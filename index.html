@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0067ff">
+  <title>MachTile 製程方塊</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b6ff3'/%3E%3Cpath d='M18 18h28v8H18zM18 30h18v8H18zM18 42h28v4H18z' fill='white'/%3E%3C/svg%3E">
+  <script>
+    (function () {
+      var path = window.location.pathname;
+      var repoBase = "/machtile-mini-mes/";
+      var basePath = "/";
+
+      if (path.indexOf(repoBase) === 0) {
+        basePath = repoBase;
+      } else if (path.indexOf("/prototype/machtile-v0/") >= 0) {
+        basePath = path.slice(0, path.indexOf("/prototype/machtile-v0/")) + "/prototype/machtile-v0/";
+      } else if (path.indexOf("/work-orders/") >= 0) {
+        basePath = path.slice(0, path.indexOf("/work-orders/") + 1);
+      } else if (path.indexOf("/m/") >= 0) {
+        basePath = path.slice(0, path.indexOf("/m/") + 1);
+      } else {
+        basePath = path.endsWith("/") ? path : path.replace(/[^/]*$/, "");
+      }
+
+      var base = document.createElement("base");
+      base.href = basePath || "/";
+      document.head.appendChild(base);
+    })();
+  </script>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css?v=20260518-detail-right-sheet">
+  <script>
+    window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
+    window.MACHTILE_CONFIG_SOURCE = "fallback";
+  </script>
+  <script src="./config.js"></script>
+  <script>
+    if (window.MACHTILE_CONFIG && window.MACHTILE_CONFIG.supabaseUrl && window.MACHTILE_CONFIG.supabaseAnonKey) {
+      window.MACHTILE_CONFIG_SOURCE = "local-config";
+    } else {
+      document.write('<script src="./config.pages-dev.js"><\/script>');
+    }
+  </script>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var routePath = params.get("route") || window.location.pathname || "";
+      var normalizedRoute = routePath.charAt(0) === "/" ? routePath : "/" + routePath;
+      var isP0SafeMode = params.get("safeMode") === "1" && normalizedRoute.indexOf("/m/") === 0;
+      window.MACHTILE_P0_SAFE_MODE = isP0SafeMode;
+
+      if (isP0SafeMode) {
+        window.MACHTILE_LIFF_SDK_FAILED = true;
+        window.MACHTILE_LIFF_SKIPPED_FOR_SAFE_MODE = true;
+        return;
+      }
+
+      if (!window.MACHTILE_CONFIG || !window.MACHTILE_CONFIG.lineLiffId) {
+        window.MACHTILE_LIFF_SKIPPED_NO_CONFIG = true;
+        return;
+      }
+
+      var script = document.createElement("script");
+      script.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
+      script.async = false;
+      script.onerror = function () {
+        window.MACHTILE_LIFF_SDK_FAILED = true;
+      };
+      document.head.appendChild(script);
+    })();
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <div id="demoBanner" class="demo-banner" hidden>
+      <span>自動展示中</span>
+      <strong id="demoTimer">03:00:00</strong>
+      <button id="stopDemoBtn" type="button">停止</button>
+    </div>
+
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="回首頁">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <div class="brand-name">MachTile</div>
+          <div class="brand-subtitle">製程方塊</div>
+        </div>
+      </a>
+      <div class="plant-meta">
+        <span id="plantName">永承一廠</span>
+        <span id="todayLabel">2026/04/30 週四</span>
+        <span id="dataSourceLabel">Mock data</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button has-dot" type="button" aria-label="通知">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path>
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path>
+          </svg>
+        </button>
+        <div class="user-chip"><span>張</span>張家維</div>
+      </div>
+    </header>
+
+    <nav class="desktop-nav" aria-label="主要導覽">
+      <button class="nav-item active" data-view="dashboard" type="button">監控</button>
+      <button class="nav-item" data-view="alerts" type="button">警報</button>
+      <button class="nav-item" data-view="history" type="button">歷史</button>
+      <button class="nav-item" data-view="reports" type="button">報表</button>
+      <button class="nav-item" data-view="settings" type="button">管理</button>
+    </nav>
+
+    <main>
+      <section id="dashboardView" class="view is-active" aria-labelledby="dashboardTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Monitor</p>
+            <h1 id="dashboardTitle">機台卡片牆與今日狀態總覽</h1>
+          </div>
+          <button class="primary-action" type="button" data-open-report>+ 現場回報</button>
+        </div>
+
+        <div id="statsGrid" class="stats-grid" aria-label="今日狀態總覽"></div>
+        <div class="filter-area" aria-label="機台與狀態篩選">
+          <div id="departmentChips" class="filter-chips department-chips" aria-label="課別篩選"></div>
+          <div id="statusChips" class="filter-chips status-chips" aria-label="狀態篩選"></div>
+        </div>
+        <div id="workOrderGrid" class="machine-wall"></div>
+      </section>
+
+      <section id="alertsView" class="view" aria-labelledby="alertsTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Alarm</p>
+            <h1 id="alertsTitle">風險處理中心</h1>
+          </div>
+          <div class="alert-top-actions">
+            <button id="openNotificationsBtn" class="notification-toggle" type="button" aria-controls="notificationDrawer" aria-expanded="false">
+              通知中心 <span id="notificationCount">0</span>
+            </button>
+            <button class="secondary-action" type="button" data-alert-action="全部標記已處理">全部標記已處理</button>
+          </div>
+        </div>
+
+        <div class="alarm-workspace">
+          <section class="alarm-panel risk-panel" aria-labelledby="riskCenterTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Delivery Risk</p>
+                <h2 id="riskCenterTitle">交期風險</h2>
+              </div>
+            </div>
+            <div id="alertChips" class="filter-chips alert-chips" aria-label="警報篩選"></div>
+            <div id="alertList" class="alert-list"></div>
+          </section>
+
+          <section class="alarm-panel inspection-panel" aria-labelledby="inspectionQueueTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Inspection Queue</p>
+                <h2 id="inspectionQueueTitle">待品檢</h2>
+              </div>
+              <div class="panel-actions">
+                <button type="button" data-alert-action="急件優先">急件優先</button>
+                <button type="button" data-alert-action="交期排序">交期排序</button>
+              </div>
+            </div>
+            <div id="inspectionQueue" class="inspection-grid"></div>
+          </section>
+        </div>
+
+        <aside id="notificationDrawer" class="notification-drawer" aria-hidden="true" aria-labelledby="notificationCenterTitle">
+          <div class="notification-drawer-panel">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Notification Center</p>
+                <h2 id="notificationCenterTitle">通知中心</h2>
+              </div>
+              <div class="panel-actions">
+                <button type="button" data-alert-action="全部已讀">全部已讀</button>
+                <button id="closeNotificationsBtn" type="button" aria-label="關閉通知中心">關閉</button>
+              </div>
+            </div>
+            <div id="notificationCenter" class="notification-center"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="historyView" class="view" aria-labelledby="historyTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">History</p>
+            <h1 id="historyTitle">工單歷程 / 報工紀錄 / 異常紀錄</h1>
+          </div>
+          <button class="secondary-action" type="button">匯出 CSV</button>
+        </div>
+        <div id="historyContent" class="history-layout"></div>
+      </section>
+
+      <section id="reportsView" class="view" aria-labelledby="reportsTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Reports</p>
+            <h1 id="reportsTitle">準交率 / 延誤統計 / 機台負載 / 不良統計</h1>
+          </div>
+          <button class="secondary-action" type="button">本週</button>
+        </div>
+        <div id="reportsContent" class="report-dashboard"></div>
+      </section>
+
+      <section id="settingsView" class="view" aria-labelledby="settingsTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Management</p>
+            <h1 id="settingsTitle">管理</h1>
+          </div>
+        </div>
+        <div id="settingsContent" class="management-grid"></div>
+      </section>
+    </main>
+  </div>
+
+  <button class="fab" type="button" data-open-report>+ 回報</button>
+  <button id="aiSupportFab" class="ai-support-fab" type="button" aria-controls="aiSupportPanel" aria-expanded="false">AI 客服</button>
+
+  <nav class="mobile-tabs" aria-label="行動導覽">
+    <button class="mobile-tab active" data-view="dashboard" type="button">監控</button>
+    <button class="mobile-tab" data-view="alerts" type="button">警報</button>
+    <button class="mobile-tab" data-view="history" type="button">歷史</button>
+    <button class="mobile-tab" data-view="reports" type="button">報表</button>
+    <button class="mobile-tab" data-view="settings" type="button">管理</button>
+  </nav>
+
+  <div id="reportSheet" class="sheet report-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-report></div>
+    <section class="sheet-panel report-panel" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">Field Report</p>
+          <h2 id="reportTitle">現場回報</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-report aria-label="關閉">×</button>
+      </div>
+
+      <div class="report-layout">
+        <div class="report-machine-card">
+          <div class="machine-line">
+            <span class="machine-dot"></span>
+            <strong id="reportMachine">CNC-03</strong>
+            <span>現場回報</span>
+          </div>
+          <div class="report-job">
+            <span>目前工單</span>
+            <strong id="reportPart">鋁合金支架</strong>
+            <code id="reportWorkNo">WO-20260429-003</code>
+          </div>
+        </div>
+
+        <form id="reportForm" class="report-form">
+          <div class="report-type-tabs" aria-label="回報類型">
+            <button class="report-type-tab active" type="button" data-report-type="workStart">首次開工</button>
+            <button class="report-type-tab" type="button" data-report-type="dailyStart">今日開工</button>
+            <button class="report-type-tab" type="button" data-report-type="noon">中午報工</button>
+            <button class="report-type-tab" type="button" data-report-type="afternoonCheck">4:30 檢查</button>
+            <button class="report-type-tab" type="button" data-report-type="finish">收工/完工</button>
+            <button class="report-type-tab" type="button" data-report-type="abnormal">異常</button>
+          </div>
+
+          <section class="report-section" data-report-section="workStart">
+            <div class="report-section-head">
+              <strong>首次開工</strong>
+              <span>第一次開始加工，建立預估工期基準</span>
+            </div>
+            <div class="report-form-grid">
+              <label class="field-label" for="workTotalQty">工件總數 <small>必填</small></label>
+              <input id="workTotalQty" class="report-input" type="number" min="1" value="100">
+
+              <label class="field-label" for="cycleMinutes">Cycle time <small>必填，不含上下料</small></label>
+              <div class="cycle-inputs">
+                <input id="cycleMinutes" class="report-input" type="number" min="0" value="9" aria-label="Cycle time 分">
+                <span>分</span>
+                <input id="cycleSeconds" class="report-input" type="number" min="0" max="59" value="10" aria-label="Cycle time 秒">
+                <span>秒 / 件</span>
+              </div>
+
+              <label class="field-label" for="programUpload">CNC 程式上傳 <small>選填</small></label>
+              <input id="programUpload" class="upload-input" type="file" accept=".nc,.tap,.txt,.min,.eia,.cnc">
+
+              <label class="field-label" for="startPhoto">開啟相機拍開工照片 <small>必填</small></label>
+              <div class="camera-capture-field">
+                <input id="startPhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
+                <button class="camera-open-button" type="button" data-camera-for="startPhoto" data-camera-label="開工照片">開啟相機拍照</button>
+                <span class="camera-file-status" data-camera-status-for="startPhoto">尚未拍照</span>
+              </div>
+            </div>
+            <div id="reportEstimate" class="report-estimate-card" aria-live="polite">
+              輸入工件總數與 cycle time 後，系統會估算每日產能與完工天數。
+            </div>
+          </section>
+
+          <section class="report-section is-hidden" data-report-section="dailyStart">
+            <div class="report-section-head">
+              <strong>今日開工</strong>
+              <span>加工當日第一筆回報，確認機台與首件</span>
+            </div>
+            <div class="report-form-grid">
+              <label class="field-label" for="machineQty">目前機台已加工數量 <small>必填</small></label>
+              <input id="machineQty" class="report-input" type="number" min="0" value="0">
+
+              <label class="field-label" for="machinePhoto">開啟相機拍機台照片 <small>必填</small></label>
+              <div class="camera-capture-field">
+                <input id="machinePhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
+                <button class="camera-open-button" type="button" data-camera-for="machinePhoto" data-camera-label="機台照片">開啟相機拍照</button>
+                <span class="camera-file-status" data-camera-status-for="machinePhoto">尚未拍照</span>
+              </div>
+            </div>
+            <div class="checklist-card">
+              <strong>當日首件檢查表 <small>必填</small></strong>
+              <label><input id="firstArticleSize" type="checkbox"> 主要尺寸符合圖面</label>
+              <label><input id="firstArticleSurface" type="checkbox"> 外觀 / 毛邊確認</label>
+              <label><input id="firstArticleTool" type="checkbox"> 刀具與程式版本確認</label>
+            </div>
+          </section>
+
+          <section class="report-section is-hidden" data-report-section="noon">
+            <div class="report-section-head">
+              <strong>中午報工</strong>
+              <span>決定下午是否需要加班或拆單</span>
+            </div>
+            <div id="noonAdvice" class="report-advice-card">系統會用中午累計數量判斷是否落後。</div>
+          </section>
+
+          <section class="report-section is-hidden" data-report-section="afternoonCheck">
+            <div class="report-section-head">
+              <strong>下午 4:30 檢查</strong>
+              <span>不填數量，只確認異常與加班需求</span>
+            </div>
+            <div class="checklist-card">
+              <strong>下午檢查表 <small>必填</small></strong>
+              <label><input id="pmToolCheck" type="checkbox"> 刀具狀態正常</label>
+              <label><input id="pmDimensionCheck" type="checkbox"> 抽檢尺寸正常</label>
+              <label><input id="pmScheduleCheck" type="checkbox"> 進度已回報主管</label>
+            </div>
+            <div class="radio-card">
+              <span class="field-label">是否異常 <small>必填</small></span>
+              <label><input name="pmAbnormal" type="radio" value="no"> 無異常</label>
+              <label><input name="pmAbnormal" type="radio" value="yes"> 有異常</label>
+            </div>
+            <label class="field-label" for="pmAbnormalNote">異常備註 <small>有異常才填</small></label>
+            <textarea id="pmAbnormalNote" rows="2" placeholder="例如：刀具磨耗偏快，已通知主管確認"></textarea>
+            <label class="field-label" for="overtimePlan">加班安排確認 <small>選填</small></label>
+            <select id="overtimePlan" class="report-input">
+              <option value="">尚未決定</option>
+              <option value="none">不加班</option>
+              <option value="1730">加班到 17:30</option>
+              <option value="2030">加班到 20:30</option>
+            </select>
+          </section>
+
+          <section class="report-section is-hidden" data-report-section="finish">
+            <div class="report-section-head">
+              <strong>收工 / 完工</strong>
+              <span>加工當日最後一筆回報</span>
+            </div>
+            <label class="field-label" for="finishPhoto">開啟相機拍完工照片 <small>必填</small></label>
+            <div class="camera-capture-field">
+              <input id="finishPhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
+              <button class="camera-open-button" type="button" data-camera-for="finishPhoto" data-camera-label="完工照片">開啟相機拍照</button>
+              <span class="camera-file-status" data-camera-status-for="finishPhoto">尚未拍照</span>
+            </div>
+            <div class="radio-card">
+              <span class="field-label">是否加班 <small>必填</small></span>
+              <label><input name="finishOvertime" type="radio" value="none"> 一般下班 17:00</label>
+              <label><input name="finishOvertime" type="radio" value="2030"> 加班收工 20:30</label>
+            </div>
+          </section>
+
+          <section class="report-section is-hidden" data-report-section="abnormal">
+            <div class="report-section-head">
+              <strong>異常回報</strong>
+              <span>有異常才建立，照片必填</span>
+            </div>
+            <label class="field-label" for="abnormalType">異常類型 <small>必填</small></label>
+            <select id="abnormalType" class="report-input">
+              <option value="">請選擇</option>
+              <option>尺寸偏差</option>
+              <option>刀具磨損</option>
+              <option>材料瑕疵</option>
+              <option>機台異音</option>
+              <option>其他</option>
+            </select>
+            <label class="field-label" for="abnormalPhoto">開啟相機拍異常照片 <small>必填</small></label>
+            <div class="camera-capture-field">
+              <input id="abnormalPhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
+              <button class="camera-open-button" type="button" data-camera-for="abnormalPhoto" data-camera-label="異常照片">開啟相機拍照</button>
+              <span class="camera-file-status" data-camera-status-for="abnormalPhoto">尚未拍照</span>
+            </div>
+          </section>
+
+          <section id="quantitySection" class="report-section quantity-section">
+            <label class="field-label" for="completedQty">良品累計 / 完成數 <small>必填</small></label>
+            <div class="stepper">
+              <button type="button" data-step="completedQty" data-delta="-1">−</button>
+              <input id="completedQty" type="number" min="0" value="5">
+              <button type="button" data-step="completedQty" data-delta="1">+</button>
+            </div>
+
+            <label class="field-label" for="defectQty">不良數 <small>必填</small></label>
+            <div class="stepper">
+              <button type="button" data-step="defectQty" data-delta="-1">−</button>
+              <input id="defectQty" type="number" min="0" value="0">
+              <button type="button" data-step="defectQty" data-delta="1">+</button>
+            </div>
+          </section>
+
+          <label class="field-label" for="reportNote">備註</label>
+          <textarea id="reportNote" rows="3" placeholder="例如：第 22 件孔徑偏差 +0.05mm，已隔離待確認"></textarea>
+
+          <div class="report-actions">
+            <button class="secondary-action" type="button" data-pause-report>暫停加工</button>
+            <button class="danger-action" type="button" data-report-type="abnormal">回報異常</button>
+          </div>
+
+          <button class="submit-report" type="submit">送出回報</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div id="cameraSheet" class="sheet camera-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-camera></div>
+    <section class="sheet-panel camera-panel" role="dialog" aria-modal="true" aria-labelledby="cameraTitle">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">Camera</p>
+          <h2 id="cameraTitle">開啟相機拍照</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-camera aria-label="關閉">×</button>
+      </div>
+      <div class="camera-preview-wrap">
+        <video id="cameraPreview" autoplay muted playsinline></video>
+        <canvas id="cameraCanvas" hidden></canvas>
+      </div>
+      <div class="camera-actions">
+        <button class="secondary-action" type="button" data-close-camera>取消</button>
+        <button class="submit-report" type="button" data-camera-capture>拍照使用</button>
+      </div>
+      <p class="camera-hint">若瀏覽器沒有相機權限，系統會退回手機內建拍照。</p>
+    </section>
+  </div>
+
+  <div id="detailSheet" class="sheet detail-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-detail></div>
+    <section class="sheet-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">工單卡片</p>
+          <h2 id="detailTitle">工單明細</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-detail aria-label="關閉">×</button>
+      </div>
+      <div id="detailContent" class="detail-content"></div>
+    </section>
+  </div>
+
+  <div id="machineAdminSheet" class="sheet machine-admin-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-machine-admin></div>
+    <section class="sheet-panel machine-admin-panel" role="dialog" aria-modal="true" aria-labelledby="machineAdminTitle">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">Machine Detail</p>
+          <h2 id="machineAdminTitle">機台詳細資訊</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-machine-admin aria-label="關閉">×</button>
+      </div>
+      <div id="machineAdminContent" class="machine-admin-content"></div>
+    </section>
+  </div>
+
+  <div id="adminModuleSheet" class="sheet admin-module-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-admin-module></div>
+    <section class="sheet-panel admin-module-panel" role="dialog" aria-modal="true" aria-labelledby="adminModuleTitle">
+      <div class="sheet-header">
+        <div>
+          <p id="adminModuleEyebrow" class="eyebrow">Management</p>
+          <h2 id="adminModuleTitle">管理功能</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-admin-module aria-label="關閉">×</button>
+      </div>
+      <div id="adminModuleContent" class="admin-module-content"></div>
+    </section>
+  </div>
+
+  <aside id="aiSupportPanel" class="ai-support-panel" aria-hidden="true" aria-labelledby="aiSupportTitle">
+    <div class="ai-support-head">
+      <div>
+        <p class="eyebrow">MachTile Support</p>
+        <h2 id="aiSupportTitle">AI 客服</h2>
+      </div>
+      <button class="icon-button" type="button" data-close-ai-support aria-label="關閉">×</button>
+    </div>
+    <div id="aiSupportMessages" class="ai-support-messages" aria-live="polite">
+      <div class="ai-message ai-message-assistant">
+        <strong>MachTile AI 客服</strong>
+        <p>可以問我報工、拍照、暫停加工、QR Code、警報、管理設定、Supabase 或地端部署。</p>
+      </div>
+    </div>
+    <div class="ai-support-quick">
+      <button type="button" data-ai-question="相機拍照怎麼用？">相機拍照</button>
+      <button type="button" data-ai-question="暫停加工什麼時候用？">暫停加工</button>
+      <button type="button" data-ai-question="一天要怎麼報工？">報工節點</button>
+      <button type="button" data-ai-question="未排機可以掃 QR 嗎？">QR 規則</button>
+    </div>
+    <form id="aiSupportForm" class="ai-support-form">
+      <input id="aiSupportInput" type="text" autocomplete="off" placeholder="輸入問題，例如：中午報工要填什麼？">
+      <button type="submit">送出</button>
+    </form>
+  </aside>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="./routeConstants.js?v=20260514-p0-001"></script>
+  <script src="./mockData.js?v=20260514-p0-001"></script>
+  <script src="./app.js?v=20260522-hmc-pallet-display"></script>
+</body>
+</html>

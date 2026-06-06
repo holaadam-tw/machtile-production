@@ -1,0 +1,10 @@
+{
+  "name": "MachTile 製程方塊",
+  "short_name": "MachTile",
+  "description": "CNC 工單進度、交期風險與 AI 助手看板",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#efeee8",
+  "theme_color": "#141413",
+  "icons": []
+}

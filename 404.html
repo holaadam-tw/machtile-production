@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MachTile redirecting</title>
+</head>
+<body>
+  <script>
+    (function () {
+      var repoBase = location.pathname.indexOf("/machtile-mini-mes/") === 0 ? "/machtile-mini-mes/" : "/";
+      var route = location.pathname.slice(repoBase.length).replace(/^\/+/, "");
+      var params = new URLSearchParams(location.search);
+      params.set("route", "/" + route);
+      location.replace(repoBase + "?" + params.toString() + location.hash);
+    })();
+  </script>
+  <p>Redirecting to MachTile...</p>
+</body>
+</html>
