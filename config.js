@@ -15,6 +15,6 @@ window.MACHTILE_CONFIG = {
   fieldReportBaseUrl: "https://holaadam-tw.github.io/machtile-production/",
   useQueryRoutesForFieldReports: true,
   useTenantHeaderAuth: true,
-  useSupabase: false,
+  useSupabase: true,
   useHmcWorklistSupabase: true
 };
