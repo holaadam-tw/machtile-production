@@ -12,7 +12,7 @@ window.MACHTILE_CONFIG = {
   tenantId: "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f",
   reportAttachmentBucket: "machtile-report-files",
   enableFileUpload: true,
-  fieldReportBaseUrl: "https://holaadam-tw.github.io/machtile-production/",
+  fieldReportBaseUrl: "https://app.machtile.com/",
   useQueryRoutesForFieldReports: true,
   useTenantHeaderAuth: true,
   useSupabase: true,
