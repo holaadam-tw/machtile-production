@@ -7612,6 +7612,10 @@ const machtileAuthState = {
   userId: "",
   tenantId: "",
   role: "",
+  // Platform tier (AM4): app_metadata.platform_role === 'super_admin' on the
+  // auth account; orthogonal to tenant role — only gates the 平台管理 card
+  // (the Edge Functions stay authoritative server-side).
+  platformRole: "",
   expiresAt: 0,
   error: "",
 };
@@ -7688,6 +7692,7 @@ function machtileSetSession(authResponse, email) {
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
   machtileAuthState.tenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || config.tenantId || "";
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
+  machtileAuthState.platformRole = appMetadata.platform_role || "";
   machtileAuthState.expiresAt = jwtPayload.exp ? Number(jwtPayload.exp) * 1000 : Date.now() + Number(authResponse?.expires_in || 0) * 1000;
   machtileAuthState.error = "";
   machtilePersistSession();
@@ -7700,6 +7705,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.userId = "";
   machtileAuthState.tenantId = "";
   machtileAuthState.role = "";
+  machtileAuthState.platformRole = "";
   machtileAuthState.expiresAt = 0;
   machtileAuthState.error = message;
   machtileDropPersistedSession();
@@ -8759,9 +8765,32 @@ function renderReports() {
   `;
 }
 
+// 平台管理 (AM4): rendered ONLY in strict mode for a live super-admin
+// session — every other session (incl. dev-nologin demo) sees a
+// byte-identical 管理 tab. The Edge Functions stay authoritative.
+function renderPlatformAdminSection() {
+  if (!machtileStrictMode() || !machtileSessionActive() || machtileAuthState.platformRole !== "super_admin") {
+    return "";
+  }
+  return `
+    <section class="admin-section">
+      <div class="panel-title">
+        <div>
+          <h2>平台管理</h2>
+        </div>
+        <span>租戶、廠內管理者、平台管理員</span>
+      </div>
+      <div class="admin-action-grid admin-action-grid-compact" aria-label="平台管理">
+        ${renderAdminActionCard("company", "平台管理", "建立租戶、管理各廠管理者與平台管理員", "purple", "platform")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSettings() {
   const managedMachines = managedMachineList();
   $("#settingsContent").innerHTML = `
+    ${renderPlatformAdminSection()}
     <section class="admin-section">
       <div class="panel-title">
         <div>
@@ -8840,6 +8869,7 @@ function adminModuleMeta(moduleKey) {
     list: ["Machine List", "機台列表管理"],
     alarm: ["Alarm Rules", "警報參數設定"],
     users: ["User Accounts", "員工帳號管理"],
+    platform: ["Platform Admin", "平台管理"],
     invite: ["Invite Codes", "生成邀請碼"],
     vendor: ["Partner Access", "供應商授權管理"],
     company: ["Company Profile", "公司資料"],
@@ -8889,6 +8919,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderAlarmRulesModule();
     case "users":
       return renderUsersModule();
+    case "platform":
+      return renderPlatformModule();
     case "invite":
       return renderInviteModule();
     case "vendor":
@@ -9044,7 +9076,8 @@ const amErrorMessages = {
   ROLE_NOT_ALLOWED: "不能建立管理者帳號（管理者由平台管理）。",
   EMAIL_EXISTS: "這個 Email 已經有帳號了。",
   USER_NOT_FOUND: "找不到這個使用者。",
-  SELF_TARGET: "不能停用自己的帳號。",
+  SELF_TARGET: "不能對自己的帳號執行這項操作。",
+  TENANT_EXISTS: "已經有同名的租戶了。",
   INTERNAL: "伺服器處理失敗，請稍後再試。",
 };
 
@@ -9286,6 +9319,281 @@ function amBindUsersModuleEvents() {
         amSetMessage(amErrorText(result.code, result.body?.message), "error");
         amRenderUsersModule();
       }
+    });
+  });
+}
+
+// ---- Platform admin module (AM4; super-admin Edge Functions) ----
+//
+// Strict mode + platform_role='super_admin' only. Backed by am-list-tenants /
+// am-create-tenant / am-reset-tenant-admin / am-set-platform-role; the same
+// amCallFunction chokepoint (session Bearer) and error map are reused.
+
+const amPlatformState = {
+  status: "idle",
+  tenants: [],
+  message: "",
+  messageKind: "",
+  expandedResetId: "",
+  confirmStateId: "",
+  confirmRoleAction: "",
+};
+
+function renderPlatformModule() {
+  if (!machtileStrictMode() || machtileAuthState.platformRole !== "super_admin") {
+    return `
+      <section class="admin-side-note">
+        <strong>需要平台管理員</strong>
+        <p>平台管理只開放給 MachTile 平台管理員（super admin）。</p>
+      </section>
+    `;
+  }
+  setTimeout(amInitPlatformModule, 0);
+  return `<div data-am-platform-root><p class="empty-note">載入租戶清單中…</p></div>`;
+}
+
+function amPlatformSetMessage(message, kind) {
+  amPlatformState.message = message;
+  amPlatformState.messageKind = kind;
+}
+
+function amPlatformStatusLine() {
+  if (!amPlatformState.message) return "";
+  const tone = amPlatformState.messageKind === "error" ? "color:#b42318" : "color:#067647";
+  return `<p class="empty-note" style="${tone}" data-am-platform-status>${escapeHtml(amPlatformState.message)}</p>`;
+}
+
+async function amInitPlatformModule() {
+  const root = document.querySelector("[data-am-platform-root]");
+  if (!root) return;
+  amPlatformState.status = "loading";
+  const result = await amCallFunction("am-list-tenants", {});
+  if (result.ok) {
+    amPlatformState.tenants = Array.isArray(result.body?.tenants) ? result.body.tenants : [];
+    amPlatformState.status = "ready";
+  } else {
+    amPlatformState.status = "error";
+    amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+  }
+  amRenderPlatformModule();
+}
+
+async function amReloadPlatformTenants() {
+  const result = await amCallFunction("am-list-tenants", {});
+  if (result.ok) {
+    amPlatformState.tenants = Array.isArray(result.body?.tenants) ? result.body.tenants : [];
+  } else {
+    amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+  }
+  amRenderPlatformModule();
+}
+
+function amRenderPlatformModule() {
+  const root = document.querySelector("[data-am-platform-root]");
+  if (!root) return;
+  const selfEmail = (machtileAuthState.email || "").toLowerCase();
+  const tenantRows = amPlatformState.tenants.map((tenant) => {
+    const admins = Array.isArray(tenant.admins) ? tenant.admins : [];
+    const adminRows = admins.map((admin) => {
+      const isSelf = (admin.account || "").toLowerCase() === selfEmail;
+      const resetOpen = amPlatformState.expandedResetId === admin.id;
+      const confirmOpen = amPlatformState.confirmStateId === admin.id;
+      return `
+        <div class="admin-data-row" data-am-platform-admin-row="${escapeHtml(admin.id)}">
+          <strong>${escapeHtml(admin.name || "-")}</strong>
+          <span>${escapeHtml(admin.account || "-")}</span>
+          <span>管理者${isSelf ? "（自己）" : ""}</span>
+          <span>${admin.isActive ? "啟用中" : "已停用"}</span>
+          <span>
+            <button type="button" data-am-platform-reset-open="${escapeHtml(admin.id)}">${resetOpen ? "收合" : "重設密碼"}</button>
+            ${isSelf ? "" : `<button type="button" data-am-platform-toggle="${escapeHtml(admin.id)}" data-am-next="${admin.isActive ? "false" : "true"}">${confirmOpen ? (admin.isActive ? "確認停用？" : "確認啟用？") : (admin.isActive ? "停用" : "啟用")}</button>`}
+          </span>
+        </div>
+        ${resetOpen ? `
+          <div class="admin-data-row" data-am-platform-reset-row="${escapeHtml(admin.id)}">
+            <label class="admin-field" style="grid-column: 1 / -2;">
+              <span>新密碼（至少 8 碼）</span>
+              <input type="password" autocomplete="new-password" data-am-platform-reset-input="${escapeHtml(admin.id)}">
+            </label>
+            <button type="button" data-am-platform-reset-confirm="${escapeHtml(admin.id)}">確認重設</button>
+          </div>
+        ` : ""}
+      `;
+    }).join("");
+    return `
+      <div class="admin-data-row">
+        <strong>${escapeHtml(tenant.name || "-")}</strong>
+        <span>${tenant.isActive ? "啟用中" : "已停用"}</span>
+        <span>${Number(tenant.userCount) || 0} 個帳號</span>
+        <span>${admins.length} 位管理者</span>
+      </div>
+      ${adminRows}
+    `;
+  }).join("");
+
+  root.innerHTML = `
+    <section class="admin-table-card">
+      <div class="admin-table-head">
+        <strong>租戶清單</strong>
+        <span>${amPlatformState.tenants.length} 個租戶</span>
+      </div>
+      ${amPlatformStatusLine()}
+      <div class="admin-data-table">
+        ${tenantRows || '<p class="empty-note">尚無租戶。</p>'}
+      </div>
+    </section>
+    <section class="admin-form-card">
+      <h3>建立新租戶</h3>
+      <div class="admin-form-grid">
+        <label class="admin-field"><span>租戶名稱（工廠）</span><input type="text" data-am-tenant-name></label>
+        <label class="admin-field"><span>廠區代碼（預設 F1）</span><input type="text" data-am-factory-code placeholder="F1"></label>
+        <label class="admin-field"><span>廠區名稱（預設同租戶名）</span><input type="text" data-am-factory-name></label>
+        <label class="admin-field"><span>管理者姓名</span><input type="text" data-am-tenant-admin-name></label>
+        <label class="admin-field"><span>管理者 Email（登入帳號）</span><input type="email" data-am-tenant-admin-email></label>
+        <label class="admin-field"><span>管理者初始密碼（至少 8 碼）</span><input type="password" autocomplete="new-password" data-am-tenant-admin-password></label>
+      </div>
+      <button class="admin-save-button" type="button" data-am-tenant-create>建立租戶</button>
+      <p class="empty-note">會同時建立租戶、預設廠區與該廠的第一位管理者帳號。</p>
+    </section>
+    <section class="admin-form-card">
+      <h3>平台管理員（super admin）</h3>
+      <div class="admin-form-grid">
+        <label class="admin-field"><span>帳號 Email</span><input type="email" data-am-platform-role-email></label>
+      </div>
+      <button class="admin-save-button" type="button" data-am-platform-role-set data-am-grant="true">${amPlatformState.confirmRoleAction === "grant" ? "確認授予？" : "授予平台管理員"}</button>
+      <button class="admin-save-button" type="button" data-am-platform-role-set data-am-grant="false">${amPlatformState.confirmRoleAction === "revoke" ? "確認撤銷？" : "撤銷平台管理員"}</button>
+      <p class="empty-note">平台管理員可建立租戶與管理各廠管理者；不能變更自己的平台角色。</p>
+    </section>
+  `;
+  amBindPlatformModuleEvents();
+}
+
+function amBindPlatformModuleEvents() {
+  const root = document.querySelector("[data-am-platform-root]");
+  if (!root) return;
+
+  root.querySelector("[data-am-tenant-create]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const tenantName = root.querySelector("[data-am-tenant-name]")?.value.trim() || "";
+    const factoryCode = root.querySelector("[data-am-factory-code]")?.value.trim() || "";
+    const factoryName = root.querySelector("[data-am-factory-name]")?.value.trim() || "";
+    const adminName = root.querySelector("[data-am-tenant-admin-name]")?.value.trim() || "";
+    const adminEmail = root.querySelector("[data-am-tenant-admin-email]")?.value.trim() || "";
+    const passwordInput = root.querySelector("[data-am-tenant-admin-password]");
+    const adminPassword = passwordInput?.value || "";
+    if (!tenantName || !adminName || !adminEmail || adminPassword.length < 8) {
+      amPlatformSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+      amRenderPlatformModule();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "建立中…";
+    const result = await amCallFunction("am-create-tenant", {
+      tenantName,
+      factoryCode,
+      factoryName,
+      adminName,
+      adminEmail,
+      adminPassword,
+    });
+    if (passwordInput) passwordInput.value = "";
+    if (result.ok) {
+      amPlatformSetMessage(`已建立租戶 ${tenantName}，管理者 ${adminEmail}。`, "ok");
+      amPlatformState.expandedResetId = "";
+      amPlatformState.confirmStateId = "";
+      await amReloadPlatformTenants();
+    } else {
+      amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+      amRenderPlatformModule();
+    }
+  });
+
+  root.querySelectorAll("[data-am-platform-reset-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-am-platform-reset-open");
+      amPlatformState.expandedResetId = amPlatformState.expandedResetId === id ? "" : id;
+      amPlatformState.confirmStateId = "";
+      amPlatformSetMessage("", "");
+      amRenderPlatformModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-platform-reset-confirm]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-platform-reset-confirm");
+      const input = root.querySelector(`[data-am-platform-reset-input="${id}"]`);
+      const newPassword = input?.value || "";
+      if (newPassword.length < 8) {
+        amPlatformSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+        amRenderPlatformModule();
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "重設中…";
+      const result = await amCallFunction("am-reset-tenant-admin", { appUserId: id, action: "reset_password", newPassword });
+      if (input) input.value = "";
+      if (result.ok) {
+        amPlatformSetMessage("管理者密碼已重設。", "ok");
+        amPlatformState.expandedResetId = "";
+      } else {
+        amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+      }
+      amRenderPlatformModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-platform-toggle]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-platform-toggle");
+      const nextActive = button.getAttribute("data-am-next") === "true";
+      if (amPlatformState.confirmStateId !== id) {
+        amPlatformState.confirmStateId = id;
+        amPlatformSetMessage("", "");
+        amRenderPlatformModule();
+        return;
+      }
+      button.disabled = true;
+      const result = await amCallFunction("am-reset-tenant-admin", { appUserId: id, action: "set_state", active: nextActive });
+      amPlatformState.confirmStateId = "";
+      if (result.ok) {
+        amPlatformSetMessage(nextActive ? "管理者帳號已重新啟用。" : "管理者帳號已停用（無法再登入）。", "ok");
+        await amReloadPlatformTenants();
+      } else {
+        amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amRenderPlatformModule();
+      }
+    });
+  });
+
+  root.querySelectorAll("[data-am-platform-role-set]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const grant = button.getAttribute("data-am-grant") === "true";
+      const action = grant ? "grant" : "revoke";
+      const email = root.querySelector("[data-am-platform-role-email]")?.value.trim() || "";
+      if (!email) {
+        amPlatformSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+        amRenderPlatformModule();
+        return;
+      }
+      if (amPlatformState.confirmRoleAction !== action) {
+        amPlatformState.confirmRoleAction = action;
+        amPlatformSetMessage("", "");
+        const emailInput = root.querySelector("[data-am-platform-role-email]");
+        const typed = emailInput ? emailInput.value : "";
+        amRenderPlatformModule();
+        const rerendered = document.querySelector("[data-am-platform-role-email]");
+        if (rerendered) rerendered.value = typed;
+        return;
+      }
+      button.disabled = true;
+      const result = await amCallFunction("am-set-platform-role", { email, grant });
+      amPlatformState.confirmRoleAction = "";
+      if (result.ok) {
+        amPlatformSetMessage(grant ? `已授予 ${email} 平台管理員。` : `已撤銷 ${email} 的平台管理員。`, "ok");
+      } else {
+        amPlatformSetMessage(amErrorText(result.code, result.body?.message), "error");
+      }
+      amRenderPlatformModule();
     });
   });
 }
