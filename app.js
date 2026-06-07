@@ -7545,14 +7545,19 @@ async function uploadReportFile(reportId, entry) {
   }
 
   const fileHash = await hashFile(entry.file);
-  await insertAttachmentMetadata({
+  const attachmentBasePayload = {
     tenant_id: tenantId,
     entity_type: "production_report",
     entity_id: reportId,
     file_name: entry.file.name,
     file_url: `${bucket}/${storagePath}`,
     file_type: [entry.kind, entry.file.type || "application/octet-stream", fileHash ? `sha256:${fileHash}` : ""].filter(Boolean).join("|"),
-  }, {
+  };
+  // polish-1 PL2: uploaded_by is a core-schema column, safe in the base
+  // payload (the extended/fallback split only concerns the newer columns).
+  const actorAppUserId = await machtileResolveAppUserId();
+  if (actorAppUserId) attachmentBasePayload.uploaded_by = actorAppUserId;
+  await insertAttachmentMetadata(attachmentBasePayload, {
     bucket_name: bucket,
     storage_path: storagePath,
     attachment_kind: entry.kind,
@@ -7616,6 +7621,9 @@ const machtileAuthState = {
   // auth account; orthogonal to tenant role — only gates the 平台管理 card
   // (the Edge Functions stay authoritative server-side).
   platformRole: "",
+  // polish-1: app_users.id for the signed-in account, lazily resolved by
+  // machtileResolveAppUserId() so legacy REST writes can carry the actor.
+  appUserId: "",
   expiresAt: 0,
   error: "",
 };
@@ -7693,6 +7701,7 @@ function machtileSetSession(authResponse, email) {
   machtileAuthState.tenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || config.tenantId || "";
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
   machtileAuthState.platformRole = appMetadata.platform_role || "";
+  machtileAuthState.appUserId = "";
   machtileAuthState.expiresAt = jwtPayload.exp ? Number(jwtPayload.exp) * 1000 : Date.now() + Number(authResponse?.expires_in || 0) * 1000;
   machtileAuthState.error = "";
   machtilePersistSession();
@@ -7706,6 +7715,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.tenantId = "";
   machtileAuthState.role = "";
   machtileAuthState.platformRole = "";
+  machtileAuthState.appUserId = "";
   machtileAuthState.expiresAt = 0;
   machtileAuthState.error = message;
   machtileDropPersistedSession();
@@ -7754,6 +7764,28 @@ function machtileSupabaseBearerToken() {
     return machtileAuthState.accessToken;
   }
   return config.supabaseAnonKey;
+}
+
+// polish-1 (PL1=ClientLookupPayload): the legacy field-report path writes
+// production_reports / attachments via direct REST insert, so the actor has
+// to be resolved client-side (strict RPC bodies do
+// app_users.auth_user_id = auth.uid() server-side; REST has no server side).
+// Resolved once per page load and cached on machtileAuthState. Soft fallback:
+// a lookup hiccup must never block a report — the row just keeps a NULL
+// actor, same as before polish-1. dev-nologin always returns "" (no session).
+async function machtileResolveAppUserId() {
+  if (!machtileStrictMode() || !machtileSessionActive() || !machtileAuthState.userId) return "";
+  if (machtileAuthState.appUserId) return machtileAuthState.appUserId;
+  try {
+    const rows = await supabaseFetch(
+      `app_users?select=id&auth_user_id=eq.${encodeURIComponent(machtileAuthState.userId)}&is_active=eq.true&limit=1`
+    );
+    machtileAuthState.appUserId = (Array.isArray(rows) && rows[0]?.id) || "";
+  } catch (error) {
+    console.warn("app_users actor lookup failed; write will carry no user_id", error);
+    machtileAuthState.appUserId = "";
+  }
+  return machtileAuthState.appUserId;
 }
 
 // Strict-only server error codes shared by every write surface; used as a
@@ -10418,6 +10450,8 @@ async function submitReport(completed, defects, remark, reportType) {
     status_after_report: selectedOrder.processStatus || "running",
     remark,
   };
+  const actorAppUserId = await machtileResolveAppUserId();
+  if (actorAppUserId) basePayload.user_id = actorAppUserId;
   const structuredPayload = {
     report_type: reportType,
     report_payload: reportPayload,
@@ -10456,18 +10490,21 @@ async function submitReport(completed, defects, remark, reportType) {
 
 async function submitPauseReport(reason) {
   if (state.source !== "supabase" || !selectedOrder?.processId || !isUuid(selectedOrder.workOrderId)) return false;
+  const pausePayload = {
+    tenant_id: selectedOrder.tenantId,
+    work_order_id: selectedOrder.workOrderId,
+    process_id: selectedOrder.processId,
+    report_date: new Date().toISOString().slice(0, 10),
+    completed_qty: 0,
+    defect_qty: 0,
+    status_after_report: "paused",
+    remark: `[暫停加工] ${reason}`,
+  };
+  const actorAppUserId = await machtileResolveAppUserId();
+  if (actorAppUserId) pausePayload.user_id = actorAppUserId;
   await supabaseFetch("production_reports", {
     method: "POST",
-    body: JSON.stringify({
-      tenant_id: selectedOrder.tenantId,
-      work_order_id: selectedOrder.workOrderId,
-      process_id: selectedOrder.processId,
-      report_date: new Date().toISOString().slice(0, 10),
-      completed_qty: 0,
-      defect_qty: 0,
-      status_after_report: "paused",
-      remark: `[暫停加工] ${reason}`,
-    }),
+    body: JSON.stringify(pausePayload),
   });
   return true;
 }
