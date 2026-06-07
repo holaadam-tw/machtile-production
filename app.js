@@ -9009,6 +9009,13 @@ function renderRuleTable(title, rows, buttonLabel) {
 }
 
 function renderUsersModule() {
+  // Strict mode (production): real tenant account management backed by the
+  // AM2 Edge Functions. Dev/Pages demo keeps the mock (AM1 lock: the
+  // public no-login demo never gets account mutation surfaces).
+  if (machtileStrictMode()) {
+    setTimeout(amInitUsersModule, 0);
+    return `<div data-am-users-root><p class="empty-note">載入員工帳號中…</p></div>`;
+  }
   const users = [
     ["張家維", "manager", "主管", "全部"],
     ["陳師傅", "operator", "現場報工", "銑床課"],
@@ -9016,6 +9023,271 @@ function renderUsersModule() {
     ["品檢 A", "inspector", "品檢", "品檢區"],
   ];
   return renderSimpleAdminList("員工帳號", users, "新增員工");
+}
+
+// ---- Strict account management module (AM3; Edge Functions from AM2) ----
+
+const amRoleLabels = {
+  admin: "管理者",
+  manager: "主管",
+  planner: "排程",
+  operator: "作業員",
+  inspector: "品檢",
+};
+
+const amCreatableRoles = ["manager", "planner", "operator", "inspector"];
+
+const amErrorMessages = {
+  AUTH_REQUIRED: "請先登入正式環境帳號。",
+  FORBIDDEN: "此帳號沒有執行這項操作的權限。",
+  INVALID_PAYLOAD: "輸入內容不完整或格式錯誤（密碼至少 8 碼）。",
+  ROLE_NOT_ALLOWED: "不能建立管理者帳號（管理者由平台管理）。",
+  EMAIL_EXISTS: "這個 Email 已經有帳號了。",
+  USER_NOT_FOUND: "找不到這個使用者。",
+  SELF_TARGET: "不能停用自己的帳號。",
+  INTERNAL: "伺服器處理失敗，請稍後再試。",
+};
+
+const amUsersState = {
+  status: "idle",
+  users: [],
+  message: "",
+  messageKind: "",
+  expandedResetId: "",
+  confirmStateId: "",
+};
+
+function amErrorText(code, fallback) {
+  return amErrorMessages[code] || fallback || "操作失敗，請稍後再試。";
+}
+
+async function amCallFunction(fnName, payload) {
+  const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
+  const response = await fetch(`${baseUrl}/functions/v1/${fnName}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${machtileSupabaseBearerToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (response.status === 401) machtileHandleUnauthorized();
+  let body = {};
+  try {
+    body = await response.json();
+  } catch (error) {
+    body = {};
+  }
+  return { ok: response.ok && body.status === "ok", code: body.code || "", body };
+}
+
+async function amFetchUsers() {
+  const rows = await supabaseFetch("app_users?select=id,name,account,role,is_active&order=created_at.asc");
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function amInitUsersModule() {
+  const root = document.querySelector("[data-am-users-root]");
+  if (!root) return;
+  if (machtileAuthState.role !== "admin") {
+    root.innerHTML = `
+      <section class="admin-side-note">
+        <strong>需要管理者帳號</strong>
+        <p>員工帳號管理只開放給廠內管理者（admin）。請改用管理者帳號登入。</p>
+      </section>
+    `;
+    return;
+  }
+  amUsersState.status = "loading";
+  try {
+    amUsersState.users = await amFetchUsers();
+    amUsersState.status = "ready";
+  } catch (error) {
+    amUsersState.status = "error";
+    amUsersState.message = `載入員工清單失敗：${error.message}`;
+    amUsersState.messageKind = "error";
+  }
+  amRenderUsersModule();
+}
+
+function amStatusLine() {
+  if (!amUsersState.message) return "";
+  const tone = amUsersState.messageKind === "error" ? "color:#b42318" : "color:#067647";
+  return `<p class="empty-note" style="${tone}" data-am-status>${escapeHtml(amUsersState.message)}</p>`;
+}
+
+function amRenderUsersModule() {
+  const root = document.querySelector("[data-am-users-root]");
+  if (!root) return;
+  const selfId = amSelfAppUserId();
+  const rows = amUsersState.users.map((user) => {
+    const isSelf = user.id === selfId;
+    const isAdmin = user.role === "admin";
+    const resetOpen = amUsersState.expandedResetId === user.id;
+    const confirmOpen = amUsersState.confirmStateId === user.id;
+    const canReset = !isAdmin || isSelf;
+    const canToggle = !isAdmin && !isSelf;
+    return `
+      <div class="admin-data-row" data-am-row="${escapeHtml(user.id)}">
+        <strong>${escapeHtml(user.name || "-")}</strong>
+        <span>${escapeHtml(user.account || "-")}</span>
+        <span>${escapeHtml(amRoleLabels[user.role] || user.role)}${isSelf ? "（自己）" : ""}</span>
+        <span>${user.is_active ? "啟用中" : "已停用"}</span>
+        <span>
+          ${canReset ? `<button type="button" data-am-reset-open="${escapeHtml(user.id)}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
+          ${canToggle ? `<button type="button" data-am-toggle="${escapeHtml(user.id)}" data-am-next="${user.is_active ? "false" : "true"}">${confirmOpen ? (user.is_active ? "確認停用？" : "確認啟用？") : (user.is_active ? "停用" : "啟用")}</button>` : ""}
+          ${isAdmin && !isSelf ? `<span class="empty-note">平台管理</span>` : ""}
+        </span>
+      </div>
+      ${resetOpen ? `
+        <div class="admin-data-row" data-am-reset-row="${escapeHtml(user.id)}">
+          <label class="admin-field" style="grid-column: 1 / -2;">
+            <span>新密碼（至少 8 碼）</span>
+            <input type="password" autocomplete="new-password" data-am-reset-input="${escapeHtml(user.id)}">
+          </label>
+          <button type="button" data-am-reset-confirm="${escapeHtml(user.id)}">確認重設</button>
+        </div>
+      ` : ""}
+    `;
+  }).join("");
+
+  root.innerHTML = `
+    <section class="admin-table-card">
+      <div class="admin-table-head">
+        <strong>員工帳號</strong>
+        <span>${amUsersState.users.length} 個帳號</span>
+      </div>
+      ${amStatusLine()}
+      <div class="admin-data-table">
+        ${rows || '<p class="empty-note">尚無帳號。</p>'}
+      </div>
+    </section>
+    <section class="admin-form-card">
+      <h3>新增員工帳號</h3>
+      <div class="admin-form-grid">
+        <label class="admin-field"><span>姓名</span><input type="text" data-am-new-name></label>
+        <label class="admin-field"><span>Email（登入帳號）</span><input type="email" data-am-new-email></label>
+        <label class="admin-field"><span>初始密碼（至少 8 碼）</span><input type="password" autocomplete="new-password" data-am-new-password></label>
+        <label class="admin-field"><span>角色</span>
+          <select data-am-new-role>
+            ${amCreatableRoles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <button class="admin-save-button" type="button" data-am-create>建立帳號</button>
+      <p class="empty-note">管理者帳號由平台（super admin）建立，不能在此新增。</p>
+    </section>
+  `;
+  amBindUsersModuleEvents();
+}
+
+function amSelfAppUserId() {
+  const self = amUsersState.users.find((user) => (user.account || "").toLowerCase() === (machtileAuthState.email || "").toLowerCase());
+  return self ? self.id : "";
+}
+
+function amSetMessage(message, kind) {
+  amUsersState.message = message;
+  amUsersState.messageKind = kind;
+}
+
+async function amReloadUsers() {
+  try {
+    amUsersState.users = await amFetchUsers();
+  } catch (error) {
+    amSetMessage(`重新載入失敗：${error.message}`, "error");
+  }
+  amRenderUsersModule();
+}
+
+function amBindUsersModuleEvents() {
+  const root = document.querySelector("[data-am-users-root]");
+  if (!root) return;
+
+  root.querySelector("[data-am-create]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const name = root.querySelector("[data-am-new-name]")?.value.trim() || "";
+    const email = root.querySelector("[data-am-new-email]")?.value.trim() || "";
+    const passwordInput = root.querySelector("[data-am-new-password]");
+    const password = passwordInput?.value || "";
+    const role = root.querySelector("[data-am-new-role]")?.value || "";
+    if (!name || !email || password.length < 8) {
+      amSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+      amRenderUsersModule();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "建立中…";
+    const result = await amCallFunction("am-create-user", { email, password, name, role });
+    if (passwordInput) passwordInput.value = "";
+    if (result.ok) {
+      amSetMessage(`已建立帳號 ${email}（${amRoleLabels[role] || role}）。`, "ok");
+      amUsersState.expandedResetId = "";
+      amUsersState.confirmStateId = "";
+      await amReloadUsers();
+    } else {
+      amSetMessage(amErrorText(result.code, result.body?.message), "error");
+      amRenderUsersModule();
+    }
+  });
+
+  root.querySelectorAll("[data-am-reset-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-am-reset-open");
+      amUsersState.expandedResetId = amUsersState.expandedResetId === id ? "" : id;
+      amUsersState.confirmStateId = "";
+      amSetMessage("", "");
+      amRenderUsersModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-reset-confirm]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-reset-confirm");
+      const input = root.querySelector(`[data-am-reset-input="${id}"]`);
+      const newPassword = input?.value || "";
+      if (newPassword.length < 8) {
+        amSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+        amRenderUsersModule();
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "重設中…";
+      const result = await amCallFunction("am-reset-password", { appUserId: id, newPassword });
+      if (input) input.value = "";
+      if (result.ok) {
+        amSetMessage("密碼已重設。", "ok");
+        amUsersState.expandedResetId = "";
+      } else {
+        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+      }
+      amRenderUsersModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-toggle]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-toggle");
+      const nextActive = button.getAttribute("data-am-next") === "true";
+      if (amUsersState.confirmStateId !== id) {
+        amUsersState.confirmStateId = id;
+        amSetMessage("", "");
+        amRenderUsersModule();
+        return;
+      }
+      button.disabled = true;
+      const result = await amCallFunction("am-set-user-state", { appUserId: id, active: nextActive });
+      amUsersState.confirmStateId = "";
+      if (result.ok) {
+        amSetMessage(nextActive ? "帳號已重新啟用。" : "帳號已停用（無法再登入）。", "ok");
+        await amReloadUsers();
+      } else {
+        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amRenderUsersModule();
+      }
+    });
+  });
 }
 
 function renderInviteModule() {
