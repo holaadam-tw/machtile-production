@@ -7624,6 +7624,9 @@ const machtileAuthState = {
   // polish-1: app_users.id for the signed-in account, lazily resolved by
   // machtileResolveAppUserId() so legacy REST writes can carry the actor.
   appUserId: "",
+  // polish-2 (PB1=TimerPlusRestore): rotated GoTrue refresh token so the 1h
+  // access token renews silently instead of re-gating mid-shift.
+  refreshToken: "",
   expiresAt: 0,
   error: "",
 };
@@ -7657,6 +7660,7 @@ function machtilePersistSession() {
   try {
     sessionStorage.setItem(MACHTILE_SESSION_STORAGE_KEY, JSON.stringify({
       accessToken: machtileAuthState.accessToken,
+      refreshToken: machtileAuthState.refreshToken,
       email: machtileAuthState.email,
     }));
   } catch (error) {
@@ -7672,7 +7676,7 @@ function machtileDropPersistedSession() {
   }
 }
 
-function machtileRestoreSession() {
+async function machtileRestoreSession() {
   if (!machtileStrictMode()) return false;
   let stored = null;
   try {
@@ -7682,12 +7686,27 @@ function machtileRestoreSession() {
   }
   if (!stored?.accessToken) return false;
   const claims = hmcDecodeJwtPayload(stored.accessToken);
-  if (!claims.exp || Number(claims.exp) * 1000 <= Date.now()) {
-    machtileDropPersistedSession();
-    return false;
+  if (claims.exp && Number(claims.exp) * 1000 > Date.now()) {
+    machtileSetSession({ access_token: stored.accessToken, refresh_token: stored.refreshToken || "" }, stored.email || "");
+    return machtileSessionActive();
   }
-  machtileSetSession({ access_token: stored.accessToken }, stored.email || "");
-  return machtileSessionActive();
+  // polish-2 (PB1=TimerPlusRestore): expired access token but a stored
+  // refresh token → renew silently instead of gating.
+  if (stored.refreshToken) {
+    machtileAuthState.refreshToken = stored.refreshToken;
+    machtileAuthState.email = stored.email || "";
+    const outcome = await machtileRefreshSession();
+    if (outcome === "ok" && machtileSessionActive()) return true;
+    if (outcome === "retry") {
+      // Network hiccup — keep the stored pair so a later reload can retry;
+      // this load falls back to the gate.
+      machtileAuthState.refreshToken = "";
+      machtileAuthState.email = "";
+      return false;
+    }
+  }
+  machtileClearSession();
+  return false;
 }
 
 function machtileSetSession(authResponse, email) {
@@ -7702,6 +7721,7 @@ function machtileSetSession(authResponse, email) {
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
   machtileAuthState.platformRole = appMetadata.platform_role || "";
   machtileAuthState.appUserId = "";
+  machtileAuthState.refreshToken = authResponse?.refresh_token || "";
   machtileAuthState.expiresAt = jwtPayload.exp ? Number(jwtPayload.exp) * 1000 : Date.now() + Number(authResponse?.expires_in || 0) * 1000;
   machtileAuthState.error = "";
   machtilePersistSession();
@@ -7716,6 +7736,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.role = "";
   machtileAuthState.platformRole = "";
   machtileAuthState.appUserId = "";
+  machtileAuthState.refreshToken = "";
   machtileAuthState.expiresAt = 0;
   machtileAuthState.error = message;
   machtileDropPersistedSession();
@@ -7757,6 +7778,97 @@ async function machtileLogin(email, password) {
 
   machtileSetSession(payload, email);
   return payload;
+}
+
+// polish-2 (PB1=TimerPlusRestore): single-flight refresh of the 1h access
+// token. GoTrue ROTATES the refresh token on every call, so the new pair must
+// overwrite state + sessionStorage atomically (machtileSetSession does both)
+// and concurrent callers must share one in-flight request.
+// Returns "ok" (rotated), "retry" (network hiccup — token may still be valid,
+// keep the session and let the next tick retry) or "dead" (definitive auth
+// failure — caller gates).
+let machtileRefreshPromise = null;
+
+function machtileRefreshSession() {
+  if (machtileRefreshPromise) return machtileRefreshPromise;
+  machtileRefreshPromise = (async () => {
+    if (!machtileAuthConfigured() || !machtileAuthState.refreshToken) return "dead";
+    const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
+    let response;
+    try {
+      response = await fetch(`${baseUrl}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: {
+          apikey: config.supabaseAnonKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ refresh_token: machtileAuthState.refreshToken }),
+      });
+    } catch (error) {
+      console.warn("MachTile session refresh network error; will retry", error);
+      return "retry";
+    }
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = {};
+    }
+    if (!response.ok || !payload.access_token) {
+      console.warn("MachTile session refresh rejected", response.status, payload.error_description || payload.msg || "");
+      return response.status >= 500 ? "retry" : "dead";
+    }
+    machtileSetSession(payload, machtileAuthState.email || "");
+    return "ok";
+  })().finally(() => {
+    machtileRefreshPromise = null;
+  });
+  return machtileRefreshPromise;
+}
+
+// Renewal timer: refresh when less than 5 minutes of token life remain. The
+// visibility/focus checks cover device sleep (suspended timers): on wake the
+// tick fires immediately and the refresh token — which does not expire by
+// time — resumes the session even if the access token already lapsed.
+const MACHTILE_REFRESH_SKEW_MS = 5 * 60 * 1000;
+let machtileRefreshTimerStarted = false;
+
+function machtileEnsureRefreshTimer() {
+  if (!machtileStrictMode() || machtileRefreshTimerStarted) return;
+  machtileRefreshTimerStarted = true;
+  setInterval(machtileRefreshTick, 60 * 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) machtileRefreshTick();
+  });
+  window.addEventListener("focus", () => machtileRefreshTick());
+}
+
+async function machtileRefreshTick() {
+  if (!machtileStrictMode()) return;
+  if (machtileAuthState.status !== "signedIn" || !machtileAuthState.refreshToken) return;
+  if (machtileAuthState.expiresAt && machtileAuthState.expiresAt - Date.now() > MACHTILE_REFRESH_SKEW_MS) return;
+  const outcome = await machtileRefreshSession();
+  if (outcome === "dead") machtileHandleUnauthorized();
+}
+
+// polish-2 (PB2=RevokeOnLogout): explicit sign-out also kills the refresh
+// chain server-side. Fire-and-forget — the local clear + reload must never
+// wait on (or fail because of) this call.
+function machtileServerSignOut() {
+  if (!machtileAuthConfigured() || !machtileAuthState.accessToken) return;
+  const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
+  try {
+    fetch(`${baseUrl}/auth/v1/logout`, {
+      method: "POST",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${machtileAuthState.accessToken}`,
+      },
+      keepalive: true,
+    }).catch(() => {});
+  } catch (error) {
+    // ignore — local clear proceeds regardless
+  }
 }
 
 function machtileSupabaseBearerToken() {
@@ -7868,6 +7980,7 @@ function machtileRenderLoginGate() {
       await machtileLogin(email, password);
       machtileRemoveLoginGate();
       machtileEnsureSessionBadge();
+      machtileEnsureRefreshTimer();
       showToast("登入成功");
       await machtileResumeInit();
     } catch (error) {
@@ -7892,8 +8005,10 @@ function machtileEnsureSessionBadge() {
     <button type="button" data-machtile-logout>登出</button>
   `;
   badge.querySelector("[data-machtile-logout]")?.addEventListener("click", () => {
+    machtileServerSignOut();
     machtileClearSession();
-    // Session lives in memory only — a reload lands back on the login gate.
+    // Local session (incl. per-tab storage) is gone — the reload lands back
+    // on the login gate.
     window.location.reload();
   });
 }
@@ -10951,7 +11066,7 @@ async function init() {
   // Route changes are full page loads, so first try the per-tab persisted
   // session before showing the gate.
   if (machtileStrictMode() && !machtileSessionActive()) {
-    machtileRestoreSession();
+    await machtileRestoreSession();
   }
   if (machtileStrictMode() && !machtileSessionActive()) {
     machtileRenderLoginGate();
@@ -10959,6 +11074,7 @@ async function init() {
   }
 
   machtileEnsureSessionBadge();
+  machtileEnsureRefreshTimer();
   await machtileResumeInit();
 }
 
