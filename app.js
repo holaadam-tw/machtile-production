@@ -7624,6 +7624,9 @@ const machtileAuthState = {
   // polish-1: app_users.id for the signed-in account, lazily resolved by
   // machtileResolveAppUserId() so legacy REST writes can carry the actor.
   appUserId: "",
+  // polish-3 (PC2=NameWithEmailFallback): app_users.name from the same
+  // lookup, cached for the header user chip.
+  appUserName: "",
   // polish-2 (PB1=TimerPlusRestore): rotated GoTrue refresh token so the 1h
   // access token renews silently instead of re-gating mid-shift.
   refreshToken: "",
@@ -7721,6 +7724,7 @@ function machtileSetSession(authResponse, email) {
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
   machtileAuthState.platformRole = appMetadata.platform_role || "";
   machtileAuthState.appUserId = "";
+  machtileAuthState.appUserName = "";
   machtileAuthState.refreshToken = authResponse?.refresh_token || "";
   machtileAuthState.expiresAt = jwtPayload.exp ? Number(jwtPayload.exp) * 1000 : Date.now() + Number(authResponse?.expires_in || 0) * 1000;
   machtileAuthState.error = "";
@@ -7736,6 +7740,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.role = "";
   machtileAuthState.platformRole = "";
   machtileAuthState.appUserId = "";
+  machtileAuthState.appUserName = "";
   machtileAuthState.refreshToken = "";
   machtileAuthState.expiresAt = 0;
   machtileAuthState.error = message;
@@ -7889,13 +7894,17 @@ async function machtileResolveAppUserId() {
   if (!machtileStrictMode() || !machtileSessionActive() || !machtileAuthState.userId) return "";
   if (machtileAuthState.appUserId) return machtileAuthState.appUserId;
   try {
+    // polish-3: select extended id → id,name so the header user chip gets the
+    // display name from the same single cached lookup (PC2).
     const rows = await supabaseFetch(
-      `app_users?select=id&auth_user_id=eq.${encodeURIComponent(machtileAuthState.userId)}&is_active=eq.true&limit=1`
+      `app_users?select=id,name&auth_user_id=eq.${encodeURIComponent(machtileAuthState.userId)}&is_active=eq.true&limit=1`
     );
     machtileAuthState.appUserId = (Array.isArray(rows) && rows[0]?.id) || "";
+    machtileAuthState.appUserName = (Array.isArray(rows) && rows[0]?.name) || "";
   } catch (error) {
     console.warn("app_users actor lookup failed; write will carry no user_id", error);
     machtileAuthState.appUserId = "";
+    machtileAuthState.appUserName = "";
   }
   return machtileAuthState.appUserId;
 }
@@ -7980,6 +7989,7 @@ function machtileRenderLoginGate() {
       await machtileLogin(email, password);
       machtileRemoveLoginGate();
       machtileEnsureSessionBadge();
+      machtileApplyBranding();
       machtileEnsureRefreshTimer();
       showToast("登入成功");
       await machtileResumeInit();
@@ -8011,6 +8021,41 @@ function machtileEnsureSessionBadge() {
     // on the login gate.
     window.location.reload();
   });
+}
+
+// polish-3 (PC1=FactoryName / PC2=NameWithEmailFallback / PC3=BlankNeverWrong):
+// the topbar carried hardcoded prototype branding (永承一廠 / 張家維) — a
+// factual error once production gained a second tenant. Strict mode replaces
+// the plant name with the tenant's factories.name (tenants itself has no
+// authenticated select policy under P01) and the user chip with the signed-in
+// account. dev-nologin never reaches this call, so the Dev demo header stays
+// byte-identical mock.
+function machtileSetUserChip(label) {
+  const chip = document.querySelector(".user-chip");
+  if (!chip) return;
+  const text = String(label || "");
+  chip.innerHTML = `<span>${escapeHtml(text.charAt(0).toUpperCase())}</span>${escapeHtml(text)}`;
+}
+
+async function machtileApplyBranding() {
+  if (!machtileStrictMode() || !machtileSessionActive()) return;
+  // BlankNeverWrong: kill the placeholders synchronously — a blank header
+  // beats showing another factory's name while lookups are in flight.
+  const plantNameEl = document.getElementById("plantName");
+  if (plantNameEl) plantNameEl.textContent = "";
+  machtileSetUserChip(machtileAuthState.email);
+  // Display name rides the polish-1 actor lookup (cached, soft-fallback);
+  // chip upgrades from email to app_users.name when it resolves.
+  machtileResolveAppUserId().then(() => {
+    if (machtileAuthState.appUserName) machtileSetUserChip(machtileAuthState.appUserName);
+  });
+  try {
+    const rows = await supabaseFetch("factories?select=name&is_active=eq.true&order=factory_code&limit=1");
+    const factoryName = (Array.isArray(rows) && rows[0]?.name) || "";
+    if (factoryName && plantNameEl) plantNameEl.textContent = factoryName;
+  } catch (error) {
+    console.warn("factory name lookup failed; plant name stays blank", error);
+  }
 }
 
 function supabaseHeaders() {
@@ -11074,6 +11119,7 @@ async function init() {
   }
 
   machtileEnsureSessionBadge();
+  machtileApplyBranding();
   machtileEnsureRefreshTimer();
   await machtileResumeInit();
 }
