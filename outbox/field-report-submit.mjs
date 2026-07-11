@@ -16,13 +16,17 @@
 //   const submitter = createFieldReportSubmitter({ outbox });
 //   const { report_uuid } = await submitter.submit(basePayload, { operators: [currentAppUserId] });
 
-export function createFieldReportSubmitter({ outbox }) {
+export function createFieldReportSubmitter({ outbox, fileStore = null }) {
   if (!outbox || typeof outbox.enqueue !== 'function' || typeof outbox.flush !== 'function') {
     throw new Error('field-report-submit: outbox with enqueue()/flush() required');
   }
   return {
     // payload: { work_order_id, process_id, completed_qty, defect_qty, started_at, ended_at, ... }
     // opts.operators: array of app_user uuids credited on this report (0..N). Empty is allowed.
+    // opts.files: attachment entries ({file, kind, label}) persisted to fileStore under the
+    //   report_uuid BEFORE flush — so an offline report's photos survive an app restart and a
+    //   late flush's onSent can still upload them. Consumption/cleanup is the onSent handler's
+    //   job (best-effort once, then delete).
     // Returns { report_uuid, queued:true }. Never throws for offline — the row is durably queued
     // and flush() best-efforts the send (online driver / heartbeat retries the rest).
     async submit(payload, opts = {}) {
@@ -32,6 +36,11 @@ export function createFieldReportSubmitter({ outbox }) {
       const full = { ...payload };
       if (operators.length > 0) full.operators = operators;
       const report_uuid = await outbox.enqueue(full);   // report_uuid fixed at enqueue time
+      const files = Array.isArray(opts.files) ? opts.files.filter(Boolean) : [];
+      if (fileStore && files.length > 0) {
+        // must land before flush — a fast send's onSent reads this store
+        try { await fileStore.put({ report_uuid, entries: files }); } catch { /* best-effort */ }
+      }
       // fire-and-forget: online → sent now; offline → stays queued, no throw
       Promise.resolve(outbox.flush()).catch(() => {});
       return { report_uuid, queued: true };

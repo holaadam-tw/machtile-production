@@ -10164,6 +10164,7 @@ function openReport(orderId, options = {}) {
   document.body.classList.toggle("route-mode", Boolean(options.routeMode));
   $("#reportSheet").classList.add("is-open");
   $("#reportSheet").setAttribute("aria-hidden", "false");
+  machtileRenderOperatorSection().catch(() => {});   // strict+flag only; no-op otherwise
   ($("#workTotalQty") || $("#completedQty")).focus();
 }
 
@@ -10606,10 +10607,12 @@ function submitAiSupportQuestion(question) {
 let machtileOutboxInstance = null;
 let machtileOutboxLoadPromise = null;
 let machtileOutboxDriverStarted = false;
-// Attachment files captured at submit time — the DOM inputs are cleared right
-// after submit, so a late (offline) flush cannot re-read them. Lost on app
-// restart: the report itself is never lost, only its attachments.
-const machtileOutboxPendingFiles = new Map();
+// Attachment entries are captured at submit time (the DOM inputs are cleared
+// right after submit) and persisted to an IndexedDB file store keyed by
+// report_uuid — so an offline report's photos survive an app restart and get
+// uploaded when the report finally sends (backlog A, 2026-07-11). Upload is
+// best-effort once, then the entry is deleted (T3) — same tolerance as the
+// legacy online path.
 const machtileOutboxUploadResults = new Map();
 
 function machtileOutboxEnabled() {
@@ -10617,8 +10620,11 @@ function machtileOutboxEnabled() {
 }
 
 async function machtileOutboxHandleSent({ report_uuid, report_id }) {
-  const entries = machtileOutboxPendingFiles.get(report_uuid) || [];
-  machtileOutboxPendingFiles.delete(report_uuid);
+  const fileStore = machtileOutboxInstance?.fileStore;
+  let entries = [];
+  if (fileStore) {
+    try { entries = (await fileStore.get(report_uuid))?.entries || []; } catch { entries = []; }
+  }
   let uploaded = 0;
   let failed = 0;
   if (report_id) {
@@ -10632,6 +10638,9 @@ async function machtileOutboxHandleSent({ report_uuid, report_id }) {
       }
     }
   }
+  if (fileStore && entries.length) {
+    try { await fileStore.delete(report_uuid); } catch { /* best-effort */ }
+  }
   if (machtileOutboxUploadResults.size < 50) {
     machtileOutboxUploadResults.set(report_uuid, { uploaded, failed });
   }
@@ -10643,12 +10652,14 @@ async function machtileGetOutbox() {
   if (machtileOutboxInstance) return machtileOutboxInstance;
   if (!machtileOutboxLoadPromise) {
     machtileOutboxLoadPromise = (async () => {
-      const [outboxMod, storeMod, senderMod, submitMod] = await Promise.all([
+      const [outboxMod, storeMod, fileStoreMod, senderMod, submitMod] = await Promise.all([
         import("./outbox/outbox.mjs"),
         import("./outbox/outbox-store-idb.mjs"),
+        import("./outbox/outbox-file-store-idb.mjs"),
         import("./outbox/sender-supabase.mjs"),
         import("./outbox/field-report-submit.mjs"),
       ]);
+      const fileStore = fileStoreMod.createIdbFileStore();
       const outbox = outboxMod.createOutbox({
         store: storeMod.createIdbStore(),
         sender: senderMod.createSupabaseFieldReportSender({
@@ -10660,8 +10671,8 @@ async function machtileGetOutbox() {
         online: () => navigator.onLine,
         onSent: machtileOutboxHandleSent,
       });
-      const submitter = submitMod.createFieldReportSubmitter({ outbox });
-      machtileOutboxInstance = { outbox, submitter };
+      const submitter = submitMod.createFieldReportSubmitter({ outbox, fileStore });
+      machtileOutboxInstance = { outbox, submitter, fileStore };
       machtileOutboxStartDriver(outbox);
       return machtileOutboxInstance;
     })().catch((error) => {
@@ -10720,7 +10731,7 @@ async function machtileUpdateOutboxBadge() {
   });
 }
 
-async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType) {
+async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType, operators) {
   const payload = {
     ...basePayload,
     ...structuredPayload,
@@ -10731,9 +10742,9 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
   };
   const files = config.enableFileUpload ? reportFilesForType(reportType) : [];
   const { report_uuid } = await box.submitter.submit(payload, {
-    operators: basePayload.user_id ? [basePayload.user_id] : [],
+    operators: operators && operators.length ? operators : (basePayload.user_id ? [basePayload.user_id] : []),
+    files,
   });
-  if (files.length) machtileOutboxPendingFiles.set(report_uuid, files);
   // submit() already fire-and-forgets a flush; await one more (it joins the
   // in-flight scan) so the toast can tell "written now" from "queued offline".
   await box.outbox.flush().catch(() => {});
@@ -10748,6 +10759,71 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
   };
+}
+
+// ---- operator multi-select (backlog C, 2026-07-11; T2=all active users) ----
+// Strict-only + flag-on: the report sheet gains an 操作人員 checklist so one
+// station account can credit several people's 每人產值 (operators -> RPC
+// operator_ids). dev-nologin never renders it (no session, byte-identical).
+let machtileOperatorListCache = null;
+
+async function machtileFetchOperatorList() {
+  if (!machtileStrictMode() || !machtileSessionActive()) return [];
+  if (machtileOperatorListCache) return machtileOperatorListCache;
+  try {
+    const rows = await supabaseFetch("app_users?select=id,name&is_active=eq.true&order=name");
+    machtileOperatorListCache = Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    console.warn("operator list lookup failed; falling back to single actor", error);
+    machtileOperatorListCache = [];
+  }
+  return machtileOperatorListCache;
+}
+
+// Injected before the 備註 field each time the report sheet opens; default =
+// current actor checked. Reuses the existing .checklist-card styling (zero
+// styles.css change).
+async function machtileRenderOperatorSection() {
+  if (!machtileOutboxEnabled() || !machtileStrictMode() || !machtileSessionActive()) return;
+  const form = document.getElementById("reportForm");
+  const anchor = form?.querySelector('label[for="reportNote"]');
+  if (!form || !anchor) return;
+  const actorId = await machtileResolveAppUserId();
+  const users = await machtileFetchOperatorList();
+  if (!users.length) return;
+  let section = document.getElementById("machtileOperatorSection");
+  if (!section) {
+    section = document.createElement("section");
+    section.id = "machtileOperatorSection";
+    section.className = "report-section";
+    form.insertBefore(section, anchor);
+  }
+  section.innerHTML = `
+    <div class="report-section-head"><strong>操作人員</strong></div>
+    <div class="checklist-card" id="machtileOperatorList"></div>
+  `;
+  const list = section.querySelector("#machtileOperatorList");
+  users.forEach((u) => {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = u.id;
+    input.checked = u.id === actorId;
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(` ${u.name || u.id}`));
+    list.appendChild(label);
+  });
+}
+
+// Checked operators from the section; falls back to the single actor when the
+// section is absent (dev-nologin, lookup failure) or nothing is checked.
+function machtileSelectedOperators(actorAppUserId) {
+  const list = document.getElementById("machtileOperatorList");
+  if (list) {
+    const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((i) => i.value);
+    if (checked.length) return checked;
+  }
+  return actorAppUserId ? [actorAppUserId] : [];
 }
 
 // Eager driver start (flag on only): resend leftovers from a previous
@@ -10788,7 +10864,12 @@ async function submitReport(completed, defects, remark, reportType) {
     const box = await machtileGetOutbox();
     // Any outbox init failure falls through to the direct POST — a report
     // must always have a way out.
-    if (box) return machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType);
+    if (box) {
+      return machtileSubmitReportViaOutbox(
+        box, basePayload, structuredPayload, reportType,
+        machtileSelectedOperators(actorAppUserId)
+      );
+    }
   }
   let rows;
   if (useStructuredReportColumns) {
@@ -10821,7 +10902,9 @@ async function submitReport(completed, defects, remark, reportType) {
 }
 
 async function submitPauseReport(reason) {
-  if (state.source !== "supabase" || !selectedOrder?.processId || !isUuid(selectedOrder.workOrderId)) return false;
+  if (state.source !== "supabase" || !selectedOrder?.processId || !isUuid(selectedOrder.workOrderId)) {
+    return { wroteCloud: false, queuedOffline: false };
+  }
   const pausePayload = {
     tenant_id: selectedOrder.tenantId,
     work_order_id: selectedOrder.workOrderId,
@@ -10834,11 +10917,27 @@ async function submitPauseReport(reason) {
   };
   const actorAppUserId = await machtileResolveAppUserId();
   if (actorAppUserId) pausePayload.user_id = actorAppUserId;
+  // backlog B (2026-07-11): pause goes through the outbox too — RPC accepts
+  // status_after_report ('paused' whitelist, migration 202607110005). Pause
+  // stays single-actor (whoever pressed it), no operator multi-select.
+  if (machtileOutboxEnabled()) {
+    const box = await machtileGetOutbox();
+    if (box) {
+      const { report_uuid } = await box.submitter.submit(
+        { ...pausePayload, ended_at: new Date().toISOString() },
+        { operators: actorAppUserId ? [actorAppUserId] : [] }
+      );
+      await box.outbox.flush().catch(() => {});
+      const record = await box.outbox.get(report_uuid).catch(() => null);
+      machtileUpdateOutboxBadge();
+      return { wroteCloud: true, queuedOffline: record?.status !== "sent" };
+    }
+  }
   await supabaseFetch("production_reports", {
     method: "POST",
     body: JSON.stringify(pausePayload),
   });
-  return true;
+  return { wroteCloud: true, queuedOffline: false };
 }
 
 async function handlePauseReport() {
@@ -10849,13 +10948,17 @@ async function handlePauseReport() {
   const reason = window.prompt("請輸入暫停原因，例如：換刀、待料、量測、機台異音");
   if (!reason?.trim()) return;
   try {
-    const wroteCloud = await submitPauseReport(reason.trim());
+    const pauseResult = await submitPauseReport(reason.trim());
     selectedOrder.processStatus = "paused";
     selectedOrder.workStatus = "paused";
     selectedOrder.lastReport = "剛剛";
     closeReport();
     renderAll();
-    showToast(wroteCloud ? "已寫入 Supabase：暫停加工" : "已標記暫停加工");
+    showToast(
+      !pauseResult.wroteCloud ? "已標記暫停加工"
+        : pauseResult.queuedOffline ? "已排入待送：暫停加工，連線後自動送出"
+        : "已寫入 Supabase：暫停加工"
+    );
   } catch (error) {
     showToast(`暫停失敗：${error.message}`);
   }
