@@ -11,6 +11,10 @@ const config = {
   fieldReportBaseUrl: "",
   useQueryRoutesForFieldReports: true,
   useSupabase: false,
+  // CNC field-report offline outbox (2026-07-11 wiring plan). false = the
+  // direct production_reports POST stays byte-identical; true routes
+  // submitReport through the offline-first idempotent outbox seam.
+  enableOutboxSubmit: false,
   ...window.MACHTILE_CONFIG,
 };
 
@@ -10594,6 +10598,168 @@ function submitAiSupportQuestion(question) {
   window.setTimeout(() => appendAiSupportMessage("assistant", aiSupportAnswer(text)), 180);
 }
 
+// ---- CNC field-report offline outbox wiring (2026-07-11) ----
+// Plan + locks: docs/MACHTILE_CNC_OUTBOX_APPJS_WIRING_PLAN_2026-07-11.md
+// (W1=LocalDevGate, W2=EndedAtOnly, W3=SimulatedOffline, W4=MinimalBadge).
+// Gated on config.enableOutboxSubmit (default false): flag off = no module
+// import, no listeners, submitReport keeps the direct POST byte-path.
+let machtileOutboxInstance = null;
+let machtileOutboxLoadPromise = null;
+let machtileOutboxDriverStarted = false;
+// Attachment files captured at submit time — the DOM inputs are cleared right
+// after submit, so a late (offline) flush cannot re-read them. Lost on app
+// restart: the report itself is never lost, only its attachments.
+const machtileOutboxPendingFiles = new Map();
+const machtileOutboxUploadResults = new Map();
+
+function machtileOutboxEnabled() {
+  return Boolean(config.enableOutboxSubmit);
+}
+
+async function machtileOutboxHandleSent({ report_uuid, report_id }) {
+  const entries = machtileOutboxPendingFiles.get(report_uuid) || [];
+  machtileOutboxPendingFiles.delete(report_uuid);
+  let uploaded = 0;
+  let failed = 0;
+  if (report_id) {
+    for (const entry of entries) {
+      try {
+        await uploadReportFile(report_id, entry);
+        uploaded += 1;
+      } catch (error) {
+        failed += 1;
+        console.warn(error);
+      }
+    }
+  }
+  if (machtileOutboxUploadResults.size < 50) {
+    machtileOutboxUploadResults.set(report_uuid, { uploaded, failed });
+  }
+  machtileUpdateOutboxBadge();
+}
+
+async function machtileGetOutbox() {
+  if (!machtileOutboxEnabled()) return null;
+  if (machtileOutboxInstance) return machtileOutboxInstance;
+  if (!machtileOutboxLoadPromise) {
+    machtileOutboxLoadPromise = (async () => {
+      const [outboxMod, storeMod, senderMod, submitMod] = await Promise.all([
+        import("./outbox/outbox.mjs"),
+        import("./outbox/outbox-store-idb.mjs"),
+        import("./outbox/sender-supabase.mjs"),
+        import("./outbox/field-report-submit.mjs"),
+      ]);
+      const outbox = outboxMod.createOutbox({
+        store: storeMod.createIdbStore(),
+        sender: senderMod.createSupabaseFieldReportSender({
+          callRpc: senderMod.createPostgrestRpcCall({
+            baseUrl: config.supabaseUrl,
+            getHeaders: () => supabaseHeaders(),
+          }),
+        }),
+        online: () => navigator.onLine,
+        onSent: machtileOutboxHandleSent,
+      });
+      const submitter = submitMod.createFieldReportSubmitter({ outbox });
+      machtileOutboxInstance = { outbox, submitter };
+      machtileOutboxStartDriver(outbox);
+      return machtileOutboxInstance;
+    })().catch((error) => {
+      machtileOutboxLoadPromise = null;
+      console.warn("outbox unavailable, falling back to direct submit", error);
+      return null;
+    });
+  }
+  return machtileOutboxLoadPromise;
+}
+
+function machtileOutboxStartDriver(outbox) {
+  if (machtileOutboxDriverStarted) return;
+  machtileOutboxDriverStarted = true;
+  const flush = () => outbox.flush().then(() => machtileUpdateOutboxBadge()).catch(() => {});
+  window.addEventListener("online", flush);
+  window.setInterval(() => { if (navigator.onLine) flush(); }, 30000);
+  flush(); // startup: resend leftovers from previous sessions (online() guards offline)
+}
+
+async function machtileUpdateOutboxBadge() {
+  if (!machtileOutboxInstance) return;
+  const { outbox } = machtileOutboxInstance;
+  let pendingCount = 0;
+  let failedCount = 0;
+  try {
+    pendingCount = (await outbox.pending()).length;
+    failedCount = (await outbox.deadLetters()).length;
+  } catch {
+    return;
+  }
+  let badge = document.getElementById("machtileOutboxBadge");
+  if (pendingCount === 0 && failedCount === 0) {
+    if (badge) badge.hidden = true;
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = "machtileOutboxBadge";
+    badge.style.cssText =
+      "position:fixed;left:16px;bottom:16px;z-index:60;display:flex;gap:8px;align-items:center;" +
+      "padding:8px 12px;border-radius:10px;background:#1f2937;color:#f9fafb;font-size:13px;" +
+      "box-shadow:0 4px 12px rgba(0,0,0,.25);";
+    document.body.appendChild(badge);
+  }
+  badge.hidden = false;
+  const failedText = failedCount
+    ? `<button type="button" data-outbox-retry style="border:0;border-radius:8px;padding:4px 8px;background:#dc2626;color:#fff;cursor:pointer;">送失敗 ${failedCount} 筆，點擊重試</button>`
+    : "";
+  badge.innerHTML = `${pendingCount ? `<span>報工待送 ${pendingCount} 筆</span>` : ""}${failedText}`;
+  badge.querySelector("[data-outbox-retry]")?.addEventListener("click", async () => {
+    const dead = await outbox.deadLetters();
+    for (const item of dead) await outbox.requeue(item.report_uuid);
+    outbox.flush().then(() => machtileUpdateOutboxBadge()).catch(() => {});
+    machtileUpdateOutboxBadge();
+  });
+}
+
+async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType) {
+  const payload = {
+    ...basePayload,
+    ...structuredPayload,
+    // W2=EndedAtOnly: capture time fixed at enqueue (accurate even if the
+    // report is sent hours later); started_at stays null until the UI
+    // collects a real start time.
+    ended_at: new Date().toISOString(),
+  };
+  const files = config.enableFileUpload ? reportFilesForType(reportType) : [];
+  const { report_uuid } = await box.submitter.submit(payload, {
+    operators: basePayload.user_id ? [basePayload.user_id] : [],
+  });
+  if (files.length) machtileOutboxPendingFiles.set(report_uuid, files);
+  // submit() already fire-and-forgets a flush; await one more (it joins the
+  // in-flight scan) so the toast can tell "written now" from "queued offline".
+  await box.outbox.flush().catch(() => {});
+  const record = await box.outbox.get(report_uuid).catch(() => null);
+  const sentNow = record?.status === "sent";
+  const uploadResult = machtileOutboxUploadResults.get(report_uuid) || { uploaded: 0, failed: 0 };
+  machtileOutboxUploadResults.delete(report_uuid);
+  machtileUpdateOutboxBadge();
+  return {
+    wroteCloud: true,
+    queuedOffline: !sentNow,
+    uploaded: uploadResult.uploaded,
+    uploadFailed: uploadResult.failed,
+  };
+}
+
+// Eager driver start (flag on only): resend leftovers from a previous
+// session without waiting for the first new submit of this one.
+if (machtileOutboxEnabled()) {
+  if (document.readyState === "complete") {
+    window.setTimeout(() => { machtileGetOutbox(); }, 0);
+  } else {
+    window.addEventListener("load", () => { machtileGetOutbox(); });
+  }
+}
+
 async function submitReport(completed, defects, remark, reportType) {
   if (state.source !== "supabase" || !selectedOrder?.processId || !isUuid(selectedOrder.workOrderId)) {
     return { wroteCloud: false, uploaded: 0, uploadFailed: 0 };
@@ -10618,6 +10784,12 @@ async function submitReport(completed, defects, remark, reportType) {
     work_total_qty: reportPayload.work_total_qty,
     cycle_time_seconds: reportPayload.cycle_time_seconds,
   };
+  if (machtileOutboxEnabled()) {
+    const box = await machtileGetOutbox();
+    // Any outbox init failure falls through to the direct POST — a report
+    // must always have a way out.
+    if (box) return machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType);
+  }
   let rows;
   if (useStructuredReportColumns) {
     try {
@@ -10947,7 +11119,11 @@ function bindEvents() {
       renderAll();
       const qtyText = meta.needsQty ? `：良品 ${completed} 件，不良 ${defects} 件` : "";
       const fileText = result.uploaded ? `，附件 ${result.uploaded} 個` : result.uploadFailed ? "，附件待補" : "";
-      showToast(result.wroteCloud ? `已寫入 Supabase ${meta.label}${qtyText}${fileText}` : `已送出示範${meta.label}${qtyText}`);
+      showToast(
+        !result.wroteCloud ? `已送出示範${meta.label}${qtyText}`
+          : result.queuedOffline ? `已排入待送${meta.label}${qtyText}，連線後自動送出`
+          : `已寫入 Supabase ${meta.label}${qtyText}${fileText}`
+      );
     } catch (error) {
       showToast(`回報失敗：${error.message}`);
     }

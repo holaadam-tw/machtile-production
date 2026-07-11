@@ -16,5 +16,9 @@ window.MACHTILE_CONFIG = {
   useQueryRoutesForFieldReports: true,
   useTenantHeaderAuth: true,
   useSupabase: true,
-  useHmcWorklistSupabase: true
+  useHmcWorklistSupabase: true,
+  // CNC 現場報工 offline outbox (2026-07-11 flag-on gate): submitReport goes
+  // through the offline-first idempotent outbox seam (DB side = migrations
+  // 202607110001–0003, applied). Rollback = set false (direct POST path).
+  enableOutboxSubmit: true
 };
