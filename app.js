@@ -10652,12 +10652,17 @@ async function machtileGetOutbox() {
   if (machtileOutboxInstance) return machtileOutboxInstance;
   if (!machtileOutboxLoadPromise) {
     machtileOutboxLoadPromise = (async () => {
+      // ?v= on module URLs: dynamic import obeys the HTTP cache (Pages
+      // max-age=600) — without a bust, a tab that loaded an older module
+      // earlier keeps composing against it after a deploy. Bump alongside
+      // the index.html app.js ?v= stamp on every outbox change.
+      const v = "20260711-outbox-trio2";
       const [outboxMod, storeMod, fileStoreMod, senderMod, submitMod] = await Promise.all([
-        import("./outbox/outbox.mjs"),
-        import("./outbox/outbox-store-idb.mjs"),
-        import("./outbox/outbox-file-store-idb.mjs"),
-        import("./outbox/sender-supabase.mjs"),
-        import("./outbox/field-report-submit.mjs"),
+        import(`./outbox/outbox.mjs?v=${v}`),
+        import(`./outbox/outbox-store-idb.mjs?v=${v}`),
+        import(`./outbox/outbox-file-store-idb.mjs?v=${v}`),
+        import(`./outbox/sender-supabase.mjs?v=${v}`),
+        import(`./outbox/field-report-submit.mjs?v=${v}`),
       ]);
       const fileStore = fileStoreMod.createIdbFileStore();
       const outbox = outboxMod.createOutbox({
