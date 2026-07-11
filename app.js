@@ -8466,7 +8466,7 @@ function renderMachineCard(machine) {
   const reportUrl = canReport ? machineReportUrl(machine) : "";
   const qrReportUrl = reportUrl ? publicReportUrlOnLocalhost(reportUrl) : "";
   const reportLinkText = isHmc
-    ? `${machine.code || machine.name} · 多盤多工件報工`
+    ? `${machine.code || machine.name} · 多盤多工件每日盤點`
     : order
     ? `${machine.code || machine.name} · 已帶 ${order.id} 報工連結`
     : `${machine.code || machine.name} · ${qrReportUrl}`;
@@ -8493,7 +8493,7 @@ function renderMachineCard(machine) {
         <a class="machine-qr-card" data-no-detail href="${escapeHtml(qrReportUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtml(machine.name)} 掃碼現場回報">
           <img src="${escapeHtml(qrUrl)}" alt="${escapeHtml(machine.name)} 現場回報 QR Code">
           <span>
-            <strong>${isHmc ? "多盤多工件報工" : "掃碼報工"}</strong>
+            <strong>${isHmc ? "多盤多工件每日盤點" : "掃碼報工"}</strong>
             <small>${escapeHtml(reportLinkText)}</small>
           </span>
         </a>
@@ -8575,8 +8575,8 @@ function renderMachineCard(machine) {
         <div class="machine-tile-actions">
           ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>` : ""}
           ${isHmc
-            ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件報工</a>`
-            : `<button type="button" ${reportAttr} ${canReport ? "" : "disabled"}>${order ? (canReport ? "回報" : "待指派") : "指派"}</button>`}
+            ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
+            : `<button type="button" ${order && canReport ? 'class="machine-report-button"' : ""} ${reportAttr} ${canReport ? "" : "disabled"}>${order ? (canReport ? "回報" : "待指派") : "指派"}</button>`}
         </div>
       </footer>
     </article>
