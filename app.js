@@ -2023,7 +2023,7 @@ function hmcSetupActiveWorklistReadState() {
     return {
       status: "not_configured",
       source: "db",
-      message: "Dev Supabase worklist read is not configured.",
+      message: "連線設定未完成，無法讀取清單。",
       worklist: null,
       pallets: [],
       items: [],
@@ -2061,7 +2061,7 @@ function requestHmcSetupActiveWorklistRead() {
     hmcReportState.worklistReadCache[key] = {
       status: "not_configured",
       source: "db",
-      message: "Dev Supabase worklist read is not configured.",
+      message: "連線設定未完成，無法讀取清單。",
       worklist: null,
       pallets: [],
       items: [],
@@ -2499,7 +2499,7 @@ function hmcWorklistSetupSummary() {
           <span>本班加工清單草稿</span>
           <strong>${selectedCount} 件 / ${groups.length} 盤</strong>
         </div>
-        <em>畫面內暫存，未寫入 DB；儲存與啟用按鈕仍停用。</em>
+        <em>畫面內暫存；按「儲存草稿」後才會寫入資料庫。</em>
       </div>
       ${groups.length ? groups.map((group) => `
         <div class="hmc-selected-group">
@@ -2557,7 +2557,7 @@ function hmcWorklistSetupPalletEditor() {
 // actor — no per-surface fetcher needed (Gate P / P2 GlobalLoginGate).
 async function hmcDevAnonRpcFetch(functionName, body) {
   if (!canReadHmcWorklistFromSupabase()) {
-    throw new Error("MachTile Dev Supabase config is required.");
+    throw new Error("尚未完成連線設定，無法儲存。");
   }
   const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
   const response = await fetch(`${baseUrl}/rest/v1/rpc/${functionName}`, {
@@ -2589,7 +2589,7 @@ async function hmcDevAnonRpcFetch(functionName, body) {
   }
 
   if (payload?.status === "error") {
-    const error = new Error(machtileStrictErrorMessage(payload.code) || payload.message || "MachTile Dev RPC returned an error.");
+    const error = new Error(machtileStrictErrorMessage(payload.code) || payload.message || "伺服器回傳錯誤。");
     error.code = payload.code || "";
     throw error;
   }
@@ -2665,7 +2665,7 @@ function hmcBuildSetupWorklistPayload() {
       workDateStart: hmcTodayDateIso(),
       workDateEnd: null,
       sourceType: "planner_setup_ui",
-      note: "Created from MachTile HMC setup UI shell.",
+      note: "由 MachTile 班前設定頁建立",
     },
     pallets,
     items,
@@ -2678,12 +2678,12 @@ async function hmcSaveWorklistDraft() {
 }
 
 async function hmcActivateWorklist(worklistId) {
-  if (!worklistId) throw new Error("Save a draft before activation.");
+  if (!worklistId) throw new Error("請先儲存草稿，再啟用清單。");
   return hmcDevAnonRpcFetch("activate_hmc_worklist", { p_worklist_id: worklistId });
 }
 
 async function hmcReplaceActiveWorklist(worklistId, confirmReplace) {
-  if (!worklistId) throw new Error("Save a draft before replacing the active worklist.");
+  if (!worklistId) throw new Error("請先儲存草稿，再取代啟用清單。");
   return hmcDevAnonRpcFetch("replace_active_hmc_worklist", {
     p_worklist_id: worklistId,
     p_confirm_replace: Boolean(confirmReplace),
@@ -2694,8 +2694,8 @@ function hmcRenderSetupDevNoLoginNotice() {
   if (!canReadHmcWorklistFromSupabase()) {
     return `
       <section class="hmc-report-card hmc-setup-nologin-notice" aria-label="HMC setup Dev config unavailable">
-        <strong>Dev Supabase 設定未完成</strong>
-        <p>需要 Dev Supabase URL 與 anon key 才能儲存或啟用班前清單。</p>
+        <strong>連線設定未完成</strong>
+        <p>需要完成資料庫連線設定，才能儲存或啟用班前清單。</p>
       </section>
     `;
   }
@@ -2725,10 +2725,10 @@ function hmcRenderSetupActiveWorklistNotice() {
         <div>
           <span>已有啟用清單</span>
           <strong>目前 ${escapeHtml(shiftLabel)} 已有啟用中的加工清單</strong>
-          <p>不可重複啟用同機台、同班別的加工清單。如需更換清單，需另外走「取代 active 清單」決策。</p>
+          <p>不可重複啟用同機台、同班別的加工清單。如需更換清單，請用下方「取代目前啟用清單」。</p>
         </div>
         <dl>
-          <div><dt>worklistId</dt><dd>${escapeHtml(readState.worklist?.id || "-")}</dd></div>
+          <div><dt>清單編號</dt><dd>${escapeHtml(readState.worklist?.id || "-")}</dd></div>
           <div><dt>交換盤</dt><dd>${escapeHtml(readState.pallets?.length || 0)}</dd></div>
           <div><dt>工件</dt><dd>${escapeHtml(readState.items?.length || 0)}</dd></div>
         </dl>
@@ -2742,7 +2742,7 @@ function hmcRenderSetupActiveWorklistNotice() {
         <div>
           <span>清單狀態衝突</span>
           <strong>偵測到多筆啟用中的 ${escapeHtml(shiftLabel)} 加工清單</strong>
-          <p>${escapeHtml(readState.message || "請先整理 Dev DB active 清單，再啟用新的加工清單。")}</p>
+          <p>${escapeHtml(readState.message || "請先處理重複的啟用清單，再啟用新的加工清單。")}</p>
         </div>
       </section>
     `;
@@ -2752,7 +2752,7 @@ function hmcRenderSetupActiveWorklistNotice() {
     return `
       <section class="hmc-report-card hmc-setup-active-status" aria-label="Checking active HMC worklist">
         <strong>正在確認是否已有啟用清單...</strong>
-        <p>啟用前會檢查同機台、同班別是否已存在 active worklist。</p>
+        <p>啟用前會檢查同機台、同班別是否已有啟用中的清單。</p>
       </section>
     `;
   }
@@ -2771,21 +2771,21 @@ function hmcRenderSetupActiveWorklistNotice() {
 
 function hmcRenderSetupWriteStatus() {
   if (hmcSetupWriteState.status === "idle") {
-    return `<p>Dev only: save and activate the HMC pre-shift worklist. This does not create report records, submit production quantities, or sync SoftNet.</p>`;
+    return `<p>儲存草稿後即可啟用為本班加工清單；此頁只管理班前清單，不會產生報工、不同步 SoftNet。</p>`;
   }
   const statusLabel = {
-    saving: "Saving draft...",
-    activating: "Activating worklist...",
-    saved: "Draft saved",
-    active: "Active worklist is ready",
-    error: "Action failed",
+    saving: "儲存草稿中...",
+    activating: "啟用清單中...",
+    saved: "草稿已儲存",
+    active: "本班清單已啟用",
+    error: "操作失敗",
   }[hmcSetupWriteState.status] || hmcSetupWriteState.status;
   return `
     <div class="hmc-setup-write-status ${hmcSetupWriteState.status === "error" ? "is-error" : "is-ok"}">
       <strong>${escapeHtml(statusLabel)}</strong>
       <span>${escapeHtml(hmcSetupWriteState.message || hmcSetupWriteState.code || "-")}</span>
-      ${hmcSetupWriteState.worklistId ? `<small>worklistId: ${escapeHtml(hmcSetupWriteState.worklistId)}</small>` : ""}
-      ${hmcSetupWriteState.palletCount || hmcSetupWriteState.itemCount ? `<small>${escapeHtml(hmcSetupWriteState.palletCount)} pallets / ${escapeHtml(hmcSetupWriteState.itemCount)} items</small>` : ""}
+      ${hmcSetupWriteState.worklistId ? `<small>清單編號：${escapeHtml(hmcSetupWriteState.worklistId)}</small>` : ""}
+      ${hmcSetupWriteState.palletCount || hmcSetupWriteState.itemCount ? `<small>${escapeHtml(hmcSetupWriteState.palletCount)} 盤 / ${escapeHtml(hmcSetupWriteState.itemCount)} 件工件</small>` : ""}
     </div>
   `;
 }
@@ -2802,8 +2802,8 @@ function hmcRenderSetupReplaceStatus() {
     <div class="hmc-setup-replace-status ${isError ? "is-error" : "is-ok"}">
       <strong>${escapeHtml(statusLabel)}</strong>
       <span>${escapeHtml(hmcSetupReplaceState.message || hmcSetupReplaceState.code || "-")}</span>
-      ${hmcSetupReplaceState.oldWorklistId ? `<small>old active: ${escapeHtml(hmcSetupReplaceState.oldWorklistId)}</small>` : ""}
-      ${hmcSetupReplaceState.newWorklistId ? `<small>new active: ${escapeHtml(hmcSetupReplaceState.newWorklistId)}</small>` : ""}
+      ${hmcSetupReplaceState.oldWorklistId ? `<small>原啟用清單：${escapeHtml(hmcSetupReplaceState.oldWorklistId)}</small>` : ""}
+      ${hmcSetupReplaceState.newWorklistId ? `<small>新啟用清單：${escapeHtml(hmcSetupReplaceState.newWorklistId)}</small>` : ""}
     </div>
   `;
 }
@@ -2826,8 +2826,8 @@ function hmcRenderReplaceActiveWorklistPanel() {
       <div class="hmc-setup-replace-copy">
         <span>需要更換本班清單</span>
         <strong>取代目前啟用清單</strong>
-        <p>這是主管/排程人員的${machtileStrictMode() ? "" : " Dev-only"} 動作。舊清單會改為 superseded，新草稿會成為 active；現場報工仍不會送出。</p>
-        ${activeWorklistId ? `<small>目前 active：${escapeHtml(activeWorklistId)}</small>` : ""}
+        <p>這是主管/排程人員的${machtileStrictMode() ? "" : " Dev-only"} 動作。舊清單會標記為已取代，新草稿會成為啟用清單；現場報工仍不會送出。</p>
+        ${activeWorklistId ? `<small>目前啟用清單：${escapeHtml(activeWorklistId)}</small>` : ""}
         ${hmcSetupWriteState.worklistId ? `<small>準備啟用草稿：${escapeHtml(hmcSetupWriteState.worklistId)}</small>` : ""}
       </div>
       ${hmcRenderSetupReplaceStatus()}
@@ -2836,10 +2836,10 @@ function hmcRenderReplaceActiveWorklistPanel() {
       ` : `
         <div class="hmc-setup-replace-confirm">
           <strong>確認取代啟用清單</strong>
-          <p>這會把目前同機台、同班別的啟用清單改為 superseded，並把這份草稿設為新的 active 清單。舊清單不會刪除，但現場會改讀新的啟用清單。</p>
+          <p>這會把目前同機台、同班別的啟用清單標記為已取代，並把這份草稿設為新的啟用清單。舊清單不會刪除，但現場會改讀新的啟用清單。</p>
           <label>
             <input type="checkbox" data-hmc-confirm-replace-active ${hmcSetupReplaceState.confirmed ? "checked" : ""}>
-            <span>我了解：舊清單會改為 superseded，新清單會成為 active。</span>
+            <span>我了解：舊清單會標記為已取代，新清單會成為啟用清單。</span>
           </label>
           <div class="hmc-setup-replace-actions">
             <button type="button" data-hmc-cancel-replace-active>取消</button>
@@ -2857,12 +2857,12 @@ function hmcRenderSetupWriteControls() {
   const canActivate = hmcSetupWriteState.worklistId && !busy && !activateBlocked;
   return `
     <section class="hmc-submit-panel hmc-setup-action-panel">
-      <strong>HMC setup write controls</strong>
+      <strong>儲存與啟用</strong>
       ${hmcRenderSetupWriteStatus()}
-      ${activateBlocked ? `<p class="hmc-setup-active-block-note">目前同機台、同班別已有啟用清單；此版本不允許取代 active 清單。</p>` : ""}
+      ${activateBlocked ? `<p class="hmc-setup-active-block-note">目前同機台、同班別已有啟用清單；如需更換，請用下方「取代目前啟用清單」。</p>` : ""}
       <div class="hmc-setup-disabled-actions">
-        <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "Saving draft..." : "Save draft to Dev"}</button>
-        <button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "Activating..." : "Activate worklist"}</button>
+        <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
+        <button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>
       </div>
       ${hmcRenderReplaceActiveWorklistPanel()}
     </section>
@@ -2910,7 +2910,7 @@ function renderHmcWorklistSetupRoute() {
         <div>
           <p class="eyebrow">臥式加工中心 · ${escapeHtml(machineLabel)}</p>
           <h1 id="hmcSetupTitle">HMC 班前加工清單設定</h1>
-          <p>主管或排程人員在班前確認本班交換盤與工件；第一版只做 UI shell，不會儲存、不會寫入資料庫、不會呼叫端點。</p>
+          <p>主管或排程人員在班前建立本班交換盤與工件清單；儲存草稿並啟用後，現場才能填每日盤點。</p>
         </div>
         <div class="hmc-report-hero-actions">
           <a class="hmc-secondary-action" href="${escapeHtml(reportBackUrl)}">查看現場報工</a>
@@ -2919,19 +2919,10 @@ function renderHmcWorklistSetupRoute() {
       </header>
 
       <section class="hmc-safe-banner" aria-label="HMC setup write boundary">
-        <strong>${machtileStrictMode() ? "HMC setup（正式環境）" : "HMC Dev setup mode"}</strong>
+        <strong>${machtileStrictMode() ? "班前清單設定（正式環境）" : "班前清單設定（Dev）"}</strong>
         <span>${machtileStrictMode() ? "需登入（排程 / 主管）" : "免登入（Dev-only）"}</span>
-        <span>Writes only HMC worklist tables</span>
-        <span>No report submit</span>
-        <span>No production DB</span>
-        <span>No SoftNet sync</span>
-      </section>
-      <section class="hmc-safe-banner" aria-label="HMC setup disabled write boundary" hidden>
-        <strong>班前設定預覽模式</strong>
-        <span>不寫 DB</span>
-        <span>不呼叫 POST</span>
-        <span>不啟用 submit</span>
-        <span>不碰 production DB</span>
+        <span>只寫班前清單</span>
+        <span>不會產生報工</span>
         <span>不同步 SoftNet</span>
       </section>
 
@@ -2943,7 +2934,7 @@ function renderHmcWorklistSetupRoute() {
           </label>
           <label class="hmc-field">
             <span>清單日期</span>
-            <input type="text" value="班前建立日期由後續 DB 版本提供" readonly>
+            <input type="text" value="${escapeHtml(hmcTodayDateIso())}" readonly>
           </label>
           <div class="hmc-field">
             <span>班別</span>
@@ -2959,7 +2950,7 @@ function renderHmcWorklistSetupRoute() {
             </div>
           </div>
         </div>
-        <p>白班與夜班各自保留畫面內草稿；切換班別會看到對應清單。重新整理後不保留，因為目前不使用 localStorage、不寫 DB。</p>
+        <p>白班與夜班各自保留畫面內草稿；切換班別會看到對應清單。尚未儲存的內容重新整理後不會保留，請記得儲存草稿。</p>
       </section>
 
       ${hmcWorklistSetupSummary()}
@@ -2968,14 +2959,6 @@ function renderHmcWorklistSetupRoute() {
       ${hmcRenderSetupActiveWorklistNotice()}
       ${hmcRenderSetupDevNoLoginNotice()}
       ${hmcRenderSetupWriteControls()}
-      <section class="hmc-submit-panel hmc-setup-action-panel" hidden>
-        <strong>設定尚未啟用</strong>
-        <p>這一版只確認主管設定頁的操作模型。儲存草稿、啟用本班清單、正式報工都還沒有開放。</p>
-        <div class="hmc-setup-disabled-actions">
-          <button type="button" disabled aria-disabled="true">儲存草稿（未啟用）</button>
-          <button type="button" disabled aria-disabled="true">啟用本班清單（未啟用）</button>
-        </div>
-      </section>
     </section>
   `;
 
@@ -3006,7 +2989,7 @@ function bindHmcWorklistSetupEvents() {
     } catch (error) {
       hmcSetupWriteState.status = "error";
       hmcSetupWriteState.code = error?.code || "";
-      hmcSetupWriteState.message = error?.message || "Save draft failed.";
+      hmcSetupWriteState.message = error?.message || "草稿儲存失敗。";
     }
     renderHmcWorklistSetupRoute();
   });
@@ -3027,7 +3010,7 @@ function bindHmcWorklistSetupEvents() {
     } catch (error) {
       hmcSetupWriteState.status = "error";
       hmcSetupWriteState.code = error?.code || "";
-      hmcSetupWriteState.message = error?.message || "Activate worklist failed.";
+      hmcSetupWriteState.message = error?.message || "清單啟用失敗。";
     }
     renderHmcWorklistSetupRoute();
   });
@@ -3059,7 +3042,7 @@ function bindHmcWorklistSetupEvents() {
       hmcSetupReplaceState.open = false;
       hmcSetupReplaceState.confirmed = false;
       hmcSetupReplaceState.code = result.code || "WORKLIST_REPLACED";
-      hmcSetupReplaceState.message = result.message || "已取代啟用清單。舊清單已保留為 superseded，新清單已啟用。";
+      hmcSetupReplaceState.message = result.message || "已取代啟用清單。舊清單已標記為已取代並保留，新清單已啟用。";
       hmcSetupReplaceState.oldWorklistId = result.oldWorklistId || "";
       hmcSetupReplaceState.newWorklistId = result.worklistId || worklistId || "";
       hmcSetupWriteState.status = "active";
@@ -3331,9 +3314,8 @@ function hmcWorklistReadStatusPanel() {
     return `
       <section class="hmc-safe-banner" aria-label="HMC worklist preview source">
         <strong>預覽清單</strong>
-        <span>不需要登入</span>
-        <span>未連 DB</span>
-        <span>可用 worklistSource=db 讀取 Dev active 清單</span>
+        <span>示範資料</span>
+        <span>未連資料庫</span>
         <span>現場頁不寫資料庫</span>
       </section>
     `;
@@ -3342,7 +3324,7 @@ function hmcWorklistReadStatusPanel() {
   if (readState.status === "ok") {
     return `
       <section class="hmc-safe-banner" aria-label="HMC active DB worklist source">
-        <strong>已讀取 Dev active 清單</strong>
+        <strong>已讀取本班加工清單</strong>
         <span>${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())}</span>
         <span>${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))}</span>
         <span>${escapeHtml(readState.pallets.length)} 盤</span>
@@ -3359,14 +3341,12 @@ function hmcWorklistReadStatusPanel() {
     invalid_request: "讀取條件不完整",
     conflict: "啟用清單衝突",
     error: "清單讀取失敗",
-    not_configured: "Dev DB 讀取未設定",
+    not_configured: "連線設定未完成",
   };
   return `
     <section class="hmc-safe-banner" aria-label="HMC worklist read status">
       <strong>${escapeHtml(labelMap[readState.status] || "清單狀態")}</strong>
       <span>${escapeHtml(readState.message || "目前改用畫面預覽清單。")}</span>
-      <span>不需要登入</span>
-      <span>不寫資料庫</span>
     </section>
   `;
 }
@@ -3798,7 +3778,7 @@ async function loadHmcDailyQuantityFieldRows(machineCode, shift, workDate, workl
   return {
     status: normalized.rows.length ? "ok" : "empty",
     source: "db",
-    message: normalized.rows.length ? "已讀取 Dev 每日數量。" : "Dev view 沒有回傳每日數量列。",
+    message: normalized.rows.length ? "已讀取每日數量。" : "沒有讀到每日數量資料。",
     workDate,
     rows: normalized.rows,
     byItemId: normalized.byItemId,
@@ -3825,7 +3805,7 @@ function requestHmcDailyQuantityRead() {
   cache[key] = {
     status: "loading",
     source: "db",
-    message: "正在讀取 Dev 每日數量...",
+    message: "正在讀取每日數量...",
     workDate,
     rows: [],
     byItemId: {},
@@ -3845,7 +3825,7 @@ function requestHmcDailyQuantityRead() {
       cache[key] = {
         status: "error",
         source: "db",
-        message: error?.message || "Dev 每日數量讀取失敗。",
+        message: error?.message || "每日數量讀取失敗。",
         workDate,
         rows: [],
         byItemId: {},
@@ -4003,9 +3983,8 @@ function hmcWorklistReadStatusPanel() {
     return `
       <section class="hmc-safe-banner" aria-label="HMC worklist preview source">
         <strong>預覽清單</strong>
-        <span>不需要登入</span>
-        <span>未連 DB</span>
-        <span>可用 worklistSource=db 讀取 Dev active 清單</span>
+        <span>示範資料</span>
+        <span>未連資料庫</span>
         <span>現場頁不寫資料庫</span>
       </section>
     `;
@@ -4014,7 +3993,7 @@ function hmcWorklistReadStatusPanel() {
   if (readState.status === "ok") {
     return `
       <section class="hmc-safe-banner" aria-label="HMC active DB worklist source">
-        <strong>已讀取 Dev active 清單</strong>
+        <strong>已讀取本班加工清單</strong>
         <span>${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())}</span>
         <span>${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))}</span>
         <span>${escapeHtml(readState.pallets.length)} 盤</span>
@@ -4031,14 +4010,12 @@ function hmcWorklistReadStatusPanel() {
     invalid_request: "讀取條件不完整",
     conflict: "啟用清單衝突",
     error: "清單讀取失敗",
-    not_configured: "Dev DB 讀取未設定",
+    not_configured: "連線設定未完成",
   };
   return `
     <section class="hmc-safe-banner" aria-label="HMC worklist read status">
       <strong>${escapeHtml(labelMap[readState.status] || "清單狀態")}</strong>
       <span>${escapeHtml(readState.message || "目前改用畫面預覽清單。")}</span>
-      <span>不需要登入</span>
-      <span>不寫資料庫</span>
     </section>
   `;
 }
@@ -4154,7 +4131,7 @@ function hmcDailyQuantityReadStatusPanel() {
     idle: "尚未讀取每日數量",
     loading: "正在讀取每日數量",
     empty: "沒有每日數量資料",
-    waiting_worklist: "等待 active 清單",
+    waiting_worklist: "等待啟用清單",
     invalid_request: "每日數量讀取條件不完整",
     error: "每日數量讀取失敗",
   };
@@ -4540,7 +4517,7 @@ function buildHmcDailyCheckPayload() {
   const items = [];
 
   if (readState.status !== "ok" || !readState.worklist?.id) {
-    return { ok: false, message: "請先讀取 Dev active 加工清單，才能儲存每日盤點。" };
+    return { ok: false, message: "請先讀取本班加工清單，才能儲存每日盤點。" };
   }
 
   if (note.length > 1000) {
@@ -4591,7 +4568,7 @@ function hmcCanSaveDailyCheck() {
 function hmcDailyCheckStatusPanel() {
   const state = hmcDailyCheckSaveState;
   if (state.status === "idle") {
-    return `<p>每日盤點送出後會成為 pending_review；主管確認前不是正式報工。</p>`;
+    return `<p>每日盤點送出後為待複核；主管確認前不是正式報工。</p>`;
   }
 
   const isError = state.status === "error";
@@ -4620,7 +4597,7 @@ function hmcDailyCheckSavePanel() {
   const editableCount = hmcDailyCheckEditableSelectedItems().length;
   const actionLabel = rejectedCount ? "修正後重新送審" : "儲存每日盤點";
   const helperText = rejectedCount
-    ? `已選 ${rejectedCount} 筆退回項目；修正數量後會重新送審為 pending_review。`
+    ? `已選 ${rejectedCount} 筆退回項目；修正數量後會重新送審為待複核。`
     : `可送出 ${editableCount} 筆每日盤點；主管確認前不是正式報工。`;
 
   return `
@@ -4634,7 +4611,7 @@ function hmcDailyCheckSavePanel() {
       <button type="button" data-hmc-save-daily-check ${canSave ? "" : "disabled aria-disabled=\"true\""}>
         ${saving ? "處理中..." : escapeHtml(actionLabel)}
       </button>
-      <em>只寫入 MachTile Dev 的每日盤點狀態，不寫 production DB，不同步 SoftNet。</em>
+      <em>送出後由主管複核，確認前不是正式報工；不同步 SoftNet。</em>
     </section>
   `;
 }
@@ -4656,7 +4633,7 @@ function hmcDailyCheckReviewCacheKey(
 
 function hmcDailyCheckReviewReadState() {
   if (!canReadHmcWorklistFromSupabase()) {
-    return { status: "not_configured", message: "Dev Supabase read config is not available.", rows: [] };
+    return { status: "not_configured", message: "連線設定未完成，無法讀取。", rows: [] };
   }
   const key = hmcDailyCheckReviewCacheKey();
   return hmcDailyCheckReviewState.cache[key] || { status: "idle", message: "Review rows have not been loaded.", rows: [] };
@@ -4802,7 +4779,7 @@ function requestHmcDailyCheckReviewRead() {
   if (current && ["loading", "ok", "empty", "invalid_request", "error", "not_configured"].includes(current.status)) return;
 
   if (!canReadHmcWorklistFromSupabase()) {
-    hmcDailyCheckReviewState.cache[key] = { status: "not_configured", message: "Dev Supabase read config is not available.", rows: [] };
+    hmcDailyCheckReviewState.cache[key] = { status: "not_configured", message: "連線設定未完成，無法讀取。", rows: [] };
     return;
   }
 
@@ -5321,7 +5298,7 @@ function hmcRenderReviewConversionPanel() {
     return `
       <section class="hmc-report-card hmc-review-conversion-panel" aria-label="HMC formal report draft conversion">
         ${head}
-        <p class="hmc-review-conversion-note">尚未連線 Dev 資料，無法建立草稿。</p>
+        <p class="hmc-review-conversion-note">尚未連線資料庫，無法建立草稿。</p>
       </section>
     `;
   }
@@ -5545,7 +5522,7 @@ async function loadHmcFormalReportDraftDetail(draftId) {
 
 function requestHmcFormalReportDraftsList() {
   if (!canReadHmcWorklistFromSupabase()) {
-    hmcFormalReportDraftsState.list = { status: "not_configured", message: "尚未連線 Dev 資料。", rows: [] };
+    hmcFormalReportDraftsState.list = { status: "not_configured", message: "尚未連線資料庫。", rows: [] };
     return;
   }
   if (["loading", "ok", "empty"].includes(hmcFormalReportDraftsState.list.status)) return;
@@ -5566,7 +5543,7 @@ function requestHmcFormalReportDraftsList() {
 function requestHmcFormalReportDraftDetail(draftId) {
   if (!draftId) return;
   if (!canReadHmcWorklistFromSupabase()) {
-    hmcFormalReportDraftsState.detail[draftId] = { status: "not_configured", message: "尚未連線 Dev 資料。", draft: null, items: [] };
+    hmcFormalReportDraftsState.detail[draftId] = { status: "not_configured", message: "尚未連線資料庫。", draft: null, items: [] };
     return;
   }
   const current = hmcFormalReportDraftsState.detail[draftId];
@@ -5678,7 +5655,7 @@ function hmcRenderFormalReportDraftCancelPanel(draft) {
 // kept harmlessly for the strict production body (hardening H5).
 
 const hmcFinalizeErrorMessages = {
-  TENANT_REQUIRED: "缺少租戶設定，無法發行。請確認 Dev 連線參數。",
+  TENANT_REQUIRED: "缺少租戶設定，無法發行。請確認連線設定。",
   AUTH_REQUIRED: "請先以主管或排程人員帳號登入，才能發行正式報表。",
   FORBIDDEN: "此帳號沒有發行權限（需要主管或排程人員）。",
   CONFIRM_REQUIRED: "需要確認後才能發行。",
@@ -6109,7 +6086,7 @@ async function loadHmcFormalReportDetail(reportId) {
 
 function requestHmcFormalReportsList() {
   if (!canReadHmcWorklistFromSupabase()) {
-    hmcFormalReportsState.list = { status: "not_configured", message: "尚未連線 Dev 資料。", rows: [] };
+    hmcFormalReportsState.list = { status: "not_configured", message: "尚未連線資料庫。", rows: [] };
     return;
   }
   if (["loading", "ok", "empty"].includes(hmcFormalReportsState.list.status)) return;
@@ -6130,7 +6107,7 @@ function requestHmcFormalReportsList() {
 function requestHmcFormalReportDetail(reportId) {
   if (!reportId) return;
   if (!canReadHmcWorklistFromSupabase()) {
-    hmcFormalReportsState.detail[reportId] = { status: "not_configured", message: "尚未連線 Dev 資料。", report: null, items: [] };
+    hmcFormalReportsState.detail[reportId] = { status: "not_configured", message: "尚未連線資料庫。", report: null, items: [] };
     return;
   }
   const current = hmcFormalReportsState.detail[reportId];
@@ -6169,7 +6146,7 @@ function hmcRenderFormalReportSafeBanner() {
 // the strict production body (hardening H7).
 
 const hmcVoidErrorMessages = {
-  TENANT_REQUIRED: "缺少租戶設定，無法作廢。請確認 Dev 連線參數。",
+  TENANT_REQUIRED: "缺少租戶設定，無法作廢。請確認連線設定。",
   AUTH_REQUIRED: "請先以主管或排程人員帳號登入，才能作廢正式報表。",
   FORBIDDEN: "此帳號沒有作廢權限（需要主管或排程人員）。",
   CONFIRM_REQUIRED: "需要確認後才能作廢。",
@@ -6528,8 +6505,8 @@ function hmcShiftLabel(shift) {
 
 function hmcShiftDescription(shift) {
   return shift === "night"
-    ? "依夜班交接清單查看多盤、多工件；目前可儲存每日盤點為 pending_review。"
-    : "依白班本班清單查看多盤、多工件；目前可儲存每日盤點為 pending_review。";
+    ? "依夜班交接清單查看多盤、多工件；每日盤點儲存後為待複核。"
+    : "依白班本班清單查看多盤、多工件；每日盤點儲存後為待複核。";
 }
 
 function hmcWorkDailyQuantityLine(work) {
@@ -6547,7 +6524,7 @@ function hmcDailyQuantityReadStatusPanel() {
     return `
       <section class="hmc-safe-banner" aria-label="HMC daily quantity preview source">
         <strong>每日數量預覽</strong>
-        <span>未讀 Dev DB</span>
+        <span>未連資料庫</span>
         <span>可畫面輸入</span>
         <span>不會正式報工</span>
       </section>
@@ -6560,8 +6537,7 @@ function hmcDailyQuantityReadStatusPanel() {
         <strong>已讀取每日數量</strong>
         <span>${escapeHtml(dailyState.workDate || hmcDailyQuantityWorkDate())}</span>
         <span>${escapeHtml(dailyState.rows.length)} 筆</span>
-        <span>來源 v_hmc_daily_quantity_field_rows</span>
-        <span>可儲存 pending_review</span>
+        <span>可儲存為待複核</span>
       </section>
     `;
   }
@@ -6570,7 +6546,7 @@ function hmcDailyQuantityReadStatusPanel() {
     idle: "尚未讀取每日數量",
     loading: "正在讀取每日數量",
     empty: "沒有每日數量資料",
-    waiting_worklist: "等待 active 清單",
+    waiting_worklist: "等待啟用清單",
     invalid_request: "每日數量讀取條件不完整",
     error: "每日數量讀取失敗",
   };
@@ -6790,7 +6766,7 @@ function updateHmcReportPreview() {
       <span><b>缺料 / 跳過</b><strong>${escapeHtml(Math.max(skippedCount, stats.dbSkippedCount))}</strong></span>
       <span><b>預覽後剩餘</b><strong>${escapeHtml(previewRemainingQty)}</strong></span>
     </div>
-    <p class="hmc-preview-warning">${totalQty > 0 || defectQty > 0 || skippedCount > 0 ? "預覽已更新；可儲存為 pending_review，每日盤點仍不是正式報工。" : "請輸入本日完成、本日不良，或勾選缺料 / 跳過。"}</p>
+    <p class="hmc-preview-warning">${totalQty > 0 || defectQty > 0 || skippedCount > 0 ? "預覽已更新；可儲存為待複核，每日盤點仍不是正式報工。" : "請輸入本日完成、本日不良，或勾選缺料 / 跳過。"}</p>
     <p class="hmc-disabled-submit">尚未啟用正式送出</p>
   `;
 }
@@ -6880,7 +6856,7 @@ function renderHmcReportRoute() {
             <ul>
               <li>不新增交換盤、不變更工件清單。</li>
               <li>只儲存本日完成、不良、缺料/跳過與備註。</li>
-              <li>儲存狀態為 pending_review，等待主管確認。</li>
+              <li>儲存後為待複核，等待主管確認。</li>
               <li>不轉正式報工、不寫 production DB、不同步 SoftNet。</li>
             </ul>
           </div>
