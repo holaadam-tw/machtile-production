@@ -8510,8 +8510,8 @@ function renderMachineCard(machine) {
       <div class="machine-job-strip">
         <span>目前工單</span>
         ${order ? `
-          <strong>${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>
-          <small>${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
+          <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>
+          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
         ` : `
           <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
