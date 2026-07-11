@@ -673,6 +673,15 @@ function hmcDailyCheckReviewRoutePath() {
   return "/m/hmc-daily-check-review";
 }
 
+function hmcGuideRoutePath() {
+  return "/m/hmc-guide";
+}
+
+function hmcGuideRouteUrl(machineOrName, shift = "day") {
+  const machineName = typeof machineOrName === "object" ? machineOrName?.name : machineOrName;
+  return appRouteUrl("", { route: hmcGuideRoutePath(), machine: machineName || "HMC-01", shift: shift || "day" });
+}
+
 function hmcFormalReportDraftsRoutePath() {
   return "/m/hmc-formal-report-drafts";
 }
@@ -2869,6 +2878,130 @@ function hmcRenderSetupWriteControls() {
   `;
 }
 
+function renderHmcGuideRoute() {
+  document.body.classList.remove("station-select-route-mode");
+  document.body.classList.remove("work-list-route-mode");
+  document.body.classList.remove("work-detail-route-mode");
+  document.body.classList.remove("report-work-route-mode");
+  document.body.classList.add("hmc-report-route-mode");
+
+  const stationSelectRoot = $("#stationSelectRoute");
+  if (stationSelectRoot) stationSelectRoot.hidden = true;
+  const workListRoot = $("#workListRoute");
+  if (workListRoot) workListRoot.hidden = true;
+  const workDetailRoot = $("#workDetailRoute");
+  if (workDetailRoot) workDetailRoot.hidden = true;
+  const reportWorkRoot = $("#reportWorkRoute");
+  if (reportWorkRoot) reportWorkRoot.hidden = true;
+  const reviewRoot = $("#hmcDailyCheckReviewRoute");
+  if (reviewRoot) reviewRoot.hidden = true;
+
+  let routeRoot = $("#hmcReportRoute");
+  if (!routeRoot) {
+    routeRoot = document.createElement("div");
+    routeRoot.id = "hmcReportRoute";
+    routeRoot.setAttribute("role", "main");
+    document.body.appendChild(routeRoot);
+  }
+  routeRoot.className = "hmc-report-route hmc-guide-route";
+  routeRoot.setAttribute("aria-labelledby", "hmcGuideTitle");
+  routeRoot.hidden = false;
+
+  initializeHmcReportState();
+  const machineLabel = hmcRouteMachineLabel();
+  const shift = hmcReportState.shift;
+  const steps = [
+    {
+      no: 1,
+      title: "班前清單設定",
+      who: "排程 / 主管",
+      url: hmcWorklistSetupRouteUrl(machineLabel, shift),
+      linkText: "前往班前清單設定",
+      what: "建立本班的交換盤與工件清單：儲存草稿，再啟用為本班清單。",
+      then: "沒有啟用清單，現場就沒有東西可填；啟用後作業員才能開始每日盤點。",
+    },
+    {
+      no: 2,
+      title: "每日盤點",
+      who: "作業員（站別帳號）",
+      url: hmcReportRouteUrl(machineLabel),
+      linkText: "前往每日盤點",
+      what: "選班別，對每個工件填「本日完成、本日不良」，缺料或跳過就勾選，然後儲存。",
+      then: "儲存後為待複核；主管確認前不是正式報工。",
+    },
+    {
+      no: 3,
+      title: "主管複核",
+      who: "主管以上",
+      url: hmcDailyCheckReviewUrl({ status: "pending_review" }),
+      linkText: "前往每日盤點複核",
+      what: "逐筆確認或退回作業員送出的盤點；退回需填原因。",
+      then: "退回的項目回到作業員，修正後重新送審；確認的項目才能進下一步。",
+    },
+    {
+      no: 4,
+      title: "轉正式報表草稿",
+      who: "主管以上",
+      url: hmcFormalReportDraftsUrl(),
+      linkText: "前往草稿清單",
+      what: "把已確認的每日盤點建立成正式報表草稿；草稿唯讀。",
+      then: "草稿可取消（填原因、留痕）；來源盤點會釋回可重新建立。",
+    },
+    {
+      no: 5,
+      title: "確認發行",
+      who: "主管以上",
+      url: hmcFormalReportsUrl(),
+      linkText: "前往正式報表",
+      what: "草稿檢查無誤後按「確認發行」，成為正式報表。",
+      then: "發行後不可修改、僅供查閱；發錯可作廢（填原因、留痕）。",
+    },
+  ];
+
+  routeRoot.innerHTML = `
+    <section class="hmc-report-shell">
+      <header class="hmc-report-hero">
+        <div>
+          <p class="eyebrow">臥式加工中心 · ${escapeHtml(machineLabel)}</p>
+          <h1 id="hmcGuideTitle">使用說明 · 多盤多工件報工</h1>
+          <p>五個步驟：填 → 送審 → 主管確認 → 轉草稿 → 發行。主管確認前都不是正式數字。</p>
+        </div>
+        <div class="hmc-report-hero-actions">
+          <a href="${escapeHtml(hmcReportRouteUrl(machineLabel))}" data-hmc-guide-back>返回上一頁</a>
+        </div>
+      </header>
+
+      ${steps.map((step) => `
+        <section class="hmc-report-card hmc-guide-step" aria-label="步驟 ${step.no}">
+          <strong>步驟 ${step.no}｜${escapeHtml(step.title)} <small>（${escapeHtml(step.who)}）</small></strong>
+          <p>${escapeHtml(step.what)}</p>
+          <p><b>做完會怎樣：</b>${escapeHtml(step.then)}</p>
+          <p><a class="hmc-secondary-action" href="${escapeHtml(step.url)}">${escapeHtml(step.linkText)}</a></p>
+        </section>
+      `).join("")}
+
+      <section class="hmc-report-card" aria-label="角色權限對照">
+        <strong>誰可以做什麼</strong>
+        <p>作業員（站別帳號）：填每日盤點、修正退回項目。</p>
+        <p>排程 / 主管：班前清單的儲存、啟用、取代。</p>
+        <p>主管以上：複核確認 / 退回、轉草稿、發行、作廢。</p>
+      </section>
+
+      <section class="hmc-report-card" aria-label="基本原則">
+        <strong>基本原則</strong>
+        <p>主管確認前不是正式報工；發行後才是正式報表。所有取消、退回、作廢都要填原因並留痕。此流程不同步 SoftNet。</p>
+      </section>
+    </section>
+  `;
+
+  $("[data-hmc-guide-back]")?.addEventListener("click", (event) => {
+    if (window.history.length > 1) {
+      event.preventDefault();
+      window.history.back();
+    }
+  });
+}
+
 function renderHmcWorklistSetupRoute() {
   document.body.classList.remove("station-select-route-mode");
   document.body.classList.remove("work-list-route-mode");
@@ -2913,6 +3046,7 @@ function renderHmcWorklistSetupRoute() {
           <p>主管或排程人員在班前建立本班交換盤與工件清單；儲存草稿並啟用後，現場才能填每日盤點。</p>
         </div>
         <div class="hmc-report-hero-actions">
+          <a class="hmc-secondary-action" href="${escapeHtml(hmcGuideRouteUrl(machineLabel, hmcReportState.shift))}">使用說明</a>
           <a class="hmc-secondary-action" href="${escapeHtml(reportBackUrl)}">查看現場報工</a>
           <a href="${escapeHtml(reportBackUrl)}" data-hmc-setup-back>返回上一頁</a>
         </div>
@@ -5114,6 +5248,7 @@ function renderHmcDailyCheckReviewRoute() {
           <p>確認或退回作業員每日盤點；此頁不轉正式報工。</p>
         </div>
         <div class="hmc-report-hero-actions">
+          <a class="hmc-secondary-action" href="${escapeHtml(hmcGuideRouteUrl(hmcRouteMachineLabel(), hmcReportState.shift))}">使用說明</a>
           <a class="hmc-secondary-action" href="${escapeHtml(hmcDailyCheckReviewUrl({ status: "pending_review" }))}">待確認</a>
           <a href="${escapeHtml(hmcReportDashboardBackUrl())}">返回機台卡片</a>
         </div>
@@ -6817,6 +6952,7 @@ function renderHmcReportRoute() {
           <p>先看本班工件和主管退回項目，再填本日完成、不良、缺料與備註。</p>
         </div>
         <div class="hmc-report-hero-actions">
+          <a class="hmc-secondary-action" href="${escapeHtml(hmcGuideRouteUrl(machineLabel, hmcReportState.shift))}">使用說明</a>
           <a class="hmc-secondary-action" href="${escapeHtml(hmcDailyCheckReviewUrl({ status: "pending_review" }))}">每日盤點複核</a>
           <a class="hmc-secondary-action" href="${escapeHtml(hmcWorklistSetupRouteUrl(machineLabel, hmcReportState.shift))}">班前清單設定</a>
           <a href="${escapeHtml(hmcReportDashboardBackUrl())}" data-hmc-back>返回上一頁</a>
@@ -11518,6 +11654,11 @@ function applyInitialRoute() {
 
   if (routePath === hmcFormalReportDraftsRoutePath() || routePath.startsWith(`${hmcFormalReportDraftsRoutePath()}/`)) {
     renderHmcFormalReportDraftsRoute();
+    return;
+  }
+
+  if (routePath === hmcGuideRoutePath() || routePath.startsWith(`${hmcGuideRoutePath()}/`)) {
+    renderHmcGuideRoute();
     return;
   }
 
