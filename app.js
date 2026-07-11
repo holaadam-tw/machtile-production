@@ -10906,6 +10906,11 @@ async function submitReport(completed, defects, remark, reportType) {
       );
     }
   }
+  // seam 待辦 B(a) (2026-07-11): fallback rows carry a report_uuid too, so
+  // they still reach the writeback feed (it filters report_uuid IS NOT NULL).
+  if (!basePayload.report_uuid && globalThis.crypto?.randomUUID) {
+    basePayload.report_uuid = crypto.randomUUID();
+  }
   let rows;
   if (useStructuredReportColumns) {
     try {
@@ -10971,6 +10976,10 @@ async function submitPauseReport(reason) {
       machtileUpdateOutboxBadge();
       return { wroteCloud: true, queuedOffline: record?.status !== "sent" };
     }
+  }
+  // seam 待辦 B(a): same report_uuid treatment for the pause fallback
+  if (!pausePayload.report_uuid && globalThis.crypto?.randomUUID) {
+    pausePayload.report_uuid = crypto.randomUUID();
   }
   await supabaseFetch("production_reports", {
     method: "POST",
