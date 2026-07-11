@@ -8983,9 +8983,149 @@ function renderPlatformAdminSection() {
   `;
 }
 
+// 工單管理 (work-order upsert, 2026-07-11; locks X1=planner-or-above,
+// X2=no format enforcement, X3=full-field update): rendered ONLY in strict
+// mode for planner/manager/admin — dev-nologin demo keeps a byte-identical
+// 管理 tab. The RPC re-checks the role server-side.
+function machtileCanManageWorkOrders() {
+  return machtileStrictMode() && machtileSessionActive()
+    && ["admin", "manager", "planner"].includes(machtileAuthState.role);
+}
+
+function renderWorkOrderAdminSection() {
+  if (!machtileCanManageWorkOrders()) return "";
+  return `
+    <section class="admin-section">
+      <div class="panel-title">
+        <div>
+          <h2>工單管理</h2>
+        </div>
+        <span>建單、指派機台（同單號重送＝更新/改派）</span>
+      </div>
+      <div class="admin-action-grid admin-action-grid-compact" aria-label="工單管理">
+        ${renderAdminActionCard("list", "建單／指派機台", "輸入 ERP/MES 派工單號，指派後機台即可報工", "blue", "workOrders")}
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkOrderModule() {
+  if (!machtileCanManageWorkOrders()) {
+    return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
+  }
+  return `
+    <form id="machtileWoForm" class="admin-module-form">
+      <label class="admin-field"><span>派工單號 *（請照抄 ERP/MES 派工單號）</span>
+        <input id="machtileWoNo" type="text" required placeholder="例：XX01202607100012"></label>
+      <label class="admin-field"><span>品號</span>
+        <input id="machtileWoPartNo" type="text" placeholder="例：DSHG-04-01"></label>
+      <label class="admin-field"><span>品名 *</span>
+        <input id="machtileWoPartName" type="text" required></label>
+      <label class="admin-field"><span>數量 *</span>
+        <input id="machtileWoQty" type="number" min="1" required></label>
+      <label class="admin-field"><span>交期 *</span>
+        <input id="machtileWoDue" type="date" required></label>
+      <label class="admin-field"><span>指派機台</span>
+        <select id="machtileWoMachine"><option value="">暫不指派</option></select></label>
+      <label class="admin-field"><span>製程名稱</span>
+        <input id="machtileWoProcess" type="text" placeholder="CNC 加工"></label>
+      <button class="admin-save-button" type="submit">建立／更新工單</button>
+      <p class="admin-module-note">同單號再次送出＝更新內容或改派機台；選「暫不指派」＝取消指派。</p>
+    </form>
+    <div id="machtileWoList"><p class="admin-module-note">載入工單中…</p></div>
+  `;
+}
+
+let machtileWoMachinesCache = null;
+
+async function machtileWoMachines() {
+  if (machtileWoMachinesCache) return machtileWoMachinesCache;
+  try {
+    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code&order=machine_code");
+  } catch (error) {
+    console.warn("machines lookup failed", error);
+    machtileWoMachinesCache = [];
+  }
+  return machtileWoMachinesCache;
+}
+
+async function machtileRefreshWorkOrderList() {
+  const holder = document.getElementById("machtileWoList");
+  if (!holder) return;
+  try {
+    const [orders, machines] = await Promise.all([
+      supabaseFetch("work_orders?select=work_order_no,part_no,part_name,quantity,due_date,work_order_processes(machine_id)&order=created_at.desc&limit=10"),
+      machtileWoMachines(),
+    ]);
+    const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+    const rows = (orders || []).map((o) => {
+      const machineId = o.work_order_processes?.[0]?.machine_id;
+      const machine = machineId ? (codeById.get(machineId) || "?") : "未指派";
+      return `<tr><td>${escapeHtml(o.work_order_no)}</td><td>${escapeHtml(o.part_no || "-")}</td><td>${escapeHtml(String(o.quantity))}</td><td>${escapeHtml(o.due_date || "-")}</td><td>${escapeHtml(machine)}</td></tr>`;
+    }).join("");
+    holder.innerHTML = `
+      <table class="admin-module-table" style="width:100%;font-size:13px;border-collapse:collapse;">
+        <thead><tr><th style="text-align:left;">單號</th><th style="text-align:left;">品號</th><th style="text-align:left;">數量</th><th style="text-align:left;">交期</th><th style="text-align:left;">機台</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5">尚無工單</td></tr>`}</tbody>
+      </table>`;
+  } catch (error) {
+    holder.innerHTML = `<p class="admin-module-note">工單清單載入失敗：${escapeHtml(error.message || "")}</p>`;
+  }
+}
+
+function machtileWoErrorText(error) {
+  const msg = String(error?.message || error || "");
+  if (msg.includes("FORBIDDEN")) return "此帳號沒有建單權限（需排程以上）。";
+  if (msg.includes("machine_code not found")) return "找不到這台機台，請重新選擇。";
+  if (msg.includes("quantity must be")) return "數量必須大於 0。";
+  return msg;
+}
+
+async function machtileInitWorkOrderModule() {
+  const form = document.getElementById("machtileWoForm");
+  if (!form) return;
+  const machines = await machtileWoMachines();
+  const select = document.getElementById("machtileWoMachine");
+  if (select) {
+    select.innerHTML = `<option value="">暫不指派</option>` +
+      machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(m.machine_code)}</option>`).join("");
+  }
+  machtileRefreshWorkOrderList();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const payload = {
+        work_order_no: document.getElementById("machtileWoNo").value.trim(),
+        part_no: document.getElementById("machtileWoPartNo").value.trim(),
+        part_name: document.getElementById("machtileWoPartName").value.trim(),
+        quantity: Number(document.getElementById("machtileWoQty").value),
+        due_date: document.getElementById("machtileWoDue").value,
+        machine_code: document.getElementById("machtileWoMachine").value || null,
+        process_name: document.getElementById("machtileWoProcess").value.trim() || null,
+      };
+      const result = await supabaseFetch("rpc/work_order_upsert", {
+        method: "POST",
+        body: JSON.stringify({ p_payload: payload }),
+      });
+      const machineText = result?.machine_code ? `，指派 ${result.machine_code}` : "（未指派）";
+      showToast(`${result?.action === "created" ? "已建立" : "已更新"}工單 ${payload.work_order_no}${machineText}`);
+      machtileRefreshWorkOrderList();
+      // card wall picks up the new/assigned order on next data load
+      loadFromSupabase().then(renderAll).catch(() => {});
+    } catch (error) {
+      showToast(`工單儲存失敗：${machtileWoErrorText(error)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function renderSettings() {
   const managedMachines = managedMachineList();
   $("#settingsContent").innerHTML = `
+    ${renderWorkOrderAdminSection()}
     ${renderPlatformAdminSection()}
     <section class="admin-section">
       <div class="panel-title">
@@ -9066,6 +9206,7 @@ function adminModuleMeta(moduleKey) {
     alarm: ["Alarm Rules", "警報參數設定"],
     users: ["User Accounts", "員工帳號管理"],
     platform: ["Platform Admin", "平台管理"],
+    workOrders: ["Work Orders", "工單管理"],
     invite: ["Invite Codes", "生成邀請碼"],
     vendor: ["Partner Access", "供應商授權管理"],
     company: ["Company Profile", "公司資料"],
@@ -9115,6 +9256,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderAlarmRulesModule();
     case "users":
       return renderUsersModule();
+    case "workOrders":
+      return renderWorkOrderModule();
     case "platform":
       return renderPlatformModule();
     case "invite":
@@ -10005,6 +10148,7 @@ function openAdminModule(moduleKey) {
   $("#adminModuleEyebrow").textContent = meta.eyebrow;
   $("#adminModuleTitle").textContent = meta.title;
   $("#adminModuleContent").innerHTML = renderAdminModuleContent(moduleKey);
+  if (moduleKey === "workOrders") machtileInitWorkOrderModule().catch(() => {});
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
