@@ -10737,14 +10737,17 @@ async function machtileUpdateOutboxBadge() {
 }
 
 async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType, operators) {
+  // ended_at = capture time fixed at enqueue (accurate even if the report is
+  // sent hours later); started_at from the rolling ledger (W2=EndedAtOnly
+  // superseded 2026-07-11 — the writeback bridge requires both).
+  const endedAt = new Date().toISOString();
+  const startedAt = machtileTakeStartedAt(basePayload.process_id, endedAt);
   const payload = {
     ...basePayload,
     ...structuredPayload,
-    // W2=EndedAtOnly: capture time fixed at enqueue (accurate even if the
-    // report is sent hours later); started_at stays null until the UI
-    // collects a real start time.
-    ended_at: new Date().toISOString(),
+    ended_at: endedAt,
   };
+  if (startedAt) payload.started_at = startedAt;
   const files = config.enableFileUpload ? reportFilesForType(reportType) : [];
   const { report_uuid } = await box.submitter.submit(payload, {
     operators: operators && operators.length ? operators : (basePayload.user_id ? [basePayload.user_id] : []),
@@ -10764,6 +10767,33 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
   };
+}
+
+// ---- started_at rolling ledger (2026-07-11, TODO_APPJS_STARTED_AT_FOR_CNC_WRITEBACK) ----
+// The SoftNet writeback bridge REQUIRES started_at (contract §3: 工時 = out−in;
+// rows without it are rejected). Lock=RollingLedger: each report's started_at
+// = the previous report/開工 timestamp for the same process (kept per-device in
+// localStorage), then the ledger rolls forward to this report's ended_at — so
+// periods tile without overlap and their sum equals real elapsed time. Ledger
+// miss (first-ever report on this device) → started_at stays null: visible
+// bridge reject instead of fabricated hours.
+const MACHTILE_STARTED_AT_LEDGER_KEY = "machtile-outbox-started-at";
+
+function machtileTakeStartedAt(processId, endedAtIso) {
+  if (!processId) return null;
+  let startedAt = null;
+  try {
+    let ledger;
+    try { ledger = JSON.parse(localStorage.getItem(MACHTILE_STARTED_AT_LEDGER_KEY) || "{}") || {}; }
+    catch { ledger = {}; }
+    const prev = ledger[processId];
+    // ISO-8601 UTC strings compare lexicographically; guard ended>=started
+    // (the RPC raises otherwise, e.g. after a device clock change).
+    if (typeof prev === "string" && prev && prev <= endedAtIso) startedAt = prev;
+    ledger[processId] = endedAtIso;   // roll forward
+    localStorage.setItem(MACHTILE_STARTED_AT_LEDGER_KEY, JSON.stringify(ledger));
+  } catch { /* storage unavailable → started_at stays null */ }
+  return startedAt;
 }
 
 // ---- operator multi-select (backlog C, 2026-07-11; T2=all active users) ----
@@ -10928,8 +10958,12 @@ async function submitPauseReport(reason) {
   if (machtileOutboxEnabled()) {
     const box = await machtileGetOutbox();
     if (box) {
+      const pauseEndedAt = new Date().toISOString();
+      const pauseStartedAt = machtileTakeStartedAt(selectedOrder.processId, pauseEndedAt);
+      const outboxPausePayload = { ...pausePayload, ended_at: pauseEndedAt };
+      if (pauseStartedAt) outboxPausePayload.started_at = pauseStartedAt;
       const { report_uuid } = await box.submitter.submit(
-        { ...pausePayload, ended_at: new Date().toISOString() },
+        outboxPausePayload,
         { operators: actorAppUserId ? [actorAppUserId] : [] }
       );
       await box.outbox.flush().catch(() => {});
