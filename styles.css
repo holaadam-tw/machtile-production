@@ -4042,6 +4042,55 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-size: 12px;
 }
 
+.hmc-wo-suggest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hmc-wo-suggest-close {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hmc-input-clear-wrap {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.hmc-input-clear-wrap input {
+  width: 100%;
+  padding-right: 32px;
+  box-sizing: border-box;
+}
+
+.hmc-input-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(20, 20, 19, 0.06);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
 .hmc-setup-add-pallet {
   display: inline-flex;
   align-items: center;

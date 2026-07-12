@@ -2611,8 +2611,9 @@ function hmcRenderWorkOrderSuggestions(palletId, query) {
     ? hmcWorkOrderPickerState.rows.filter((row) => `${row.work_order_no || ""} ${row.part_name || ""} ${row.part_no || ""}`.toLowerCase().includes(term))
     : hmcWorkOrderPickerState.rows
   ).slice(0, 8);
+  const closeButton = `<button type="button" class="hmc-wo-suggest-close" data-hmc-wo-close="${escapeHtml(palletId)}" aria-label="收合工單建議">收合 ✕</button>`;
   box.innerHTML = matches.length
-    ? `${term ? "" : '<p class="hmc-wo-suggest-note">最近的工單（輸入可搜尋）：</p>'}` + matches.map((row) => `
+    ? `<div class="hmc-wo-suggest-head"><span class="hmc-wo-suggest-note">${term ? "符合的工單：" : "最近的工單（輸入可搜尋）："}</span>${closeButton}</div>` + matches.map((row) => `
         <button type="button" class="hmc-wo-suggest-item" data-hmc-wo-pick="${escapeHtml(palletId)}" data-wo-no="${escapeHtml(row.work_order_no || "")}" data-wo-part="${escapeHtml(row.part_name || row.part_no || "")}" data-wo-qty="${escapeHtml(row.quantity ?? "")}">
           <strong>${escapeHtml(row.work_order_no || "")}</strong>
           <span>${escapeHtml(row.part_name || row.part_no || "-")}</span>
@@ -2691,7 +2692,10 @@ function hmcWorklistSetupPalletEditor() {
               `).join("") || '<p class="empty-note">此盤還沒有工件，用下方表單新增。</p>'}
             </div>
             <div class="hmc-setup-add-form">
-              <input type="text" placeholder="工單號（點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
+              <span class="hmc-input-clear-wrap">
+                <input type="text" placeholder="工單號（點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
+                <button type="button" class="hmc-input-clear" data-hmc-form-clear="${escapeHtml(pallet.palletId)}" aria-label="清除工單號">✕</button>
+              </span>
               <input type="text" placeholder="工件名" maxlength="60" value="${editing ? escapeHtml(editing.partName) : ""}" data-hmc-form-partname="${escapeHtml(pallet.palletId)}">
               <input type="number" min="0" inputmode="numeric" placeholder="預計數量" value="${editing ? escapeHtml(editing.plannedQty) : ""}" data-hmc-form-qty="${escapeHtml(pallet.palletId)}">
               <button type="button" data-hmc-form-submit="${escapeHtml(pallet.palletId)}">${editing ? "更新工件" : "＋ 加入工件"}</button>
@@ -3367,8 +3371,26 @@ function bindHmcWorklistSetupEvents() {
     });
   });
 
+  $$("[data-hmc-form-clear]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const palletId = button.dataset.hmcFormClear;
+      const input = $(`[data-hmc-form-workno="${palletId}"]`);
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+      const box = $(`[data-hmc-wo-suggest="${palletId}"]`);
+      if (box) box.innerHTML = "";
+    });
+  });
+
   $$("[data-hmc-wo-suggest]").forEach((box) => {
     box.addEventListener("click", (event) => {
+      const close = event.target.closest("[data-hmc-wo-close]");
+      if (close) {
+        box.innerHTML = "";
+        return;
+      }
       const pick = event.target.closest("[data-hmc-wo-pick]");
       if (!pick) return;
       const palletId = pick.dataset.hmcWoPick;
