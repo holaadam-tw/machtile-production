@@ -3823,6 +3823,125 @@ input.hmc-selected-defect-qty[type="number"],
   font-weight: 800;
 }
 
+.hmc-setup-pallet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.hmc-setup-pallet-head > span {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.hmc-pallet-name-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hmc-setup-pallet-head .hmc-link-button.is-danger {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hmc-setup-work-chip {
+  position: relative;
+}
+
+.hmc-chip-tools {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.hmc-chip-tools [data-chip-edit],
+.hmc-chip-tools [data-chip-del] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(20, 20, 19, 0.06);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hmc-chip-tools [data-chip-del]:hover {
+  background: var(--red-soft);
+  color: #b42318;
+}
+
+.hmc-setup-add-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 0.7fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.hmc-setup-add-form input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.hmc-setup-add-form button[data-hmc-form-submit] {
+  min-height: 40px;
+  border: 1px solid var(--brand-blue);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: var(--brand-blue);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.hmc-setup-add-pallet {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 12px;
+  border: 1px dashed var(--brand-blue);
+  border-radius: 999px;
+  padding: 8px 16px;
+  background: var(--surface);
+  color: var(--brand-blue);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .hmc-setup-add-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .pw-field {
   position: relative;
   display: block;

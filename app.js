@@ -2217,6 +2217,16 @@ function hmcShiftDescription(shift) {
     : "白班模式：依班前清單自選本班要做的交換盤與工件。";
 }
 
+function machtileSetRouteParam(key, value) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set(key, value);
+    window.history.replaceState(null, "", url.toString());
+  } catch {
+    // URL 更新失敗不阻擋畫面切換
+  }
+}
+
 function initializeHmcReportState() {
   const params = new URLSearchParams(window.location.search);
   const shift = params.get("shift");
@@ -2498,9 +2508,73 @@ function hmcWorklistSetupGroups() {
     .filter((group) => group.items.length);
 }
 
+// ---- Setup editor v2 draft (2026-07-12): the setup page edits its OWN deep
+// copy of the current worklist so pallets/works can be added/edited/removed
+// without polluting the DB read cache or the report page's shared plan. ----
+
+const hmcSetupDraftState = {
+  key: "",
+  workDate: "",
+  pallets: [],
+  editTarget: null,
+  deleteConfirmPalletId: "",
+  message: "",
+  dirty: false,
+  seedStatus: "",
+};
+
+function hmcSetupDraftMarkDirty() {
+  hmcSetupDraftState.dirty = true;
+}
+
+function hmcSetupDraft() {
+  const key = `${hmcRouteMachineKey()}|${hmcReportState.shift}`;
+  const readStatus = hmcCurrentWorklistReadState().status;
+  // Re-seed on machine/shift change, or when the DB worklist arrives after we
+  // seeded from the fallback template and the user hasn't edited anything yet.
+  const needReseed = hmcSetupDraftState.key !== key
+    || (!hmcSetupDraftState.dirty && readStatus === "ok" && hmcSetupDraftState.seedStatus !== "ok");
+  if (needReseed) {
+    hmcSetupDraftState.key = key;
+    hmcSetupDraftState.dirty = false;
+    hmcSetupDraftState.seedStatus = readStatus;
+    hmcSetupDraftState.workDate = hmcTodayDateIso();
+    hmcSetupDraftState.editTarget = null;
+    hmcSetupDraftState.deleteConfirmPalletId = "";
+    hmcSetupDraftState.message = "";
+    hmcSetupDraftState.pallets = activeHmcReportPallets().map((pallet, index) => ({
+      palletId: pallet.palletId || `P${index + 1}`,
+      palletNo: Number(pallet.palletNo) || index + 1,
+      setupName: pallet.setupName || pallet.fixtureName || "未設定治具",
+      works: (Array.isArray(pallet.works) ? pallet.works : []).map((work) => ({
+        workNo: work.workNo || "",
+        partName: work.partName || "",
+        plannedQty: hmcNonNegativeInteger(work.plannedQty, 0),
+        completedQty: hmcNonNegativeInteger(work.completedQty, 0),
+        remainingQty: hmcNonNegativeInteger(work.remainingQty, Math.max(0, hmcNonNegativeInteger(work.plannedQty, 0) - hmcNonNegativeInteger(work.completedQty, 0))),
+        operationId: work.operationId || "",
+        operationName: work.operationName || "",
+        materialStatus: ["ready", "missing", "unknown"].includes(work.materialStatus) ? work.materialStatus : "ready",
+        included: true,
+      })),
+    }));
+  }
+  return hmcSetupDraftState;
+}
+
+function hmcSetupDraftPallet(palletId) {
+  return hmcSetupDraft().pallets.find((pallet) => pallet.palletId === palletId) || null;
+}
+
+function hmcSetupDraftSelectedGroups() {
+  return hmcSetupDraft().pallets
+    .map((pallet) => ({ pallet, works: pallet.works.filter((work) => work.included) }))
+    .filter((group) => group.works.length);
+}
+
 function hmcWorklistSetupSummary() {
-  const groups = hmcWorklistSetupGroups();
-  const selectedCount = groups.reduce((total, group) => total + group.items.length, 0);
+  const groups = hmcSetupDraftSelectedGroups();
+  const selectedCount = groups.reduce((total, group) => total + group.works.length, 0);
   return `
     <section class="hmc-report-card hmc-setup-summary-card" aria-label="HMC setup selected worklist">
       <div class="hmc-selected-summary-head">
@@ -2510,52 +2584,68 @@ function hmcWorklistSetupSummary() {
         </div>
         <em>畫面內暫存；按「儲存草稿」後才會寫入資料庫。</em>
       </div>
-      ${groups.length ? groups.map((group) => `
+      ${groups.length ? groups.map((group, index) => `
         <div class="hmc-selected-group">
-          <strong>${escapeHtml(group.pallet.palletName)} · ${escapeHtml(group.pallet.setupName)}</strong>
+          <strong>第 ${escapeHtml(index + 1)} 盤 · ${escapeHtml(group.pallet.setupName)}</strong>
           <div>
-            ${group.items.map((item) => `<span>${escapeHtml(item.work.workNo)} · ${escapeHtml(item.work.partName)}</span>`).join("")}
+            ${group.works.map((work) => `<span>${escapeHtml(work.workNo)} · ${escapeHtml(work.partName)}</span>`).join("")}
           </div>
         </div>
-      `).join("") : `<p>尚未選取工件。第一版只做畫面預覽，不會儲存空清單。</p>`}
+      `).join("") : `<p>尚未有納入的工件；在下方新增或勾選工件後再儲存。</p>`}
     </section>
   `;
 }
 
 function hmcWorklistSetupPalletEditor() {
+  const draft = hmcSetupDraft();
+  const editTarget = draft.editTarget;
   return `
     <section class="hmc-report-card hmc-setup-editor-card" aria-label="HMC setup pallet editor">
       <div class="hmc-night-head">
         <div>
           <strong>交換盤與工件清單</strong>
-          <span>點選工件只會更新畫面草稿；不會新增資料、不會寫入資料庫。</span>
+          <span>點工件卡＝納入／排除本班清單；✎ 編輯、✕ 移除；下方可手動新增工件。</span>
         </div>
       </div>
+      ${draft.message ? `<p class="hmc-draft-cancel-error">${escapeHtml(draft.message)}</p>` : ""}
       <div class="hmc-setup-pallet-editor">
-        ${activeHmcReportPallets().map((pallet, palletIndex) => `
-          <article class="hmc-setup-pallet-row ${pallet.palletId === hmcActivePlan().activePalletId ? "is-active" : ""}">
-            <button type="button" class="hmc-setup-pallet-title" data-hmc-setup-pallet="${escapeHtml(pallet.palletId)}">
+        ${draft.pallets.map((pallet, palletIndex) => {
+          const editing = editTarget && editTarget.palletId === pallet.palletId
+            ? pallet.works.find((work) => work.workNo === editTarget.workNo)
+            : null;
+          return `
+          <article class="hmc-setup-pallet-row">
+            <div class="hmc-setup-pallet-head">
               <span>第 ${escapeHtml(palletIndex + 1)} 盤</span>
-              <strong>${escapeHtml(pallet.setupName)}</strong>
-              <em>${pallet.works.filter((work) => hmcSelectedWorkKeys().has(hmcWorkKey(pallet.palletId, work.workNo))).length}/${pallet.works.length} 已選</em>
-            </button>
+              <input type="text" class="hmc-pallet-name-input" value="${escapeHtml(pallet.setupName)}" maxlength="60" aria-label="治具名稱" data-hmc-pallet-name="${escapeHtml(pallet.palletId)}">
+              <button type="button" class="hmc-link-button is-danger" data-hmc-del-pallet="${escapeHtml(pallet.palletId)}">${draft.deleteConfirmPalletId === pallet.palletId ? "確認刪除此盤？" : "刪除盤"}</button>
+            </div>
             <div class="hmc-setup-work-list">
-              ${pallet.works.map((work, workIndex) => {
-                const key = hmcWorkKey(pallet.palletId, work.workNo);
-                const isSelected = hmcSelectedWorkKeys().has(key);
-                return `
-                  <button type="button" class="hmc-setup-work-chip ${isSelected ? "is-selected" : ""} ${work.workNo === hmcActivePlan().workNo ? "is-active" : ""}" data-hmc-setup-work-card="${escapeHtml(work.workNo)}" data-hmc-pallet-work="${escapeHtml(pallet.palletId)}" aria-pressed="${isSelected ? "true" : "false"}">
-                    <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
-                    <strong>${escapeHtml(work.partName)}</strong>
-                    <em>${escapeHtml(work.workNo)}</em>
-                    <small>剩餘 ${escapeHtml(work.remainingQty)} · ${escapeHtml(work.operationId)}</small>
-                  </button>
-                `;
-              }).join("")}
+              ${pallet.works.map((work, workIndex) => `
+                <button type="button" class="hmc-setup-work-chip ${work.included ? "is-selected" : ""}" data-hmc-chip="${escapeHtml(pallet.palletId)}::${escapeHtml(work.workNo)}" aria-pressed="${work.included ? "true" : "false"}">
+                  <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
+                  <strong>${escapeHtml(work.partName)}</strong>
+                  <em>${escapeHtml(work.workNo)}</em>
+                  <small>預計 ${escapeHtml(work.plannedQty)} · 已完成 ${escapeHtml(work.completedQty)}</small>
+                  <span class="hmc-chip-tools">
+                    <span data-chip-edit role="button" aria-label="編輯工件">✎</span>
+                    <span data-chip-del role="button" aria-label="移除工件">✕</span>
+                  </span>
+                </button>
+              `).join("") || '<p class="empty-note">此盤還沒有工件，用下方表單新增。</p>'}
+            </div>
+            <div class="hmc-setup-add-form">
+              <input type="text" placeholder="工單號" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
+              <input type="text" placeholder="工件名" maxlength="60" value="${editing ? escapeHtml(editing.partName) : ""}" data-hmc-form-partname="${escapeHtml(pallet.palletId)}">
+              <input type="number" min="0" inputmode="numeric" placeholder="預計數量" value="${editing ? escapeHtml(editing.plannedQty) : ""}" data-hmc-form-qty="${escapeHtml(pallet.palletId)}">
+              <button type="button" data-hmc-form-submit="${escapeHtml(pallet.palletId)}">${editing ? "更新工件" : "＋ 加入工件"}</button>
+              ${editing ? `<button type="button" class="hmc-link-button" data-hmc-form-cancel="1">取消編輯</button>` : ""}
             </div>
           </article>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
+      <button type="button" class="hmc-secondary-action hmc-setup-add-pallet" data-hmc-add-pallet>＋ 新增交換盤</button>
     </section>
   `;
 }
@@ -2618,52 +2708,42 @@ function hmcNonNegativeInteger(value, fallback = 0) {
 }
 
 function hmcBuildSetupWorklistPayload() {
-  const groups = hmcWorklistSetupGroups();
+  const groups = hmcSetupDraftSelectedGroups();
   if (!groups.length) {
-    throw new Error("Select at least one HMC pallet item before saving.");
+    throw new Error("請至少納入一件工件再儲存。");
   }
 
-  const pallets = groups.map((group, index) => {
-    const palletNo = hmcNonNegativeInteger(group.pallet.palletNo || String(group.pallet.palletId || "").replace(/\D/g, ""), index + 1) || index + 1;
-    return {
-      clientId: group.pallet.palletId || `P${palletNo}`,
-      palletNo,
-      fixtureCode: group.pallet.fixtureCode || group.pallet.palletId || `P${palletNo}`,
-      fixtureName: group.pallet.setupName || group.pallet.fixtureName || "",
-      status: "active",
-      sortOrder: index + 1,
-      note: "",
-    };
-  });
+  const pallets = groups.map((group, index) => ({
+    clientId: group.pallet.palletId || `P${index + 1}`,
+    palletNo: index + 1,
+    fixtureCode: group.pallet.palletId || `P${index + 1}`,
+    fixtureName: group.pallet.setupName || "",
+    status: "active",
+    sortOrder: index + 1,
+    note: "",
+  }));
 
-  const items = groups.flatMap((group) => {
-    const palletNo = hmcNonNegativeInteger(group.pallet.palletNo || String(group.pallet.palletId || "").replace(/\D/g, ""), 1) || 1;
-    const allWorks = Array.isArray(group.pallet.works) ? group.pallet.works : [];
-    return group.items.map((item, itemIndex) => {
-      const workIndex = allWorks.findIndex((work) => work.workNo === item.work.workNo);
-      const positionIndex = workIndex >= 0 ? workIndex : itemIndex;
-      const materialStatus = ["ready", "missing", "unknown"].includes(item.work.materialStatus) ? item.work.materialStatus : "unknown";
-      const isSkipped = Boolean(hmcSkipped()[item.key]);
-      return {
-        clientId: item.key,
-        palletClientId: group.pallet.palletId || `P${palletNo}`,
-        palletNo,
-        positionCode: hmcWorkLetter(positionIndex),
-        workpieceName: item.work.partName || item.work.workNo,
-        workOrderId: item.work.workOrderId || item.work.workNo,
-        workOrderNo: item.work.workNo,
-        operationId: item.work.operationId || "",
-        operationName: item.work.operationName || "",
-        partNo: item.work.partNo || item.work.partName || "",
-        plannedQty: hmcNonNegativeInteger(item.work.plannedQty, 0),
-        completedQtyBefore: hmcNonNegativeInteger(item.work.completedQty, 0),
-        remainingQtySnapshot: hmcNonNegativeInteger(item.work.remainingQty, 0),
-        materialStatus,
-        status: isSkipped ? "skipped" : "active",
-        sortOrder: positionIndex + 1,
-        note: "",
-      };
-    });
+  const items = groups.flatMap((group, groupIndex) => {
+    const palletNo = groupIndex + 1;
+    return group.works.map((work, workIndex) => ({
+      clientId: `${group.pallet.palletId}::${work.workNo}`,
+      palletClientId: group.pallet.palletId || `P${palletNo}`,
+      palletNo,
+      positionCode: hmcWorkLetter(workIndex),
+      workpieceName: work.partName || work.workNo,
+      workOrderId: work.workNo,
+      workOrderNo: work.workNo,
+      operationId: work.operationId || "",
+      operationName: work.operationName || "",
+      partNo: work.partName || "",
+      plannedQty: hmcNonNegativeInteger(work.plannedQty, 0),
+      completedQtyBefore: hmcNonNegativeInteger(work.completedQty, 0),
+      remainingQtySnapshot: hmcNonNegativeInteger(work.remainingQty, 0),
+      materialStatus: work.materialStatus || "ready",
+      status: "active",
+      sortOrder: workIndex + 1,
+      note: "",
+    }));
   });
 
   return {
@@ -2671,7 +2751,7 @@ function hmcBuildSetupWorklistPayload() {
       machineId: hmcRouteMachineKey(),
       machineCode: hmcRouteMachineKey(),
       shiftScope: hmcReportState.shift === "night" ? "night" : "day",
-      workDateStart: hmcTodayDateIso(),
+      workDateStart: hmcSetupDraft().workDate || hmcTodayDateIso(),
       workDateEnd: null,
       sourceType: "planner_setup_ui",
       note: "由 MachTile 班前設定頁建立",
@@ -3058,11 +3138,13 @@ function renderHmcWorklistSetupRoute() {
         <div class="hmc-setup-control-grid">
           <label class="hmc-field">
             <span>機台</span>
-            <input type="text" value="${escapeHtml(machineLabel)}" readonly>
+            <select data-hmc-setup-machine>
+              ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === machineLabel ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+            </select>
           </label>
           <label class="hmc-field">
             <span>清單日期</span>
-            <input type="text" value="${escapeHtml(hmcTodayDateIso())}" readonly>
+            <input type="date" value="${escapeHtml(hmcSetupDraft().workDate || hmcTodayDateIso())}" data-hmc-setup-date>
           </label>
           <div class="hmc-field">
             <span>班別</span>
@@ -3190,6 +3272,7 @@ function bindHmcWorklistSetupEvents() {
   $$("[data-hmc-setup-shift]").forEach((button) => {
     button.addEventListener("click", () => {
       hmcReportState.shift = button.dataset.hmcSetupShift === "night" ? "night" : "day";
+      machtileSetRouteParam("shift", hmcReportState.shift);
       hmcSetupWriteState.status = "idle";
       hmcSetupWriteState.worklistId = "";
       hmcSetupWriteState.worklistStatus = "";
@@ -3201,31 +3284,125 @@ function bindHmcWorklistSetupEvents() {
       renderHmcWorklistSetupRoute();
     });
   });
-  $$("[data-hmc-setup-pallet]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const plan = hmcActivePlan();
-      plan.activePalletId = button.dataset.hmcSetupPallet || "P1";
-      plan.workNo = selectedHmcPallet().works[0]?.workNo || "";
+  $("[data-hmc-setup-machine]")?.addEventListener("change", (event) => {
+    const machineName = event.currentTarget.value || "HMC-01";
+    window.location.href = hmcWorklistSetupRouteUrl(machineName, hmcReportState.shift);
+  });
+
+  $("[data-hmc-setup-date]")?.addEventListener("change", (event) => {
+    const value = (event.currentTarget.value || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      hmcSetupDraft().workDate = value;
+    }
+  });
+
+  $$("[data-hmc-pallet-name]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      const pallet = hmcSetupDraftPallet(event.currentTarget.dataset.hmcPalletName);
+      if (pallet) {
+        pallet.setupName = event.currentTarget.value.trim() || "未設定治具";
+        hmcSetupDraftMarkDirty();
+      }
+    });
+  });
+
+  $$("[data-hmc-chip]").forEach((chip) => {
+    chip.addEventListener("click", (event) => {
+      const [palletId, workNo] = String(chip.dataset.hmcChip || "").split("::");
+      const draft = hmcSetupDraft();
+      const pallet = hmcSetupDraftPallet(palletId);
+      if (!pallet) return;
+      const workIndex = pallet.works.findIndex((work) => work.workNo === workNo);
+      if (workIndex < 0) return;
+      draft.message = "";
+      hmcSetupDraftMarkDirty();
+      if (event.target.closest("[data-chip-del]")) {
+        pallet.works.splice(workIndex, 1);
+        if (draft.editTarget && draft.editTarget.palletId === palletId && draft.editTarget.workNo === workNo) draft.editTarget = null;
+      } else if (event.target.closest("[data-chip-edit]")) {
+        draft.editTarget = { palletId, workNo };
+      } else {
+        pallet.works[workIndex].included = !pallet.works[workIndex].included;
+      }
       renderHmcWorklistSetupRoute();
     });
   });
-  $$("[data-hmc-setup-work-card]").forEach((button) => {
+
+  $$("[data-hmc-form-submit]").forEach((button) => {
     button.addEventListener("click", () => {
-      const plan = hmcActivePlan();
-      const palletId = button.dataset.hmcPalletWork || plan.activePalletId || "P1";
-      const pallet = activeHmcReportPallets().find((item) => item.palletId === palletId) || selectedHmcPallet();
-      const workNo = button.dataset.hmcSetupWorkCard || pallet.works[0]?.workNo || "";
-      const key = hmcWorkKey(pallet.palletId, workNo);
-      plan.activePalletId = pallet.palletId;
-      plan.workNo = workNo;
-      if (hmcSelectedWorkKeys().has(key)) {
-        hmcSelectedWorkKeys().delete(key);
-        delete hmcQuantities()[key];
-        delete hmcSkipped()[key];
-      } else {
-        hmcSelectedWorkKeys().add(key);
+      const palletId = button.dataset.hmcFormSubmit;
+      const draft = hmcSetupDraft();
+      const pallet = hmcSetupDraftPallet(palletId);
+      if (!pallet) return;
+      const workNo = ($(`[data-hmc-form-workno="${palletId}"]`)?.value || "").trim();
+      const partName = ($(`[data-hmc-form-partname="${palletId}"]`)?.value || "").trim();
+      const plannedQty = hmcNonNegativeInteger($(`[data-hmc-form-qty="${palletId}"]`)?.value, 0);
+      if (!workNo || !partName) {
+        draft.message = "請填工單號與工件名。";
+        renderHmcWorklistSetupRoute();
+        return;
       }
-      hmcEnsureSelectedWork();
+      const editing = draft.editTarget && draft.editTarget.palletId === palletId
+        ? pallet.works.find((work) => work.workNo === draft.editTarget.workNo)
+        : null;
+      const duplicate = pallet.works.some((work) => work.workNo === workNo && work !== editing);
+      if (duplicate) {
+        draft.message = `此盤已有工單號 ${workNo}。`;
+        renderHmcWorklistSetupRoute();
+        return;
+      }
+      draft.message = "";
+      hmcSetupDraftMarkDirty();
+      if (editing) {
+        editing.workNo = workNo;
+        editing.partName = partName;
+        editing.plannedQty = plannedQty;
+        editing.remainingQty = Math.max(0, plannedQty - editing.completedQty);
+        draft.editTarget = null;
+      } else {
+        pallet.works.push({
+          workNo,
+          partName,
+          plannedQty,
+          completedQty: 0,
+          remainingQty: plannedQty,
+          operationId: "",
+          operationName: "",
+          materialStatus: "ready",
+          included: true,
+        });
+      }
+      renderHmcWorklistSetupRoute();
+    });
+  });
+
+  $("[data-hmc-form-cancel]")?.addEventListener("click", () => {
+    hmcSetupDraft().editTarget = null;
+    renderHmcWorklistSetupRoute();
+  });
+
+  $("[data-hmc-add-pallet]")?.addEventListener("click", () => {
+    const draft = hmcSetupDraft();
+    const nextNo = draft.pallets.reduce((max, pallet) => Math.max(max, Number(pallet.palletNo) || 0), 0) + 1;
+    draft.pallets.push({ palletId: `P${nextNo}`, palletNo: nextNo, setupName: "未設定治具", works: [] });
+    hmcSetupDraftMarkDirty();
+    draft.message = "";
+    renderHmcWorklistSetupRoute();
+  });
+
+  $$("[data-hmc-del-pallet]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const palletId = button.dataset.hmcDelPallet;
+      const draft = hmcSetupDraft();
+      if (draft.deleteConfirmPalletId !== palletId) {
+        draft.deleteConfirmPalletId = palletId;
+        renderHmcWorklistSetupRoute();
+        return;
+      }
+      draft.pallets = draft.pallets.filter((pallet) => pallet.palletId !== palletId);
+      hmcSetupDraftMarkDirty();
+      draft.deleteConfirmPalletId = "";
+      if (draft.editTarget && draft.editTarget.palletId === palletId) draft.editTarget = null;
       renderHmcWorklistSetupRoute();
     });
   });
@@ -7243,6 +7420,7 @@ function bindHmcReportEvents() {
   $$("[data-hmc-shift]").forEach((button) => {
     button.addEventListener("click", () => {
       hmcReportState.shift = button.dataset.hmcShift === "night" ? "night" : "day";
+      machtileSetRouteParam("shift", hmcReportState.shift);
       resetHmcDailyCheckSaveState();
       renderHmcReportRoute();
     });
