@@ -3786,6 +3786,20 @@ body.hmc-report-route-mode .mobile-tabs {
   color: var(--brand-blue);
 }
 
+.hmc-guide-step a.hmc-secondary-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 31px;
+  border: 1px solid var(--brand-blue);
+  border-radius: 999px;
+  padding: 5px 14px;
+  background: var(--surface);
+  color: var(--brand-blue);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
 .hmc-safe-banner {
   display: flex;
   flex-wrap: wrap;

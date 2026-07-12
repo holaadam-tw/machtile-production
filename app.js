@@ -4200,7 +4200,7 @@ function hmcRenderReviewNoteCell(row) {
     <span class="hmc-review-note-stack">
       <b>作業員：${escapeHtml(quantityNote)}</b>
       ${reviewNote ? `<em>主管：${escapeHtml(reviewNote)}</em>` : ""}
-      ${reviewedAt ? `<small>${escapeHtml(reviewedAt)}</small>` : ""}
+      ${reviewedAt ? `<small>${escapeHtml(machtileFormatAuditTime(reviewedAt))}</small>` : ""}
     </span>
   `;
 }
@@ -5192,7 +5192,7 @@ function hmcRenderReviewGroups() {
                 <button type="button" data-hmc-review-row-action="confirm" data-hmc-review-id="${escapeHtml(row.quantityId)}">確認</button>
                 <button type="button" class="is-danger" data-hmc-review-row-action="reject" data-hmc-review-id="${escapeHtml(row.quantityId)}">駁回</button>
               ` : `
-                <small>${row.reviewedAt ? `已處理 ${escapeHtml(row.reviewedAt)}` : "無可執行動作"}</small>
+                <small>${row.reviewedAt ? `已處理 ${escapeHtml(machtileFormatAuditTime(row.reviewedAt))}` : "無可執行動作"}</small>
               `}
             </span>
           </article>
@@ -5734,7 +5734,7 @@ function hmcRenderFormalReportDraftsList() {
             <span><b>不良</b>${escapeHtml(draft.defectQtyTotal)}</span>
             <span><b>缺料/跳過</b>${escapeHtml(draft.shortageOrSkippedCount)}</span>
           </div>
-          <small class="hmc-draft-created">建立於 ${escapeHtml(draft.createdAt || "-")}</small>
+          <small class="hmc-draft-created">建立於 ${escapeHtml(machtileFormatAuditTime(draft.createdAt))}</small>
         </a>
       `).join("")}
     </section>
@@ -5746,7 +5746,7 @@ function hmcRenderFormalReportDraftCancelPanel(draft) {
     return `
       <div class="hmc-draft-cancel-info" aria-label="HMC formal report draft cancelled">
         <strong>此草稿已取消</strong>
-        ${draft.cancelledAt ? `<small>取消於 ${escapeHtml(draft.cancelledAt)}</small>` : ""}
+        ${draft.cancelledAt ? `<small>取消於 ${escapeHtml(machtileFormatAuditTime(draft.cancelledAt))}</small>` : ""}
         ${draft.cancelNote ? `<p class="hmc-draft-note">取消原因：${escapeHtml(draft.cancelNote)}</p>` : ""}
       </div>
     `;
@@ -5812,7 +5812,7 @@ function hmcRenderFormalReportDraftFinalizePanel(draft) {
     return `
       <div class="hmc-draft-finalize-info" aria-label="HMC formal report draft finalized">
         <strong>此草稿已定稿並發行正式報表</strong>
-        ${draft.finalizedAt ? `<small>發行於 ${escapeHtml(draft.finalizedAt)}</small>` : ""}
+        ${draft.finalizedAt ? `<small>發行於 ${escapeHtml(machtileFormatAuditTime(draft.finalizedAt))}</small>` : ""}
         ${draft.formalReportId ? `<a class="hmc-draft-inline-link" href="${escapeHtml(hmcFormalReportDetailUrl(draft.formalReportId))}">查看正式報表</a>` : ""}
       </div>
     `;
@@ -6029,7 +6029,7 @@ function hmcRenderFormalReportDraftDetail(draftId) {
         <strong>${escapeHtml(draft.draftNo)}</strong>
         <span class="hmc-draft-status is-${escapeHtml(draft.status)}">${escapeHtml(hmcFormalReportDraftStatusLabel(draft.status))}</span>
       </div>
-      <small>${escapeHtml(draft.machineCode)} · ${escapeHtml(hmcShiftLabel(draft.shiftScope))} · ${escapeHtml(draft.workDate)}｜建立於 ${escapeHtml(draft.createdAt || "-")}</small>
+      <small>${escapeHtml(draft.machineCode)} · ${escapeHtml(hmcShiftLabel(draft.shiftScope))} · ${escapeHtml(draft.workDate)}｜建立於 ${escapeHtml(machtileFormatAuditTime(draft.createdAt))}</small>
       <div class="hmc-draft-detail-grid">
         <span><b>工件列</b><strong>${escapeHtml(draft.itemCount)}</strong></span>
         <span><b>完成</b><strong>${escapeHtml(draft.completedQtyTotal)}</strong></span>
@@ -6053,7 +6053,7 @@ function hmcRenderFormalReportDraftDetail(draftId) {
               <span><b>完成</b>${escapeHtml(item.completedQty)}</span>
               <span><b>不良</b>${escapeHtml(item.defectQty)}</span>
               <span><b>缺料/跳過</b>${item.shortageOrSkipped ? "是" : "否"}</span>
-              <small class="hmc-draft-trace">來源盤點 ${escapeHtml(hmcFormalReportDraftShortId(item.sourceDailyQuantityId))}${item.sourceReviewedAt ? `｜覆核於 ${escapeHtml(item.sourceReviewedAt)}` : ""}</small>
+              <small class="hmc-draft-trace">來源盤點 ${escapeHtml(hmcFormalReportDraftShortId(item.sourceDailyQuantityId))}${item.sourceReviewedAt ? `｜覆核於 ${escapeHtml(machtileFormatAuditTime(item.sourceReviewedAt))}` : ""}</small>
             </article>
           `).join("")}
         </div>
@@ -6301,7 +6301,7 @@ function hmcRenderFormalReportVoidPanel(report) {
     return `
       <div class="hmc-draft-cancel-info" aria-label="HMC official report voided">
         <strong>此正式報表已作廢</strong>
-        ${report.voidedAt ? `<small>作廢於 ${escapeHtml(report.voidedAt)}</small>` : ""}
+        ${report.voidedAt ? `<small>作廢於 ${escapeHtml(machtileFormatAuditTime(report.voidedAt))}</small>` : ""}
         ${report.voidReason ? `<p class="hmc-draft-note">作廢原因：${escapeHtml(report.voidReason)}</p>` : ""}
         <small>作廢記錄永久保留可查；來源盤點範圍已釋回，可重新建立草稿並發行新報表。</small>
       </div>
@@ -6455,7 +6455,7 @@ function hmcRenderFormalReportsList() {
             <span><b>不良</b>${escapeHtml(report.defectQtyTotal)}</span>
             <span><b>缺料/跳過</b>${escapeHtml(report.shortageOrSkippedCount)}</span>
           </div>
-          <small class="hmc-draft-created">發行於 ${escapeHtml(report.finalizedAt || "-")}</small>
+          <small class="hmc-draft-created">發行於 ${escapeHtml(machtileFormatAuditTime(report.finalizedAt))}</small>
         </a>
       `).join("")}
     </section>
@@ -6490,7 +6490,7 @@ function hmcRenderFormalReportDetail(reportId) {
         <strong>${escapeHtml(report.reportNo)}</strong>
         <span class="hmc-draft-status is-${escapeHtml(report.status)}">${escapeHtml(hmcFormalReportStatusLabel(report.status))}</span>
       </div>
-      <small>${escapeHtml(report.machineCode)} · ${escapeHtml(hmcShiftLabel(report.shiftScope))} · ${escapeHtml(report.workDate)}｜發行於 ${escapeHtml(report.finalizedAt || "-")}</small>
+      <small>${escapeHtml(report.machineCode)} · ${escapeHtml(hmcShiftLabel(report.shiftScope))} · ${escapeHtml(report.workDate)}｜發行於 ${escapeHtml(machtileFormatAuditTime(report.finalizedAt))}</small>
       <div class="hmc-draft-detail-grid">
         <span><b>工件列</b><strong>${escapeHtml(report.itemCount)}</strong></span>
         <span><b>完成</b><strong>${escapeHtml(report.completedQtyTotal)}</strong></span>
@@ -6518,7 +6518,7 @@ function hmcRenderFormalReportDetail(reportId) {
               <span><b>完成</b>${escapeHtml(item.completedQty)}</span>
               <span><b>不良</b>${escapeHtml(item.defectQty)}</span>
               <span><b>缺料/跳過</b>${item.shortageOrSkipped ? "是" : "否"}</span>
-              <small class="hmc-draft-trace">來源盤點 ${escapeHtml(hmcFormalReportDraftShortId(item.sourceDailyQuantityId))}${item.sourceReviewedAt ? `｜覆核於 ${escapeHtml(item.sourceReviewedAt)}` : ""}</small>
+              <small class="hmc-draft-trace">來源盤點 ${escapeHtml(hmcFormalReportDraftShortId(item.sourceDailyQuantityId))}${item.sourceReviewedAt ? `｜覆核於 ${escapeHtml(machtileFormatAuditTime(item.sourceReviewedAt))}` : ""}</small>
             </article>
           `).join("")}
         </div>
@@ -8322,6 +8322,23 @@ function formatRelativeTime(value) {
   if (diffMinutes < 60) return `${diffMinutes} 分鐘前`;
   if (diffMinutes < 1440) return `${Math.round(diffMinutes / 60)} 小時前`;
   return `${Math.round(diffMinutes / 1440)} 天前`;
+}
+
+function machtileFormatAuditTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const parts = new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const part = (type) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}/${part("month")}/${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
 function formatDateTime(value) {
