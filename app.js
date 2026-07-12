@@ -3163,8 +3163,10 @@ function renderHmcWorklistSetupRoute() {
         <p>白班與夜班各自保留畫面草稿；尚未儲存的內容重新整理後不會保留，請記得儲存草稿。</p>
       </section>
 
-      ${hmcWorklistSetupSummary()}
-      ${hmcWorklistSetupPalletEditor()}
+      <div class="hmc-setup-split">
+        <div class="hmc-setup-split-side">${hmcWorklistSetupSummary()}</div>
+        <div class="hmc-setup-split-main">${hmcWorklistSetupPalletEditor()}</div>
+      </div>
 
       ${hmcRenderSetupActiveWorklistNotice()}
       ${hmcRenderSetupDevNoLoginNotice()}

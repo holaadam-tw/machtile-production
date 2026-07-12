@@ -3823,6 +3823,47 @@ input.hmc-selected-defect-qty[type="number"],
   font-weight: 800;
 }
 
+.hmc-setup-split {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.hmc-setup-split-side {
+  position: sticky;
+  top: 12px;
+}
+
+.hmc-setup-split-side .hmc-setup-summary-card,
+.hmc-setup-split-main .hmc-setup-editor-card {
+  margin-bottom: 16px;
+}
+
+.hmc-setup-split-side .hmc-selected-summary-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .hmc-setup-split {
+    grid-template-columns: 1fr;
+  }
+
+  .hmc-setup-split-side {
+    position: static;
+  }
+}
+
+.hmc-setup-editor-card .hmc-setup-pallet-row {
+  grid-template-columns: 1fr;
+}
+
+.hmc-setup-editor-card .hmc-setup-work-chip {
+  padding-right: 68px;
+}
+
 .hmc-setup-pallet-head {
   display: flex;
   align-items: center;
