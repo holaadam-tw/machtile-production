@@ -4134,6 +4134,7 @@ function normalizeHmcDailyQuantityFieldRows(rows) {
       operationId,
       todayCompletedQty: Number(row.today_completed_qty || 0),
       todayDefectQty: Number(row.today_defect_qty || 0),
+      plannedQty: Number(row.planned_qty || 0),
       remainingQtyBeforeToday: Number(row.remaining_qty_before_today || 0),
       remainingQty: Number(row.remaining_qty || 0),
       shortageOrSkipped: Boolean(row.shortage_or_skipped),
@@ -7095,6 +7096,7 @@ function hmcDailyQuantityStats() {
   const dailyState = hmcCurrentDailyQuantityReadState();
   const hasDbDailyQuantity = dailyState.status === "ok";
   const readRows = hasDbDailyQuantity && Array.isArray(dailyState.rows) ? dailyState.rows : [];
+  const readListPlannedQty = readRows.reduce((total, row) => total + (Number(row.plannedQty) || 0), 0);
   const readListCompletedQty = readRows.reduce((total, row) => total + (Number(row.todayCompletedQty) || 0), 0);
   const readListDefectQty = readRows.reduce((total, row) => total + (Number(row.todayDefectQty) || 0), 0);
   const readListRemainingQty = readRows.reduce((total, row) => total + (Number(row.remainingQty) || 0), 0);
@@ -7123,6 +7125,7 @@ function hmcDailyQuantityStats() {
     hasDbDailyQuantity,
     readListCompletedQty,
     readListDefectQty,
+    readListPlannedQty,
     readListRemainingQty,
     readListSkippedCount,
     readListPendingCount,
@@ -7209,9 +7212,10 @@ function hmcDailyQuantitySummary() {
         <em>先看退回與待確認，再填本日完成 / 不良。</em>
       </div>
       <div class="hmc-daily-summary-grid">
-        <span><b>已退回</b><strong>${escapeHtml(stats.readListRejectedCount || 0)}</strong></span>
+        <span><b>預計總量</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListPlannedQty : stats.plannedQty)}</strong></span>
         <span><b>本日完成</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListCompletedQty : stats.completedQty)}</strong></span>
         <span><b>剩餘</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListRemainingQty : stats.previewRemainingQty)}</strong></span>
+        <span><b>已退回</b><strong>${escapeHtml(stats.readListRejectedCount || 0)}</strong></span>
       </div>
     </section>
   `;
