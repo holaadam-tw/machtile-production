@@ -3823,6 +3823,22 @@ input.hmc-selected-defect-qty[type="number"],
   font-weight: 800;
 }
 
+.machtile-route-brand-bar {
+  display: none;
+}
+
+body.hmc-report-route-mode .machtile-route-brand-bar,
+body.station-select-route-mode .machtile-route-brand-bar,
+body.work-list-route-mode .machtile-route-brand-bar,
+body.work-detail-route-mode .machtile-route-brand-bar,
+body.report-work-route-mode .machtile-route-brand-bar {
+  display: flex;
+  align-items: center;
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: 14px 0 0;
+}
+
 .hmc-setup-split {
   display: grid;
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);

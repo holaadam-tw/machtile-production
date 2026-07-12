@@ -12192,8 +12192,27 @@ function updateTodayLabel() {
   $("#todayLabel").textContent = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} 週${weekday}`;
 }
 
+// 每個 route 頁左上角固定品牌列（點擊回首頁）；CSS 只在 *-route-mode 顯示。
+function machtileEnsureRouteBrand() {
+  if (document.getElementById("machtileRouteBrand")) return;
+  const bar = document.createElement("div");
+  bar.id = "machtileRouteBrand";
+  bar.className = "machtile-route-brand-bar";
+  bar.innerHTML = `
+    <a class="brand" href="./" aria-label="回首頁">
+      <div class="brand-mark" aria-hidden="true"><span></span></div>
+      <div>
+        <div class="brand-name">MachTile</div>
+        <div class="brand-subtitle">製程方塊</div>
+      </div>
+    </a>
+  `;
+  document.body.prepend(bar);
+}
+
 function applyInitialRoute() {
   ensureP0SafeModeBanner();
+  machtileEnsureRouteBrand();
   const params = new URLSearchParams(window.location.search);
   const routePath = currentRoutePath();
   const routeView = params.get("view");
