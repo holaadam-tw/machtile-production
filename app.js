@@ -5191,6 +5191,11 @@ function hmcRenderReviewGroups() {
               ${row.dailyCheckStatus === "pending_review" && row.quantityId ? `
                 <button type="button" data-hmc-review-row-action="confirm" data-hmc-review-id="${escapeHtml(row.quantityId)}">確認</button>
                 <button type="button" class="is-danger" data-hmc-review-row-action="reject" data-hmc-review-id="${escapeHtml(row.quantityId)}">駁回</button>
+              ` : row.dailyCheckStatus === "confirmed" && row.conversionStatus === "not_converted" && row.quantityId ? `
+                <button type="button" class="is-danger" data-hmc-review-row-action="reject" data-hmc-review-id="${escapeHtml(row.quantityId)}">退回修正</button>
+                ${row.reviewedAt ? `<small>已確認 ${escapeHtml(machtileFormatAuditTime(row.reviewedAt))}</small>` : ""}
+              ` : row.dailyCheckStatus === "confirmed" ? `
+                <small>已轉入報表；要改請先修訂重發</small>
               ` : `
                 <small>${row.reviewedAt ? `已處理 ${escapeHtml(machtileFormatAuditTime(row.reviewedAt))}` : "無可執行動作"}</small>
               `}
@@ -8275,6 +8280,9 @@ const machtileStrictErrorMessages = {
   AUTH_REQUIRED: "請先登入正式環境帳號。",
   FORBIDDEN: "此帳號沒有執行這項操作的權限。",
   ACTOR_NOT_FOUND: "登入帳號未對應到啟用中的使用者，請聯絡管理員。",
+  CONFIRMED_ALREADY_CONVERTED: "這筆已轉入草稿／報表，不能直接退回；請先在正式報表頁修訂重發或作廢，釋回後再退。",
+  ONLY_PENDING_REVIEW_CAN_BE_REVIEWED: "只有待確認（或未轉換的已確認）項目可以退回。",
+  QUANTITY_NOT_PENDING_REVIEW: "只有待確認（或未轉換的已確認）項目可以退回。",
 };
 
 function machtileStrictErrorMessage(code) {
