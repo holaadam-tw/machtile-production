@@ -3786,6 +3786,39 @@ body.hmc-report-route-mode .mobile-tabs {
   color: var(--brand-blue);
 }
 
+.pw-field {
+  position: relative;
+  display: block;
+}
+
+.pw-field input {
+  width: 100%;
+  padding-right: 38px;
+  box-sizing: border-box;
+}
+
+.pw-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.pw-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .hmc-guide-step a.hmc-secondary-action {
   display: inline-flex;
   align-items: center;

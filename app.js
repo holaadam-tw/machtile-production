@@ -8131,6 +8131,25 @@ function machtileAccountDisplay(value) {
   return raw.toLowerCase().endsWith(machtileLoginSuffix) ? raw.slice(0, raw.length - machtileLoginSuffix.length) : raw;
 }
 
+// Password show/hide toggle (AM7). Delegated listener survives re-renders.
+const machtilePwEyeSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const machtilePwEyeOffSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.77 21.77 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.8 21.8 0 0 1-3.22 4.31M1 1l22 22"/><path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/></svg>';
+
+function machtilePasswordField(inputHtml) {
+  return `<span class="pw-field">${inputHtml}<button type="button" class="pw-toggle" data-pw-toggle aria-label="顯示密碼">${machtilePwEyeSvg}</button></span>`;
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-pw-toggle]");
+  if (!button) return;
+  const input = button.closest(".pw-field")?.querySelector("input");
+  if (!input) return;
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  button.innerHTML = show ? machtilePwEyeOffSvg : machtilePwEyeSvg;
+  button.setAttribute("aria-label", show ? "隱藏密碼" : "顯示密碼");
+});
+
 async function machtileLogin(email, password) {
   if (!machtileAuthConfigured()) {
     throw new Error("尚未設定 Supabase 連線參數，無法登入。");
@@ -8353,7 +8372,7 @@ function machtileRenderLoginGate() {
         </label>
         <label>
           <span>密碼</span>
-          <input type="password" name="password" autocomplete="current-password" required ${busy ? "disabled" : ""}>
+          ${machtilePasswordField(`<input type="password" name="password" autocomplete="current-password" required ${busy ? "disabled" : ""}>`)}
         </label>
         <button type="submit" ${busy ? "disabled" : ""}>${busy ? "登入中..." : "登入"}</button>
       </form>
@@ -9853,7 +9872,9 @@ async function amCallFunction(fnName, payload) {
 
 async function amFetchUsers() {
   const rows = await supabaseFetch("app_users?select=id,name,account,role,is_active&order=created_at.asc");
-  return Array.isArray(rows) ? rows : [];
+  const users = Array.isArray(rows) ? rows : [];
+  // Admins pinned to the top; everyone else keeps created_at order.
+  return [...users.filter((user) => user.role === "admin"), ...users.filter((user) => user.role !== "admin")];
 }
 
 async function amInitUsersModule() {
@@ -9929,7 +9950,7 @@ function amRenderUsersModule() {
         <div class="admin-data-row" data-am-reset-row="${escapeHtml(user.id)}">
           <label class="admin-field" style="grid-column: 1 / -2;">
             <span>新密碼（至少 8 碼）</span>
-            <input type="password" autocomplete="new-password" data-am-reset-input="${escapeHtml(user.id)}">
+            ${machtilePasswordField(`<input type="password" autocomplete="new-password" data-am-reset-input="${escapeHtml(user.id)}">`)}
           </label>
           <button type="button" data-am-reset-confirm="${escapeHtml(user.id)}">確認重設</button>
         </div>
@@ -9953,7 +9974,7 @@ function amRenderUsersModule() {
       <div class="admin-form-grid">
         <label class="admin-field"><span>姓名</span><input type="text" data-am-new-name></label>
         <label class="admin-field"><span>登入帳號（工號或 Email）</span><input type="text" data-am-new-email></label>
-        <label class="admin-field"><span>初始密碼（至少 8 碼）</span><input type="password" autocomplete="new-password" data-am-new-password></label>
+        <label class="admin-field"><span>初始密碼（至少 8 碼）</span>${machtilePasswordField('<input type="password" autocomplete="new-password" data-am-new-password>')}</label>
         <label class="admin-field"><span>角色</span>
           <select data-am-new-role>
             ${amCreatableRoles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
