@@ -9807,6 +9807,7 @@ const amUsersState = {
   message: "",
   messageKind: "",
   expandedResetId: "",
+  expandedEditId: "",
   confirmStateId: "",
 };
 
@@ -9878,8 +9879,10 @@ function amRenderUsersModule() {
     const isSelf = user.id === selfId;
     const isAdmin = user.role === "admin";
     const resetOpen = amUsersState.expandedResetId === user.id;
+    const editOpen = amUsersState.expandedEditId === user.id;
     const confirmOpen = amUsersState.confirmStateId === user.id;
     const canReset = !isAdmin || isSelf;
+    const canEdit = !isAdmin;
     const canToggle = !isAdmin && !isSelf;
     return `
       <div class="admin-data-row" data-am-row="${escapeHtml(user.id)}">
@@ -9888,11 +9891,25 @@ function amRenderUsersModule() {
         <span>${escapeHtml(amRoleLabels[user.role] || user.role)}${isSelf ? "（自己）" : ""}</span>
         <span>${user.is_active ? "啟用中" : "已停用"}</span>
         <span>
+          ${canEdit ? `<button type="button" data-am-edit-open="${escapeHtml(user.id)}">${editOpen ? "收合" : "編輯"}</button>` : ""}
           ${canReset ? `<button type="button" data-am-reset-open="${escapeHtml(user.id)}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
           ${canToggle ? `<button type="button" data-am-toggle="${escapeHtml(user.id)}" data-am-next="${user.is_active ? "false" : "true"}">${confirmOpen ? (user.is_active ? "確認停用？" : "確認啟用？") : (user.is_active ? "停用" : "啟用")}</button>` : ""}
           ${isAdmin && !isSelf ? `<span class="empty-note">平台管理</span>` : ""}
         </span>
       </div>
+      ${editOpen ? `
+        <div class="admin-data-row" data-am-edit-row="${escapeHtml(user.id)}">
+          <label class="admin-field">
+            <span>姓名</span>
+            <input type="text" value="${escapeHtml(user.name || "")}" data-am-edit-name="${escapeHtml(user.id)}">
+          </label>
+          <label class="admin-field" style="grid-column: 2 / -2;">
+            <span>Email（登入帳號）</span>
+            <input type="email" value="${escapeHtml(user.account || "")}" data-am-edit-email="${escapeHtml(user.id)}">
+          </label>
+          <button type="button" data-am-edit-confirm="${escapeHtml(user.id)}">確認修改</button>
+        </div>
+      ` : ""}
       ${resetOpen ? `
         <div class="admin-data-row" data-am-reset-row="${escapeHtml(user.id)}">
           <label class="admin-field" style="grid-column: 1 / -2;">
@@ -9989,9 +10006,51 @@ function amBindUsersModuleEvents() {
     button.addEventListener("click", () => {
       const id = button.getAttribute("data-am-reset-open");
       amUsersState.expandedResetId = amUsersState.expandedResetId === id ? "" : id;
+      amUsersState.expandedEditId = "";
       amUsersState.confirmStateId = "";
       amSetMessage("", "");
       amRenderUsersModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-edit-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-am-edit-open");
+      amUsersState.expandedEditId = amUsersState.expandedEditId === id ? "" : id;
+      amUsersState.expandedResetId = "";
+      amUsersState.confirmStateId = "";
+      amSetMessage("", "");
+      amRenderUsersModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-edit-confirm]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-edit-confirm");
+      const user = amUsersState.users.find((row) => row.id === id);
+      const newName = root.querySelector(`[data-am-edit-name="${id}"]`)?.value.trim() || "";
+      const newEmail = (root.querySelector(`[data-am-edit-email="${id}"]`)?.value.trim() || "").toLowerCase();
+      if (!newName || !newEmail) {
+        amSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+        amRenderUsersModule();
+        return;
+      }
+      if (user && newName === (user.name || "") && newEmail === (user.account || "").toLowerCase()) {
+        amSetMessage("沒有變更任何內容。", "error");
+        amRenderUsersModule();
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "修改中…";
+      const result = await amCallFunction("am-update-user", { appUserId: id, newEmail, newName });
+      if (result.ok) {
+        amSetMessage(`已更新帳號資料${result.body?.emailChanged ? "；下次請用新 Email 登入" : ""}。`, "ok");
+        amUsersState.expandedEditId = "";
+        await amReloadUsers();
+      } else {
+        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amRenderUsersModule();
+      }
     });
   });
 
