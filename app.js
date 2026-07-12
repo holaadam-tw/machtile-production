@@ -2591,17 +2591,28 @@ function hmcRenderWorkOrderSuggestions(palletId, query) {
   const box = $(`[data-hmc-wo-suggest="${palletId}"]`);
   if (!box) return;
   const term = (query || "").trim().toLowerCase();
-  if (!term || hmcWorkOrderPickerState.status !== "ok") {
-    box.innerHTML = hmcWorkOrderPickerState.status === "loading" && term
-      ? '<p class="hmc-wo-suggest-note">正在載入工單清單...</p>'
-      : "";
+  if (hmcWorkOrderPickerState.status === "loading") {
+    box.innerHTML = '<p class="hmc-wo-suggest-note">正在載入工單清單...</p>';
     return;
   }
-  const matches = hmcWorkOrderPickerState.rows
-    .filter((row) => `${row.work_order_no || ""} ${row.part_name || ""} ${row.part_no || ""}`.toLowerCase().includes(term))
-    .slice(0, 8);
+  if (hmcWorkOrderPickerState.status === "error") {
+    box.innerHTML = '<p class="hmc-wo-suggest-note">工單清單載入失敗；仍可手動輸入，或重新整理再試。</p>';
+    return;
+  }
+  if (hmcWorkOrderPickerState.status !== "ok") {
+    box.innerHTML = "";
+    return;
+  }
+  if (hmcWorkOrderPickerState.status === "ok" && !hmcWorkOrderPickerState.rows.length) {
+    box.innerHTML = '<p class="hmc-wo-suggest-note">工單管理（管理 → 建單／指派機台）還沒有工單；可先手動輸入。</p>';
+    return;
+  }
+  const matches = (term
+    ? hmcWorkOrderPickerState.rows.filter((row) => `${row.work_order_no || ""} ${row.part_name || ""} ${row.part_no || ""}`.toLowerCase().includes(term))
+    : hmcWorkOrderPickerState.rows
+  ).slice(0, 8);
   box.innerHTML = matches.length
-    ? matches.map((row) => `
+    ? `${term ? "" : '<p class="hmc-wo-suggest-note">最近的工單（輸入可搜尋）：</p>'}` + matches.map((row) => `
         <button type="button" class="hmc-wo-suggest-item" data-hmc-wo-pick="${escapeHtml(palletId)}" data-wo-no="${escapeHtml(row.work_order_no || "")}" data-wo-part="${escapeHtml(row.part_name || row.part_no || "")}" data-wo-qty="${escapeHtml(row.quantity ?? "")}">
           <strong>${escapeHtml(row.work_order_no || "")}</strong>
           <span>${escapeHtml(row.part_name || row.part_no || "-")}</span>
@@ -2680,7 +2691,7 @@ function hmcWorklistSetupPalletEditor() {
               `).join("") || '<p class="empty-note">此盤還沒有工件，用下方表單新增。</p>'}
             </div>
             <div class="hmc-setup-add-form">
-              <input type="text" placeholder="工單號" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
+              <input type="text" placeholder="工單號（點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
               <input type="text" placeholder="工件名" maxlength="60" value="${editing ? escapeHtml(editing.partName) : ""}" data-hmc-form-partname="${escapeHtml(pallet.palletId)}">
               <input type="number" min="0" inputmode="numeric" placeholder="預計數量" value="${editing ? escapeHtml(editing.plannedQty) : ""}" data-hmc-form-qty="${escapeHtml(pallet.palletId)}">
               <button type="button" data-hmc-form-submit="${escapeHtml(pallet.palletId)}">${editing ? "更新工件" : "＋ 加入工件"}</button>
@@ -9630,7 +9641,7 @@ function renderWorkOrderAdminSection() {
         <span>建單、指派機台（同單號重送＝更新/改派）</span>
       </div>
       <div class="admin-action-grid admin-action-grid-compact" aria-label="工單管理">
-        ${renderAdminActionCard("list", "建單／指派機台", "輸入 ERP/MES 派工單號，指派後機台即可報工", "blue", "workOrders")}
+        ${renderAdminActionCard("list", "工單管理（建單／指派）", "輸入 ERP/MES 派工單號，指派後機台即可報工；班前清單可直接挑選", "blue", "workOrders")}
       </div>
     </section>
   `;
