@@ -2936,7 +2936,7 @@ function renderHmcGuideRoute() {
       url: hmcDailyCheckReviewUrl({ status: "pending_review" }),
       linkText: "前往每日盤點複核",
       what: "逐筆確認或退回作業員送出的盤點；退回需填原因。",
-      then: "退回的項目回到作業員，修正後重新送審；確認的項目才能進下一步。數字都沒問題時，可用複核頁的「一鍵確認並發行」直接完成步驟 3～5。",
+      then: "退回的項目回到作業員，修正後重新送審；確認的項目才能進下一步。確認後才發現錯的，也可以按「退回修正」退回去改（已轉入報表的要先修訂重發）。數字都沒問題時，可用「一鍵確認並發行」直接完成步驟 3～5。",
     },
     {
       no: 4,
@@ -2989,7 +2989,7 @@ function renderHmcGuideRoute() {
 
       <section class="hmc-report-card" aria-label="基本原則">
         <strong>基本原則</strong>
-        <p>主管確認前不是正式報工；發行後才是正式報表。所有取消、退回、作廢都要填原因並留痕。此流程不同步 SoftNet。</p>
+        <p>主管確認前不是正式報工；發行後才是正式報表。每一層都有退路：送審前直接改、送審後駁回、確認後退回修正、發行後修訂重發——所有取消、退回、作廢都要填原因並留痕，舊版本永遠查得到。此流程不同步 SoftNet。</p>
       </section>
     </section>
   `;
@@ -3457,13 +3457,8 @@ function hmcWorklistReadStatusPanel() {
 
   if (readState.status === "ok") {
     return `
-      <section class="hmc-safe-banner" aria-label="HMC active DB worklist source">
-        <strong>已讀取本班加工清單</strong>
-        <span>${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())}</span>
-        <span>${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))}</span>
-        <span>${escapeHtml(readState.pallets.length)} 盤</span>
-        <span>${escapeHtml(readState.items.length)} 件工件</span>
-        <span>只讀，不送出</span>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC active DB worklist source">
+        <span>已讀取本班加工清單 · ${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())} · ${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))} · ${escapeHtml(readState.pallets.length)} 盤 ${escapeHtml(readState.items.length)} 件</span>
       </section>
     `;
   }
@@ -4126,13 +4121,8 @@ function hmcWorklistReadStatusPanel() {
 
   if (readState.status === "ok") {
     return `
-      <section class="hmc-safe-banner" aria-label="HMC active DB worklist source">
-        <strong>已讀取本班加工清單</strong>
-        <span>${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())}</span>
-        <span>${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))}</span>
-        <span>${escapeHtml(readState.pallets.length)} 盤</span>
-        <span>${escapeHtml(readState.items.length)} 件工件</span>
-        <span>只讀，不送出</span>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC active DB worklist source">
+        <span>已讀取本班加工清單 · ${escapeHtml(readState.worklist?.machineCode || hmcRouteMachineKey())} · ${escapeHtml(hmcShiftLabel(readState.worklist?.shiftScope || hmcReportState.shift))} · ${escapeHtml(readState.pallets.length)} 盤 ${escapeHtml(readState.items.length)} 件</span>
       </section>
     `;
   }
@@ -5039,15 +5029,10 @@ function hmcRenderReviewSummary() {
         <em>${escapeHtml(hmcDailyQuantityWorkDate())} / ${escapeHtml(hmcReviewStatusLabel(hmcDailyCheckReviewStatusFilter()))}</em>
       </div>
       <div class="hmc-daily-summary-grid">
-        <span><b>交換盤</b><strong>${escapeHtml(stats.palletCount)}</strong></span>
-        <span><b>工件列</b><strong>${escapeHtml(stats.rowCount)}</strong></span>
         <span><b>待確認</b><strong>${escapeHtml(stats.pendingCount)}</strong></span>
         <span><b>已確認</b><strong>${escapeHtml(stats.confirmedCount)}</strong></span>
         <span><b>已退回</b><strong>${escapeHtml(stats.rejectedCount)}</strong></span>
         <span><b>今日完成</b><strong>${escapeHtml(stats.completedQty)}</strong></span>
-        <span><b>今日不良</b><strong>${escapeHtml(stats.defectQty)}</strong></span>
-        <span><b>缺料 / 跳過</b><strong>${escapeHtml(stats.shortageCount)}</strong></span>
-        <span><b>剩餘</b><strong>${escapeHtml(stats.remainingQty)}</strong></span>
       </div>
     </section>
   `;
@@ -5065,12 +5050,8 @@ function hmcRenderReviewAuthPanel() {
 
   if (machtileStrictMode()) {
     return `
-      <section class="hmc-report-card hmc-review-auth-panel is-signed-in" aria-label="HMC supervisor review auth">
-        <div>
-          <span>登入複核</span>
-          <strong>已以 ${escapeHtml(machtileAuthState.email || "登入帳號")} 登入</strong>
-          <small>確認 / 退回需要主管以上權限；此頁只更新每日盤點狀態，不轉正式報工。</small>
-        </div>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC supervisor review auth">
+        <span>已以 ${escapeHtml(machtileAccountDisplay(machtileAuthState.email) || "登入帳號")} 登入 · 確認 / 退回需要主管以上權限</span>
       </section>
     `;
   }
@@ -5259,12 +5240,8 @@ function renderHmcDailyCheckReviewRoute() {
         </div>
       </header>
 
-      <section class="hmc-safe-banner" aria-label="HMC review safety boundary">
-        <strong>複核模式</strong>
-        <span>可確認</span>
-        <span>可退回</span>
-        <span>退回需填原因</span>
-        <span>不轉正式報工</span>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC review safety boundary">
+        <span>複核模式 · 退回需填原因 · 不轉正式報工</span>
       </section>
 
       ${hmcRenderReviewFilterTabs()}
@@ -5278,11 +5255,6 @@ function renderHmcDailyCheckReviewRoute() {
       ${hmcRenderReviewConversionPanel()}
       ${hmcRenderReviewGroups()}
 
-      <section class="hmc-submit-panel hmc-review-safety-panel">
-        <strong>正式報工仍未啟用</strong>
-        <p>主管可確認或退回每日盤點；不會建立正式報工紀錄。</p>
-        <button type="button" disabled aria-disabled="true">不轉正式報工</button>
-      </section>
     </section>
   `;
 
@@ -6917,11 +6889,8 @@ function hmcDailyQuantityReadStatusPanel() {
 
   if (dailyState.status === "ok") {
     return `
-      <section class="hmc-safe-banner" aria-label="HMC daily quantity DB source">
-        <strong>已讀取每日數量</strong>
-        <span>${escapeHtml(dailyState.workDate || hmcDailyQuantityWorkDate())}</span>
-        <span>${escapeHtml(dailyState.rows.length)} 筆</span>
-        <span>可儲存為待複核</span>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC daily quantity DB source">
+        <span>已讀取每日數量 · ${escapeHtml(dailyState.workDate || hmcDailyQuantityWorkDate())} · ${escapeHtml(dailyState.rows.length)} 筆 · 可儲存為待複核</span>
       </section>
     `;
   }
@@ -6961,11 +6930,8 @@ function hmcDailyQuantitySummary() {
         <em>先看退回與待確認，再填本日完成 / 不良。</em>
       </div>
       <div class="hmc-daily-summary-grid">
-        <span><b>工件</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListItemCount : stats.itemCount)}</strong></span>
-        <span><b>待確認</b><strong>${escapeHtml(stats.readListPendingCount || 0)}</strong></span>
         <span><b>已退回</b><strong>${escapeHtml(stats.readListRejectedCount || 0)}</strong></span>
         <span><b>本日完成</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListCompletedQty : stats.completedQty)}</strong></span>
-        <span><b>本日不良</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListDefectQty : stats.enteredDefectQty)}</strong></span>
         <span><b>剩餘</b><strong>${escapeHtml(stats.hasDbDailyQuantity ? stats.readListRemainingQty : stats.previewRemainingQty)}</strong></span>
       </div>
     </section>
@@ -7151,7 +7117,6 @@ function updateHmcReportPreview() {
       <span><b>預覽後剩餘</b><strong>${escapeHtml(previewRemainingQty)}</strong></span>
     </div>
     <p class="hmc-preview-warning">${totalQty > 0 || defectQty > 0 || skippedCount > 0 ? "預覽已更新；可儲存為待複核，每日盤點仍不是正式報工。" : "請輸入本日完成、本日不良，或勾選缺料 / 跳過。"}</p>
-    <p class="hmc-disabled-submit">尚未啟用正式送出</p>
   `;
 }
 

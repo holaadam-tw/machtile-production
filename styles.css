@@ -3786,6 +3786,37 @@ body.hmc-report-route-mode .mobile-tabs {
   color: var(--brand-blue);
 }
 
+.hmc-safe-banner.is-quiet {
+  margin-bottom: 10px;
+  border: 0;
+  padding: 2px 2px;
+  background: transparent;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+input.hmc-selected-qty[type="number"],
+input.hmc-selected-defect-qty[type="number"],
+.hmc-night-row input.hmc-selected-qty[type="number"],
+.hmc-night-row input.hmc-selected-defect-qty[type="number"] {
+  min-height: 46px;
+  font-size: 20px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.hmc-daily-check-panel [data-hmc-save-daily-check] {
+  min-height: 52px;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.hmc-review-row-actions button {
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .pw-field {
   position: relative;
   display: block;
