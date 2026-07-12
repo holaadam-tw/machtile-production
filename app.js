@@ -2710,16 +2710,14 @@ function hmcRenderSetupDevNoLoginNotice() {
   }
   if (machtileStrictMode()) {
     return `
-      <section class="hmc-report-card hmc-setup-nologin-notice" aria-label="HMC setup strict auth boundary">
-        <strong>正式環境</strong>
-        <p>已以 ${escapeHtml(machtileAuthState.email || "登入帳號")} 登入。儲存、啟用、取代清單需要排程 / 主管權限，寫入會記錄操作人。</p>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC setup strict auth boundary">
+        <span>已以 ${escapeHtml(machtileAccountDisplay(machtileAuthState.email) || "登入帳號")} 登入 · 儲存 / 啟用 / 取代需要排程或主管權限，寫入會記錄操作人</span>
       </section>
     `;
   }
   return `
-    <section class="hmc-report-card hmc-setup-nologin-notice" aria-label="HMC setup Dev no-login boundary">
-      <strong>Dev 免登入</strong>
-      <p>此頁不需帳號密碼（Dev-only，S6/H8）。儲存、啟用、取代清單都以匿名身分寫入 Dev DB；正式上線前會恢復 planner 登入與審計。</p>
+    <section class="hmc-safe-banner is-quiet" aria-label="HMC setup Dev no-login boundary">
+      <span>Dev 免登入 · 以匿名身分寫入 Dev DB（正式環境需 planner 登入與審計）</span>
     </section>
   `;
 }
@@ -2918,7 +2916,7 @@ function renderHmcGuideRoute() {
       url: hmcWorklistSetupRouteUrl(machineLabel, shift),
       linkText: "前往班前清單設定",
       what: "建立本班的交換盤與工件清單：儲存草稿，再啟用為本班清單。",
-      then: "沒有啟用清單，現場就沒有東西可填；啟用後作業員才能開始每日盤點。",
+      then: "沒有啟用清單，現場就沒有東西可填。每班開工前要建立或取代當班清單——盤點的日期跟著清單走，沿用舊清單會把數字記到舊日期。",
     },
     {
       no: 2,
@@ -3052,12 +3050,8 @@ function renderHmcWorklistSetupRoute() {
         </div>
       </header>
 
-      <section class="hmc-safe-banner" aria-label="HMC setup write boundary">
-        <strong>${machtileStrictMode() ? "班前清單設定（正式環境）" : "班前清單設定（Dev）"}</strong>
-        <span>${machtileStrictMode() ? "需登入（排程 / 主管）" : "免登入（Dev-only）"}</span>
-        <span>只寫班前清單</span>
-        <span>不會產生報工</span>
-        <span>不同步 SoftNet</span>
+      <section class="hmc-safe-banner is-quiet" aria-label="HMC setup write boundary">
+        <span>${machtileStrictMode() ? "班前清單設定（正式環境）· 需登入（排程 / 主管）" : "班前清單設定（Dev）· 免登入"} · 只寫班前清單，不會產生報工</span>
       </section>
 
       <section class="hmc-report-card hmc-setup-control-card" aria-label="HMC setup controls">
@@ -3084,7 +3078,7 @@ function renderHmcWorklistSetupRoute() {
             </div>
           </div>
         </div>
-        <p>白班與夜班各自保留畫面內草稿；切換班別會看到對應清單。尚未儲存的內容重新整理後不會保留，請記得儲存草稿。</p>
+        <p>白班與夜班各自保留畫面草稿；尚未儲存的內容重新整理後不會保留，請記得儲存草稿。</p>
       </section>
 
       ${hmcWorklistSetupSummary()}

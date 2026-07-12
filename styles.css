@@ -3817,6 +3817,12 @@ input.hmc-selected-defect-qty[type="number"],
   font-weight: 800;
 }
 
+.hmc-setup-disabled-actions button {
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
 .pw-field {
   position: relative;
   display: block;
