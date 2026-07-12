@@ -2566,6 +2566,51 @@ function hmcSetupDraftPallet(palletId) {
   return hmcSetupDraft().pallets.find((pallet) => pallet.palletId === palletId) || null;
 }
 
+// 工單選擇器（2026-07-12）：班前清單的工單號欄輸入時，從工單管理（work_orders）
+// 帶出建議，點選自動填工單號＋品名＋預計數量；查無工單仍可手動輸入。
+const hmcWorkOrderPickerState = { status: "idle", rows: [] };
+
+async function hmcLoadWorkOrderSuggestions() {
+  if (hmcWorkOrderPickerState.status === "loading" || hmcWorkOrderPickerState.status === "ok") return;
+  if (!canReadHmcWorklistFromSupabase()) {
+    hmcWorkOrderPickerState.status = "unavailable";
+    return;
+  }
+  hmcWorkOrderPickerState.status = "loading";
+  try {
+    const rows = await supabaseFetch("work_orders?select=work_order_no,part_no,part_name,quantity&order=created_at.desc&limit=100");
+    hmcWorkOrderPickerState.rows = Array.isArray(rows) ? rows : [];
+    hmcWorkOrderPickerState.status = "ok";
+  } catch (error) {
+    hmcWorkOrderPickerState.status = "error";
+    hmcWorkOrderPickerState.rows = [];
+  }
+}
+
+function hmcRenderWorkOrderSuggestions(palletId, query) {
+  const box = $(`[data-hmc-wo-suggest="${palletId}"]`);
+  if (!box) return;
+  const term = (query || "").trim().toLowerCase();
+  if (!term || hmcWorkOrderPickerState.status !== "ok") {
+    box.innerHTML = hmcWorkOrderPickerState.status === "loading" && term
+      ? '<p class="hmc-wo-suggest-note">正在載入工單清單...</p>'
+      : "";
+    return;
+  }
+  const matches = hmcWorkOrderPickerState.rows
+    .filter((row) => `${row.work_order_no || ""} ${row.part_name || ""} ${row.part_no || ""}`.toLowerCase().includes(term))
+    .slice(0, 8);
+  box.innerHTML = matches.length
+    ? matches.map((row) => `
+        <button type="button" class="hmc-wo-suggest-item" data-hmc-wo-pick="${escapeHtml(palletId)}" data-wo-no="${escapeHtml(row.work_order_no || "")}" data-wo-part="${escapeHtml(row.part_name || row.part_no || "")}" data-wo-qty="${escapeHtml(row.quantity ?? "")}">
+          <strong>${escapeHtml(row.work_order_no || "")}</strong>
+          <span>${escapeHtml(row.part_name || row.part_no || "-")}</span>
+          <em>${row.quantity != null ? `${escapeHtml(row.quantity)} 件` : ""}</em>
+        </button>
+      `).join("")
+    : '<p class="hmc-wo-suggest-note">工單管理裡找不到；可直接手動輸入。</p>';
+}
+
 function hmcSetupDraftSelectedGroups() {
   return hmcSetupDraft().pallets
     .map((pallet) => ({ pallet, works: pallet.works.filter((work) => work.included) }))
@@ -2641,6 +2686,7 @@ function hmcWorklistSetupPalletEditor() {
               <button type="button" data-hmc-form-submit="${escapeHtml(pallet.palletId)}">${editing ? "更新工件" : "＋ 加入工件"}</button>
               ${editing ? `<button type="button" class="hmc-link-button" data-hmc-form-cancel="1">取消編輯</button>` : ""}
             </div>
+            <div class="hmc-wo-suggest" data-hmc-wo-suggest="${escapeHtml(pallet.palletId)}"></div>
           </article>
         `;
         }).join("")}
@@ -3296,6 +3342,33 @@ function bindHmcWorklistSetupEvents() {
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
       hmcSetupDraft().workDate = value;
     }
+  });
+
+  $$("[data-hmc-form-workno]").forEach((input) => {
+    const palletId = input.dataset.hmcFormWorkno;
+    input.addEventListener("focus", async () => {
+      await hmcLoadWorkOrderSuggestions();
+      hmcRenderWorkOrderSuggestions(palletId, input.value);
+    });
+    input.addEventListener("input", async () => {
+      await hmcLoadWorkOrderSuggestions();
+      hmcRenderWorkOrderSuggestions(palletId, input.value);
+    });
+  });
+
+  $$("[data-hmc-wo-suggest]").forEach((box) => {
+    box.addEventListener("click", (event) => {
+      const pick = event.target.closest("[data-hmc-wo-pick]");
+      if (!pick) return;
+      const palletId = pick.dataset.hmcWoPick;
+      const wonoInput = $(`[data-hmc-form-workno="${palletId}"]`);
+      const partInput = $(`[data-hmc-form-partname="${palletId}"]`);
+      const qtyInput = $(`[data-hmc-form-qty="${palletId}"]`);
+      if (wonoInput) wonoInput.value = pick.dataset.woNo || "";
+      if (partInput) partInput.value = pick.dataset.woPart || "";
+      if (qtyInput && pick.dataset.woQty !== "") qtyInput.value = pick.dataset.woQty;
+      box.innerHTML = "";
+    });
   });
 
   $$("[data-hmc-pallet-name]").forEach((input) => {

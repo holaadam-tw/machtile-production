@@ -3862,6 +3862,28 @@ input.hmc-selected-defect-qty[type="number"],
 
 .hmc-setup-editor-card .hmc-setup-work-chip {
   padding-right: 68px;
+  border: 2px solid var(--border);
+  background: var(--surface-soft);
+  opacity: 0.62;
+}
+
+.hmc-setup-editor-card .hmc-setup-work-chip.is-selected {
+  border-color: var(--green-strong);
+  background: var(--green-soft);
+  opacity: 1;
+}
+
+.hmc-setup-editor-card .hmc-setup-work-chip.is-selected::after {
+  content: "已納入";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: var(--green-strong);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .hmc-setup-pallet-head {
@@ -3960,6 +3982,48 @@ input.hmc-selected-defect-qty[type="number"],
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.hmc-wo-suggest {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.hmc-wo-suggest-item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hmc-wo-suggest-item:hover {
+  border-color: var(--brand-blue);
+  background: var(--brand-blue-soft);
+}
+
+.hmc-wo-suggest-item strong {
+  color: var(--brand-blue);
+  font-weight: 800;
+}
+
+.hmc-wo-suggest-item em {
+  margin-left: auto;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.hmc-wo-suggest-note {
+  color: var(--subtle);
+  font-size: 12px;
 }
 
 .hmc-setup-add-pallet {
