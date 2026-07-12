@@ -7137,11 +7137,12 @@ function hmcWorkDailyQuantityLine(work) {
   if (source === "preview" || work.dailyQuantityReadStatus === "preview") {
     return `<span class="hmc-qtyline">剩餘 <b class="qty-left">${Number(work.remainingQty || 0)}</b></span>`;
   }
+  const before = Number(work.completedQty || 0);
   const done = Number(work.dbTodayCompletedQty || 0);
   const bad = Number(work.dbTodayDefectQty || 0);
   const left = Number((work.dbRemainingQty ?? work.remainingQty) || 0);
   const shortage = work.dbShortageOrSkipped ? ' / <b class="qty-bad">缺料</b>' : "";
-  return `<span class="hmc-qtyline">已存完成 <b class="${done > 0 ? "qty-ok" : ""}">${done}</b> / 不良 <b class="${bad > 0 ? "qty-bad" : ""}">${bad}</b> / 剩餘 <b class="qty-left">${left}</b>${shortage}</span>`;
+  return `<span class="hmc-qtyline">之前完成 <b>${before}</b> / 今日已存 <b class="${done > 0 ? "qty-ok" : ""}">${done}</b> / 不良 <b class="${bad > 0 ? "qty-bad" : ""}">${bad}</b> / 剩餘 <b class="qty-left">${left}</b>${shortage}</span>`;
 }
 
 function hmcDailyQuantityReadStatusPanel() {
@@ -7388,7 +7389,7 @@ function updateHmcReportPreview() {
       <span><b>班別</b><strong>${escapeHtml(hmcShiftLabel(hmcReportState.shift))}</strong></span>
       <span><b>選取交換盤</b><strong>${escapeHtml(stats.selectedPalletCount)}</strong></span>
       <span><b>選取工件</b><strong>${escapeHtml(stats.itemCount)}</strong></span>
-      <span><b>已存完成</b><strong>${escapeHtml(stats.dbCompletedQty)}</strong></span>
+      <span><b>今日已存</b><strong>${escapeHtml(stats.dbCompletedQty)}</strong></span>
       <span><b>已存不良</b><strong>${escapeHtml(stats.dbDefectQty)}</strong></span>
       <span><b>本次完成</b><strong>${escapeHtml(totalQty)}</strong></span>
       <span><b>本次不良</b><strong>${escapeHtml(defectQty)}</strong></span>
@@ -7452,8 +7453,13 @@ function renderHmcReportRoute() {
         </div>
       </header>
 
-      ${hmcDailyQuantitySummary()}
-      ${hmcDailyCheckReviewResultPanel()}
+      ${(() => {
+        const summaryHtml = hmcDailyQuantitySummary();
+        const reviewHtml = hmcDailyCheckReviewResultPanel();
+        return reviewHtml
+          ? `<div class="hmc-report-topsplit"><div>${summaryHtml}</div><div>${reviewHtml}</div></div>`
+          : summaryHtml;
+      })()}
       ${hmcDailyWorkFocusPanel()}
 
       <section class="hmc-report-card hmc-pallet-selector-card">

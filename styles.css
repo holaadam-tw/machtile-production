@@ -3839,6 +3839,25 @@ body.report-work-route-mode .machtile-route-brand-bar {
   padding: 14px 0 0;
 }
 
+.hmc-report-topsplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.hmc-report-topsplit .hmc-daily-summary,
+.hmc-report-topsplit .hmc-review-result-panel {
+  height: 100%;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 980px) {
+  .hmc-report-topsplit {
+    grid-template-columns: 1fr;
+  }
+}
+
 .hmc-setup-split {
   display: grid;
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
