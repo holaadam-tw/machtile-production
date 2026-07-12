@@ -2936,7 +2936,7 @@ function renderHmcGuideRoute() {
       url: hmcDailyCheckReviewUrl({ status: "pending_review" }),
       linkText: "前往每日盤點複核",
       what: "逐筆確認或退回作業員送出的盤點；退回需填原因。",
-      then: "退回的項目回到作業員，修正後重新送審；確認的項目才能進下一步。",
+      then: "退回的項目回到作業員，修正後重新送審；確認的項目才能進下一步。數字都沒問題時，可用複核頁的「一鍵確認並發行」直接完成步驟 3～5。",
     },
     {
       no: 4,
@@ -2954,7 +2954,7 @@ function renderHmcGuideRoute() {
       url: hmcFormalReportsUrl(),
       linkText: "前往正式報表",
       what: "草稿檢查無誤後按「確認發行」，成為正式報表。",
-      then: "發行後不可修改、僅供查閱；發錯可作廢（填原因、留痕）。",
+      then: "發行後不可修改、僅供查閱。發現錯誤可用正式報表頁的「修訂重發」：舊版作廢留痕，新版自動編下一號。",
     },
   ];
 
@@ -5269,6 +5269,7 @@ function renderHmcDailyCheckReviewRoute() {
       ${hmcRenderReviewSummary()}
       ${hmcRenderReviewAuthPanel()}
       ${hmcRenderReviewActionPanel()}
+      ${hmcRenderReviewOneClickPanel()}
       ${hmcRenderReviewConversionPanel()}
       ${hmcRenderReviewGroups()}
 
@@ -5281,6 +5282,124 @@ function renderHmcDailyCheckReviewRoute() {
   `;
 
   bindHmcDailyCheckReviewEvents();
+}
+
+let hmcOneClickState = {
+  status: "idle",
+  confirming: false,
+  step: "",
+  message: "",
+  reportNo: "",
+  reportId: "",
+};
+
+function hmcRenderReviewOneClickPanel() {
+  const stats = hmcDailyCheckReviewStats();
+  const actionable = stats.pendingCount + stats.convertibleCount;
+  if (!actionable || !canReadHmcWorklistFromSupabase()) return "";
+
+  const state = hmcOneClickState;
+  if (state.status === "success") {
+    return `
+      <section class="hmc-report-card hmc-review-conversion-panel is-active" aria-label="HMC one-click confirm and issue">
+        <div class="hmc-review-conversion-copy">
+          <span>一鍵確認並發行</span>
+          <strong>已發行正式報表 ${escapeHtml(state.reportNo || "")}</strong>
+          ${state.reportId ? `<a class="hmc-draft-inline-link" href="${escapeHtml(hmcFormalReportDetailUrl(state.reportId))}">查看正式報表</a>` : ""}
+        </div>
+      </section>
+    `;
+  }
+  if (state.status === "running") {
+    return `
+      <section class="hmc-report-card hmc-review-conversion-panel is-active" aria-label="HMC one-click confirm and issue">
+        <div class="hmc-review-conversion-copy">
+          <span>一鍵確認並發行</span>
+          <strong>${escapeHtml(state.message || "處理中...")}</strong>
+        </div>
+      </section>
+    `;
+  }
+
+  const summaryParts = [];
+  if (stats.pendingCount) summaryParts.push(`確認 ${stats.pendingCount} 筆待確認`);
+  summaryParts.push("建立草稿並直接發行正式報表");
+  const controls = state.confirming
+    ? `
+      <div class="hmc-review-conversion-confirm">
+        <p>將一次完成：${escapeHtml(summaryParts.join("、"))}。發行後不可修改，只能修訂重發。</p>
+        <div class="hmc-review-conversion-confirm-actions">
+          <button type="button" data-hmc-oneclick-confirm>確定執行</button>
+          <button type="button" class="hmc-link-button" data-hmc-oneclick-cancel>取消</button>
+        </div>
+      </div>
+    `
+    : `
+      <button type="button" class="hmc-review-conversion-button" data-hmc-oneclick>
+        一鍵確認並發行${stats.pendingCount ? `（含 ${escapeHtml(stats.pendingCount)} 筆待確認）` : ""}
+      </button>
+    `;
+
+  return `
+    <section class="hmc-report-card hmc-review-conversion-panel is-active" aria-label="HMC one-click confirm and issue">
+      <div class="hmc-review-conversion-copy">
+        <span>一鍵確認並發行</span>
+        <strong>數字都沒問題時，一步完成確認 → 草稿 → 發行</strong>
+        <small>有要退回的請先用下方單筆駁回，再回來按這裡。</small>
+      </div>
+      ${state.status === "error" ? `<p class="hmc-draft-cancel-error">${escapeHtml(state.message)}</p>` : ""}
+      ${controls}
+    </section>
+  `;
+}
+
+async function hmcRunOneClickConfirmAndFinalize() {
+  const machineCode = hmcRouteMachineKey();
+  const workDate = hmcDailyQuantityWorkDate();
+  const shiftScope = hmcReportState.shift;
+  const pending = hmcDailyCheckReviewPendingRows();
+
+  hmcOneClickState = { status: "running", confirming: false, step: "confirm", message: pending.length ? `正在確認 ${pending.length} 筆...` : "正在建立正式報表草稿...", reportNo: "", reportId: "" };
+  renderHmcDailyCheckReviewRoute();
+
+  try {
+    if (pending.length) {
+      await hmcDailyCheckReviewRpcFetch(pending.map((row) => row.quantityId), "confirm", null);
+      hmcDailyCheckReviewState.cache = {};
+      hmcClearDailyQuantityReadCache();
+    }
+    hmcOneClickState.step = "convert";
+    hmcOneClickState.message = "正在建立正式報表草稿...";
+    renderHmcDailyCheckReviewRoute();
+    const conv = await hmcDevAnonRpcFetch("convert_hmc_daily_checks_to_formal_draft", {
+      p_machine_code: machineCode,
+      p_work_date: workDate,
+      p_shift_scope: shiftScope,
+      p_confirm: true,
+      p_note: "一鍵確認並發行",
+    });
+    hmcOneClickState.step = "finalize";
+    hmcOneClickState.message = `草稿 ${conv.draftNo || ""} 已建立，正在發行...`;
+    renderHmcDailyCheckReviewRoute();
+    const fin = await hmcDevAnonRpcFetch("finalize_hmc_formal_report_draft", {
+      p_draft_id: conv.draftId,
+      p_confirm: true,
+      p_note: "一鍵確認並發行",
+    });
+    hmcOneClickState = { status: "success", confirming: false, step: "done", message: "", reportNo: fin.reportNo || "", reportId: fin.reportId || "" };
+    hmcDailyCheckReviewState.cache = {};
+    hmcClearDailyQuantityReadCache();
+    hmcFormalReportDraftsState.list = { status: "idle", message: "", rows: [] };
+    hmcFormalReportsState.list = { status: "idle", message: "", rows: [] };
+    showToast(`已發行正式報表 ${fin.reportNo || ""}`.trim());
+  } catch (error) {
+    const stepLabel = { confirm: "批次確認", convert: "建立草稿", finalize: "發行" }[hmcOneClickState.step] || "執行";
+    const hint = error?.code === "OPEN_DRAFT_EXISTS" ? "；已有開啟中的草稿，請到草稿清單手動發行。" : "";
+    hmcOneClickState = { ...hmcOneClickState, status: "error", confirming: false, message: `${stepLabel}失敗：${error?.message || "未知錯誤"}${hint}` };
+    hmcDailyCheckReviewState.cache = {};
+    hmcClearDailyQuantityReadCache();
+  }
+  renderHmcDailyCheckReviewRoute();
 }
 
 async function hmcRunDailyCheckReview(quantityIds, reviewAction) {
@@ -5515,6 +5634,18 @@ async function hmcRunDailyCheckConversion() {
 function bindHmcDailyCheckReviewEvents() {
   $("#hmcReviewNote")?.addEventListener("input", (event) => {
     hmcDailyCheckReviewState.reviewNote = event.currentTarget?.value || "";
+  });
+
+  $("[data-hmc-oneclick]")?.addEventListener("click", () => {
+    hmcOneClickState = { ...hmcOneClickState, status: "idle", confirming: true, message: "" };
+    renderHmcDailyCheckReviewRoute();
+  });
+  $("[data-hmc-oneclick-cancel]")?.addEventListener("click", () => {
+    hmcOneClickState = { ...hmcOneClickState, status: "idle", confirming: false, message: "" };
+    renderHmcDailyCheckReviewRoute();
+  });
+  $("[data-hmc-oneclick-confirm]")?.addEventListener("click", () => {
+    hmcRunOneClickConfirmAndFinalize();
   });
 
   $$("[data-hmc-review-row-action]").forEach((button) => {
@@ -6296,6 +6427,93 @@ function hmcVoidErrorMessage(code, fallback) {
   return hmcVoidErrorMessages[code] || fallback || "作廢正式報表失敗。";
 }
 
+let hmcReissueState = {
+  status: "idle",
+  confirming: false,
+  reportId: "",
+  reason: "",
+  step: "",
+  message: "",
+};
+
+function hmcRenderFormalReportReissuePanel(report) {
+  if (report.status !== "issued") return "";
+  const state = hmcReissueState;
+  const isThis = state.reportId === report.id;
+
+  if (isThis && state.status === "running") {
+    return `<div class="hmc-draft-cancel-panel"><p class="hmc-draft-cancel-progress">${escapeHtml(state.message || "正在修訂重發...")}</p></div>`;
+  }
+  if (!isThis || !state.confirming) {
+    return `
+      <div class="hmc-draft-cancel-panel">
+        ${isThis && state.status === "error" ? `<p class="hmc-draft-cancel-error">${escapeHtml(state.message)}</p>` : ""}
+        <button type="button" class="hmc-secondary-action" data-hmc-report-reissue="${escapeHtml(report.id)}">修訂重發…</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="hmc-draft-cancel-panel is-confirming">
+      <p class="hmc-draft-cancel-warn">修訂重發＝舊報表作廢留痕，並以目前已確認的盤點重新發行新報表（自動編下一號）。此動作不改已確認的數字；要改數字請先在複核頁處理。</p>
+      <label class="hmc-draft-cancel-label" for="hmcReportReissueReason">修訂原因（必填，最多 1000 字）</label>
+      <textarea id="hmcReportReissueReason" class="hmc-draft-cancel-reason" rows="2" maxlength="1000" placeholder="請說明修訂原因">${escapeHtml(state.reason || "")}</textarea>
+      ${state.status === "error" ? `<p class="hmc-draft-cancel-error">${escapeHtml(state.message)}</p>` : ""}
+      <div class="hmc-draft-cancel-actions">
+        <button type="button" class="hmc-secondary-action" data-hmc-report-reissue-abort="1">返回</button>
+        <button type="button" class="hmc-finalize-action" data-hmc-report-reissue-confirm="${escapeHtml(report.id)}">確認修訂重發</button>
+      </div>
+    </div>
+  `;
+}
+
+async function hmcRunFormalReportReissue(report, reason) {
+  hmcReissueState = { status: "running", confirming: true, reportId: report.id, reason, step: "void", message: "正在作廢舊報表..." };
+  renderHmcFormalReportsRoute();
+
+  try {
+    await hmcDevAnonRpcFetch("void_hmc_formal_report", {
+      p_report_id: report.id,
+      p_reason: `修訂重發：${reason}`,
+      p_confirm: true,
+    });
+    hmcReissueState.step = "convert";
+    hmcReissueState.message = "正在重建草稿...";
+    renderHmcFormalReportsRoute();
+    const conv = await hmcDevAnonRpcFetch("convert_hmc_daily_checks_to_formal_draft", {
+      p_machine_code: report.machineCode,
+      p_work_date: report.workDate,
+      p_shift_scope: report.shiftScope,
+      p_confirm: true,
+      p_note: `修訂重發：${reason}`,
+    });
+    hmcReissueState.step = "finalize";
+    hmcReissueState.message = `草稿 ${conv.draftNo || ""} 已重建，正在發行新報表...`;
+    renderHmcFormalReportsRoute();
+    const fin = await hmcDevAnonRpcFetch("finalize_hmc_formal_report_draft", {
+      p_draft_id: conv.draftId,
+      p_confirm: true,
+      p_note: `修訂重發：${reason}`,
+    });
+    hmcReissueState = { status: "idle", confirming: false, reportId: "", reason: "", step: "", message: "" };
+    hmcFormalReportsState.detail = {};
+    hmcFormalReportsState.list = { status: "idle", message: "", rows: [] };
+    hmcFormalReportDraftsState.list = { status: "idle", message: "", rows: [] };
+    hmcClearDailyQuantityReadCache();
+    showToast(`已修訂重發 ${fin.reportNo || ""}`.trim());
+    if (fin.reportId) {
+      window.location.href = hmcFormalReportDetailUrl(fin.reportId);
+      return;
+    }
+    renderHmcFormalReportsRoute();
+  } catch (error) {
+    const stepLabel = { void: "作廢舊報表", convert: "重建草稿", finalize: "發行新報表" }[hmcReissueState.step] || "修訂重發";
+    hmcReissueState = { ...hmcReissueState, status: "error", message: `${stepLabel}失敗：${error?.message || "未知錯誤"}${hmcReissueState.step !== "void" ? "；舊報表已作廢，可到複核頁／草稿清單手動完成重發。" : ""}` };
+    hmcFormalReportsState.detail = {};
+    hmcFormalReportsState.list = { status: "idle", message: "", rows: [] };
+    renderHmcFormalReportsRoute();
+  }
+}
+
 function hmcRenderFormalReportVoidPanel(report) {
   if (report.status === "voided") {
     return `
@@ -6381,6 +6599,31 @@ async function hmcRunFormalReportVoid(reportId, reason) {
 }
 
 function bindHmcFormalReportDetailEvents() {
+  $("[data-hmc-report-reissue]")?.addEventListener("click", (event) => {
+    hmcReissueState = { status: "idle", confirming: true, reportId: event.currentTarget.dataset.hmcReportReissue || "", reason: "", step: "", message: "" };
+    renderHmcFormalReportsRoute();
+  });
+  $("[data-hmc-report-reissue-abort]")?.addEventListener("click", () => {
+    hmcReissueState = { status: "idle", confirming: false, reportId: "", reason: "", step: "", message: "" };
+    renderHmcFormalReportsRoute();
+  });
+  $("#hmcReportReissueReason")?.addEventListener("input", (event) => {
+    hmcReissueState.reason = event.currentTarget.value || "";
+  });
+  $("[data-hmc-report-reissue-confirm]")?.addEventListener("click", (event) => {
+    const reportId = event.currentTarget.dataset.hmcReportReissueConfirm || "";
+    const reason = ($("#hmcReportReissueReason")?.value || "").trim();
+    const report = hmcFormalReportsState.detail[reportId]?.report;
+    if (!report) return;
+    if (!reason) {
+      hmcReissueState = { ...hmcReissueState, status: "error", message: "修訂前請先填寫修訂原因。" };
+      renderHmcFormalReportsRoute();
+      return;
+    }
+    hmcReissueState.reason = reason;
+    hmcRunFormalReportReissue(report, reason);
+  });
+
   $("[data-hmc-report-void]")?.addEventListener("click", (event) => {
     hmcFormalReportsState.void = {
       confirming: true,
@@ -6503,6 +6746,7 @@ function hmcRenderFormalReportDetail(reportId) {
         <small>此正式報表為定稿時的快照，後續來源資料變動不影響此記錄。</small>
         ${report.sourceDraftId ? `<a class="hmc-draft-inline-link" href="${escapeHtml(hmcFormalReportDraftDetailUrl(report.sourceDraftId))}">查看來源草稿</a>` : ""}
       </div>
+      ${hmcRenderFormalReportReissuePanel(report)}
       ${hmcRenderFormalReportVoidPanel(report)}
     </section>
     ${palletGroups.map(([palletNo, items]) => `
