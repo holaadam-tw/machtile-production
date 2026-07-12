@@ -8116,6 +8116,21 @@ function machtileSessionActive() {
   return Boolean(machtileAuthState.accessToken && machtileAuthState.status === "signedIn" && (!machtileAuthState.expiresAt || machtileAuthState.expiresAt > Date.now()));
 }
 
+// Internal login suffix for username-style accounts (AM6). PERMANENT — changing
+// it would orphan every short-account login (auth stores the full form).
+const machtileLoginSuffix = "@machtile.local";
+
+function machtileAccountToEmail(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.includes("@") ? raw.toLowerCase() : `${raw.toLowerCase()}${machtileLoginSuffix}`;
+}
+
+function machtileAccountDisplay(value) {
+  const raw = String(value || "");
+  return raw.toLowerCase().endsWith(machtileLoginSuffix) ? raw.slice(0, raw.length - machtileLoginSuffix.length) : raw;
+}
+
 async function machtileLogin(email, password) {
   if (!machtileAuthConfigured()) {
     throw new Error("尚未設定 Supabase 連線參數，無法登入。");
@@ -8333,8 +8348,8 @@ function machtileRenderLoginGate() {
       ${machtileAuthState.error ? `<p class="machtile-login-error">${escapeHtml(machtileAuthState.error)}</p>` : ""}
       <form class="machtile-login-form" data-machtile-login-form>
         <label>
-          <span>Email</span>
-          <input type="email" name="email" autocomplete="username" required ${busy ? "disabled" : ""}>
+          <span>帳號（工號或 Email）</span>
+          <input type="text" name="email" autocomplete="username" required ${busy ? "disabled" : ""}>
         </label>
         <label>
           <span>密碼</span>
@@ -8348,7 +8363,7 @@ function machtileRenderLoginGate() {
   overlay.querySelector("[data-machtile-login-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email") || "").trim();
+    const email = machtileAccountToEmail(formData.get("email"));
     const password = String(formData.get("password") || "");
     machtileAuthState.status = "signingIn";
     machtileAuthState.error = "";
@@ -8411,7 +8426,7 @@ async function machtileApplyBranding() {
   // beats showing another factory's name while lookups are in flight.
   const plantNameEl = document.getElementById("plantName");
   if (plantNameEl) plantNameEl.textContent = "";
-  machtileSetUserChip(machtileAuthState.email);
+  machtileSetUserChip(machtileAccountDisplay(machtileAuthState.email));
   // Display name rides the polish-1 actor lookup (cached, soft-fallback);
   // chip upgrades from email to app_users.name when it resolves.
   machtileResolveAppUserId().then(() => {
@@ -9887,7 +9902,7 @@ function amRenderUsersModule() {
     return `
       <div class="admin-data-row" data-am-row="${escapeHtml(user.id)}">
         <strong>${escapeHtml(user.name || "-")}</strong>
-        <span>${escapeHtml(user.account || "-")}</span>
+        <span>${escapeHtml(machtileAccountDisplay(user.account) || "-")}</span>
         <span>${escapeHtml(amRoleLabels[user.role] || user.role)}${isSelf ? "（自己）" : ""}</span>
         <span>${user.is_active ? "啟用中" : "已停用"}</span>
         <span>
@@ -9904,8 +9919,8 @@ function amRenderUsersModule() {
             <input type="text" value="${escapeHtml(user.name || "")}" data-am-edit-name="${escapeHtml(user.id)}">
           </label>
           <label class="admin-field" style="grid-column: 2 / -2;">
-            <span>Email（登入帳號）</span>
-            <input type="email" value="${escapeHtml(user.account || "")}" data-am-edit-email="${escapeHtml(user.id)}">
+            <span>登入帳號（工號或 Email）</span>
+            <input type="text" value="${escapeHtml(machtileAccountDisplay(user.account))}" data-am-edit-email="${escapeHtml(user.id)}">
           </label>
           <button type="button" data-am-edit-confirm="${escapeHtml(user.id)}">確認修改</button>
         </div>
@@ -9937,7 +9952,7 @@ function amRenderUsersModule() {
       <h3>新增員工帳號</h3>
       <div class="admin-form-grid">
         <label class="admin-field"><span>姓名</span><input type="text" data-am-new-name></label>
-        <label class="admin-field"><span>Email（登入帳號）</span><input type="email" data-am-new-email></label>
+        <label class="admin-field"><span>登入帳號（工號或 Email）</span><input type="text" data-am-new-email></label>
         <label class="admin-field"><span>初始密碼（至少 8 碼）</span><input type="password" autocomplete="new-password" data-am-new-password></label>
         <label class="admin-field"><span>角色</span>
           <select data-am-new-role>
@@ -9978,12 +9993,17 @@ function amBindUsersModuleEvents() {
   root.querySelector("[data-am-create]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const name = root.querySelector("[data-am-new-name]")?.value.trim() || "";
-    const email = root.querySelector("[data-am-new-email]")?.value.trim() || "";
+    const email = machtileAccountToEmail(root.querySelector("[data-am-new-email]")?.value);
     const passwordInput = root.querySelector("[data-am-new-password]");
     const password = passwordInput?.value || "";
     const role = root.querySelector("[data-am-new-role]")?.value || "";
-    if (!name || !email || password.length < 8) {
-      amSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+    if (!name || !email) {
+      amSetMessage("請填姓名與登入帳號。", "error");
+      amRenderUsersModule();
+      return;
+    }
+    if (password.length < 8) {
+      amSetMessage("初始密碼至少 8 碼。", "error");
       amRenderUsersModule();
       return;
     }
@@ -9992,7 +10012,7 @@ function amBindUsersModuleEvents() {
     const result = await amCallFunction("am-create-user", { email, password, name, role });
     if (passwordInput) passwordInput.value = "";
     if (result.ok) {
-      amSetMessage(`已建立帳號 ${email}（${amRoleLabels[role] || role}）。`, "ok");
+      amSetMessage(`已建立帳號 ${machtileAccountDisplay(email)}（${amRoleLabels[role] || role}）。`, "ok");
       amUsersState.expandedResetId = "";
       amUsersState.confirmStateId = "";
       await amReloadUsers();
@@ -10029,9 +10049,9 @@ function amBindUsersModuleEvents() {
       const id = button.getAttribute("data-am-edit-confirm");
       const user = amUsersState.users.find((row) => row.id === id);
       const newName = root.querySelector(`[data-am-edit-name="${id}"]`)?.value.trim() || "";
-      const newEmail = (root.querySelector(`[data-am-edit-email="${id}"]`)?.value.trim() || "").toLowerCase();
+      const newEmail = machtileAccountToEmail(root.querySelector(`[data-am-edit-email="${id}"]`)?.value);
       if (!newName || !newEmail) {
-        amSetMessage(amErrorText("INVALID_PAYLOAD"), "error");
+        amSetMessage("請填姓名與登入帳號。", "error");
         amRenderUsersModule();
         return;
       }
