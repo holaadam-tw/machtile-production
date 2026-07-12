@@ -2966,33 +2966,22 @@ function hmcRenderReplaceActiveWorklistPanel() {
 
   if (!canShowReplace && hmcSetupReplaceState.status === "idle") return "";
 
-  const finalEnabled = canShowReplace && hmcSetupReplaceState.open && hmcSetupReplaceState.confirmed && !busy;
   const openEnabled = canShowReplace && !busy;
 
   return `
     <section class="hmc-setup-replace-panel ${hmcSetupReplaceState.open ? "is-open" : ""}" aria-label="Replace active HMC worklist">
       <div class="hmc-setup-replace-copy">
-        <span>需要更換本班清單</span>
-        <strong>取代目前啟用清單</strong>
-        <p>這是主管/排程人員的${machtileStrictMode() ? "" : " Dev-only"} 動作。舊清單會標記為已取代，新草稿會成為啟用清單；現場報工仍不會送出。</p>
-        ${activeWorklistId ? `<small>目前啟用清單：${escapeHtml(activeWorklistId)}</small>` : ""}
-        ${hmcSetupWriteState.worklistId ? `<small>準備啟用草稿：${escapeHtml(hmcSetupWriteState.worklistId)}</small>` : ""}
+        <strong>換成這份新清單</strong>
+        <p>舊清單會留檔（標記已取代），現場改讀新清單。</p>
+        ${activeWorklistId && hmcSetupWriteState.worklistId ? `<small>舊 ${escapeHtml(activeWorklistId.slice(0, 8))}… → 新 ${escapeHtml(hmcSetupWriteState.worklistId.slice(0, 8))}…</small>` : ""}
       </div>
       ${hmcRenderSetupReplaceStatus()}
       ${!hmcSetupReplaceState.open ? `
         <button type="button" class="hmc-setup-replace-open" data-hmc-open-replace-active ${openEnabled ? "" : "disabled aria-disabled=\"true\""}>取代目前啟用清單</button>
       ` : `
-        <div class="hmc-setup-replace-confirm">
-          <strong>確認取代啟用清單</strong>
-          <p>這會把目前同機台、同班別的啟用清單標記為已取代，並把這份草稿設為新的啟用清單。舊清單不會刪除，但現場會改讀新的啟用清單。</p>
-          <label>
-            <input type="checkbox" data-hmc-confirm-replace-active ${hmcSetupReplaceState.confirmed ? "checked" : ""}>
-            <span>我了解：舊清單會標記為已取代，新清單會成為啟用清單。</span>
-          </label>
-          <div class="hmc-setup-replace-actions">
-            <button type="button" data-hmc-cancel-replace-active>取消</button>
-            <button type="button" class="hmc-setup-replace-danger" data-hmc-replace-active-worklist ${finalEnabled ? "" : "disabled aria-disabled=\"true\""}>${hmcSetupReplaceState.status === "replacing" ? "正在取代..." : "確認取代"}</button>
-          </div>
+        <div class="hmc-setup-replace-actions">
+          <button type="button" data-hmc-cancel-replace-active>取消</button>
+          <button type="button" class="hmc-setup-replace-danger" data-hmc-replace-active-worklist ${busy ? "disabled aria-disabled=\"true\"" : ""}>${hmcSetupReplaceState.status === "replacing" ? "正在取代..." : "確認取代？"}</button>
         </div>
       `}
     </section>
@@ -3297,10 +3286,6 @@ function bindHmcWorklistSetupEvents() {
   });
   $("[data-hmc-cancel-replace-active]")?.addEventListener("click", () => {
     resetHmcSetupReplaceState();
-    renderHmcWorklistSetupRoute();
-  });
-  $("[data-hmc-confirm-replace-active]")?.addEventListener("change", (event) => {
-    hmcSetupReplaceState.confirmed = Boolean(event.currentTarget?.checked);
     renderHmcWorklistSetupRoute();
   });
   $("[data-hmc-replace-active-worklist]")?.addEventListener("click", async () => {
@@ -4595,7 +4580,7 @@ function hmcPalletMatrix() {
                     <button type="button" data-hmc-work-card="${escapeHtml(work.workNo)}" data-hmc-pallet-work="${escapeHtml(pallet.palletId)}" aria-pressed="${isSelected ? "true" : "false"}">
                       <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
                       <strong>${escapeHtml(work.partName)}</strong>
-                      <em>${escapeHtml(work.workNo)} · ${escapeHtml(hmcWorkDailyQuantityLine(work))}</em>
+                      <em>${escapeHtml(work.workNo)} · ${hmcWorkDailyQuantityLine(work)}</em>
                     </button>
                     <label>
                       <span>畫面輸入</span>
@@ -7150,10 +7135,13 @@ function hmcShiftDescription(shift) {
 function hmcWorkDailyQuantityLine(work) {
   const source = work.dailyQuantitySource || "preview";
   if (source === "preview" || work.dailyQuantityReadStatus === "preview") {
-    return `剩餘 ${work.remainingQty}`;
+    return `<span class="hmc-qtyline">剩餘 <b class="qty-left">${Number(work.remainingQty || 0)}</b></span>`;
   }
-  const shortage = work.dbShortageOrSkipped ? " / 缺料" : "";
-  return `已存完成 ${Number(work.dbTodayCompletedQty || 0)} / 不良 ${Number(work.dbTodayDefectQty || 0)} / 剩餘 ${Number((work.dbRemainingQty ?? work.remainingQty) || 0)}${shortage}`;
+  const done = Number(work.dbTodayCompletedQty || 0);
+  const bad = Number(work.dbTodayDefectQty || 0);
+  const left = Number((work.dbRemainingQty ?? work.remainingQty) || 0);
+  const shortage = work.dbShortageOrSkipped ? ' / <b class="qty-bad">缺料</b>' : "";
+  return `<span class="hmc-qtyline">已存完成 <b class="${done > 0 ? "qty-ok" : ""}">${done}</b> / 不良 <b class="${bad > 0 ? "qty-bad" : ""}">${bad}</b> / 剩餘 <b class="qty-left">${left}</b>${shortage}</span>`;
 }
 
 function hmcDailyQuantityReadStatusPanel() {
@@ -7267,7 +7255,7 @@ function hmcDailyWorkFocusPanel() {
             <div>
               <span>${escapeHtml(pallet.palletName)} · ${escapeHtml(work.positionCode || "-")}</span>
               <strong>${escapeHtml(work.partName)}</strong>
-              <small>${escapeHtml(work.workNo)} · ${escapeHtml(hmcWorkDailyQuantityLine(work))}</small>
+              <small>${escapeHtml(work.workNo)} · ${hmcWorkDailyQuantityLine(work)}</small>
             </div>
             <b class="hmc-review-status ${hmcReviewStatusClass(status)}">${escapeHtml(hmcReviewStatusLabel(status))}</b>
             ${work.dailyReviewNote ? `<p>退回原因：${escapeHtml(work.dailyReviewNote)}</p>` : ""}
@@ -7311,7 +7299,7 @@ function hmcPalletMatrix() {
                     <button type="button" data-hmc-work-card="${escapeHtml(work.workNo)}" data-hmc-pallet-work="${escapeHtml(pallet.palletId)}" aria-pressed="${isSelected ? "true" : "false"}">
                       <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
                       <strong>${escapeHtml(work.partName)}</strong>
-                      <em>${escapeHtml(work.workNo)} · ${escapeHtml(hmcWorkDailyQuantityLine(work))}</em>
+                      <em>${escapeHtml(work.workNo)} · ${hmcWorkDailyQuantityLine(work)}</em>
                     </button>
                     ${dailyStatus !== "not_started" ? `
                       <div class="hmc-matrix-review-state">
@@ -7321,6 +7309,14 @@ function hmcPalletMatrix() {
                         ${dailyStatus === "rejected" ? `<small>可修正後重新送審。</small>` : ""}
                       </div>
                     ` : ""}
+                    <div class="hmc-matrix-qtystat">
+                      <span>訂單數量</span>
+                      <strong>${escapeHtml(Number(work.plannedQty || 0))}</strong>
+                    </div>
+                    <div class="hmc-matrix-qtystat is-remaining">
+                      <span>剩餘</span>
+                      <strong>${escapeHtml(Number((work.dbRemainingQty ?? work.remainingQty) || 0))}</strong>
+                    </div>
                     <label>
                       <span>本日完成</span>
                       <input class="hmc-selected-qty" type="number" min="0" inputmode="numeric" value="${escapeHtml(qtyValue)}" data-hmc-work-key="${escapeHtml(key)}" ${canEditDailyCheck ? "" : "disabled"}>

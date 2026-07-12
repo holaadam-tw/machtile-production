@@ -6319,7 +6319,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
 .hmc-matrix-work {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 120px 120px 118px;
+  grid-template-columns: minmax(300px, 1fr) 68px 68px 110px 110px 112px;
   gap: 10px;
   align-items: center;
   border: 1px solid var(--border);
@@ -6327,6 +6327,58 @@ body.report-work-route-mode .machtile-route-brand-bar {
   min-height: 88px;
   padding: 10px;
   background: var(--surface);
+}
+
+.hmc-matrix-qtystat {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+}
+
+.hmc-matrix-qtystat span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hmc-matrix-qtystat strong {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.hmc-matrix-qtystat.is-remaining strong {
+  color: var(--brand-blue);
+}
+
+.hmc-matrix-work button span.hmc-qtyline,
+.hmc-matrix-work.is-selected button span.hmc-qtyline,
+.hmc-matrix-work.is-active button span.hmc-qtyline {
+  display: inline;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: inherit;
+}
+
+.hmc-qtyline b {
+  font-size: 14px;
+  font-weight: 800;
+  font-style: normal;
+  color: var(--text);
+}
+
+.hmc-qtyline b.qty-ok {
+  color: var(--green-strong);
+}
+
+.hmc-qtyline b.qty-bad {
+  color: #b42318;
+}
+
+.hmc-qtyline b.qty-left {
+  color: var(--brand-blue);
 }
 
 .hmc-matrix-work.is-selected {
