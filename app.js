@@ -10883,7 +10883,37 @@ function renderVendorModule() {
   return renderSimpleAdminList("外部授權", vendors, "新增授權對象");
 }
 
+// 公司資料真做（2026-07-13）：strict 模式接 company_profile_upsert；
+// 廠區名稱＝頁首品牌來源，存檔後品牌即時刷新。Dev 免登入維持 mock 示範。
+function machtileCanManageCompany() {
+  return machtileStrictMode() && machtileSessionActive()
+    && ["admin", "manager"].includes(machtileAuthState.role);
+}
+
 function renderCompanyModule() {
+  if (machtileStrictMode() && machtileSessionActive()) {
+    if (!machtileCanManageCompany()) {
+      return `<p class="admin-module-note">此功能需要管理者或主管權限的正式環境帳號。</p>`;
+    }
+    return `
+      <form id="machtileCompanyForm" class="admin-module-form">
+        <label class="admin-field"><span>公司名稱 *</span>
+          <input id="machtileCoName" type="text" required></label>
+        <label class="admin-field"><span>統一編號（選填）</span>
+          <input id="machtileCoTaxId" type="text"></label>
+        <label class="admin-field"><span>聯絡人（選填）</span>
+          <input id="machtileCoContact" type="text"></label>
+        <label class="admin-field"><span>電話（選填）</span>
+          <input id="machtileCoPhone" type="text"></label>
+        <label class="admin-field"><span>地址（選填）</span>
+          <input id="machtileCoAddress" type="text"></label>
+        <label class="admin-field"><span>廠區名稱（顯示在每頁左上角）</span>
+          <input id="machtileCoFactory" type="text" placeholder="例：主廠區"></label>
+        <button class="admin-save-button" type="submit">儲存公司資料</button>
+        <p class="admin-module-note">廠區名稱改了之後，頁首品牌立刻跟著換。</p>
+      </form>
+    `;
+  }
   return `
     <section class="admin-form-card">
       <h3>公司與部署設定</h3>
@@ -10898,6 +10928,52 @@ function renderCompanyModule() {
       ${adminSaveButton("儲存公司資料")}
     </section>
   `;
+}
+
+async function machtileInitCompanyModule() {
+  const form = document.getElementById("machtileCompanyForm");
+  if (!form) return;
+  try {
+    const [settings, factories] = await Promise.all([
+      supabaseFetch("company_settings?select=company_name,tax_id,contact_name,phone,address&limit=1"),
+      supabaseFetch("factories?select=name&is_active=eq.true&order=factory_code&limit=1"),
+    ]);
+    const row = Array.isArray(settings) && settings[0] ? settings[0] : {};
+    document.getElementById("machtileCoName").value = row.company_name || "";
+    document.getElementById("machtileCoTaxId").value = row.tax_id || "";
+    document.getElementById("machtileCoContact").value = row.contact_name || "";
+    document.getElementById("machtileCoPhone").value = row.phone || "";
+    document.getElementById("machtileCoAddress").value = row.address || "";
+    document.getElementById("machtileCoFactory").value = Array.isArray(factories) && factories[0] ? (factories[0].name || "") : "";
+  } catch (error) {
+    console.warn("company profile prefill failed", error);
+  }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const payload = {
+        company_name: document.getElementById("machtileCoName").value.trim(),
+        tax_id: document.getElementById("machtileCoTaxId").value.trim() || null,
+        contact_name: document.getElementById("machtileCoContact").value.trim() || null,
+        phone: document.getElementById("machtileCoPhone").value.trim() || null,
+        address: document.getElementById("machtileCoAddress").value.trim() || null,
+        factory_name: document.getElementById("machtileCoFactory").value.trim() || null,
+      };
+      await supabaseFetch("rpc/company_profile_upsert", {
+        method: "POST",
+        body: JSON.stringify({ p_payload: payload }),
+      });
+      showToast("公司資料已儲存");
+      machtileApplyBranding();
+    } catch (error) {
+      const msg = String(error?.message || error || "");
+      showToast(`儲存失敗：${msg.includes("FORBIDDEN") ? "此帳號沒有公司資料權限（需管理者/主管）。" : msg}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 function renderTemplateModule() {
@@ -11077,6 +11153,7 @@ function openAdminModule(moduleKey) {
   $("#adminModuleContent").innerHTML = renderAdminModuleContent(moduleKey);
   if (moduleKey === "workOrders") machtileInitWorkOrderModule().catch(() => {});
   if (moduleKey === "add") machtileInitMachineModule().catch(() => {});
+  if (moduleKey === "company") machtileInitCompanyModule().catch(() => {});
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
