@@ -6142,29 +6142,54 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 
 .hmc-setup-disabled-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
 }
 
 .hmc-setup-disabled-actions button {
-  min-height: 44px;
+  min-height: 48px;
+  min-width: 170px;
   border: 0;
-  border-radius: 8px;
-  padding: 10px 14px;
+  border-radius: 10px;
+  padding: 10px 16px;
   background: #e8eef5;
   color: #64748b;
   font-weight: 900;
 }
 
 .hmc-setup-disabled-actions button:not(:disabled) {
-  background: var(--brand-blue);
-  color: #ffffff;
   cursor: pointer;
 }
 
-.hmc-setup-disabled-actions button:not(:disabled):last-child {
-  background: #0f172a;
+.hmc-setup-disabled-actions [data-hmc-save-draft]:not(:disabled) {
+  background: var(--brand-blue);
+  color: #ffffff;
+}
+
+.hmc-setup-disabled-actions [data-hmc-activate-worklist]:not(:disabled) {
+  background: #15803d;
+  color: #ffffff;
+}
+
+.hmc-setup-disabled-actions .hmc-setup-replace-open:not(:disabled) {
+  background: #f59e0b;
+  color: #431407;
+}
+
+.hmc-setup-disabled-actions [data-hmc-cancel-replace-active] {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.hmc-setup-disabled-actions .hmc-setup-replace-danger:not(:disabled) {
+  background: #b45309;
+  color: #ffffff;
+}
+
+.hmc-setup-replace-hint {
+  text-align: right;
 }
 
 .hmc-setup-nologin-notice {
