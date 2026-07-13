@@ -2880,9 +2880,7 @@ function hmcRenderSetupActiveWorklistNotice() {
           <span>已有啟用清單</span>
           <strong>${escapeHtml(shiftLabel)}・${escapeHtml(readState.pallets?.length || 0)} 盤 / ${escapeHtml(readState.items?.length || 0)} 件</strong>
         </div>
-        <dl>
-          <div><dt>清單編號</dt><dd>${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</dd></div>
-        </dl>
+        <small class="hmc-setup-active-id">清單編號 ${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</small>
       </section>
     `;
   }
@@ -2988,14 +2986,18 @@ function hmcRenderSetupWriteControls() {
   const replaceUi = activateBlocked ? hmcRenderReplaceActiveWorklistInline() : null;
   return `
     <section class="hmc-submit-panel hmc-setup-action-panel">
-      <strong>儲存與啟用</strong>
-      ${hmcRenderSetupWriteStatus()}
-      <div class="hmc-setup-disabled-actions">
-        <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
-        ${replaceUi ? replaceUi.buttons : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
+      <div class="hmc-setup-action-copy">
+        <strong>儲存與啟用</strong>
+        ${hmcRenderSetupWriteStatus()}
+        ${hmcRenderSetupReplaceStatus()}
       </div>
-      ${replaceUi && replaceUi.hint ? `<p class="hmc-setup-replace-hint">${escapeHtml(replaceUi.hint)}</p>` : ""}
-      ${hmcRenderSetupReplaceStatus()}
+      <div class="hmc-setup-action-side">
+        <div class="hmc-setup-disabled-actions">
+          <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
+          ${replaceUi ? replaceUi.buttons : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
+        </div>
+        ${replaceUi && replaceUi.hint ? `<p class="hmc-setup-replace-hint">${escapeHtml(replaceUi.hint)}</p>` : ""}
+      </div>
     </section>
   `;
 }

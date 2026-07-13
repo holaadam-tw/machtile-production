@@ -6137,8 +6137,26 @@ body.report-work-route-mode .machtile-route-brand-bar {
   overflow-wrap: anywhere;
 }
 
-.hmc-setup-action-panel {
+.hmc-submit-panel.hmc-setup-action-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-top: 16px;
+}
+
+.hmc-setup-action-copy {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.hmc-setup-action-side {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
 }
 
 .hmc-setup-disabled-actions {
@@ -6218,6 +6236,24 @@ body.report-work-route-mode .machtile-route-brand-bar {
   margin-bottom: 16px;
   border-left: 4px solid #f59e0b;
   background: #fff7ed;
+}
+
+.hmc-setup-active-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hmc-setup-active-warning > div {
+  display: grid;
+  gap: 2px;
+}
+
+.hmc-setup-active-id {
+  color: var(--muted);
+  font-weight: 900;
 }
 
 .hmc-setup-active-warning.is-conflict {
