@@ -2433,6 +2433,11 @@ function updateHmcReportPreview() {
 }
 
 function bindHmcReportEvents() {
+  $("[data-hmc-report-machine]")?.addEventListener("change", (event) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    window.location.href = url.toString();
+  });
   $("[data-hmc-back]")?.addEventListener("click", (event) => {
     event.preventDefault();
     const target = event.currentTarget?.getAttribute("href") || hmcReportDashboardBackUrl();
@@ -3184,30 +3189,28 @@ function renderHmcWorklistSetupRoute() {
         <span>${machtileStrictMode() ? "班前清單設定（正式環境）· 需登入（排程 / 主管）" : "班前清單設定（Dev）· 免登入"} · 只寫班前清單，不會產生報工</span>
       </section>
 
-      <section class="hmc-report-card hmc-setup-control-card" aria-label="HMC setup controls">
-        <div class="hmc-setup-control-grid">
-          <label class="hmc-field">
-            <span>機台</span>
-            <select data-hmc-setup-machine>
-              ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === machineLabel ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="hmc-field">
-            <span>清單日期</span>
-            <input type="date" value="${escapeHtml(hmcSetupDraft().workDate || hmcTodayDateIso())}" data-hmc-setup-date>
-          </label>
-          <div class="hmc-field">
-            <span>班別</span>
-            <div class="hmc-shift-tabs hmc-shift-tabs-inline" role="tablist" aria-label="HMC setup shift mode">
-              <button type="button" class="hmc-shift-day ${!isNight ? "is-active" : ""}" data-hmc-setup-shift="day">
-                <strong>白班</strong>
-                <span>自選工件</span>
-              </button>
-              <button type="button" class="hmc-shift-night ${isNight ? "is-active" : ""}" data-hmc-setup-shift="night">
-                <strong>夜班</strong>
-                <span>批次工件</span>
-              </button>
-            </div>
+      <section class="hmc-report-card hmc-machine-shift-bar hmc-setup-control-card" aria-label="HMC setup controls">
+        <label class="hmc-field">
+          <span>機台</span>
+          <select data-hmc-setup-machine>
+            ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === machineLabel ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="hmc-field">
+          <span>清單日期</span>
+          <input type="date" value="${escapeHtml(hmcSetupDraft().workDate || hmcTodayDateIso())}" data-hmc-setup-date>
+        </label>
+        <div class="hmc-field">
+          <span>班別</span>
+          <div class="hmc-shift-tabs hmc-shift-tabs-inline" role="tablist" aria-label="HMC setup shift mode">
+            <button type="button" class="hmc-shift-day ${!isNight ? "is-active" : ""}" data-hmc-setup-shift="day">
+              <strong>白班</strong>
+              <span>自選工件</span>
+            </button>
+            <button type="button" class="hmc-shift-night ${isNight ? "is-active" : ""}" data-hmc-setup-shift="night">
+              <strong>夜班</strong>
+              <span>批次工件</span>
+            </button>
           </div>
         </div>
         <p>白班與夜班各自保留畫面草稿；尚未儲存的內容重新整理後不會保留，請記得儲存草稿。</p>
@@ -5236,11 +5239,21 @@ function hmcRenderReviewFilterTabs() {
   const activeStatus = hmcDailyCheckReviewStatusFilter();
   const activeShift = hmcReportState.shift;
   return `
-    <section class="hmc-review-filters" aria-label="HMC daily check review filters">
-      <div>
-        <strong>班別</strong>
-        <span>${shifts.map((shift) => `<a class="${shift === activeShift ? "is-active" : ""}" href="${escapeHtml(hmcDailyCheckReviewUrl({ shift }))}">${escapeHtml(hmcShiftLabel(shift))}</a>`).join("")}</span>
+    <section class="hmc-report-card hmc-machine-shift-bar" aria-label="機台與班別切換">
+      <label class="hmc-field">
+        <span>機台</span>
+        <select data-hmc-review-machine>
+          ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="hmc-field">
+        <span>班別</span>
+        <div class="hmc-shift-tabs hmc-shift-tabs-inline" role="tablist" aria-label="HMC review shift mode">
+          ${shifts.map((shift) => `<a class="${shift === "night" ? "hmc-shift-night" : "hmc-shift-day"} ${shift === activeShift ? "is-active" : ""}" href="${escapeHtml(hmcDailyCheckReviewUrl({ shift }))}"><strong>${shift === "night" ? "夜班" : "白班"}</strong><span>${shift === "night" ? "批次工件" : "自選工件"}</span></a>`).join("")}
+        </div>
       </div>
+    </section>
+    <section class="hmc-review-filters" aria-label="HMC daily check review filters">
       <div>
         <strong>狀態</strong>
         <span>${statuses.map((status) => `<a class="${status === activeStatus ? "is-active" : ""}" href="${escapeHtml(hmcDailyCheckReviewUrl({ status }))}">${escapeHtml(hmcReviewStatusLabel(status))}</a>`).join("")}</span>
@@ -5874,6 +5887,11 @@ async function hmcRunDailyCheckConversion() {
 }
 
 function bindHmcDailyCheckReviewEvents() {
+  $("[data-hmc-review-machine]")?.addEventListener("change", (event) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    window.location.href = url.toString();
+  });
   $("#hmcReviewNote")?.addEventListener("input", (event) => {
     hmcDailyCheckReviewState.reviewNote = event.currentTarget?.value || "";
   });
@@ -7453,6 +7471,28 @@ function renderHmcReportRoute() {
         </div>
       </header>
 
+      <section class="hmc-report-card hmc-machine-shift-bar" aria-label="機台與班別切換">
+        <label class="hmc-field">
+          <span>機台</span>
+          <select data-hmc-report-machine>
+            ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="hmc-field">
+          <span>班別</span>
+          <div class="hmc-shift-tabs hmc-shift-tabs-inline" role="tablist" aria-label="HMC shift mode">
+            <button type="button" class="hmc-shift-day ${!isNight ? "is-active" : ""}" data-hmc-shift="day">
+              <strong>白班</strong>
+              <span>自選工件</span>
+            </button>
+            <button type="button" class="hmc-shift-night ${isNight ? "is-active" : ""}" data-hmc-shift="night">
+              <strong>夜班</strong>
+              <span>批次工件</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
       ${(() => {
         const summaryHtml = hmcDailyQuantitySummary();
         const reviewHtml = hmcDailyCheckReviewResultPanel();
@@ -7467,16 +7507,6 @@ function renderHmcReportRoute() {
           <div>
             <strong>交換盤與工件輸入</strong>
             <span>依盤號往下填本日完成與本日不良；退回項目可修正後重新送審。</span>
-          </div>
-          <div class="hmc-shift-tabs hmc-shift-tabs-inline" role="tablist" aria-label="HMC shift mode">
-            <button type="button" class="hmc-shift-day ${!isNight ? "is-active" : ""}" data-hmc-shift="day">
-              <strong>白班</strong>
-              <span>自選工件</span>
-            </button>
-            <button type="button" class="hmc-shift-night ${isNight ? "is-active" : ""}" data-hmc-shift="night">
-              <strong>夜班</strong>
-              <span>批次工件</span>
-            </button>
           </div>
         </div>
         ${hmcPalletMatrix()}
@@ -7522,6 +7552,11 @@ function renderHmcReportRoute() {
 }
 
 function bindHmcReportEvents() {
+  $("[data-hmc-report-machine]")?.addEventListener("change", (event) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    window.location.href = url.toString();
+  });
   $("[data-hmc-back]")?.addEventListener("click", (event) => {
     event.preventDefault();
     const target = event.currentTarget?.getAttribute("href") || hmcReportDashboardBackUrl();

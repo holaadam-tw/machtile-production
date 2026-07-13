@@ -3839,6 +3839,98 @@ body.report-work-route-mode .machtile-route-brand-bar {
   padding: 14px 0 0;
 }
 
+.hmc-report-card.hmc-machine-shift-bar {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: end;
+  border: 2px solid #1e3a8a;
+  background: #1e3a8a;
+}
+
+.hmc-report-card.hmc-machine-shift-bar.hmc-setup-control-card {
+  grid-template-columns: minmax(180px, 240px) minmax(180px, 240px) minmax(0, 1fr);
+}
+
+.hmc-report-card.hmc-machine-shift-bar > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-field > span {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.hmc-report-card.hmc-machine-shift-bar select,
+.hmc-report-card.hmc-machine-shift-bar input {
+  min-height: 56px;
+  border: 2px solid #ffffff;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1e3a8a;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline button,
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline a {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  min-height: 56px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+  text-decoration: none;
+  font-weight: 900;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline button strong,
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline a strong {
+  font-size: 18px;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline button span,
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline a span {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  opacity: 0.78;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline .hmc-shift-day:not(.is-active),
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline .hmc-shift-night:not(.is-active) {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline .hmc-shift-day.is-active {
+  border-color: #fbbf24;
+  background: #fbbf24;
+  color: #78350f;
+}
+
+.hmc-report-card.hmc-machine-shift-bar .hmc-shift-tabs-inline .hmc-shift-night.is-active {
+  border-color: #cbd5f5;
+  background: #312e81;
+  color: #ffffff;
+}
+
+@media (max-width: 720px) {
+  .hmc-report-card.hmc-machine-shift-bar,
+  .hmc-report-card.hmc-machine-shift-bar.hmc-setup-control-card {
+    grid-template-columns: 1fr;
+  }
+}
+
 .hmc-report-topsplit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
