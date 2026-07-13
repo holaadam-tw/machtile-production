@@ -370,6 +370,12 @@ function isOrderReportable(order) {
   return isReportableMachineName(order?.machine);
 }
 
+// 機台下拉來源：DB 機台主檔有料就用它（strict 已載入），否則退回寫死示範清單。
+function hmcMachineChoices() {
+  const source = state.machineMasters.length ? state.machineMasters : baseMachines;
+  return source.filter((machine) => isHmcMachine(machine));
+}
+
 function isHmcMachine(machine) {
   const text = [
     machine?.name,
@@ -3246,7 +3252,7 @@ function renderHmcWorklistSetupRoute() {
         <label class="hmc-field">
           <span>機台</span>
           <select data-hmc-setup-machine>
-            ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === machineLabel ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+            ${hmcMachineChoices().map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === machineLabel ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
           </select>
         </label>
         <label class="hmc-field">
@@ -5304,7 +5310,7 @@ function hmcRenderReviewFilterTabs() {
       <label class="hmc-field">
         <span>機台</span>
         <select data-hmc-review-machine>
-          ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+          ${hmcMachineChoices().map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
         </select>
       </label>
       <div class="hmc-field">
@@ -7536,7 +7542,7 @@ function renderHmcReportRoute() {
         <label class="hmc-field">
           <span>機台</span>
           <select data-hmc-report-machine>
-            ${baseMachines.filter((machine) => isHmcMachine(machine)).map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
+            ${hmcMachineChoices().map((machine) => `<option value="${escapeHtml(machine.name)}" ${machine.name === hmcRouteMachineKey() ? "selected" : ""}>${escapeHtml(machine.name)}</option>`).join("")}
           </select>
         </label>
         <div class="hmc-field">
@@ -10047,7 +10053,41 @@ function renderAdminModuleContent(moduleKey) {
   }
 }
 
+// 機台管理真做（2026-07-13，M1=RPC/M2=6欄/M3=status 停用）：strict 模式接
+// machine_upsert；Dev 免登入維持原 mock 示範表單。
+let machtileMachineEditSeed = null;
+
+const machtileMachineTypes = ["車床", "銑床", "五軸", "車銑複合", "臥式加工中心", "外包站", "other"];
+const machtileMachineStatuses = [
+  ["idle", "空閒"],
+  ["running", "加工中"],
+  ["paused", "暫停"],
+  ["maintenance", "維修"],
+  ["offline", "停用"],
+];
+
 function renderAddMachineModule() {
+  if (machtileCanManageWorkOrders()) {
+    const seed = machtileMachineEditSeed;
+    return `
+      <form id="machtileMachineForm" class="admin-module-form">
+        <label class="admin-field"><span>機台代號 *（同代號再次送出＝更新）</span>
+          <input id="machtileMcCode" type="text" required value="${escapeHtml(seed?.machine_code || "")}" ${seed ? "readonly" : ""} placeholder="例：HMC-03"></label>
+        <label class="admin-field"><span>機台名稱 *</span>
+          <input id="machtileMcName" type="text" required value="${escapeHtml(seed?.name || "")}" placeholder="例：HMC-03 臥式加工中心"></label>
+        <label class="admin-field"><span>機型</span>
+          <select id="machtileMcType">${machtileMachineTypes.map((type) => `<option ${((seed?.machine_type) || "銑床") === type ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
+        <label class="admin-field"><span>位置（選填）</span>
+          <input id="machtileMcLocation" type="text" value="${escapeHtml(seed?.location || "")}" placeholder="例：一廠 B 區"></label>
+        <label class="admin-field"><span>顯示排序（小的排前面）</span>
+          <input id="machtileMcOrder" type="number" min="0" value="${escapeHtml(seed?.display_order ?? 0)}"></label>
+        <label class="admin-field"><span>狀態</span>
+          <select id="machtileMcStatus">${machtileMachineStatuses.map(([value, label]) => `<option value="${value}" ${((seed?.status) || "idle") === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
+        <button class="admin-save-button" type="submit">${seed ? "更新機台" : "建立機台"}</button>
+        <p class="admin-module-note">機型選「臥式加工中心」會自動獲得多盤多工件盤點入口；「停用」只改狀態、不會刪除資料。</p>
+      </form>
+    `;
+  }
   return `
     <div class="admin-module-grid">
       <section class="admin-form-card">
@@ -10070,6 +10110,64 @@ function renderAddMachineModule() {
   `;
 }
 
+function machtileMachineErrorText(error) {
+  const msg = String(error?.message || error || "");
+  if (msg.includes("FORBIDDEN")) return "此帳號沒有機台管理權限（需排程以上）。";
+  if (msg.includes("machine_code is required")) return "機台代號必填。";
+  if (msg.includes("name is required")) return "機台名稱必填。";
+  if (msg.includes("status must be")) return "狀態值不正確。";
+  return msg;
+}
+
+async function machtileInitMachineModule() {
+  const form = document.getElementById("machtileMachineForm");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const payload = {
+        machine_code: document.getElementById("machtileMcCode").value.trim(),
+        name: document.getElementById("machtileMcName").value.trim(),
+        machine_type: document.getElementById("machtileMcType").value,
+        location: document.getElementById("machtileMcLocation").value.trim() || null,
+        display_order: Number(document.getElementById("machtileMcOrder").value) || 0,
+        status: document.getElementById("machtileMcStatus").value,
+      };
+      const result = await supabaseFetch("rpc/machine_upsert", {
+        method: "POST",
+        body: JSON.stringify({ p_payload: payload }),
+      });
+      showToast(`${result?.action === "created" ? "已建立" : "已更新"}機台 ${payload.machine_code}`);
+      machtileMachineEditSeed = null;
+      machtileWoMachinesCache = null;
+      await loadFromSupabase().then(renderAll).catch(() => {});
+      openAdminModule("list");
+    } catch (error) {
+      showToast(`機台儲存失敗：${machtileMachineErrorText(error)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+async function machtileOpenMachineEdit(machineCode) {
+  try {
+    const rows = await supabaseFetch(`machines?select=machine_code,name,machine_type,location,display_order,status&machine_code=eq.${encodeURIComponent(machineCode)}&limit=1`);
+    machtileMachineEditSeed = Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch (error) {
+    machtileMachineEditSeed = null;
+  }
+  if (!machtileMachineEditSeed) {
+    showToast("讀不到這台機台的資料");
+    return;
+  }
+  openAdminModule("add");
+  const title = $("#adminModuleTitle");
+  if (title) title.textContent = "編輯機台資料";
+}
+
 function renderMachineListModule() {
   const machines = managedMachineList();
   return `
@@ -10089,7 +10187,8 @@ function renderMachineListModule() {
               <span>${escapeHtml(meta.department)}</span>
               <span>${escapeHtml(machineTypeLabel(machine.type))}</span>
               <a data-no-detail href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">QR</a>
-              <button type="button" data-machine-admin="${escapeHtml(machine.name)}">編輯</button>
+              ${machtileCanManageWorkOrders() ? `<button type="button" data-machine-edit="${escapeHtml(meta.code || machine.name)}">改資料</button>` : ""}
+              <button type="button" data-machine-admin="${escapeHtml(machine.name)}">檢視</button>
             </div>
           `;
         }).join("")}
@@ -10977,6 +11076,7 @@ function openAdminModule(moduleKey) {
   $("#adminModuleTitle").textContent = meta.title;
   $("#adminModuleContent").innerHTML = renderAdminModuleContent(moduleKey);
   if (moduleKey === "workOrders") machtileInitWorkOrderModule().catch(() => {});
+  if (moduleKey === "add") machtileInitMachineModule().catch(() => {});
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
@@ -12116,7 +12216,14 @@ function bindEvents() {
 
     const adminModuleButton = event.target.closest("[data-admin-module]");
     if (adminModuleButton) {
+      if (adminModuleButton.dataset.adminModule === "add") machtileMachineEditSeed = null;
       openAdminModule(adminModuleButton.dataset.adminModule);
+      return;
+    }
+
+    const machineEditButton = event.target.closest("[data-machine-edit]");
+    if (machineEditButton) {
+      machtileOpenMachineEdit(machineEditButton.dataset.machineEdit);
       return;
     }
 
