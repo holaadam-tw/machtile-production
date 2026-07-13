@@ -2684,7 +2684,7 @@ function hmcWorklistSetupPalletEditor() {
             </div>
             <div class="hmc-setup-work-list">
               ${pallet.works.map((work, workIndex) => `
-                <button type="button" class="hmc-setup-work-chip ${work.included ? "is-selected" : ""}" data-hmc-chip="${escapeHtml(pallet.palletId)}::${escapeHtml(work.workNo)}" aria-pressed="${work.included ? "true" : "false"}">
+                <button type="button" class="hmc-setup-work-chip ${work.included ? "is-selected" : ""} ${String(work.workNo).startsWith("待工單") ? "is-pending-order" : ""}" data-hmc-chip="${escapeHtml(pallet.palletId)}::${escapeHtml(work.workNo)}" aria-pressed="${work.included ? "true" : "false"}">
                   <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
                   <strong>${escapeHtml(work.partName)}</strong>
                   <em>${escapeHtml(work.workNo)}</em>
@@ -2698,7 +2698,7 @@ function hmcWorklistSetupPalletEditor() {
             </div>
             <div class="hmc-setup-add-form">
               <span class="hmc-input-clear-wrap">
-                <input type="text" placeholder="工單號（點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
+                <input type="text" placeholder="工單號（可留空＝待工單；點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
                 <button type="button" class="hmc-input-clear" data-hmc-form-clear="${escapeHtml(pallet.palletId)}" aria-label="清除工單號">✕</button>
               </span>
               <input type="text" placeholder="工件名" maxlength="60" value="${editing ? escapeHtml(editing.partName) : ""}" data-hmc-form-partname="${escapeHtml(pallet.palletId)}">
@@ -3430,17 +3430,22 @@ function bindHmcWorklistSetupEvents() {
       const draft = hmcSetupDraft();
       const pallet = hmcSetupDraftPallet(palletId);
       if (!pallet) return;
-      const workNo = ($(`[data-hmc-form-workno="${palletId}"]`)?.value || "").trim();
+      let workNo = ($(`[data-hmc-form-workno="${palletId}"]`)?.value || "").trim();
       const partName = ($(`[data-hmc-form-partname="${palletId}"]`)?.value || "").trim();
       const plannedQty = hmcNonNegativeInteger($(`[data-hmc-form-qty="${palletId}"]`)?.value, 0);
-      if (!workNo || !partName) {
-        draft.message = "請填工單號與工件名。";
+      if (!partName) {
+        draft.message = "請填工件名；工單號可留空（未開工先占位，工單到了再補）。";
         renderHmcWorklistSetupRoute();
         return;
       }
       const editing = draft.editTarget && draft.editTarget.palletId === palletId
         ? pallet.works.find((work) => work.workNo === draft.editTarget.workNo)
         : null;
+      if (!workNo) {
+        let pendingNo = 1;
+        while (pallet.works.some((work) => work !== editing && work.workNo === `待工單-${pendingNo}`)) pendingNo += 1;
+        workNo = `待工單-${pendingNo}`;
+      }
       const duplicate = pallet.works.some((work) => work.workNo === workNo && work !== editing);
       if (duplicate) {
         draft.message = `此盤已有工單號 ${workNo}。`;

@@ -4055,6 +4055,16 @@ body.report-work-route-mode .machtile-route-brand-bar {
   position: relative;
 }
 
+.hmc-setup-work-chip.is-pending-order {
+  border-style: dashed;
+  border-color: #f59e0b;
+}
+
+.hmc-setup-work-chip.is-pending-order em {
+  color: #b45309;
+  font-weight: 900;
+}
+
 .hmc-chip-tools {
   position: absolute;
   top: 6px;
