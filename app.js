@@ -9904,42 +9904,26 @@ function renderSettings() {
       </div>
       <div class="admin-action-grid" aria-label="主檔與規則設定">
         ${renderAdminActionCard("add", `新增機台 (${managedMachines.length} / 50)`, "新增 CNC、車銑複合、五軸或外包站點", "blue", "add")}
-        ${renderAdminActionCard("list", "機台列表管理", "批次編輯課別、狀態與 QR Code", "blue", "list")}
-        ${renderAdminActionCard("alarm", "警報參數設定", "交期、未回報、異常與待品檢規則", "blue", "alarm")}
+        ${renderAdminActionCard("list", "機台列表管理", "編輯機台資料、狀態與 QR Code", "blue", "list")}
+        ${renderAdminActionCard("alarm", "警報參數設定（規劃中）", "將與異常 LINE 通知一起實作", "blue", "alarm")}
         ${renderAdminActionCard("users", "員工帳號管理", "主管、排程、師傅、品檢角色權限", "green", "users")}
-        ${renderAdminActionCard("invite", "生成邀請碼", "快速邀請現場人員加入工廠", "green", "invite")}
-        ${renderAdminActionCard("vendor", "供應商授權管理", "外包商、客戶或油商的有限權限", "green", "vendor")}
-        ${renderAdminActionCard("company", "公司資料", "公司、廠區、班別與部署模式", "amber", "company")}
-        ${renderAdminActionCard("template", "製程模板管理", "鋸料、車削、銑削、去毛邊、品檢、包裝", "amber", "template")}
-        ${renderAdminActionCard("reportRule", "報工規則管理", "每日回報次數、未回報提醒、補登限制", "amber", "reportRule")}
-        ${renderAdminActionCard("program", "CNC 程式管理", "上傳程式、版本 hash、差異比對與附件", "purple", "program")}
-        ${renderAdminActionCard("time", "加工時間管理", "純加工時間、上下料時間、歷史平均、日產能", "purple", "time")}
+        ${renderAdminActionCard("company", "公司資料", "公司基本資料與廠區名稱（頁首品牌）", "amber", "company")}
+        ${renderAdminActionCard("program", "CNC 程式管理（規劃中）", "上傳程式、版本 hash、差異比對", "purple", "program")}
+        ${renderAdminActionCard("time", "加工時間統計（規劃中）", "cycle time 實際 vs 基準、日產能報表", "purple", "time")}
       </div>
     </section>
 
     <section class="admin-section">
       <div class="panel-title">
         <div>
-          <h2>同步設定</h2>
+          <h2>通知與匯出</h2>
         </div>
-        <span>通知、串接、部署、資料匯出</span>
+        <span>通知、資料匯出</span>
       </div>
-      <div class="admin-action-grid admin-action-grid-compact" aria-label="同步設定">
-        ${renderAdminActionCard("notify", "通知規則管理", "LINE、Email、Web Push 與警報對象", "blue", "notify")}
-        ${renderAdminActionCard("integration", "串接設定", "SoftNet MES、I-Reporter、Supabase、地端部署", "blue", "integration")}
-        ${renderAdminActionCard("export", "資料匯出", "機台、工單、報工、警報、程式履歷、操作紀錄", "purple", "export")}
+      <div class="admin-action-grid admin-action-grid-compact" aria-label="通知與匯出">
+        ${renderAdminActionCard("notify", "異常 LINE 通知（規劃中）", "機台異常、交期風險、久未回報推播", "blue", "notify")}
+        ${renderAdminActionCard("export", "資料匯出", "每日盤點、正式報表 CSV（Excel 可開）", "purple", "export")}
       </div>
-    </section>
-
-    <section class="admin-export-panel">
-      <div class="admin-export-icon">${adminIcon("export")}</div>
-      <div>
-        <h2>資料匯出</h2>
-        <p>下載您公司的所有資料（CSV 格式 ZIP 壓縮）</p>
-        <p>包含：機台、工單、報工紀錄、警報、異常、CNC 程式履歷、AI 對話、操作紀錄</p>
-      </div>
-      <button type="button" data-admin-module="export">匯出全部資料</button>
-      <small>依據個人資料保護法，您可隨時下載您公司在本系統中的所有資料。</small>
     </section>
 
     <section class="machine-quick-edit-section">
@@ -10163,6 +10147,7 @@ async function machtileOpenMachineEdit(machineCode) {
     showToast("讀不到這台機台的資料");
     return;
   }
+  closeMachineAdmin();
   openAdminModule("add");
   const title = $("#adminModuleTitle");
   if (title) title.textContent = "編輯機台資料";
@@ -10197,15 +10182,12 @@ function renderMachineListModule() {
   `;
 }
 
+function machtilePlannedModuleNote(text) {
+  return `<p class="admin-module-note">🚧 規劃中：${escapeHtml(text)}</p>`;
+}
+
 function renderAlarmRulesModule() {
-  const rules = [
-    ["可能延誤提醒", "交期前 24 小時", "主管 / 生管", "LINE + Web"],
-    ["已延誤提醒", "逾期立即", "主管 / 生管", "LINE + Web"],
-    ["未回報提醒", "4 小時未回報", "主管 / 班長", "Web"],
-    ["待品檢卡關", "16 小時未品檢", "主管 / 品檢", "LINE + Web"],
-    ["加工時間增加", "純加工時間 +10%", "主管 / 生管", "Web"],
-  ];
-  return renderRuleTable("警報規則", rules, "儲存警報規則");
+  return machtilePlannedModuleNote("警報觸發條件（交期風險、久未回報、異常）將與「異常 LINE 通知」一起實作，已排入開發。");
 }
 
 function renderReportRulesModule() {
@@ -10989,30 +10971,15 @@ function renderTemplateModule() {
 }
 
 function renderProgramModule() {
-  const orders = state.workOrders.filter((order) => getProgramProfile(order).programName !== "待上傳");
-  const rows = orders.map((order) => {
-    const profile = getProgramProfile(order);
-    return [order.drawing, profile.programName, profile.programVersion, `${profile.changedLines ?? 0} 行差異`];
-  });
-  return renderSimpleAdminList("CNC 程式版本", rows, "上傳程式");
+  return machtilePlannedModuleNote("CNC 程式版本管理（O 檔上傳、版本、差異比對）已排入開發。");
 }
 
 function renderTimeModule() {
-  const rows = state.workOrders.map((order) => {
-    const profile = getProgramProfile(order);
-    const dailyQty = dailyPureCapacity(profile);
-    return [order.drawing, formatSeconds(profile.pureCycleSec), formatSeconds(profile.baselineCycleSec), dailyQty ? `${dailyQty} 件/日` : "待建立"];
-  });
-  return renderSimpleAdminList("加工時間基準", rows, "更新時間基準");
+  return machtilePlannedModuleNote("加工時間統計報表（cycle time 實際 vs 基準、每日產能）已排入開發。");
 }
 
 function renderNotifyModule() {
-  const rows = [
-    ["LINE", "交期風險 / 已延誤", "主管、生管", "待串接"],
-    ["Email", "每日摘要", "主管", "選配"],
-    ["Web Push", "未回報 / 待品檢", "現場主管", "待串接"],
-  ];
-  return renderSimpleAdminList("通知規則", rows, "儲存通知規則");
+  return machtilePlannedModuleNote("異常 LINE 通知（機台異常、交期風險、久未回報推播到廠內 LINE 群）已排入開發。");
 }
 
 function renderIntegrationModule() {
@@ -11256,21 +11223,25 @@ function machineAdminMeta(machine) {
   const match = String(machine.name).match(/(\d+)/);
   const number = match ? Number(match[1]) : state.machines.indexOf(machine) + 1;
   const department = machine.department || departmentForMachine(machine);
-  const code = machine.assetNo || `M2025-${String(number).padStart(3, "0")}`;
+  // strict＝真資料模式：沒填的欄位誠實顯示「未設定」，不再用示範預設值充數
+  const strictReal = machtileStrictMode() && machtileSessionActive();
+  const unset = "未設定";
+  const code = machine.assetNo || (strictReal ? unset : `M2025-${String(number).padStart(3, "0")}`);
   const status = statusMeta[machine.status] || statusMeta.idle;
   return {
     code,
     department,
-    company: machine.vendorName || "大正科技",
-    coolant: machine.coolantType || "半合成",
-    capacity: machine.coolantCapacityLiters ? `${machine.coolantCapacityLiters} L` : machine.type === "五軸" ? "300 L" : "200 L",
-    reportRule: machine.reportRuleName || (machine.reportsPerDay ? `每日 ${machine.reportsPerDay} 次` : "每班 3 次"),
-    alertRule: machine.staleMinutes ? `未回報 ${Math.round(machine.staleMinutes / 60)} 小時提醒` : "未回報 4 小時提醒",
-    targetConcentration: machine.targetConcentrationPercent ? `${machine.targetConcentrationPercent}%` : "6%",
-    inspectionFrequency: machine.inspectionFrequencyDays ? `每 ${machine.inspectionFrequencyDays} 天` : "每 30 天",
+    company: machine.vendorName || (strictReal ? unset : "大正科技"),
+    coolant: machine.coolantType || (strictReal ? unset : "半合成"),
+    capacity: machine.coolantCapacityLiters ? `${machine.coolantCapacityLiters} L` : (strictReal ? unset : machine.type === "五軸" ? "300 L" : "200 L"),
+    reportRule: machine.reportRuleName || (machine.reportsPerDay ? `每日 ${machine.reportsPerDay} 次` : (strictReal ? unset : "每班 3 次")),
+    alertRule: machine.staleMinutes ? `未回報 ${Math.round(machine.staleMinutes / 60)} 小時提醒` : (strictReal ? unset : "未回報 4 小時提醒"),
+    targetConcentration: machine.targetConcentrationPercent ? `${machine.targetConcentrationPercent}%` : (strictReal ? unset : "6%"),
+    inspectionFrequency: machine.inspectionFrequencyDays ? `每 ${machine.inspectionFrequencyDays} 天` : (strictReal ? unset : "每 30 天"),
     programCount: machine.programCount ?? 0,
     status,
     order,
+    strictReal,
     health: machine.status === "maintenance" ? 42 : machine.status === "paused" ? 66 : order?.risk ? 72 : 88,
   };
 }
@@ -11293,9 +11264,11 @@ function renderMachineEditCard(machine) {
       <p>🛢️ ${escapeHtml(meta.coolant)}</p>
       <p>📦 ${escapeHtml(machineTypeLabel(machine.type))} · ${escapeHtml(meta.reportRule)} · 程式 ${meta.programCount}</p>
       <footer>
-        <button type="button" data-machine-admin="${escapeHtml(machine.name)}" aria-label="編輯 ${escapeHtml(machine.name)}">${adminIcon("edit")}</button>
+        ${meta.strictReal
+          ? `<button type="button" data-machine-edit="${escapeHtml(machine.code || machine.name)}" aria-label="編輯 ${escapeHtml(machine.name)}">${adminIcon("edit")}</button>`
+          : `<button type="button" data-machine-admin="${escapeHtml(machine.name)}" aria-label="編輯 ${escapeHtml(machine.name)}">${adminIcon("edit")}</button>`}
         <a data-no-detail href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtml(machine.name)} QR 連結">${adminIcon("qr")}</a>
-        <button class="danger-icon" type="button" data-alert-action="刪除 ${escapeHtml(machine.name)}" aria-label="刪除 ${escapeHtml(machine.name)}">${adminIcon("trash")}</button>
+        ${meta.strictReal ? "" : `<button class="danger-icon" type="button" data-alert-action="刪除 ${escapeHtml(machine.name)}" aria-label="刪除 ${escapeHtml(machine.name)}">${adminIcon("trash")}</button>`}
       </footer>
     </article>
   `;
@@ -11369,7 +11342,7 @@ function renderMachineAdminDetail(machine) {
       </div>
 
       <div class="machine-admin-block">
-        <h4>切削液 / 保養</h4>
+        <h4>切削液 / 保養${meta.strictReal ? "（將由 DrCoolant 串接）" : ""}</h4>
         <dl>
           <div><dt>油品類型</dt><dd>${escapeHtml(meta.coolant)}</dd></div>
           <div><dt>槽體容量</dt><dd>${escapeHtml(meta.capacity)}</dd></div>
@@ -11381,7 +11354,7 @@ function renderMachineAdminDetail(machine) {
       <div class="machine-admin-block">
         <h4>最新狀態</h4>
         <dl>
-          <div><dt>健康分數</dt><dd>${meta.health} 分</dd></div>
+          ${meta.strictReal ? "" : `<div><dt>健康分數</dt><dd>${meta.health} 分</dd></div>`}
           <div><dt>目前工單</dt><dd>${escapeHtml(order?.id || "無")}</dd></div>
           <div><dt>完成數</dt><dd>${order ? `${order.done}/${order.total}` : "-"}</dd></div>
           <div><dt>最後回報</dt><dd>${escapeHtml(order?.lastReport || machine.note || "尚未回報")}</dd></div>
@@ -11398,7 +11371,7 @@ function renderMachineAdminDetail(machine) {
         <div class="machine-admin-actions">
           <a data-no-detail href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">開啟報工頁</a>
           ${order ? `<a data-no-detail href="${escapeHtml(workOrderDetailUrl(order.id))}" target="_blank" rel="noopener">開啟目前工單</a>` : ""}
-          <button type="button" data-alert-action="編輯 ${escapeHtml(machine.name)}">編輯機台</button>
+          ${meta.strictReal ? `<button type="button" data-machine-edit="${escapeHtml(machine.code || machine.name)}">編輯機台</button>` : `<button type="button" data-alert-action="編輯 ${escapeHtml(machine.name)}">編輯機台</button>`}
         </div>
       </div>
     </section>
