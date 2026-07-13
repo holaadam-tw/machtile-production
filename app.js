@@ -2878,8 +2878,7 @@ function hmcRenderSetupActiveWorklistNotice() {
       <section class="hmc-report-card hmc-setup-active-warning" aria-label="Existing active HMC worklist">
         <div>
           <span>已有啟用清單</span>
-          <strong>目前 ${escapeHtml(shiftLabel)} 已有啟用清單：${escapeHtml(readState.pallets?.length || 0)} 盤 / ${escapeHtml(readState.items?.length || 0)} 件</strong>
-          <p>要更換：改好上方清單內容 → 儲存草稿 → 按「取代目前啟用清單」。</p>
+          <strong>${escapeHtml(shiftLabel)}・${escapeHtml(readState.pallets?.length || 0)} 盤 / ${escapeHtml(readState.items?.length || 0)} 件</strong>
         </div>
         <dl>
           <div><dt>清單編號</dt><dd>${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</dd></div>
@@ -2924,7 +2923,7 @@ function hmcRenderSetupActiveWorklistNotice() {
 function hmcRenderSetupWriteStatus() {
   if (hmcSetupWriteState.status === "idle") {
     const blocked = hmcSetupActiveWorklistBlocksActivation();
-    return `<p>流程：改內容 → 儲存草稿 → ${blocked ? "取代目前啟用清單" : "啟用本班清單"}。此頁不會產生報工、不同步 SoftNet。</p>`;
+    return `<p>流程：改內容 → 儲存草稿 → ${blocked ? "取代目前啟用清單（存好草稿會亮起）" : "啟用本班清單"}。不會產生報工、不同步 SoftNet。</p>`;
   }
   const statusLabel = {
     saving: "儲存草稿中...",
@@ -2975,10 +2974,10 @@ function hmcRenderReplaceActiveWorklistInline() {
       <button type="button" class="hmc-setup-replace-danger" data-hmc-replace-active-worklist ${busy ? "disabled aria-disabled=\"true\"" : ""}>${hmcSetupReplaceState.status === "replacing" ? "正在取代..." : "確認取代？"}</button>
     `;
   const hint = !hasDraft
-    ? "先按「儲存草稿」，右邊「取代目前啟用清單」亮起後按它換單。"
+    ? ""
     : (!isDifferentDraft
       ? "這份草稿就是目前啟用中的清單；改了內容要重新儲存草稿。"
-      : `舊 ${activeWorklistId.slice(0, 8)}… → 新 ${String(hmcSetupWriteState.worklistId).slice(0, 8)}…；舊清單留檔（標記已取代），現場改讀新清單。`);
+      : `舊 ${activeWorklistId.slice(0, 8)}… → 新 ${String(hmcSetupWriteState.worklistId).slice(0, 8)}…；舊清單留檔，現場改讀新清單。`);
   return { buttons, hint };
 }
 
@@ -2995,7 +2994,7 @@ function hmcRenderSetupWriteControls() {
         <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
         ${replaceUi ? replaceUi.buttons : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
       </div>
-      ${replaceUi ? `<p class="hmc-setup-replace-hint">${escapeHtml(replaceUi.hint)}</p>` : ""}
+      ${replaceUi && replaceUi.hint ? `<p class="hmc-setup-replace-hint">${escapeHtml(replaceUi.hint)}</p>` : ""}
       ${hmcRenderSetupReplaceStatus()}
     </section>
   `;
