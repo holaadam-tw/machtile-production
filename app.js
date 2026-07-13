@@ -10187,7 +10187,7 @@ function renderMachineListModule() {
               <span>${escapeHtml(meta.department)}</span>
               <span>${escapeHtml(machineTypeLabel(machine.type))}</span>
               <a data-no-detail href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">QR</a>
-              ${machtileCanManageWorkOrders() ? `<button type="button" data-machine-edit="${escapeHtml(meta.code || machine.name)}">改資料</button>` : ""}
+              ${machtileCanManageWorkOrders() ? `<button type="button" data-machine-edit="${escapeHtml(machine.code || machine.name)}">改資料</button>` : ""}
               <button type="button" data-machine-admin="${escapeHtml(machine.name)}">檢視</button>
             </div>
           `;
