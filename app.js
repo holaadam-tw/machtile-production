@@ -11025,7 +11025,143 @@ function renderIntegrationModule() {
   return renderSimpleAdminList("同步與串接", rows, "測試連線");
 }
 
+// 資料匯出真做（2026-07-13，三連發之三）：strict 模式直接在瀏覽器產 CSV 下載
+// （UTF-8 BOM，Excel 開啟中文不亂碼）；讀取走 tenant-scoped REST。Dev 維持 mock。
+function machtileCsvDownload(filename, headers, rows) {
+  const esc = (value) => {
+    const s = value == null ? "" : String(value);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = "﻿" + [headers, ...rows].map((row) => row.map(esc).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+const machtileShiftCsvLabel = { day: "白班", night: "夜班" };
+const machtileDailyStatusCsvLabel = {
+  draft: "草稿",
+  pending_review: "待確認",
+  confirmed: "已確認",
+  rejected: "已退回",
+  converted: "已轉正式",
+};
+
+async function machtileExportDailyChecks(fromDate, toDate, statusEl) {
+  statusEl.textContent = "正在讀取每日盤點...";
+  const rows = await supabaseFetch(`hmc_daily_worklist_item_quantities?select=work_date,machine_code,shift_scope,pallet_no,position_code,work_order_no,completed_qty,defect_qty,shortage_or_skipped,daily_check_status,quantity_note,last_reported_at,worklist_item_id&work_date=gte.${fromDate}&work_date=lte.${toDate}&order=work_date.asc,machine_code.asc,shift_scope.asc,pallet_no.asc,position_code.asc&limit=5000`);
+  if (!Array.isArray(rows) || !rows.length) {
+    statusEl.textContent = "這個日期區間沒有每日盤點資料。";
+    return;
+  }
+  const itemIds = [...new Set(rows.map((row) => row.worklist_item_id).filter(Boolean))];
+  const nameById = new Map();
+  for (let i = 0; i < itemIds.length; i += 80) {
+    const chunk = itemIds.slice(i, i + 80);
+    const items = await supabaseFetch(`hmc_worklist_items?select=id,workpiece_name&id=in.(${chunk.join(",")})`);
+    (Array.isArray(items) ? items : []).forEach((item) => nameById.set(item.id, item.workpiece_name || ""));
+  }
+  const headers = ["日期", "機台", "班別", "盤號", "位置", "工單號", "工件", "本日完成", "本日不良", "缺料或跳過", "狀態", "備註", "最後回報時間"];
+  const data = rows.map((row) => [
+    row.work_date,
+    row.machine_code,
+    machtileShiftCsvLabel[row.shift_scope] || row.shift_scope,
+    row.pallet_no,
+    row.position_code || "",
+    row.work_order_no || "",
+    nameById.get(row.worklist_item_id) || "",
+    row.completed_qty,
+    row.defect_qty,
+    row.shortage_or_skipped ? "是" : "",
+    machtileDailyStatusCsvLabel[row.daily_check_status] || row.daily_check_status || "",
+    row.quantity_note || "",
+    row.last_reported_at ? machtileFormatAuditTime(row.last_reported_at) : "",
+  ]);
+  machtileCsvDownload(`MachTile_每日盤點_${fromDate}_${toDate}.csv`, headers, data);
+  statusEl.textContent = `已匯出 ${data.length} 筆每日盤點。`;
+}
+
+async function machtileExportFormalReports(fromDate, toDate, statusEl) {
+  statusEl.textContent = "正在讀取正式報表...";
+  const reports = await supabaseFetch(`hmc_formal_reports?select=id,report_no,machine_code,shift_scope,work_date,status,finalized_at,void_reason,note&work_date=gte.${fromDate}&work_date=lte.${toDate}&order=work_date.asc,report_no.asc&limit=1000`);
+  if (!Array.isArray(reports) || !reports.length) {
+    statusEl.textContent = "這個日期區間沒有正式報表。";
+    return;
+  }
+  const reportById = new Map(reports.map((report) => [report.id, report]));
+  const itemsByReport = new Map();
+  const ids = reports.map((report) => report.id);
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const items = await supabaseFetch(`hmc_formal_report_items?select=report_id,pallet_no,position_code,work_order_no,workpiece_name,completed_qty,defect_qty,shortage_or_skipped,quantity_note&report_id=in.(${chunk.join(",")})&order=pallet_no.asc,position_code.asc`);
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      if (!itemsByReport.has(item.report_id)) itemsByReport.set(item.report_id, []);
+      itemsByReport.get(item.report_id).push(item);
+    });
+  }
+  const headers = ["報表編號", "狀態", "日期", "機台", "班別", "盤號", "位置", "工單號", "工件", "完成", "不良", "缺料或跳過", "備註", "發行時間", "作廢原因"];
+  const data = [];
+  reports.forEach((report) => {
+    const base = [
+      report.report_no,
+      report.status === "voided" ? "已作廢" : "已發行",
+      report.work_date,
+      report.machine_code,
+      machtileShiftCsvLabel[report.shift_scope] || report.shift_scope,
+    ];
+    const tail = [
+      report.finalized_at ? machtileFormatAuditTime(report.finalized_at) : "",
+      report.void_reason || "",
+    ];
+    const items = itemsByReport.get(report.id) || [];
+    if (!items.length) {
+      data.push([...base, "", "", "", "", "", "", "", report.note || "", ...tail]);
+      return;
+    }
+    items.forEach((item) => {
+      data.push([
+        ...base,
+        item.pallet_no ?? "",
+        item.position_code || "",
+        item.work_order_no || "",
+        item.workpiece_name || "",
+        item.completed_qty,
+        item.defect_qty,
+        item.shortage_or_skipped ? "是" : "",
+        item.quantity_note || "",
+        ...tail,
+      ]);
+    });
+  });
+  machtileCsvDownload(`MachTile_正式報表_${fromDate}_${toDate}.csv`, headers, data);
+  statusEl.textContent = `已匯出 ${reports.length} 張報表、共 ${data.length} 列明細。`;
+}
+
 function renderExportModule() {
+  if (machtileStrictMode() && machtileSessionActive()) {
+    if (!machtileCanManageWorkOrders()) {
+      return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
+    }
+    const today = hmcTodayDateIso();
+    const monthStart = `${today.slice(0, 8)}01`;
+    return `
+      <form id="machtileExportForm" class="admin-module-form">
+        <label class="admin-field"><span>起始日期</span>
+          <input id="machtileExFrom" type="date" value="${monthStart}"></label>
+        <label class="admin-field"><span>結束日期</span>
+          <input id="machtileExTo" type="date" value="${today}"></label>
+        <button class="admin-save-button" type="button" data-machtile-export="daily">匯出每日盤點 CSV</button>
+        <button class="admin-save-button" type="button" data-machtile-export="formal">匯出正式報表 CSV</button>
+        <p class="admin-module-note">CSV 可直接用 Excel 開啟（中文不亂碼）；只會匯出本廠資料。</p>
+        <p class="admin-module-note" id="machtileExportStatus"></p>
+      </form>
+    `;
+  }
   const rows = [
     ["機台", managedMachineList().length, "CSV"],
     ["工單", state.workOrders.length, "CSV"],
@@ -11038,6 +11174,34 @@ function renderExportModule() {
     ${renderSimpleAdminList("匯出資料範圍", rows, "建立匯出 ZIP")}
     <p class="admin-export-note">正式版會建立 data_export_jobs，完成後提供 ZIP 下載連結。</p>
   `;
+}
+
+function machtileInitExportModule() {
+  const form = document.getElementById("machtileExportForm");
+  if (!form) return;
+  form.querySelectorAll("[data-machtile-export]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const fromDate = document.getElementById("machtileExFrom").value;
+      const toDate = document.getElementById("machtileExTo").value;
+      const statusEl = document.getElementById("machtileExportStatus");
+      if (!fromDate || !toDate || fromDate > toDate) {
+        statusEl.textContent = "請確認日期區間（起始不可晚於結束）。";
+        return;
+      }
+      button.disabled = true;
+      try {
+        if (button.dataset.machtileExport === "daily") {
+          await machtileExportDailyChecks(fromDate, toDate, statusEl);
+        } else {
+          await machtileExportFormalReports(fromDate, toDate, statusEl);
+        }
+      } catch (error) {
+        statusEl.textContent = `匯出失敗：${String(error?.message || error || "")}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 function renderSimpleAdminList(title, rows, buttonLabel) {
@@ -11154,6 +11318,7 @@ function openAdminModule(moduleKey) {
   if (moduleKey === "workOrders") machtileInitWorkOrderModule().catch(() => {});
   if (moduleKey === "add") machtileInitMachineModule().catch(() => {});
   if (moduleKey === "company") machtileInitCompanyModule().catch(() => {});
+  if (moduleKey === "export") machtileInitExportModule();
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
