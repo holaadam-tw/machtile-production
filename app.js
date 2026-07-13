@@ -2877,13 +2877,11 @@ function hmcRenderSetupActiveWorklistNotice() {
       <section class="hmc-report-card hmc-setup-active-warning" aria-label="Existing active HMC worklist">
         <div>
           <span>已有啟用清單</span>
-          <strong>目前 ${escapeHtml(shiftLabel)} 已有啟用中的加工清單</strong>
-          <p>不可重複啟用同機台、同班別的加工清單。如需更換清單，請用下方「取代目前啟用清單」。</p>
+          <strong>目前 ${escapeHtml(shiftLabel)} 已有啟用清單：${escapeHtml(readState.pallets?.length || 0)} 盤 / ${escapeHtml(readState.items?.length || 0)} 件</strong>
+          <p>要更換：改好上方清單內容 → 儲存草稿 → 按「取代目前啟用清單」。</p>
         </div>
         <dl>
-          <div><dt>清單編號</dt><dd>${escapeHtml(readState.worklist?.id || "-")}</dd></div>
-          <div><dt>交換盤</dt><dd>${escapeHtml(readState.pallets?.length || 0)}</dd></div>
-          <div><dt>工件</dt><dd>${escapeHtml(readState.items?.length || 0)}</dd></div>
+          <div><dt>清單編號</dt><dd>${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</dd></div>
         </dl>
       </section>
     `;
@@ -2924,7 +2922,8 @@ function hmcRenderSetupActiveWorklistNotice() {
 
 function hmcRenderSetupWriteStatus() {
   if (hmcSetupWriteState.status === "idle") {
-    return `<p>儲存草稿後即可啟用為本班加工清單；此頁只管理班前清單，不會產生報工、不同步 SoftNet。</p>`;
+    const blocked = hmcSetupActiveWorklistBlocksActivation();
+    return `<p>流程：改內容 → 儲存草稿 → ${blocked ? "取代目前啟用清單" : "啟用本班清單"}。此頁不會產生報工、不同步 SoftNet。</p>`;
   }
   const statusLabel = {
     saving: "儲存草稿中...",
@@ -2937,7 +2936,7 @@ function hmcRenderSetupWriteStatus() {
     <div class="hmc-setup-write-status ${hmcSetupWriteState.status === "error" ? "is-error" : "is-ok"}">
       <strong>${escapeHtml(statusLabel)}</strong>
       <span>${escapeHtml(hmcSetupWriteState.message || hmcSetupWriteState.code || "-")}</span>
-      ${hmcSetupWriteState.worklistId ? `<small>清單編號：${escapeHtml(hmcSetupWriteState.worklistId)}</small>` : ""}
+      ${hmcSetupWriteState.worklistId ? `<small>清單編號：${escapeHtml(String(hmcSetupWriteState.worklistId).slice(0, 8))}…</small>` : ""}
       ${hmcSetupWriteState.palletCount || hmcSetupWriteState.itemCount ? `<small>${escapeHtml(hmcSetupWriteState.palletCount)} 盤 / ${escapeHtml(hmcSetupWriteState.itemCount)} 件工件</small>` : ""}
     </div>
   `;
@@ -2955,8 +2954,8 @@ function hmcRenderSetupReplaceStatus() {
     <div class="hmc-setup-replace-status ${isError ? "is-error" : "is-ok"}">
       <strong>${escapeHtml(statusLabel)}</strong>
       <span>${escapeHtml(hmcSetupReplaceState.message || hmcSetupReplaceState.code || "-")}</span>
-      ${hmcSetupReplaceState.oldWorklistId ? `<small>原啟用清單：${escapeHtml(hmcSetupReplaceState.oldWorklistId)}</small>` : ""}
-      ${hmcSetupReplaceState.newWorklistId ? `<small>新啟用清單：${escapeHtml(hmcSetupReplaceState.newWorklistId)}</small>` : ""}
+      ${hmcSetupReplaceState.oldWorklistId ? `<small>原啟用清單：${escapeHtml(String(hmcSetupReplaceState.oldWorklistId).slice(0, 8))}…</small>` : ""}
+      ${hmcSetupReplaceState.newWorklistId ? `<small>新啟用清單：${escapeHtml(String(hmcSetupReplaceState.newWorklistId).slice(0, 8))}…</small>` : ""}
     </div>
   `;
 }
@@ -2967,18 +2966,22 @@ function hmcRenderReplaceActiveWorklistPanel() {
   const busy = ["saving", "activating"].includes(hmcSetupWriteState.status) || hmcSetupReplaceState.status === "replacing";
   const activeWorklistId = readState.worklist?.id || "";
   const isDifferentDraft = hasDraft && (!activeWorklistId || activeWorklistId !== hmcSetupWriteState.worklistId);
-  const canShowReplace = isDifferentDraft && readState.status === "ok";
+  const canShowReplace = readState.status === "ok";
 
   if (!canShowReplace && hmcSetupReplaceState.status === "idle") return "";
 
-  const openEnabled = canShowReplace && !busy;
+  const openEnabled = isDifferentDraft && canShowReplace && !busy;
+  const hint = !hasDraft
+    ? "先按「儲存草稿」存這份新清單，才能取代。"
+    : (!isDifferentDraft ? "這份草稿就是目前啟用中的清單，改了內容要重新儲存草稿。" : "");
 
   return `
     <section class="hmc-setup-replace-panel ${hmcSetupReplaceState.open ? "is-open" : ""}" aria-label="Replace active HMC worklist">
       <div class="hmc-setup-replace-copy">
         <strong>換成這份新清單</strong>
         <p>舊清單會留檔（標記已取代），現場改讀新清單。</p>
-        ${activeWorklistId && hmcSetupWriteState.worklistId ? `<small>舊 ${escapeHtml(activeWorklistId.slice(0, 8))}… → 新 ${escapeHtml(hmcSetupWriteState.worklistId.slice(0, 8))}…</small>` : ""}
+        ${hint ? `<small>${escapeHtml(hint)}</small>` : ""}
+        ${!hint && activeWorklistId && hmcSetupWriteState.worklistId ? `<small>舊 ${escapeHtml(activeWorklistId.slice(0, 8))}… → 新 ${escapeHtml(hmcSetupWriteState.worklistId.slice(0, 8))}…</small>` : ""}
       </div>
       ${hmcRenderSetupReplaceStatus()}
       ${!hmcSetupReplaceState.open ? `
@@ -3001,10 +3004,9 @@ function hmcRenderSetupWriteControls() {
     <section class="hmc-submit-panel hmc-setup-action-panel">
       <strong>儲存與啟用</strong>
       ${hmcRenderSetupWriteStatus()}
-      ${activateBlocked ? `<p class="hmc-setup-active-block-note">目前同機台、同班別已有啟用清單；如需更換，請用下方「取代目前啟用清單」。</p>` : ""}
       <div class="hmc-setup-disabled-actions">
         <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
-        <button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>
+        ${activateBlocked ? "" : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
       </div>
       ${hmcRenderReplaceActiveWorklistPanel()}
     </section>
