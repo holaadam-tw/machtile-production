@@ -2684,7 +2684,7 @@ function hmcWorklistSetupPalletEditor() {
             </div>
             <div class="hmc-setup-work-list">
               ${pallet.works.map((work, workIndex) => `
-                <button type="button" class="hmc-setup-work-chip ${work.included ? "is-selected" : ""} ${String(work.workNo).startsWith("待工單") ? "is-pending-order" : ""}" data-hmc-chip="${escapeHtml(pallet.palletId)}::${escapeHtml(work.workNo)}" aria-pressed="${work.included ? "true" : "false"}">
+                <button type="button" class="hmc-setup-work-chip ${work.included ? "is-selected" : ""} ${String(work.workNo).startsWith("待工單") ? "is-pending-order" : ""} ${editing && editing === work ? "is-editing" : ""}" data-hmc-chip="${escapeHtml(pallet.palletId)}::${escapeHtml(work.workNo)}" aria-pressed="${work.included ? "true" : "false"}">
                   <span>${escapeHtml(hmcWorkLetter(workIndex))}</span>
                   <strong>${escapeHtml(work.partName)}</strong>
                   <em>${escapeHtml(work.workNo)}</em>
@@ -2696,6 +2696,7 @@ function hmcWorklistSetupPalletEditor() {
                 </button>
               `).join("") || '<p class="empty-note">此盤還沒有工件，用下方表單新增。</p>'}
             </div>
+            ${editing ? `<p class="hmc-setup-editing-note">正在編輯 ${escapeHtml(hmcWorkLetter(pallet.works.indexOf(editing)))}・${escapeHtml(editing.partName)}——改好下方欄位按「更新工件」，或按「取消編輯」。</p>` : ""}
             <div class="hmc-setup-add-form">
               <span class="hmc-input-clear-wrap">
                 <input type="text" placeholder="工單號（可留空＝待工單；點選可挑工單）" maxlength="60" value="${editing ? escapeHtml(editing.workNo) : ""}" data-hmc-form-workno="${escapeHtml(pallet.palletId)}">
@@ -2960,55 +2961,42 @@ function hmcRenderSetupReplaceStatus() {
   `;
 }
 
-function hmcRenderReplaceActiveWorklistPanel() {
+function hmcRenderReplaceActiveWorklistInline() {
   const readState = hmcSetupActiveWorklistReadState();
   const hasDraft = Boolean(hmcSetupWriteState.worklistId);
   const busy = ["saving", "activating"].includes(hmcSetupWriteState.status) || hmcSetupReplaceState.status === "replacing";
   const activeWorklistId = readState.worklist?.id || "";
   const isDifferentDraft = hasDraft && (!activeWorklistId || activeWorklistId !== hmcSetupWriteState.worklistId);
-  const canShowReplace = readState.status === "ok";
-
-  if (!canShowReplace && hmcSetupReplaceState.status === "idle") return "";
-
-  const openEnabled = isDifferentDraft && canShowReplace && !busy;
+  const ready = isDifferentDraft && readState.status === "ok" && !busy;
+  const buttons = !hmcSetupReplaceState.open
+    ? `<button type="button" class="hmc-setup-replace-open ${ready ? "is-ready" : ""}" data-hmc-open-replace-active ${ready ? "" : "disabled aria-disabled=\"true\""}>取代目前啟用清單</button>`
+    : `
+      <button type="button" data-hmc-cancel-replace-active>取消</button>
+      <button type="button" class="hmc-setup-replace-danger" data-hmc-replace-active-worklist ${busy ? "disabled aria-disabled=\"true\"" : ""}>${hmcSetupReplaceState.status === "replacing" ? "正在取代..." : "確認取代？"}</button>
+    `;
   const hint = !hasDraft
-    ? "先按「儲存草稿」存這份新清單，才能取代。"
-    : (!isDifferentDraft ? "這份草稿就是目前啟用中的清單，改了內容要重新儲存草稿。" : "");
-
-  return `
-    <section class="hmc-setup-replace-panel ${hmcSetupReplaceState.open ? "is-open" : ""}" aria-label="Replace active HMC worklist">
-      <div class="hmc-setup-replace-copy">
-        <strong>換成這份新清單</strong>
-        <p>舊清單會留檔（標記已取代），現場改讀新清單。</p>
-        ${hint ? `<small>${escapeHtml(hint)}</small>` : ""}
-        ${!hint && activeWorklistId && hmcSetupWriteState.worklistId ? `<small>舊 ${escapeHtml(activeWorklistId.slice(0, 8))}… → 新 ${escapeHtml(hmcSetupWriteState.worklistId.slice(0, 8))}…</small>` : ""}
-      </div>
-      ${hmcRenderSetupReplaceStatus()}
-      ${!hmcSetupReplaceState.open ? `
-        <button type="button" class="hmc-setup-replace-open" data-hmc-open-replace-active ${openEnabled ? "" : "disabled aria-disabled=\"true\""}>取代目前啟用清單</button>
-      ` : `
-        <div class="hmc-setup-replace-actions">
-          <button type="button" data-hmc-cancel-replace-active>取消</button>
-          <button type="button" class="hmc-setup-replace-danger" data-hmc-replace-active-worklist ${busy ? "disabled aria-disabled=\"true\"" : ""}>${hmcSetupReplaceState.status === "replacing" ? "正在取代..." : "確認取代？"}</button>
-        </div>
-      `}
-    </section>
-  `;
+    ? "先按「儲存草稿」，右邊「取代目前啟用清單」亮起後按它換單。"
+    : (!isDifferentDraft
+      ? "這份草稿就是目前啟用中的清單；改了內容要重新儲存草稿。"
+      : `舊 ${activeWorklistId.slice(0, 8)}… → 新 ${String(hmcSetupWriteState.worklistId).slice(0, 8)}…；舊清單留檔（標記已取代），現場改讀新清單。`);
+  return { buttons, hint };
 }
 
 function hmcRenderSetupWriteControls() {
   const busy = ["saving", "activating"].includes(hmcSetupWriteState.status) || hmcSetupReplaceState.status === "replacing";
   const activateBlocked = hmcSetupActiveWorklistBlocksActivation();
   const canActivate = hmcSetupWriteState.worklistId && !busy && !activateBlocked;
+  const replaceUi = activateBlocked ? hmcRenderReplaceActiveWorklistInline() : null;
   return `
     <section class="hmc-submit-panel hmc-setup-action-panel">
       <strong>儲存與啟用</strong>
       ${hmcRenderSetupWriteStatus()}
       <div class="hmc-setup-disabled-actions">
         <button type="button" data-hmc-save-draft ${!busy ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "saving" ? "儲存中..." : "儲存草稿"}</button>
-        ${activateBlocked ? "" : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
+        ${replaceUi ? replaceUi.buttons : `<button type="button" data-hmc-activate-worklist ${canActivate ? "" : "disabled aria-disabled=\"true\""}>${busy && hmcSetupWriteState.status === "activating" ? "啟用中..." : "啟用本班清單"}</button>`}
       </div>
-      ${hmcRenderReplaceActiveWorklistPanel()}
+      ${replaceUi ? `<p class="hmc-setup-replace-hint">${escapeHtml(replaceUi.hint)}</p>` : ""}
+      ${hmcRenderSetupReplaceStatus()}
     </section>
   `;
 }

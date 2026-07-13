@@ -4060,6 +4060,43 @@ body.report-work-route-mode .machtile-route-brand-bar {
   border-color: #f59e0b;
 }
 
+.hmc-setup-work-chip.is-editing {
+  border-style: solid;
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.hmc-setup-replace-open.is-ready {
+  border-color: #b45309;
+  background: #f59e0b;
+  color: #431407;
+  font-weight: 900;
+  animation: hmcReplacePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes hmcReplacePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  50% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
+}
+
+.hmc-setup-replace-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hmc-setup-editing-note {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--brand-blue);
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .hmc-setup-work-chip.is-pending-order em {
   color: #b45309;
   font-weight: 900;
