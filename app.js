@@ -2869,18 +2869,80 @@ function hmcRenderSetupDevNoLoginNotice() {
   `;
 }
 
+// 沿用此清單開新的一天（2026-07-13 owner 點名）：把啟用清單整份帶入草稿、
+// 日期改今天、已確認盤點滾入「已完成」；之後走現成的儲存草稿→取代流程。
+const hmcSetupRolloverState = { status: "idle", message: "" };
+
+async function hmcRolloverActiveWorklist() {
+  const readState = hmcSetupActiveWorklistReadState();
+  if (hmcSetupRolloverState.status === "loading") return;
+  if (readState.status !== "ok" || !readState.worklist) return;
+  hmcSetupRolloverState.status = "loading";
+  hmcSetupRolloverState.message = "";
+  renderHmcWorklistSetupRoute();
+
+  const confirmedSums = {};
+  let sumNote = "";
+  try {
+    const rows = await supabaseFetch(`hmc_daily_worklist_item_quantities?select=work_order_no,completed_qty,daily_check_status&${hmcRestEq("worklist_id", readState.worklist.id)}`);
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (!["confirmed", "converted"].includes(row.daily_check_status)) return;
+      const key = row.work_order_no || "";
+      confirmedSums[key] = (confirmedSums[key] || 0) + (Number(row.completed_qty) || 0);
+    });
+  } catch (error) {
+    sumNote = "（讀不到已確認盤點，「已完成」先照舊清單帶入）";
+  }
+
+  hmcSetupDraftState.key = `${hmcRouteMachineKey()}|${hmcReportState.shift}`;
+  hmcSetupDraftState.dirty = true;
+  hmcSetupDraftState.seedStatus = "ok";
+  hmcSetupDraftState.workDate = hmcTodayDateIso();
+  hmcSetupDraftState.editTarget = null;
+  hmcSetupDraftState.deleteConfirmPalletId = "";
+  hmcSetupDraftState.message = "";
+  hmcSetupDraftState.pallets = (readState.pallets || []).map((pallet, index) => ({
+    palletId: pallet.palletId || `P${index + 1}`,
+    palletNo: Number(pallet.palletNo) || index + 1,
+    setupName: pallet.setupName || "未設定治具",
+    works: (Array.isArray(pallet.works) ? pallet.works : []).map((work) => {
+      const planned = hmcNonNegativeInteger(work.plannedQty, 0);
+      const done = hmcNonNegativeInteger(work.completedQty, 0) + (confirmedSums[work.workNo] || 0);
+      return {
+        workNo: work.workNo || "",
+        partName: work.partName || "",
+        plannedQty: planned,
+        completedQty: done,
+        remainingQty: Math.max(0, planned - done),
+        operationId: work.operationId && work.operationId !== "-" ? work.operationId : "",
+        operationName: work.operationName && work.operationName !== "-" ? work.operationName : "",
+        materialStatus: ["ready", "missing", "unknown"].includes(work.materialStatus) ? work.materialStatus : "ready",
+        included: true,
+      };
+    }),
+  }));
+  hmcSetupRolloverState.status = "done";
+  hmcSetupRolloverState.message = `已帶入啟用清單、日期改為今天（${hmcTodayDateIso()}），已確認數字滾入「已完成」${sumNote}。接著按「儲存草稿」→「取代目前啟用清單」完成換單。`;
+  renderHmcWorklistSetupRoute();
+}
+
 function hmcRenderSetupActiveWorklistNotice() {
   const readState = hmcSetupActiveWorklistReadState();
   const shiftLabel = hmcShiftLabel(hmcReportState.shift);
 
   if (readState.status === "ok") {
+    const rolling = hmcSetupRolloverState.status === "loading";
     return `
       <section class="hmc-report-card hmc-setup-active-warning" aria-label="Existing active HMC worklist">
         <div>
           <span>已有啟用清單</span>
           <strong>${escapeHtml(shiftLabel)}・${escapeHtml(readState.pallets?.length || 0)} 盤 / ${escapeHtml(readState.items?.length || 0)} 件</strong>
+          ${hmcSetupRolloverState.message ? `<p class="hmc-setup-rollover-note">${escapeHtml(hmcSetupRolloverState.message)}</p>` : ""}
         </div>
-        <small class="hmc-setup-active-id">清單編號 ${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</small>
+        <div class="hmc-setup-active-side">
+          <button type="button" class="hmc-setup-rollover-btn" data-hmc-rollover-active ${rolling ? "disabled aria-disabled=\"true\"" : ""}>${rolling ? "帶入中..." : "沿用此清單開新的一天"}</button>
+          <small class="hmc-setup-active-id">清單編號 ${escapeHtml(String(readState.worklist?.id || "-").slice(0, 8))}…</small>
+        </div>
       </section>
     `;
   }
@@ -3042,7 +3104,7 @@ function renderHmcGuideRoute() {
       url: hmcWorklistSetupRouteUrl(machineLabel, shift),
       linkText: "前往班前清單設定",
       what: "建立本班的交換盤與工件清單：儲存草稿，再啟用為本班清單。",
-      then: "沒有啟用清單，現場就沒有東西可填。每班開工前要建立或取代當班清單——盤點的日期跟著清單走，沿用舊清單會把數字記到舊日期。",
+      then: "沒有啟用清單，現場就沒有東西可填。每班開工前要建立或取代當班清單——盤點的日期跟著清單走，沿用舊清單會把數字記到舊日期。工件不變只換日期時，按「沿用此清單開新的一天」一鍵帶入，再儲存草稿、取代即可。",
     },
     {
       no: 2,
@@ -3281,6 +3343,9 @@ function bindHmcWorklistSetupEvents() {
   $("[data-hmc-cancel-replace-active]")?.addEventListener("click", () => {
     resetHmcSetupReplaceState();
     renderHmcWorklistSetupRoute();
+  });
+  $("[data-hmc-rollover-active]")?.addEventListener("click", () => {
+    hmcRolloverActiveWorklist();
   });
   $("[data-hmc-replace-active-worklist]")?.addEventListener("click", async () => {
     const worklistId = hmcSetupWriteState.worklistId;

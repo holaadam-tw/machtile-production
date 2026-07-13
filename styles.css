@@ -6256,6 +6256,36 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 900;
 }
 
+.hmc-setup-active-side {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.hmc-setup-rollover-btn {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 16px;
+  background: var(--brand-blue);
+  color: #ffffff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.hmc-setup-rollover-btn:disabled {
+  background: #e8eef5;
+  color: #64748b;
+  cursor: default;
+}
+
+.hmc-setup-rollover-note {
+  margin: 4px 0 0;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .hmc-setup-active-warning.is-conflict {
   border-color: var(--danger);
   background: #fff1f2;
