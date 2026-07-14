@@ -4514,6 +4514,40 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 800;
 }
 
+.machtile-ir-inline {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.machtile-ir-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.machtile-ir-search input {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+
+.machtile-ir-search .hmc-secondary-action { white-space: nowrap; }
+
+#machtileIrList button {
+  border: 1px solid var(--brand-blue);
+  border-radius: 8px;
+  padding: 3px 12px;
+  background: #eff6ff;
+  color: var(--brand-blue);
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .machtile-qc-slot {
   margin-bottom: 14px;
   border: 1px solid var(--border);

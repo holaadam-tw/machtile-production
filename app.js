@@ -9322,6 +9322,7 @@ function machtileAdminDrawerGroups() {
     groups.push({ title: "生產管理", items: [
       { key: "workOrders", icon: "📋", label: "工單管理" },
       { key: "program", icon: "⚙️", label: "CNC 程式與加工" },
+      { key: "inspection", icon: "🔬", label: "進料檢驗（I-Reporter）" },
     ]});
   }
   groups.push({ title: "機台管理", items: [
@@ -10070,6 +10071,11 @@ async function machtileRenderHistoryReal() {
       (await supabaseFetch("machines?select=id,machine_code")).forEach((m) => machineNames.set(String(m.id), m.machine_code));
     } catch (error) { /* 顯示未知機台 */ }
     const machineOf = (id) => machineNames.get(String(id)) || "未知機台";
+    // 進料檢驗（I-Reporter 唯讀橋）：同品號的近期檢驗記錄掛進工件履歷卡
+    let irRecords = [];
+    try {
+      irRecords = await machtileInspectionFetch("op=records");
+    } catch (error) { /* 橋未部署時安靜略過 */ }
     const typeLabel = { workStart: "開工", dailyStart: "今日開工", noon: "中午盤點", afternoonCheck: "下午盤點", finish: "完工", abnormal: "異常", pause: "暫停" };
 
     const abnormalRows = (Array.isArray(reports) ? reports : []).filter((row) => row.report_type === "abnormal");
@@ -10094,6 +10100,11 @@ async function machtileRenderHistoryReal() {
         groups.set(key, slot);
       });
       if (!groups.size) return "";
+      const partNos = new Set(list.map((run) => run.work_orders?.part_no).filter(Boolean));
+      const irMatches = (Array.isArray(irRecords) ? irRecords : []).filter((record) => {
+        const code = record.inspection_workpieces?.workpiece_code;
+        return code && (partNos.has(code) || record.inspection_workpieces?.workpiece_name === part);
+      }).slice(0, 3);
       const best = Math.min(...[...groups.values()].map((g) => g.sum / g.count));
       const rows = [...groups.entries()].map(([key, g]) => {
         const avg = g.sum / g.count;
@@ -10110,6 +10121,7 @@ async function machtileRenderHistoryReal() {
               <tbody>${rows}</tbody>
             </table>
           </div>
+          ${irMatches.length ? `<p class="machtile-ir-inline">🔬 進料檢驗：${irMatches.map((record) => `<span class="cnc-chip">${escapeHtml(record.lot_number)}・${escapeHtml(machtileIrStatusLabel[record.status] || record.status || "")}</span>`).join(" ")}（明細在管理抽屜 → 進料檢驗）</p>` : ""}
         </div>
       `;
     }).filter(Boolean).join("");
@@ -10400,6 +10412,123 @@ function renderWorkOrderAdminSection() {
   `;
 }
 
+// 進料檢驗唯讀串接（階段一，2026-07-14）：經 inspection-bridge Edge Function 讀
+// I-Reporter 品檢資料（key 只在後端）；現場操作仍在 I-Reporter，這裡是 MachTile 檢視窗。
+const machtileIrStatusLabel = {
+  pending: "待檢", in_progress: "進行中", completed: "已完成", pass: "合格", fail: "不合格", skipped: "本次免檢",
+};
+
+async function machtileInspectionFetch(query) {
+  const res = await fetch(`${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/inspection-bridge?${query}`, {
+    headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${machtileSupabaseBearerToken()}` },
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body?.error || `bridge ${res.status}`);
+  return body;
+}
+
+function renderInspectionModule() {
+  if (!(machtileStrictMode() && machtileSessionActive())) {
+    return machtilePlannedModuleNote("進料檢驗串接（I-Reporter）為正式環境功能。");
+  }
+  return `
+    <form id="machtileIrSearch" class="admin-module-form machtile-ir-search">
+      <input id="machtileIrCode" type="text" placeholder="品號搜尋（例：AR16-R01）；留空＝最近 25 筆" maxlength="40">
+      <button class="admin-save-button" type="submit">查詢</button>
+      <a class="hmc-secondary-action" href="https://holaadam-tw.github.io/I-Reporter/" target="_blank" rel="noopener">開 I-Reporter 操作 ↗</a>
+    </form>
+    <div id="machtileIrList"><p class="admin-module-note">載入檢驗記錄中…</p></div>
+    <div id="machtileIrDetail"></div>
+  `;
+}
+
+async function machtileIrLoadRecords(code) {
+  const holder = document.getElementById("machtileIrList");
+  if (!holder) return;
+  holder.innerHTML = '<p class="admin-module-note">讀取中…</p>';
+  try {
+    const rows = await machtileInspectionFetch(`op=records${code ? `&code=${encodeURIComponent(code)}` : ""}`);
+    if (!Array.isArray(rows) || !rows.length) {
+      holder.innerHTML = '<p class="admin-module-note">沒有符合的檢驗記錄。</p>';
+      return;
+    }
+    holder.innerHTML = `
+      <div class="machtile-stats-table-wrap">
+        <table class="machtile-stats-table">
+          <thead><tr><th>批號</th><th>工件</th><th>狀態</th><th>建立日</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td><strong>${escapeHtml(row.lot_number || "-")}</strong></td>
+                <td>${escapeHtml(row.inspection_workpieces?.workpiece_code || "-")}・${escapeHtml(row.inspection_workpieces?.workpiece_name || "")}</td>
+                <td>${escapeHtml(machtileIrStatusLabel[row.status] || row.status || "-")}</td>
+                <td>${escapeHtml(String(row.created_at || "").slice(0, 10))}</td>
+                <td><button type="button" data-ir-lot="${escapeHtml(row.lot_number || "")}">明細</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (error) {
+    holder.innerHTML = `<p class="admin-module-note">檢驗記錄讀取失敗：${escapeHtml(String(error?.message || ""))}（inspection-bridge 未部署或 secrets 未設時會這樣）</p>`;
+  }
+}
+
+async function machtileIrLoadDetail(lot) {
+  const holder = document.getElementById("machtileIrDetail");
+  if (!holder) return;
+  holder.innerHTML = '<p class="admin-module-note">讀取明細中…</p>';
+  try {
+    const rows = await machtileInspectionFetch(`op=record&lot=${encodeURIComponent(lot)}`);
+    const record = Array.isArray(rows) ? rows[0] : null;
+    if (!record) { holder.innerHTML = '<p class="admin-module-note">找不到這張記錄。</p>'; return; }
+    const processes = (record.inspection_process_results || []).sort((a, b) => (a.process_order || 0) - (b.process_order || 0));
+    holder.innerHTML = `
+      <section class="machtile-cnc-program">
+        <div class="machtile-cnc-program-head">
+          <div class="machtile-cnc-program-title">
+            <strong>${escapeHtml(record.lot_number)}</strong>
+            <span class="cnc-chip is-progno">${escapeHtml(record.inspection_workpieces?.workpiece_code || "")}</span>
+            <span class="cnc-chip">${escapeHtml(machtileIrStatusLabel[record.status] || record.status || "")}</span>
+          </div>
+          <span class="machtile-cnc-count">${processes.length} 道製程</span>
+        </div>
+        ${processes.map((proc) => {
+          const batches = proc.inspection_process_batches || [];
+          const good = batches.reduce((sum, b) => sum + (Number(b.good_count) || 0), 0);
+          const defect = batches.reduce((sum, b) => sum + (Number(b.defect_count) || 0), 0);
+          return `
+            <div class="machtile-qc-row ${defect > 0 ? "is-fail" : ""}">
+              <strong>#${proc.process_order}</strong>
+              <span>${escapeHtml(proc.process_name || "")}${proc.supplier ? `・${escapeHtml(proc.supplier)}` : ""}${proc.requires_inspection ? "" : "・免檢"}</span>
+              <em>${good} 良${defect ? ` / <b>${defect} 不良</b>` : ""}｜${batches.length} 批</em>
+              <span class="cnc-chip">${escapeHtml(machtileIrStatusLabel[proc.status] || proc.status || "-")}</span>
+            </div>
+          `;
+        }).join("") || '<p class="admin-module-note">此記錄還沒有製程結果。</p>'}
+        <p class="admin-module-note">量測明細與操作請到 <a href="https://holaadam-tw.github.io/I-Reporter/" target="_blank" rel="noopener">I-Reporter ↗</a>（MachTile 端唯讀）。</p>
+      </section>
+    `;
+  } catch (error) {
+    holder.innerHTML = `<p class="admin-module-note">明細讀取失敗：${escapeHtml(String(error?.message || ""))}</p>`;
+  }
+}
+
+function machtileInitInspectionModule() {
+  const form = document.getElementById("machtileIrSearch");
+  if (!form) return;
+  machtileIrLoadRecords("");
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    machtileIrLoadRecords(document.getElementById("machtileIrCode").value.trim());
+  });
+  document.getElementById("machtileIrList").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ir-lot]");
+    if (button) machtileIrLoadDetail(button.dataset.irLot);
+  });
+}
+
 function renderWorkOrderModule() {
   if (!machtileCanManageWorkOrders()) {
     return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
@@ -10581,6 +10710,7 @@ function adminModuleMeta(moduleKey) {
     users: ["User Accounts", "員工帳號管理"],
     platform: ["Platform Admin", "平台管理"],
     workOrders: ["Work Orders", "工單管理"],
+    inspection: ["Incoming Inspection", "進料檢驗（I-Reporter）"],
     invite: ["Invite Codes", "生成邀請碼"],
     vendor: ["Partner Access", "供應商授權管理"],
     company: ["Company Profile", "公司資料"],
@@ -10632,6 +10762,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderUsersModule();
     case "workOrders":
       return renderWorkOrderModule();
+    case "inspection":
+      return renderInspectionModule();
     case "platform":
       return renderPlatformModule();
     case "invite":
@@ -12608,6 +12740,7 @@ function openAdminModule(moduleKey) {
   if (moduleKey === "export") machtileInitExportModule();
   if (moduleKey === "alarm") machtileInitAlarmModule().catch(() => {});
   if (moduleKey === "program") machtileInitCncModule().catch(() => {});
+  if (moduleKey === "inspection") machtileInitInspectionModule();
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
