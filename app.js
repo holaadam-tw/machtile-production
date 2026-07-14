@@ -9342,6 +9342,10 @@ function remainingProcesses(order) {
 }
 
 function alertActions(order) {
+  // H3：strict＝只給真動作（查看工單/調排程），假動作按鈕不進正式環境
+  if (machtileStrictMode() && machtileSessionActive()) {
+    return ["查看工單", "調排程"];
+  }
   const status = primaryAlertStatus(order);
   if (status === "overdue") return ["安排夜班", "拆單到 CNC-04", "通知客戶", "標記已處理", "忽略提醒"];
   if (status === "aiRisk") return ["安排加班", "拆單到 CNC-05", "通知客戶", "標記已處理", "忽略提醒"];
@@ -9606,6 +9610,32 @@ function renderAlerts() {
   $("#alertList").innerHTML = alerts.length
     ? alerts.map(renderAlertCard).join("")
     : `<article class="empty-card"><strong>目前沒有待處理警報</strong><span>所有工單都在可控範圍內。</span></article>`;
+
+  if (machtileStrictMode() && machtileSessionActive()) machtileRenderNotifyLog().catch(() => {});
+}
+
+// H3 通知紀錄（strict）：警報頁尾顯示 LINE 已推播內容，與群組看到的一致。
+async function machtileRenderNotifyLog() {
+  const list = $("#alertList");
+  if (!list || document.getElementById("machtileNotifyLog")) return;
+  try {
+    const rows = await supabaseFetch("line_notification_log?select=rule_key,message,sent_at&order=sent_at.desc&limit=20");
+    const section = document.createElement("section");
+    section.id = "machtileNotifyLog";
+    section.className = "machtile-notify-log";
+    section.innerHTML = `
+      <div class="panel-title"><h2>LINE 通知紀錄</h2><span>近 ${(rows || []).length} 則</span></div>
+      ${(rows || []).length ? rows.map((row) => `
+        <div class="machtile-notify-log-row">
+          <span>${escapeHtml((row.message || row.rule_key || "").slice(0, 90))}</span>
+          <time>${escapeHtml(machtileFormatAuditTime(row.sent_at))}</time>
+        </div>
+      `).join("") : '<p class="empty-note">還沒有推播過通知。</p>'}
+    `;
+    list.parentElement.appendChild(section);
+  } catch (error) {
+    console.warn("notify log render failed", error);
+  }
 }
 
 function renderAlertCard(order) {
@@ -9717,9 +9747,11 @@ function renderInspectionQueue() {
           <div><span>優先</span><strong>${escapeHtml(item.priority)}</strong></div>
         </div>
         <div class="inspection-actions">
-          <button type="button" data-alert-action="開始品檢" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>開始品檢</button>
+          ${machtileStrictMode() && machtileSessionActive()
+            ? `<button type="button" data-alert-action="查看工單" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>查看工單</button>`
+            : `<button type="button" data-alert-action="開始品檢" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>開始品檢</button>
           <button type="button" data-alert-action="品檢通過" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>通過</button>
-          <button type="button" data-alert-action="品檢異常" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>異常</button>
+          <button type="button" data-alert-action="品檢異常" ${item.real ? `data-alert-order="${escapeHtml(item.id)}"` : ""}>異常</button>`}
         </div>
       </article>
     `;
@@ -9866,6 +9898,106 @@ function renderHistory() {
       }).join("")}
     </section>
   `;
+  if (machtileStrictMode() && machtileSessionActive()) machtileRenderHistoryReal().catch(() => {});
+}
+
+// H2 歷史真做（2026-07-14）：strict 模式下報工/異常/加工履歷三面板改吃真資料；
+// 工件加工履歷＝每次加工的（機台×程式版本×單件時間），同工件落差 >15% 標紅。
+async function machtileRenderHistoryReal() {
+  const holder = $("#historyContent");
+  if (!holder) return;
+  try {
+    const [reports, runs] = await Promise.all([
+      supabaseFetch("production_reports?select=report_date,report_type,completed_qty,defect_qty,cycle_time_seconds,remark,created_at,machine_id,work_orders(work_order_no,part_name)&order=created_at.desc&limit=20"),
+      supabaseFetch("cnc_machining_runs?select=run_date,qty_good,qty_defect,pure_cutting_seconds,machine_id,created_at,work_orders(work_order_no,part_name,part_no),cnc_program_versions(version_no)&order=created_at.desc&limit=500"),
+    ]);
+    const machineNames = new Map();
+    try {
+      (await supabaseFetch("machines?select=id,machine_code")).forEach((m) => machineNames.set(String(m.id), m.machine_code));
+    } catch (error) { /* 顯示未知機台 */ }
+    const machineOf = (id) => machineNames.get(String(id)) || "未知機台";
+    const typeLabel = { workStart: "開工", dailyStart: "今日開工", noon: "中午盤點", afternoonCheck: "下午盤點", finish: "完工", abnormal: "異常", pause: "暫停" };
+
+    const abnormalRows = (Array.isArray(reports) ? reports : []).filter((row) => row.report_type === "abnormal");
+
+    // 工件履歷：以品名分組 →（機台×版本）分組平均 → 對最佳組標落差
+    const byPart = new Map();
+    (Array.isArray(runs) ? runs : []).forEach((run) => {
+      const part = run.work_orders?.part_name || "未命名工件";
+      if (!byPart.has(part)) byPart.set(part, []);
+      byPart.get(part).push(run);
+    });
+    const partSections = [...byPart.entries()].map(([part, list]) => {
+      const groups = new Map();
+      list.forEach((run) => {
+        if (run.pure_cutting_seconds == null) return;
+        const key = `${machineOf(run.machine_id)}｜${run.cnc_program_versions?.version_no || "無程式版"}`;
+        const slot = groups.get(key) || { sum: 0, count: 0, qty: 0, lastDate: "" };
+        slot.sum += Number(run.pure_cutting_seconds) || 0;
+        slot.count += 1;
+        slot.qty += Number(run.qty_good) || 0;
+        if (String(run.run_date) > slot.lastDate) slot.lastDate = String(run.run_date);
+        groups.set(key, slot);
+      });
+      if (!groups.size) return "";
+      const best = Math.min(...[...groups.values()].map((g) => g.sum / g.count));
+      const rows = [...groups.entries()].map(([key, g]) => {
+        const avg = g.sum / g.count;
+        const delta = best > 0 ? Math.round(((avg - best) / best) * 100) : 0;
+        const slow = delta > 15;
+        return `<tr class="${slow ? "machtile-history-slow" : ""}"><td>${escapeHtml(key.split("｜")[0])}</td><td>${escapeHtml(key.split("｜")[1])}</td><td>${Math.round(avg)} 秒</td><td>${slow ? `<strong>+${delta}%</strong>` : delta > 0 ? `+${delta}%` : "最佳"}</td><td>${g.count}</td><td>${g.qty}</td><td>${escapeHtml(g.lastDate)}</td></tr>`;
+      }).join("");
+      return `
+        <div class="machtile-part-history">
+          <strong>${escapeHtml(part)}</strong>
+          <div class="machtile-stats-table-wrap">
+            <table class="machtile-stats-table">
+              <thead><tr><th>機台</th><th>程式版</th><th>平均單件</th><th>vs 最佳</th><th>次數</th><th>累計良品</th><th>最近加工</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }).filter(Boolean).join("");
+
+    holder.innerHTML = `
+      <section class="history-panel">
+        <div class="panel-title"><h2>報工紀錄（真資料）</h2><span>${(reports || []).length} 筆</span></div>
+        ${(reports || []).length ? reports.map((row) => `
+          <div class="history-row risk-blue">
+            <span class="timeline-dot"></span>
+            <div>
+              <strong>${escapeHtml(machineOf(row.machine_id))} · ${escapeHtml(typeLabel[row.report_type] || row.report_type || "報工")} · ${row.completed_qty}/${row.defect_qty} 件</strong>
+              <small>${escapeHtml(row.work_orders?.work_order_no || "-")} · ${escapeHtml(row.work_orders?.part_name || "")}${row.cycle_time_seconds != null ? ` · 單件 ${row.cycle_time_seconds} 秒` : ""}</small>
+            </div>
+            <time>${escapeHtml(machtileFormatAuditTime(row.created_at))}</time>
+          </div>
+        `).join("") : '<p class="empty-note">還沒有報工紀錄。</p>'}
+      </section>
+
+      <section class="history-panel">
+        <div class="panel-title"><h2>異常紀錄（真資料）</h2><span>${abnormalRows.length} 筆</span></div>
+        ${abnormalRows.length ? abnormalRows.map((row) => `
+          <div class="history-row risk-red">
+            <span class="timeline-dot"></span>
+            <div>
+              <strong>${escapeHtml(machineOf(row.machine_id))} · ${escapeHtml(row.work_orders?.work_order_no || "-")}</strong>
+              <small>${escapeHtml(row.remark || "未填異常說明")}</small>
+            </div>
+            <time>${escapeHtml(machtileFormatAuditTime(row.created_at))}</time>
+          </div>
+        `).join("") : '<p class="empty-note">近期沒有異常報工。</p>'}
+      </section>
+
+      <section class="history-panel machtile-part-history-panel">
+        <div class="panel-title"><h2>工件加工履歷（真資料）</h2><span>${byPart.size} 個工件</span></div>
+        <p class="admin-module-note">同一工件在不同機台或不同程式版本的平均單件時間；比最佳組合慢超過 15% 的標紅。資料來自每筆帶單件時間的報工，自動累積。</p>
+        ${partSections || '<p class="empty-note">還沒有加工履歷；現場報工填「單件時間」後會自動累積。</p>'}
+      </section>
+    `;
+  } catch (error) {
+    console.warn("history real render failed", error);
+  }
 }
 
 function renderReports() {
@@ -10540,6 +10672,8 @@ function renderAlarmRulesModule() {
           <input id="machtileAlReviewHours" type="number" min="1" max="24" value="2"> 小時沒複核就提醒主管</label>
         <label class="admin-field machtile-alarm-row"><span><input type="checkbox" id="machtileAlEnNostart" checked> 未開工提醒</span>
           <input id="machtileAlNostartTime" type="time" value="08:10"> 還沒開工回報就提醒</label>
+        <label class="admin-field machtile-alarm-row"><span><input type="checkbox" id="machtileAlEnSlow" checked> 加工偏慢提醒</span>
+          單件時間比該機台平均慢 <input id="machtileAlSlowPct" type="number" min="5" max="100" value="20"> % 就提醒（同工件累積 3 筆後生效）</label>
         <button class="admin-save-button" type="submit">儲存警報參數</button>
         <p class="admin-module-note">儲存後最慢 10 分鐘生效（下一次自動掃描）；通知發到已加入的廠內 LINE 群。</p>
       </form>
@@ -10564,6 +10698,8 @@ async function machtileInitAlarmModule() {
       document.getElementById("machtileAlStaleHours").value = cfg.stale_hours ?? 4;
       document.getElementById("machtileAlReviewHours").value = cfg.review_hours ?? 2;
       document.getElementById("machtileAlNostartTime").value = cfg.nostart_time || "08:10";
+      document.getElementById("machtileAlEnSlow").checked = cfg.enable_slowcycle !== false;
+      document.getElementById("machtileAlSlowPct").value = cfg.slow_percent ?? 20;
     }
   } catch (error) {
     console.warn("notification settings prefill failed", error);
@@ -10583,6 +10719,8 @@ async function machtileInitAlarmModule() {
         stale_hours: Number(document.getElementById("machtileAlStaleHours").value) || 4,
         review_hours: Number(document.getElementById("machtileAlReviewHours").value) || 2,
         nostart_time: document.getElementById("machtileAlNostartTime").value || "08:10",
+        enable_slowcycle: document.getElementById("machtileAlEnSlow").checked,
+        slow_percent: Number(document.getElementById("machtileAlSlowPct").value) || 20,
       };
       await supabaseFetch("rpc/notification_settings_upsert", {
         method: "POST",
@@ -13161,8 +13299,13 @@ function bindEvents() {
 
     const actionButton = event.target.closest("[data-alert-action]");
     if (actionButton) {
-      const orderText = actionButton.dataset.alertOrder ? `：${actionButton.dataset.alertOrder}` : "";
-      showToast(`${actionButton.dataset.alertAction}${orderText}`);
+      const action = actionButton.dataset.alertAction;
+      const orderId = actionButton.dataset.alertOrder || "";
+      if (machtileStrictMode() && machtileSessionActive()) {
+        if (action === "查看工單" && orderId) { openDetail(orderId); return; }
+        if (action === "調排程") { switchView("schedule"); return; }
+      }
+      showToast(`${action}${orderId ? `：${orderId}` : ""}`);
       return;
     }
 
