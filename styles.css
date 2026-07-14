@@ -7893,6 +7893,21 @@ body.report-work-route-mode .machtile-route-brand-bar {
     font-weight: 900;
   }
 
+  /* 登入徽章抬到底部分頁列上方，別壓住 tabs（owner 手機截圖回報） */
+  .machtile-session-badge {
+    right: 8px;
+    bottom: 68px;
+    max-width: calc(100vw - 16px);
+    padding: 6px 8px 6px 12px;
+  }
+
+  .machtile-session-badge span {
+    max-width: 38vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .admin-export-panel,
   .machine-admin-qr-block {
     grid-template-columns: 1fr;
