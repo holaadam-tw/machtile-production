@@ -8910,6 +8910,7 @@ async function loadFromSupabase() {
     console.warn("v_machine_management_cards is not ready yet; using local machine defaults.", error);
     state.machineMasters = [];
   }
+  await machtileLoadScheduleQueue();
   state.source = "supabase";
 }
 
@@ -9077,9 +9078,229 @@ function deriveMachines() {
     });
   });
 
+  // SB3：排程佇列第一張＝機台卡「目前工單」（沒有排佇列的機台維持原邏輯）
+  const queueTops = new Map();
+  state.workOrders.forEach((order) => {
+    if (!order.machine || !order.processId) return;
+    const q = machtileScheduleState.queueOrderByProcess.get(order.processId);
+    if (q == null) return;
+    const current = queueTops.get(order.machine);
+    if (!current || q < current.q) queueTops.set(order.machine, { q, order });
+  });
+  queueTops.forEach(({ order }, name) => {
+    const machine = machines.get(name);
+    if (!machine) return;
+    machines.set(name, {
+      ...machine,
+      order,
+      workOrderNo: order.id,
+      part: order.part,
+      customer: order.customer,
+      dueDate: order.dueDate,
+      processName: order.process,
+      done: order.done,
+      total: order.total,
+      lastReport: order.lastReport,
+    });
+  });
+
   state.machines = Array.from(machines.values())
     .map((machine) => ({ ...machine, status: machineStatus(machine), department: normalizedMachineDepartment(machine) }))
     .sort((a, b) => (a.displayOrder || 999) - (b.displayOrder || 999) || a.name.localeCompare(b.name, "zh-Hant"));
+}
+
+// 排程板（2026-07-14，SB1 頂層分頁/SB2 拖拉+按鈕/SB3 佇列第一張=機台卡目前工單）。
+// strict 由 machine_queue_reorder RPC 持久化（同時處理改派）；Dev 免登入=畫面內示範。
+const machtileScheduleState = { queueOrderByProcess: new Map() };
+
+async function machtileLoadScheduleQueue() {
+  if (!(machtileStrictMode() && machtileSessionActive())) return;
+  try {
+    const rows = await supabaseFetch("work_order_processes?select=id,queue_order&queue_order=not.is.null&limit=1000");
+    machtileScheduleState.queueOrderByProcess = new Map((Array.isArray(rows) ? rows : []).map((row) => [row.id, row.queue_order]));
+  } catch (error) {
+    console.warn("schedule queue load failed", error);
+  }
+}
+
+function machtileQueuePosition(order) {
+  const q = order.processId ? machtileScheduleState.queueOrderByProcess.get(order.processId) : null;
+  return q == null ? Infinity : q;
+}
+
+function machtileScheduleColumns() {
+  const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
+    .filter((machine) => !machine.isUnassignedBucket)
+    .map((machine) => ({ code: machine.code || machine.name, name: machine.name }));
+  // 與 deriveMachines 同步：主檔缺 HMC 示範機時從 baseMachines 補（Dev demo 相容）
+  if (state.machineMasters.length) {
+    const known = new Set(machineDefs.flatMap((machine) => [machine.name, machine.code]));
+    baseMachines.filter(isHmcMachine).forEach((machine) => {
+      if (!known.has(machine.name)) machineDefs.push({ code: machine.name, name: machine.name });
+    });
+  }
+  const byMachine = new Map(machineDefs.map((machine) => [machine.name, { def: machine, list: [] }]));
+  const unassigned = [];
+  state.workOrders.forEach((order) => {
+    if (order.machine && byMachine.has(order.machine)) byMachine.get(order.machine).list.push(order);
+    else if (order.machine) byMachine.set(order.machine, { def: { code: order.machine, name: order.machine }, list: [order] });
+    else unassigned.push(order);
+  });
+  byMachine.forEach((column) => column.list.sort((a, b) => machtileQueuePosition(a) - machtileQueuePosition(b) || String(a.dueDate || "").localeCompare(String(b.dueDate || ""))));
+  unassigned.sort((a, b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+  return { byMachine, unassigned };
+}
+
+function machtileCanEditSchedule() {
+  return machtileStrictMode() ? machtileCanManageWorkOrders() : true;
+}
+
+function machtileScheduleCard(order, index, total, colKey, canEdit) {
+  const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
+  return `
+    <article class="schedule-card ${status.className}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(order.id)}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
+      <div class="schedule-card-head">
+        <strong>${index + 1}. ${escapeHtml(order.id)}</strong>
+        <span class="schedule-card-status">${escapeHtml(status.label)}</span>
+      </div>
+      <p>${escapeHtml(order.part)}</p>
+      <small>${order.done}/${order.total} 件 · 交期 ${escapeHtml(order.dueDate || "-")}</small>
+      ${canEdit ? `
+      <div class="schedule-card-tools">
+        <button type="button" data-schedule-move="up" ${index === 0 ? "disabled" : ""} aria-label="往前排">↑</button>
+        <button type="button" data-schedule-move="down" ${index === total - 1 ? "disabled" : ""} aria-label="往後排">↓</button>
+      </div>` : ""}
+    </article>
+  `;
+}
+
+function renderSchedule() {
+  const holder = $("#scheduleContent");
+  if (!holder) return;
+  const canEdit = machtileCanEditSchedule();
+  const { byMachine, unassigned } = machtileScheduleColumns();
+  const column = (key, title, list) => `
+    <section class="schedule-column" data-schedule-col="${escapeHtml(key)}">
+      <header class="schedule-column-head"><strong>${escapeHtml(title)}</strong><span>${list.length} 張</span></header>
+      <div class="schedule-list" data-schedule-list="${escapeHtml(key)}">
+        ${list.map((order, index) => machtileScheduleCard(order, index, list.length, key, canEdit)).join("") || '<p class="schedule-empty">沒有工單；拖卡片過來＝派給這台機</p>'}
+      </div>
+    </section>
+  `;
+  holder.innerHTML = `
+    <p class="schedule-hint">${canEdit ? "拖拉卡片排順序或換機台；↑↓ 也可以。每欄第一張＝現場機台卡的「目前工單」。" : "唯讀檢視：排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
+    <div class="schedule-board">
+      ${[...byMachine.values()].map((columnData) => column(columnData.def.code, columnData.def.name, columnData.list)).join("")}
+      ${column("", "未排機", unassigned)}
+    </div>
+  `;
+  if (canEdit) machtileBindScheduleEvents(holder);
+}
+
+function machtileScheduleListOrders(colKey) {
+  const { byMachine, unassigned } = machtileScheduleColumns();
+  if (!colKey) return unassigned;
+  for (const columnData of byMachine.values()) {
+    if (columnData.def.code === colKey) return columnData.list;
+  }
+  return [];
+}
+
+async function machtileApplyQueue(colKey, orderList) {
+  if (!machtileStrictMode()) {
+    orderList.forEach((order, index) => {
+      if (order.processId) machtileScheduleState.queueOrderByProcess.set(order.processId, index + 1);
+      order.machine = colKey || "";
+    });
+    renderAll();
+    showToast("示範模式：排程只在畫面上生效");
+    return;
+  }
+  const ids = orderList.map((order) => order.processId).filter(Boolean);
+  if (ids.length !== orderList.length) {
+    showToast("有工單缺製程資料，無法排入佇列");
+    return;
+  }
+  await supabaseFetch("rpc/machine_queue_reorder", {
+    method: "POST",
+    body: JSON.stringify({ p_payload: { machine_code: colKey || null, process_ids: ids } }),
+  });
+}
+
+async function machtileScheduleCommit(actions) {
+  try {
+    for (const action of actions) await machtileApplyQueue(action.colKey, action.orders);
+    if (machtileStrictMode()) {
+      await loadFromSupabase();
+      renderAll();
+      showToast("排程已更新");
+    }
+  } catch (error) {
+    showToast(`排程更新失敗：${String(error?.message || error || "")}`);
+    renderAll();
+  }
+}
+
+function machtileBindScheduleEvents(holder) {
+  holder.addEventListener("click", (event) => {
+    const moveButton = event.target.closest("[data-schedule-move]");
+    if (!moveButton) return;
+    const card = moveButton.closest("[data-schedule-card]");
+    const colKey = card.dataset.scheduleFrom;
+    const list = [...machtileScheduleListOrders(colKey)];
+    const index = list.findIndex((order) => order.id === card.dataset.scheduleCard);
+    if (index < 0) return;
+    const target = moveButton.dataset.scheduleMove === "up" ? index - 1 : index + 1;
+    if (target < 0 || target >= list.length) return;
+    [list[index], list[target]] = [list[target], list[index]];
+    machtileScheduleCommit([{ colKey, orders: list }]);
+  });
+
+  holder.querySelectorAll("[data-schedule-card][draggable]").forEach((card) => {
+    card.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        orderId: card.dataset.scheduleCard,
+        from: card.dataset.scheduleFrom,
+      }));
+      event.dataTransfer.effectAllowed = "move";
+    });
+  });
+
+  holder.querySelectorAll("[data-schedule-list]").forEach((listEl) => {
+    listEl.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    });
+    listEl.addEventListener("drop", (event) => {
+      event.preventDefault();
+      let payload;
+      try {
+        payload = JSON.parse(event.dataTransfer.getData("text/plain"));
+      } catch (error) {
+        return;
+      }
+      const fromKey = payload.from || "";
+      const toKey = listEl.dataset.scheduleList || "";
+      const fromList = [...machtileScheduleListOrders(fromKey)];
+      const moving = fromList.find((order) => order.id === payload.orderId);
+      if (!moving) return;
+      const targetCard = event.target.closest("[data-schedule-card]");
+      if (fromKey === toKey) {
+        const list = fromList.filter((order) => order.id !== payload.orderId);
+        const insertAt = targetCard ? list.findIndex((order) => order.id === targetCard.dataset.scheduleCard) : list.length;
+        list.splice(insertAt < 0 ? list.length : insertAt, 0, moving);
+        machtileScheduleCommit([{ colKey: toKey, orders: list }]);
+        return;
+      }
+      const sourceRest = fromList.filter((order) => order.id !== payload.orderId);
+      const toList = [...machtileScheduleListOrders(toKey)];
+      const insertAt = targetCard ? toList.findIndex((order) => order.id === targetCard.dataset.scheduleCard) : toList.length;
+      toList.splice(insertAt < 0 ? toList.length : insertAt, 0, moving);
+      const actions = [{ colKey: toKey, orders: toList }];
+      if (fromKey && sourceRest.length) actions.push({ colKey: fromKey, orders: sourceRest });
+      machtileScheduleCommit(actions);
+    });
+  });
 }
 
 function riskSuggestion(order) {
@@ -11832,6 +12053,7 @@ function renderAll() {
   renderHistory();
   renderReports();
   renderSettings();
+  renderSchedule();
 }
 
 function applyDashboardFilterParams() {

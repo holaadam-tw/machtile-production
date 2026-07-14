@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260714-cnc-programs">
+  <link rel="stylesheet" href="./styles.css?v=20260714-schedule">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -106,6 +106,7 @@
 
     <nav class="desktop-nav" aria-label="主要導覽">
       <button class="nav-item active" data-view="dashboard" type="button">監控</button>
+      <button class="nav-item" data-view="schedule" type="button">排程</button>
       <button class="nav-item" data-view="alerts" type="button">警報</button>
       <button class="nav-item" data-view="history" type="button">歷史</button>
       <button class="nav-item" data-view="reports" type="button">報表</button>
@@ -128,6 +129,16 @@
           <div id="statusChips" class="filter-chips status-chips" aria-label="狀態篩選"></div>
         </div>
         <div id="workOrderGrid" class="machine-wall"></div>
+      </section>
+
+      <section id="scheduleView" class="view" aria-labelledby="scheduleTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Schedule</p>
+            <h1 id="scheduleTitle">機台排程板</h1>
+          </div>
+        </div>
+        <div id="scheduleContent" class="schedule-layout"></div>
       </section>
 
       <section id="alertsView" class="view" aria-labelledby="alertsTitle">
@@ -227,6 +238,7 @@
 
   <nav class="mobile-tabs" aria-label="行動導覽">
     <button class="mobile-tab active" data-view="dashboard" type="button">監控</button>
+    <button class="mobile-tab" data-view="schedule" type="button">排程</button>
     <button class="mobile-tab" data-view="alerts" type="button">警報</button>
     <button class="mobile-tab" data-view="history" type="button">歷史</button>
     <button class="mobile-tab" data-view="reports" type="button">報表</button>
@@ -523,6 +535,6 @@
 
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260714-cnc-programs"></script>
+  <script src="./app.js?v=20260714-schedule"></script>
 </body>
 </html>

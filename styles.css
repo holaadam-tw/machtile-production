@@ -4086,6 +4086,99 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 700;
 }
 
+.schedule-hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.schedule-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.schedule-column {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.schedule-column-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  color: #1e3a8a;
+  font-size: 15px;
+}
+
+.schedule-list {
+  display: grid;
+  gap: 8px;
+  min-height: 60px;
+}
+
+.schedule-empty {
+  margin: 0;
+  padding: 14px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.schedule-card {
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface-soft);
+  cursor: grab;
+}
+
+.schedule-card:active { cursor: grabbing; }
+
+.schedule-card p { margin: 2px 0; font-weight: 800; }
+.schedule-card small { color: var(--muted); }
+
+.schedule-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.schedule-card-status { font-size: 11px; font-weight: 900; color: var(--muted); }
+
+.schedule-card.risk-red { border-left-color: #dc2626; }
+.schedule-card.risk-amber { border-left-color: #f59e0b; }
+.schedule-card.risk-purple { border-left-color: #8b5cf6; }
+.schedule-card.risk-blue { border-left-color: var(--brand-blue); }
+.schedule-card.risk-green { border-left-color: #16a34a; }
+
+.schedule-card-tools {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.schedule-card-tools button {
+  min-width: 40px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.schedule-card-tools button:disabled { opacity: 0.35; cursor: default; }
+
 .machtile-cnc-program {
   margin-top: 14px;
   border: 1px solid var(--border);
