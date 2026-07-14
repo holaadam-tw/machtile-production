@@ -4086,6 +4086,112 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 700;
 }
 
+.machtile-cnc-program {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.machtile-cnc-program-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.machtile-cnc-version {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1.4fr) 100px 150px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.machtile-cnc-version button {
+  border: 1px solid var(--brand-blue);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #eff6ff;
+  color: var(--brand-blue);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.machtile-cnc-summary {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.machtile-cnc-diff pre {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.machtile-cnc-diff .diff-add { color: #4ade80; }
+.machtile-cnc-diff .diff-del { color: #f87171; }
+.machtile-cnc-diff .diff-ctx { color: #94a3b8; }
+
+.machtile-alarm-row {
+  display: grid;
+  gap: 4px;
+}
+
+.machtile-alarm-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.machtile-alarm-row input[type="number"] {
+  width: 80px;
+}
+
+.machtile-alarm-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.machtile-stats-table-wrap {
+  overflow-x: auto;
+}
+
+.machtile-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.machtile-stats-table th,
+.machtile-stats-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.machtile-stats-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+#machtileTimeStats .hmc-secondary-action {
+  display: inline-block;
+  margin-top: 10px;
+}
+
 .hmc-setup-editing-note {
   margin: 10px 0 0;
   padding: 8px 12px;
