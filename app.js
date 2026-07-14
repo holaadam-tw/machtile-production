@@ -9807,7 +9807,81 @@ function inspectionItems() {
   return [...mapped, ...demos.filter((item) => !existingIds.has(item.id))].slice(0, 4);
 }
 
+// 今日品檢打卡板（2026-07-14 owner 鎖定：時間制——早上首件檢＋下午下班前檢）。
+// strict 取代示範用「待品檢」佇列；每機台每時段一格，合格/異常（異常必填原因）。
+const machtileQcEditSet = new Set();
+
+async function machtileRenderQcBoard() {
+  const holder = $("#inspectionQueue");
+  if (!holder) return;
+  const title = $("#inspectionQueueTitle");
+  if (title) title.textContent = "今日品檢";
+  try {
+    const today = hmcTodayDateIso();
+    const punches = await supabaseFetch(`quality_checks?select=check_type,machine_code,result,note,checked_at&check_date=eq.${today}`);
+    const punchMap = new Map((Array.isArray(punches) ? punches : []).map((p) => [`${p.check_type}|${p.machine_code}`, p]));
+    const machines = state.machines.filter((machine) => !machine.isUnassignedBucket);
+    const slot = (type, label, emoji) => `
+      <div class="machtile-qc-slot">
+        <p class="machtile-qc-slot-title">${emoji} ${escapeHtml(label)}</p>
+        ${machines.map((machine) => {
+          const punch = machtileQcEditSet.has(`${type}|${machine.name}`) ? null : punchMap.get(`${type}|${machine.name}`);
+          const orderInfo = machine.order ? `${escapeHtml(machine.order.id)}・${escapeHtml(machine.part || "")}` : "目前沒有工單";
+          if (punch) {
+            const time = machtileFormatAuditTime(punch.checked_at).slice(-5);
+            return `
+              <div class="machtile-qc-row ${punch.result === "fail" ? "is-fail" : "is-pass"}">
+                <strong>${escapeHtml(machine.name)}</strong>
+                <span>${orderInfo}</span>
+                <em>${punch.result === "fail" ? `✗ 異常 ${time}｜${escapeHtml(punch.note || "")}` : `✓ 合格 ${time}`}</em>
+                <button type="button" data-qc-redo="${escapeHtml(type)}" data-qc-machine="${escapeHtml(machine.name)}">改判</button>
+              </div>`;
+          }
+          return `
+            <div class="machtile-qc-row" data-qc-slot="${escapeHtml(type)}" data-qc-machine="${escapeHtml(machine.name)}" data-qc-wo="${escapeHtml(machine.order?.id || "")}" data-qc-part="${escapeHtml(machine.part || "")}">
+              <strong>${escapeHtml(machine.name)}</strong>
+              <span>${orderInfo}</span>
+              <span class="machtile-qc-actions">
+                <button type="button" class="is-pass" data-qc-punch="pass">合格</button>
+                <button type="button" class="is-fail" data-qc-punch="fail">異常</button>
+              </span>
+              <span class="machtile-qc-note" hidden>
+                <input type="text" maxlength="200" placeholder="異常原因（必填）">
+                <button type="button" data-qc-punch-confirm="fail">確認異常</button>
+              </span>
+            </div>`;
+        }).join("")}
+      </div>
+    `;
+    holder.innerHTML = slot("first_article", "首件檢查（早上）", "🌅") + slot("afternoon", "下班前檢查", "🕓");
+  } catch (error) {
+    holder.innerHTML = `<p class="admin-module-note">品檢資料載入失敗：${escapeHtml(String(error?.message || ""))}</p>`;
+  }
+}
+
+async function machtileQcPunch(row, result, note) {
+  const payload = {
+    check_type: row.dataset.qcSlot,
+    machine_code: row.dataset.qcMachine,
+    result,
+    note: note || null,
+    work_order_no: row.dataset.qcWo || null,
+    part_name: row.dataset.qcPart || null,
+  };
+  await supabaseFetch("rpc/quality_check_record", {
+    method: "POST",
+    body: JSON.stringify({ p_payload: payload }),
+  });
+  machtileQcEditSet.delete(`${payload.check_type}|${payload.machine_code}`);
+  showToast(`${payload.machine_code} ${result === "pass" ? "品檢合格" : "品檢異常已記錄"}`);
+  machtileRenderQcBoard().catch(() => {});
+}
+
 function renderInspectionQueue() {
+  if (machtileStrictMode() && machtileSessionActive()) {
+    machtileRenderQcBoard().catch(() => {});
+    return;
+  }
   const items = inspectionItems();
   $("#inspectionQueue").innerHTML = items.map((item) => {
     const due = dueInfo({ dueDate: item.dueDate });
@@ -10753,6 +10827,8 @@ function renderAlarmRulesModule() {
           <input id="machtileAlNostartTime" type="time" value="08:10"> 還沒開工回報就提醒</label>
         <label class="admin-field machtile-alarm-row"><span><input type="checkbox" id="machtileAlEnSlow" checked> 加工偏慢提醒</span>
           單件時間比該機台平均慢 <input id="machtileAlSlowPct" type="number" min="5" max="100" value="20"> % 就提醒（同工件累積 3 筆後生效）</label>
+        <label class="admin-field machtile-alarm-row"><span><input type="checkbox" id="machtileAlEnQc" checked> 品檢打卡提醒</span>
+          首件檢 <input id="machtileAlQcFirst" type="time" value="09:00">、下班前檢 <input id="machtileAlQcAfternoon" type="time" value="16:00"> 過時未打卡就提醒；異常即時推播</label>
         <button class="admin-save-button" type="submit">儲存警報參數</button>
         <p class="admin-module-note">儲存後最慢 10 分鐘生效（下一次自動掃描）；通知發到已加入的廠內 LINE 群。</p>
       </form>
@@ -10779,6 +10855,9 @@ async function machtileInitAlarmModule() {
       document.getElementById("machtileAlNostartTime").value = cfg.nostart_time || "08:10";
       document.getElementById("machtileAlEnSlow").checked = cfg.enable_slowcycle !== false;
       document.getElementById("machtileAlSlowPct").value = cfg.slow_percent ?? 20;
+      document.getElementById("machtileAlEnQc").checked = cfg.enable_qc !== false;
+      document.getElementById("machtileAlQcFirst").value = cfg.first_check_time || "09:00";
+      document.getElementById("machtileAlQcAfternoon").value = cfg.afternoon_check_time || "16:00";
     }
   } catch (error) {
     console.warn("notification settings prefill failed", error);
@@ -10800,6 +10879,9 @@ async function machtileInitAlarmModule() {
         nostart_time: document.getElementById("machtileAlNostartTime").value || "08:10",
         enable_slowcycle: document.getElementById("machtileAlEnSlow").checked,
         slow_percent: Number(document.getElementById("machtileAlSlowPct").value) || 20,
+        enable_qc: document.getElementById("machtileAlEnQc").checked,
+        first_check_time: document.getElementById("machtileAlQcFirst").value || "09:00",
+        afternoon_check_time: document.getElementById("machtileAlQcAfternoon").value || "16:00",
       };
       await supabaseFetch("rpc/notification_settings_upsert", {
         method: "POST",
@@ -13477,6 +13559,38 @@ function bindEvents() {
 
     if (event.target.id === "notificationDrawer") {
       closeNotificationDrawer();
+      return;
+    }
+
+    const qcPunchBtn = event.target.closest("[data-qc-punch]");
+    if (qcPunchBtn) {
+      const row = qcPunchBtn.closest("[data-qc-slot]");
+      if (row) {
+        if (qcPunchBtn.dataset.qcPunch === "pass") {
+          machtileQcPunch(row, "pass").catch((error) => showToast(`品檢記錄失敗：${String(error?.message || error || "")}`));
+        } else {
+          const noteBox = row.querySelector(".machtile-qc-note");
+          noteBox.hidden = false;
+          noteBox.querySelector("input").focus();
+        }
+      }
+      return;
+    }
+    const qcConfirmBtn = event.target.closest("[data-qc-punch-confirm]");
+    if (qcConfirmBtn) {
+      const row = qcConfirmBtn.closest("[data-qc-slot]");
+      const input = row.querySelector(".machtile-qc-note input");
+      if (!input.value.trim()) {
+        showToast("異常原因必填");
+        return;
+      }
+      machtileQcPunch(row, "fail", input.value.trim()).catch((error) => showToast(`品檢記錄失敗：${String(error?.message || error || "")}`));
+      return;
+    }
+    const qcRedoBtn = event.target.closest("[data-qc-redo]");
+    if (qcRedoBtn) {
+      machtileQcEditSet.add(`${qcRedoBtn.dataset.qcRedo}|${qcRedoBtn.dataset.qcMachine}`);
+      machtileRenderQcBoard().catch(() => {});
       return;
     }
 
