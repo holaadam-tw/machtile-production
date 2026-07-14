@@ -12053,21 +12053,28 @@ function machtileCncRenderList(programs, runs, machineNames) {
     return `
       <section class="machtile-cnc-program">
         <div class="machtile-cnc-program-head">
-          <strong>${escapeHtml(program.part_name)}${program.program_no ? `・${escapeHtml(program.program_no)}` : ""}</strong>
-          <span>${versions.length} 版</span>
-        </div>
-        ${versions.map((version) => `
-          <div class="machtile-cnc-version">
-            <strong>${escapeHtml(version.version_no)}</strong>
-            <span>${escapeHtml(version.file_name)}</span>
-            <span>${version.estimated_seconds != null ? `估 ${machtileFormatDuration(version.estimated_seconds)}` : "—"}</span>
-            <span>${version.changed_line_count != null ? `${version.changed_line_count} 行差異` : "—"}</span>
-            <span>${escapeHtml(machtileFormatAuditTime(version.uploaded_at))}</span>
-            ${version.changed_from_version_id ? `<button type="button" data-cnc-diff="${escapeHtml(version.id)}" data-cnc-prev="${escapeHtml(version.changed_from_version_id)}">與前版比對</button>` : "<span>首版</span>"}
+          <div class="machtile-cnc-program-title">
+            <strong>${escapeHtml(program.part_name)}</strong>
+            ${program.program_no ? `<span class="cnc-chip is-progno">${escapeHtml(program.program_no)}</span>` : ""}
           </div>
-          ${version.change_summary ? `<p class="machtile-cnc-summary">${escapeHtml(version.change_summary)}</p>` : ""}
+          <span class="machtile-cnc-count">${versions.length} 版</span>
+        </div>
+        ${versions.map((version, index) => `
+          <div class="machtile-cnc-version ${index === 0 ? "is-latest" : ""}">
+            <span class="cnc-ver-badge">${escapeHtml(version.version_no)}</span>
+            <div class="cnc-ver-main">
+              <strong>${escapeHtml(version.file_name)}</strong>
+              <small>${escapeHtml(machtileFormatAuditTime(version.uploaded_at))}${version.change_summary ? `・${escapeHtml(version.change_summary)}` : ""}</small>
+            </div>
+            <div class="cnc-ver-chips">
+              ${index === 0 ? '<span class="cnc-chip is-current">現行版</span>' : ""}
+              ${version.estimated_seconds != null ? `<span class="cnc-chip is-est">⏱ ${machtileFormatDuration(version.estimated_seconds)}</span>` : ""}
+              ${version.changed_line_count != null ? `<span class="cnc-chip">±${version.changed_line_count} 行</span>` : ""}
+            </div>
+            ${version.changed_from_version_id ? `<button type="button" data-cnc-diff="${escapeHtml(version.id)}" data-cnc-prev="${escapeHtml(version.changed_from_version_id)}">比對</button>` : '<span class="cnc-first-tag">首版</span>'}
+          </div>
         `).join("")}
-        <p class="machtile-cnc-time-title">加工時間（此工件）</p>
+        <p class="machtile-cnc-time-title">⏱ 加工時間（此工件・實際）</p>
         ${machtileCncTimeTable(program, runs, machineNames)}
       </section>
     `;
