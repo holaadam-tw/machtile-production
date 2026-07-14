@@ -5201,8 +5201,9 @@ async function loadHmcDailyCheckReviewRows(machineCode, shift, workDate, statusF
   }
   const tenantFilter = config.tenantId ? `&${hmcRestEq("tenant_id", config.tenantId)}` : "";
   const statusFilterQuery = statusFilter && statusFilter !== "all" ? hmcRestEq("daily_check_status", statusFilter) : "";
+  // 複核專用 view：含舊（superseded）清單上已有盤點記錄的列——現場 view 維持只讀現行清單
   const path = [
-    "v_hmc_daily_quantity_field_rows?select=*",
+    "v_hmc_daily_check_review_rows?select=*",
     hmcRestEq("machine_code", machineCode),
     hmcRestEq("shift_scope", shift),
     hmcRestEq("work_date", workDate),
