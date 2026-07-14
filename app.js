@@ -11450,7 +11450,8 @@ function renderProgramModule() {
 }
 
 async function machtileCncLoadPrograms() {
-  return await supabaseFetch("cnc_programs?select=id,part_name,part_no,program_no,process_name,current_version_id,cnc_program_versions(id,version_no,file_name,file_size_bytes,changed_from_version_id,changed_line_count,change_summary,storage_path,uploaded_at)&is_active=eq.true&order=updated_at.desc&limit=50");
+  // cnc_programs↔versions 有兩條 FK（program_id 與 current_version_id），嵌入要指名走 program_id
+  return await supabaseFetch("cnc_programs?select=id,part_name,part_no,program_no,process_name,current_version_id,cnc_program_versions!program_id(id,version_no,file_name,file_size_bytes,changed_from_version_id,changed_line_count,change_summary,storage_path,uploaded_at)&is_active=eq.true&order=updated_at.desc&limit=50");
 }
 
 function machtileCncRenderList(programs) {
