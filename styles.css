@@ -4179,6 +4179,32 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
 .schedule-card-tools button:disabled { opacity: 0.35; cursor: default; }
 
+.machtile-cnc-drop {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  margin-bottom: 12px;
+  border: 2px dashed var(--brand-blue);
+  border-radius: 12px;
+  padding: 26px 16px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  text-align: center;
+  cursor: pointer;
+}
+
+.machtile-cnc-drop strong { font-size: 16px; }
+.machtile-cnc-drop span { color: var(--muted); font-size: 12px; }
+.machtile-cnc-drop.is-over { background: #dbeafe; border-style: solid; }
+
+.machtile-cnc-time-title {
+  margin: 12px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+
 .machtile-cnc-program {
   margin-top: 14px;
   border: 1px solid var(--border);
@@ -4234,6 +4260,79 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .machtile-cnc-diff .diff-add { color: #4ade80; }
 .machtile-cnc-diff .diff-del { color: #f87171; }
 .machtile-cnc-diff .diff-ctx { color: #94a3b8; }
+
+.admin-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.admin-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  width: min(340px, 88vw);
+  overflow-y: auto;
+  background: var(--surface);
+  box-shadow: -12px 0 40px rgba(15, 23, 42, 0.25);
+}
+
+.admin-drawer-profile {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 26px 18px 20px;
+  background: linear-gradient(160deg, #2563eb, #38bdf8);
+  color: #ffffff;
+  text-align: center;
+}
+
+.admin-drawer-profile strong { font-size: 18px; }
+.admin-drawer-profile span { font-size: 13px; opacity: 0.9; }
+
+.admin-drawer-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.admin-drawer-groups { padding: 12px 14px 24px; }
+
+.admin-drawer-group-title {
+  margin: 16px 6px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.admin-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-drawer-item:hover { background: #eff6ff; }
 
 .machtile-notify-log {
   margin-top: 16px;

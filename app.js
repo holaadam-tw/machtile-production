@@ -9304,6 +9304,79 @@ function machtileBindScheduleEvents(holder) {
   });
 }
 
+// 右側管理抽屜（2026-07-14，owner 指定照 Dr. Coolant 樣式）：個人卡片＋分組選單，
+// 取代頂部「管理」分頁；點項目直接開對應管理模組。
+function machtileAdminDrawerGroups() {
+  const strict = machtileStrictMode() && machtileSessionActive();
+  const canPlan = strict ? machtileCanManageWorkOrders() : true;
+  const canAdmin = strict ? machtileCanManageCompany() : true;
+  const groups = [];
+  if (canPlan) {
+    groups.push({ title: "生產管理", items: [
+      { key: "workOrders", icon: "📋", label: "工單管理" },
+      { key: "program", icon: "⚙️", label: "CNC 程式與加工" },
+    ]});
+  }
+  groups.push({ title: "機台管理", items: [
+    { key: "add", icon: "➕", label: "新增機台" },
+    { key: "list", icon: "🏭", label: "機台列表管理" },
+    { key: "alarm", icon: "🔔", label: "警報參數設定" },
+  ]});
+  const people = [{ key: "users", icon: "👥", label: "員工帳號管理" }];
+  if (!strict || machtileAuthState.platformRole === "super_admin") {
+    people.push({ key: "platform", icon: "🏢", label: "平台管理" });
+  }
+  groups.push({ title: "人員與權限", items: people });
+  groups.push({ title: "系統", items: [
+    ...(canAdmin ? [{ key: "company", icon: "🏷️", label: "公司資料" }] : []),
+    { key: "export", icon: "📤", label: "資料匯出" },
+    { key: "__guide", icon: "📖", label: "使用說明" },
+  ]});
+  return groups;
+}
+
+function machtileRenderAdminDrawer() {
+  const drawer = $("#adminDrawer");
+  if (!drawer) return;
+  const strict = machtileStrictMode() && machtileSessionActive();
+  const name = strict ? (machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "使用者") : "張家維";
+  const roleLabel = strict
+    ? ({ admin: "管理者", manager: "主管", planner: "排程", operator: "作業員" }[machtileAuthState.role] || machtileAuthState.role || "")
+    : "示範模式";
+  const plant = $("#plantName")?.textContent || "";
+  drawer.innerHTML = `
+    <div class="admin-drawer-profile">
+      <div class="admin-drawer-avatar">${escapeHtml(String(name).slice(0, 1))}</div>
+      <strong>${escapeHtml(name)}</strong>
+      <span>${escapeHtml(roleLabel)}${plant ? `・${escapeHtml(plant)}` : ""}</span>
+    </div>
+    <div class="admin-drawer-groups">
+      ${machtileAdminDrawerGroups().map((group) => `
+        <p class="admin-drawer-group-title">${escapeHtml(group.title)}</p>
+        ${group.items.map((item) => `
+          <button type="button" class="admin-drawer-item" data-drawer-module="${escapeHtml(item.key)}">
+            <span aria-hidden="true">${item.icon}</span>${escapeHtml(item.label)}
+          </button>
+        `).join("")}
+      `).join("")}
+    </div>
+  `;
+}
+
+function machtileToggleAdminDrawer(open) {
+  const drawer = $("#adminDrawer");
+  const backdrop = $("#adminDrawerBackdrop");
+  const button = $("#adminDrawerBtn");
+  if (!drawer || !backdrop) return;
+  const show = open ?? drawer.hidden;
+  if (show) machtileRenderAdminDrawer();
+  drawer.hidden = !show;
+  backdrop.hidden = !show;
+  drawer.classList.toggle("is-open", show);
+  backdrop.classList.toggle("is-open", show);
+  button?.setAttribute("aria-expanded", show ? "true" : "false");
+}
+
 function riskSuggestion(order) {
   const status = deriveOrderStatus(order);
   if (status === "overdue") {
@@ -10377,8 +10450,7 @@ function renderSettings() {
         ${renderAdminActionCard("alarm", "警報參數設定", "LINE 通知的開關與門檻（交期/未回報/複核/開工）", "blue", "alarm")}
         ${renderAdminActionCard("users", "員工帳號管理", "主管、排程、師傅、品檢角色權限", "green", "users")}
         ${renderAdminActionCard("company", "公司資料", "公司基本資料與廠區名稱（頁首品牌）", "amber", "company")}
-        ${renderAdminActionCard("program", `CNC 程式管理${machtileStrictMode() && machtileSessionActive() ? "" : "（規劃中）"}`, "O 檔上傳、自動編版、行級差異比對", "purple", "program")}
-        ${renderAdminActionCard("time", `加工時間統計${machtileStrictMode() && machtileSessionActive() ? "" : "（規劃中）"}`, "每日產量與單件時間——在「報表」分頁", "purple", "time")}
+        ${renderAdminActionCard("program", `CNC 程式與加工${machtileStrictMode() && machtileSessionActive() ? "" : "（規劃中）"}`, "O 檔拖放上傳、版本比對、工件時間表", "purple", "program")}
       </div>
     </section>
 
@@ -10433,8 +10505,8 @@ function adminModuleMeta(moduleKey) {
     company: ["Company Profile", "公司資料"],
     template: ["Process Templates", "製程模板管理"],
     reportRule: ["Report Rules", "報工規則管理"],
-    program: ["CNC Programs", "CNC 程式管理"],
-    time: ["Machining Time", "加工時間管理"],
+    program: ["CNC Programs", "CNC 程式與加工"],
+    time: ["Machining Time", "加工時間統計"],
     notify: ["Notification Rules", "通知規則管理"],
     integration: ["Integrations", "串接設定"],
     export: ["Data Export", "資料匯出"],
@@ -11567,25 +11639,29 @@ function renderProgramModule() {
       return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
     }
     return `
-      <form id="machtileCncForm" class="admin-module-form">
-        <label class="admin-field"><span>程式檔 *（O 檔 / .nc / .txt 文字檔）</span>
-          <input id="machtileCncFile" type="file" required></label>
-        <label class="admin-field"><span>歸屬程式</span>
+      <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
+        <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
+        <span>檔名自動辨識程式號並歸屬到既有程式（例：O9001-v3.nc → O9001 的下一版）</span>
+        <input id="machtileCncFile" type="file" hidden>
+      </div>
+      <form id="machtileCncForm" class="admin-module-form machtile-cnc-preview" hidden>
+        <p id="machtileCncFileInfo" class="admin-module-note"></p>
+        <label class="admin-field"><span>歸屬程式（自動判定，可改）</span>
           <select id="machtileCncProgram"><option value="">＋ 建立新程式</option></select></label>
         <span id="machtileCncNewFields">
           <label class="admin-field"><span>品名 *（新程式用）</span><input id="machtileCncPartName" type="text" placeholder="例：油壓閥座本體"></label>
-          <label class="admin-field"><span>程式號（選填）</span><input id="machtileCncProgramNo" type="text" placeholder="例：O1234"></label>
+          <label class="admin-field"><span>程式號</span><input id="machtileCncProgramNo" type="text" placeholder="自動帶入檔名辨識結果"></label>
           <label class="admin-field"><span>機台（選填）</span><select id="machtileCncMachine"><option value="">不指定</option></select></label>
         </span>
         <label class="admin-field"><span>變更說明（選填）</span><input id="machtileCncSummary" type="text" placeholder="例：T03 進給調整"></label>
-        <button class="admin-save-button" type="submit">上傳並登錄新版本</button>
-        <p class="admin-module-note" id="machtileCncStatus">同一程式再次上傳＝自動編下一版（V1→V2→…）；內容完全相同的檔會被擋。</p>
+        <button class="admin-save-button" type="submit" id="machtileCncSubmit">上傳並登錄</button>
+        <p class="admin-module-note" id="machtileCncStatus"></p>
       </form>
       <div id="machtileCncList"><p class="admin-module-note">載入程式清單中…</p></div>
       <div id="machtileCncDiff"></div>
     `;
   }
-  return machtilePlannedModuleNote("CNC 程式版本管理（O 檔上傳、版本、差異比對）為正式環境功能。");
+  return machtilePlannedModuleNote("CNC 程式與加工（O 檔上傳、版本比對、工件時間表）為正式環境功能。");
 }
 
 async function machtileCncLoadPrograms() {
@@ -11593,11 +11669,45 @@ async function machtileCncLoadPrograms() {
   return await supabaseFetch("cnc_programs?select=id,part_name,part_no,program_no,process_name,current_version_id,cnc_program_versions!program_id(id,version_no,file_name,file_size_bytes,changed_from_version_id,changed_line_count,change_summary,storage_path,uploaded_at)&is_active=eq.true&order=updated_at.desc&limit=50");
 }
 
-function machtileCncRenderList(programs) {
+// B 合併：每張程式卡＝版本清單＋這個工件的加工時間表（機台×程式版 vs 最佳）
+function machtileCncTimeTable(program, runs, machineNames) {
+  const partKeys = new Set([program.part_name, program.part_no].filter(Boolean));
+  const groups = new Map();
+  (runs || []).forEach((run) => {
+    const wo = run.work_orders || {};
+    if (!partKeys.has(wo.part_name) && !partKeys.has(wo.part_no)) return;
+    if (run.pure_cutting_seconds == null) return;
+    const key = `${machineNames.get(String(run.machine_id)) || "未知機台"}｜${run.cnc_program_versions?.version_no || "無程式版"}`;
+    const slot = groups.get(key) || { sum: 0, count: 0, lastDate: "" };
+    slot.sum += Number(run.pure_cutting_seconds) || 0;
+    slot.count += 1;
+    if (String(run.run_date) > slot.lastDate) slot.lastDate = String(run.run_date);
+    groups.set(key, slot);
+  });
+  if (!groups.size) return '<p class="admin-module-note">還沒有這個工件的加工時間紀錄（現場報工填單件時間後自動累積）。</p>';
+  const best = Math.min(...[...groups.values()].map((g) => g.sum / g.count));
+  const rows = [...groups.entries()].map(([key, g]) => {
+    const avg = g.sum / g.count;
+    const delta = best > 0 ? Math.round(((avg - best) / best) * 100) : 0;
+    const slow = delta > 15;
+    const [machine, version] = key.split("｜");
+    return `<tr class="${slow ? "machtile-history-slow" : ""}"><td>${escapeHtml(machine)}</td><td>${escapeHtml(version)}</td><td>${Math.round(avg)} 秒</td><td>${slow ? `<strong>+${delta}%</strong>` : delta > 0 ? `+${delta}%` : "最佳"}</td><td>${g.count}</td><td>${escapeHtml(g.lastDate)}</td></tr>`;
+  }).join("");
+  return `
+    <div class="machtile-stats-table-wrap">
+      <table class="machtile-stats-table">
+        <thead><tr><th>機台</th><th>程式版</th><th>平均單件</th><th>vs 最佳</th><th>次數</th><th>最近加工</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function machtileCncRenderList(programs, runs, machineNames) {
   const holder = document.getElementById("machtileCncList");
   if (!holder) return;
   if (!Array.isArray(programs) || !programs.length) {
-    holder.innerHTML = '<p class="admin-module-note">還沒有登錄任何 CNC 程式；上面表單上傳第一支就開張。</p>';
+    holder.innerHTML = '<p class="admin-module-note">還沒有登錄任何 CNC 程式；把第一支 O 檔拖上去就開張。</p>';
     return;
   }
   holder.innerHTML = programs.map((program) => {
@@ -11618,6 +11728,8 @@ function machtileCncRenderList(programs) {
           </div>
           ${version.change_summary ? `<p class="machtile-cnc-summary">${escapeHtml(version.change_summary)}</p>` : ""}
         `).join("")}
+        <p class="machtile-cnc-time-title">加工時間（此工件）</p>
+        ${machtileCncTimeTable(program, runs, machineNames)}
       </section>
     `;
   }).join("");
@@ -11627,10 +11739,18 @@ async function machtileInitCncModule() {
   const form = document.getElementById("machtileCncForm");
   if (!form) return;
   let programs = [];
+  let runsCache = [];
+  const machineNames = new Map();
   const versionById = new Map();
+  let pendingFile = null;
   const refresh = async () => {
     try {
-      programs = await machtileCncLoadPrograms();
+      const [programRows, runRows] = await Promise.all([
+        machtileCncLoadPrograms(),
+        supabaseFetch("cnc_machining_runs?select=run_date,pure_cutting_seconds,machine_id,work_orders(part_name,part_no),cnc_program_versions(version_no)&order=created_at.desc&limit=500"),
+      ]);
+      programs = programRows;
+      runsCache = Array.isArray(runRows) ? runRows : [];
       versionById.clear();
       programs.forEach((program) => (program.cnc_program_versions || []).forEach((version) => versionById.set(version.id, version)));
       const select = document.getElementById("machtileCncProgram");
@@ -11639,7 +11759,7 @@ async function machtileInitCncModule() {
         select.innerHTML = `<option value="">＋ 建立新程式</option>` + programs.map((program) => `<option value="${escapeHtml(program.id)}">${escapeHtml(program.part_name)}${program.program_no ? `・${escapeHtml(program.program_no)}` : ""}</option>`).join("");
         select.value = current;
       }
-      machtileCncRenderList(programs);
+      machtileCncRenderList(programs, runsCache, machineNames);
     } catch (error) {
       const holder = document.getElementById("machtileCncList");
       if (holder) holder.innerHTML = `<p class="admin-module-note">程式清單載入失敗：${escapeHtml(String(error?.message || ""))}</p>`;
@@ -11651,8 +11771,42 @@ async function machtileInitCncModule() {
     if (machineSelect) {
       machineSelect.innerHTML = `<option value="">不指定</option>` + machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(m.machine_code)}</option>`).join("");
     }
+    (await supabaseFetch("machines?select=id,machine_code")).forEach((m) => machineNames.set(String(m.id), m.machine_code));
   } catch (error) { /* 機台清單失敗不擋上傳 */ }
   await refresh();
+
+  // C 上傳體驗：拖放/點擊選檔 → 檔名自動辨識程式號＋自動歸屬 → 預覽確認
+  const drop = document.getElementById("machtileCncDrop");
+  const fileInput = document.getElementById("machtileCncFile");
+  const handleFile = async (file) => {
+    if (!file) return;
+    pendingFile = file;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).length;
+    const stem = file.name.replace(/\.[^.]+$/, "");
+    const progGuess = (stem.match(/O\d{3,5}/i) || [stem.split(/[-_\s]/)[0]])[0].toUpperCase();
+    const match = programs.find((p) => (p.program_no || "").toUpperCase() === progGuess)
+      || programs.find((p) => (p.cnc_program_versions || []).some((v) => v.file_name.replace(/\.[^.]+$/, "").toUpperCase().startsWith(progGuess)));
+    const select = document.getElementById("machtileCncProgram");
+    select.value = match ? match.id : "";
+    document.getElementById("machtileCncNewFields").style.display = match ? "none" : "";
+    document.getElementById("machtileCncProgramNo").value = match ? "" : progGuess;
+    const nextVersion = match ? `V${(match.cnc_program_versions || []).length + 1}` : "V1";
+    document.getElementById("machtileCncFileInfo").innerHTML = match
+      ? `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 偵測到既有程式 <strong>${escapeHtml(match.part_name)}${match.program_no ? `・${escapeHtml(match.program_no)}` : ""}</strong>，將登錄為 <strong>${nextVersion}</strong>`
+      : `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 沒有相符的既有程式，將建立<strong>新程式</strong>（程式號 ${escapeHtml(progGuess)}，請填品名）`;
+    form.hidden = false;
+    document.getElementById("machtileCncStatus").textContent = "";
+  };
+  drop?.addEventListener("click", () => fileInput.click());
+  drop?.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("is-over"); });
+  drop?.addEventListener("dragleave", () => drop.classList.remove("is-over"));
+  drop?.addEventListener("drop", (event) => {
+    event.preventDefault();
+    drop.classList.remove("is-over");
+    handleFile(event.dataTransfer.files?.[0]);
+  });
+  fileInput?.addEventListener("change", () => handleFile(fileInput.files?.[0]));
 
   document.getElementById("machtileCncProgram")?.addEventListener("change", (event) => {
     const isNew = !event.currentTarget.value;
@@ -11663,7 +11817,7 @@ async function machtileInitCncModule() {
     event.preventDefault();
     const statusEl = document.getElementById("machtileCncStatus");
     const button = form.querySelector("button[type=submit]");
-    const file = document.getElementById("machtileCncFile").files[0];
+    const file = pendingFile;
     const programId = document.getElementById("machtileCncProgram").value;
     if (!file) return;
     if (!programId && !document.getElementById("machtileCncPartName").value.trim()) {
@@ -11720,8 +11874,9 @@ async function machtileInitCncModule() {
         body: JSON.stringify({ p_payload: payload }),
       });
       showToast(`已登錄 ${result?.version_no || "新版本"}`);
-      statusEl.textContent = `已登錄 ${result?.version_no}${changedLineCount != null ? `（與前版 ${changedLineCount} 行差異）` : ""}。`;
       form.reset();
+      pendingFile = null;
+      form.hidden = true;
       await refresh();
     } catch (error) {
       const msg = String(error?.message || error || "");
@@ -13239,6 +13394,27 @@ function bindEvents() {
     const machineEditButton = event.target.closest("[data-machine-edit]");
     if (machineEditButton) {
       machtileOpenMachineEdit(machineEditButton.dataset.machineEdit);
+      return;
+    }
+
+    if (event.target.closest("#adminDrawerBtn")) {
+      machtileToggleAdminDrawer();
+      return;
+    }
+    if (event.target.closest("#adminDrawerBackdrop")) {
+      machtileToggleAdminDrawer(false);
+      return;
+    }
+    const drawerItem = event.target.closest("[data-drawer-module]");
+    if (drawerItem) {
+      const key = drawerItem.dataset.drawerModule;
+      machtileToggleAdminDrawer(false);
+      if (key === "__guide") {
+        window.location.href = hmcGuideRouteUrl("HMC-01", "day");
+        return;
+      }
+      if (key === "add") machtileMachineEditSeed = null;
+      openAdminModule(key);
       return;
     }
 
