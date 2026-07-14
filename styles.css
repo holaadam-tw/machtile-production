@@ -4273,7 +4273,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
 .machtile-cnc-version {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1.4fr) 100px 150px auto;
+  grid-template-columns: 44px minmax(0, 1.2fr) 110px 90px 140px auto;
   gap: 8px;
   align-items: center;
   padding: 6px 0;
