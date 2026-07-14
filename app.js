@@ -9158,19 +9158,23 @@ function machtileCanEditSchedule() {
 
 function machtileScheduleCard(order, index, total, colKey, canEdit) {
   const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
+  const isFirst = index === 0 && Boolean(colKey);
   return `
-    <article class="schedule-card ${status.className}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(order.id)}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
-      <div class="schedule-card-head">
-        <strong>${index + 1}. ${escapeHtml(order.id)}</strong>
-        <span class="schedule-card-status">${escapeHtml(status.label)}</span>
+    <article class="schedule-card ${status.className} ${isFirst ? "is-first" : ""}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(order.id)}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
+      <span class="schedule-card-index" aria-label="第 ${index + 1} 順位">${index + 1}</span>
+      <div class="schedule-card-body">
+        <div class="schedule-card-head">
+          <strong>${escapeHtml(order.id)}</strong>
+          ${isFirst ? '<span class="schedule-now-tag">▶ 目前加工</span>' : `<span class="schedule-card-status">${escapeHtml(status.label)}</span>`}
+        </div>
+        <p>${escapeHtml(order.part)}</p>
+        <small>${order.done}/${order.total} 件 · 交期 ${escapeHtml(order.dueDate || "-")}</small>
+        ${canEdit ? `
+        <div class="schedule-card-tools">
+          <button type="button" data-schedule-move="up" ${index === 0 ? "disabled" : ""} aria-label="往前排">↑</button>
+          <button type="button" data-schedule-move="down" ${index === total - 1 ? "disabled" : ""} aria-label="往後排">↓</button>
+        </div>` : ""}
       </div>
-      <p>${escapeHtml(order.part)}</p>
-      <small>${order.done}/${order.total} 件 · 交期 ${escapeHtml(order.dueDate || "-")}</small>
-      ${canEdit ? `
-      <div class="schedule-card-tools">
-        <button type="button" data-schedule-move="up" ${index === 0 ? "disabled" : ""} aria-label="往前排">↑</button>
-        <button type="button" data-schedule-move="down" ${index === total - 1 ? "disabled" : ""} aria-label="往後排">↓</button>
-      </div>` : ""}
     </article>
   `;
 }
@@ -9181,15 +9185,18 @@ function renderSchedule() {
   const canEdit = machtileCanEditSchedule();
   const { byMachine, unassigned } = machtileScheduleColumns();
   const column = (key, title, list) => `
-    <section class="schedule-column" data-schedule-col="${escapeHtml(key)}">
-      <header class="schedule-column-head"><strong>${escapeHtml(title)}</strong><span>${list.length} 張</span></header>
+    <section class="schedule-column ${key ? "" : "schedule-column-unassigned"}" data-schedule-col="${escapeHtml(key)}">
+      <header class="schedule-column-head">
+        <div><strong>${escapeHtml(title)}</strong><small>${key ? "① 在最上面＝現在做" : "還沒派機台的工單"}</small></div>
+        <span>${list.length} 張</span>
+      </header>
       <div class="schedule-list" data-schedule-list="${escapeHtml(key)}">
         ${list.map((order, index) => machtileScheduleCard(order, index, list.length, key, canEdit)).join("") || '<p class="schedule-empty">沒有工單；拖卡片過來＝派給這台機</p>'}
       </div>
     </section>
   `;
   holder.innerHTML = `
-    <p class="schedule-hint">${canEdit ? "拖拉卡片排順序或換機台；↑↓ 也可以。每欄第一張＝現場機台卡的「目前工單」。" : "唯讀檢視：排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
+    <p class="schedule-hint">${canEdit ? "號碼＝加工順序（由上而下）。拖拉卡片排順序或換機台，↑↓ 也可以；每欄第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
     <div class="schedule-board">
       ${[...byMachine.values()].map((columnData) => column(columnData.def.code, columnData.def.name, columnData.list)).join("")}
       ${column("", "未排機", unassigned)}
