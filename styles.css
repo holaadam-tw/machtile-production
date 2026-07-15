@@ -4193,6 +4193,14 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 800;
 }
 
+/* 監控卡／機台管理卡的俗名（跟在代號後面，例：A01 小瀧澤） */
+.machine-alias {
+  color: var(--muted);
+  font-size: 0.72em;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .schedule-zone { margin-bottom: 14px; }
 
 .schedule-zone-title {

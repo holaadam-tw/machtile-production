@@ -9608,7 +9608,7 @@ function renderMachineCard(machine) {
         <div>
           <div class="machine-title-line">
             <span class="machine-symbol" aria-hidden="true"></span>
-            <h2>${escapeHtml(machine.name)}</h2>
+            <h2>${escapeHtml(machine.name)}${machine.location ? ` <span class="machine-alias">${escapeHtml(machine.location)}</span>` : ""}</h2>
           </div>
           <span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span>
           ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
@@ -10871,8 +10871,8 @@ function renderAddMachineModule() {
           <input id="machtileMcName" type="text" required value="${escapeHtml(seed?.name || "")}" placeholder="例：B03 大立加工中心"></label>
         <label class="admin-field"><span>機型</span>
           <select id="machtileMcType">${machtileMachineTypes.map((type) => `<option ${((seed?.machine_type) || "銑床") === type ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
-        <label class="admin-field"><span>位置（選填）</span>
-          <input id="machtileMcLocation" type="text" value="${escapeHtml(seed?.location || "")}" placeholder="例：一廠 B 區"></label>
+        <label class="admin-field"><span>俗名／位置（顯示在機台卡代號旁，例：小瀧澤）</span>
+          <input id="machtileMcLocation" type="text" value="${escapeHtml(seed?.location || "")}" placeholder="例：小瀧澤"></label>
         <label class="admin-field"><span>顯示排序（小的排前面）</span>
           <input id="machtileMcOrder" type="number" min="0" value="${escapeHtml(seed?.display_order ?? 0)}"></label>
         <label class="admin-field"><span>狀態</span>
@@ -12756,7 +12756,7 @@ function renderMachineEditCard(machine) {
     <article class="machine-edit-card machine-${tone}">
       <header>
         <div>
-          <h3>${escapeHtml(machine.name)}</h3>
+          <h3>${escapeHtml(machine.name)}${machine.location ? ` <span class="machine-alias">${escapeHtml(machine.location)}</span>` : ""}</h3>
           <span>${escapeHtml(meta.code)}</span>
         </div>
         <button class="machine-mini-status ${meta.status.className}" type="button" data-machine-admin="${escapeHtml(machine.name)}">${escapeHtml(meta.status.label)}</button>
@@ -12830,6 +12830,7 @@ function renderMachineAdminDetail(machine) {
         <h4>基本資訊</h4>
         <dl>
           <div><dt>機台名稱</dt><dd>${escapeHtml(machine.name)}</dd></div>
+          <div><dt>俗名／位置</dt><dd>${escapeHtml(machine.location || "未設定")}</dd></div>
           <div><dt>機台 ID</dt><dd>${escapeHtml(meta.code)}</dd></div>
           <div><dt>部門</dt><dd>${escapeHtml(meta.department)}</dd></div>
           <div><dt>狀態</dt><dd class="state-dot">${escapeHtml(meta.status.label)}</dd></div>
