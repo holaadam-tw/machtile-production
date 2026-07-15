@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260715-alias-all-tabs">
+  <link rel="stylesheet" href="./styles.css?v=20260716-schedule-rpc">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -113,9 +113,9 @@
     <nav class="desktop-nav" aria-label="主要導覽">
       <button class="nav-item active" data-view="dashboard" type="button">監控</button>
       <button class="nav-item" data-view="schedule" type="button">排程</button>
-      <button class="nav-item" data-view="alerts" type="button">警報</button>
-      <button class="nav-item" data-view="history" type="button">歷史</button>
-      <button class="nav-item" data-view="reports" type="button">報表</button>
+      <button class="nav-item" data-view="alerts" type="button">待處理</button>
+      <button class="nav-item" data-view="history" type="button">紀錄</button>
+      <button class="nav-item" data-view="reports" type="button">分析</button>
     </nav>
 
     <div id="departmentBar" class="department-bar" aria-label="課別篩選">
@@ -143,7 +143,7 @@
         <div class="view-heading">
           <div>
             <p class="eyebrow">Schedule</p>
-            <h1 id="scheduleTitle">機台排程板</h1>
+            <h1 id="scheduleTitle">完整時間排程</h1>
           </div>
         </div>
         <div id="scheduleContent" class="schedule-layout"></div>
@@ -152,14 +152,13 @@
       <section id="alertsView" class="view" aria-labelledby="alertsTitle">
         <div class="view-heading">
           <div>
-            <p class="eyebrow">Alarm</p>
-            <h1 id="alertsTitle">風險處理中心</h1>
+            <p class="eyebrow">Action Center</p>
+            <h1 id="alertsTitle">待處理中心</h1>
           </div>
           <div class="alert-top-actions">
             <button id="openNotificationsBtn" class="notification-toggle" type="button" aria-controls="notificationDrawer" aria-expanded="false">
               通知中心 <span id="notificationCount">0</span>
             </button>
-            <button class="secondary-action" type="button" data-alert-action="全部標記已處理">全部標記已處理</button>
           </div>
         </div>
 
@@ -210,10 +209,10 @@
       <section id="historyView" class="view" aria-labelledby="historyTitle">
         <div class="view-heading">
           <div>
-            <p class="eyebrow">History</p>
-            <h1 id="historyTitle">工單歷程 / 報工紀錄 / 異常紀錄</h1>
+            <p class="eyebrow">Records</p>
+            <h1 id="historyTitle">紀錄查詢</h1>
           </div>
-          <button class="secondary-action" type="button">匯出 CSV</button>
+          <button class="secondary-action" type="button" data-history-export>依篩選匯出</button>
         </div>
         <div id="historyContent" class="history-layout"></div>
       </section>
@@ -221,10 +220,10 @@
       <section id="reportsView" class="view" aria-labelledby="reportsTitle">
         <div class="view-heading">
           <div>
-            <p class="eyebrow">Reports</p>
-            <h1 id="reportsTitle">準交率 / 延誤統計 / 機台負載 / 不良統計</h1>
+            <p class="eyebrow">Analytics</p>
+            <h1 id="reportsTitle">營運分析</h1>
           </div>
-          <button class="secondary-action" type="button">本週</button>
+          <button class="secondary-action" type="button" disabled title="期間篩選將在時間分析規則確認後開放">即時快照</button>
         </div>
         <div id="reportsContent" class="report-dashboard"></div>
       </section>
@@ -247,9 +246,9 @@
   <nav class="mobile-tabs" aria-label="行動導覽">
     <button class="mobile-tab active" data-view="dashboard" type="button">監控</button>
     <button class="mobile-tab" data-view="schedule" type="button">排程</button>
-    <button class="mobile-tab" data-view="alerts" type="button">警報</button>
-    <button class="mobile-tab" data-view="history" type="button">歷史</button>
-    <button class="mobile-tab" data-view="reports" type="button">報表</button>
+    <button class="mobile-tab" data-view="alerts" type="button">待處理</button>
+    <button class="mobile-tab" data-view="history" type="button">紀錄</button>
+    <button class="mobile-tab" data-view="reports" type="button">分析</button>
   </nav>
 
   <div id="reportSheet" class="sheet report-sheet" aria-hidden="true">
@@ -541,7 +540,8 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
+  <script src="./scheduleCore.js?v=20260716-schedule-rpc"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260715-alias-all-tabs"></script>
+  <script src="./app.js?v=20260716-schedule-rpc"></script>
 </body>
 </html>

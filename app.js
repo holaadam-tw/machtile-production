@@ -15,6 +15,13 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // Schedule foundation RPCs/tables are additive and must be rolled out per
+  // environment. Keep production reads/writes disabled until that environment
+  // has applied and verified 202607150004_machtile_schedule_foundation.sql.
+  enableScheduleContracts: false,
+  // 正式班表由部署設定或未來排程契約提供。null 時不推算完工日期；
+  // Dev mock 另使用畫面上明確標示的範例班表，不會混入正式資料。
+  scheduleCalendar: null,
   ...window.MACHTILE_CONFIG,
 };
 
@@ -30,11 +37,12 @@ const statusMeta = {
   unassigned: { label: "未排機", className: "risk-gray", group: "未排機" },
   maintenance: { label: "維修", className: "risk-red", group: "異常" },
   paused: { label: "暫停", className: "risk-amber", group: "異常" },
+  offline: { label: "停用", className: "risk-gray", group: "異常" },
 };
 
 const departmentFilters = ["全部", "車床課", "銑床課"];
 const millingModeFilters = ["全部銑床", "單盤單工件", "多盤多工件"];
-const statusFilters = ["全部狀態", "可能延誤", "已延誤", "異常", "待品檢", "今日到期", "未排機", "未回報"];
+const statusFilters = ["全部狀態", "加工中", "空閒", "暫停", "維修／停用", "可能延誤", "已延誤", "異常", "待品檢", "今日到期", "未排機", "未回報"];
 const alertFilters = ["全部", "已延誤", "可能延誤", "異常", "待品檢", "今日到期", "未回報"];
 
 const reportTypeMeta = {
@@ -80,6 +88,8 @@ let activeDepartmentFilter = "全部";
 let activeMillingModeFilter = "全部銑床";
 let activeStatusFilter = "全部狀態";
 let activeAlertFilter = "全部";
+let activeHistoryTab = "全部";
+let historySearchQuery = "";
 let activeReportType = "workStart";
 let selectedOrder = null;
 let demoState = null;
@@ -121,6 +131,9 @@ const mockOrders = [
     workStatus: "abnormal",
     processStatus: "abnormal",
     risk: "critical",
+    scheduleSetupMinutes: 90,
+    scheduleStandardUnitMinutes: 21,
+    scheduleHandlingMinutes: 30,
   },
   {
     id: "WO-20260429-006",
@@ -140,6 +153,9 @@ const mockOrders = [
     workStatus: "waiting_inspection",
     processStatus: "waiting_inspection",
     risk: "medium",
+    scheduleSetupMinutes: 30,
+    scheduleStandardUnitMinutes: 3.5,
+    scheduleHandlingMinutes: 20,
   },
   {
     id: "WO-20260429-003",
@@ -159,6 +175,9 @@ const mockOrders = [
     workStatus: "in_progress",
     processStatus: "running",
     risk: "high",
+    scheduleSetupMinutes: 45,
+    scheduleStandardUnitMinutes: 9.2,
+    scheduleHandlingMinutes: 30,
   },
   {
     id: "WO-20260429-014",
@@ -178,6 +197,9 @@ const mockOrders = [
     workStatus: "in_progress",
     processStatus: "running",
     risk: null,
+    scheduleSetupMinutes: 30,
+    scheduleStandardUnitMinutes: 2.6,
+    scheduleHandlingMinutes: 30,
   },
   {
     id: "WO-20260429-018",
@@ -197,6 +219,9 @@ const mockOrders = [
     workStatus: "not_started",
     processStatus: "pending",
     risk: null,
+    scheduleSetupMinutes: 20,
+    scheduleStandardUnitMinutes: null,
+    scheduleHandlingMinutes: 25,
   },
 ];
 
@@ -477,11 +502,6 @@ function detailReportRouteUrl(order, reportType = "dailyStart") {
   if (order?.id) params.set("returnRoute", `/work-orders/${encodeURIComponent(order.id)}`);
   if (new URLSearchParams(window.location.search).get("safeMode") === "1") params.set("safeMode", "1");
   return appRouteUrl("", Object.fromEntries(params));
-}
-
-function qrCodeUrl(value, size = 112) {
-  const data = encodeURIComponent(value);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=8&data=${data}`;
 }
 
 function currentRoutePath() {
@@ -8875,11 +8895,23 @@ function normalizeOrder(row) {
     historyRuns: row.history_runs ? Number(row.history_runs) : null,
     historyYears: row.history_years ? Number(row.history_years) : null,
     lastRunDate: row.last_run_date,
+    // Future-compatible read seam. The current production view does not expose
+    // these fields yet; missing values intentionally stop date forecasting.
+    scheduleSetupMinutes: row.schedule_setup_minutes == null ? null : Number(row.schedule_setup_minutes),
+    scheduleStandardUnitMinutes: row.schedule_standard_unit_minutes == null ? null : Number(row.schedule_standard_unit_minutes),
+    scheduleHandlingMinutes: row.schedule_handling_minutes == null ? null : Number(row.schedule_handling_minutes),
+    scheduleOverrideMinutes: row.schedule_override_minutes == null ? null : Number(row.schedule_override_minutes),
+    scheduleOverrideReason: row.schedule_override_reason || "",
+    scheduleOverrideBy: row.schedule_override_by_name || "",
+    scheduleOverrideAt: row.schedule_override_at || "",
+    materialStatus: row.material_status || "",
+    inspectionHold: Boolean(row.inspection_hold),
   };
 }
 
 function normalizeMachineMaster(row) {
   return {
+    id: row.id || "",
     name: row.machine_name || row.machine_code,
     code: row.machine_code || row.machine_name,
     type: row.machine_type || "other",
@@ -8898,10 +8930,12 @@ function normalizeMachineMaster(row) {
     reportsPerDay: row.reports_per_day ? Number(row.reports_per_day) : null,
     staleMinutes: row.stale_minutes ? Number(row.stale_minutes) : null,
     programCount: Number(row.program_count || 0),
+    maintenanceWindows: Array.isArray(row.maintenance_windows) ? row.maintenance_windows : [],
   };
 }
 
 async function loadFromSupabase() {
+  machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
   if (!Array.isArray(rows) || rows.length === 0) throw new Error("v_work_order_cards has no rows");
   state.workOrders = rows.map(normalizeOrder);
@@ -8914,12 +8948,15 @@ async function loadFromSupabase() {
   }
   await machtileLoadScheduleQueue();
   state.source = "supabase";
+  await machtileLoadScheduleContracts();
 }
 
 function loadMockData() {
+  machtileHistoryRealRows = null;
   state.workOrders = mockOrders.map((order) => ({ ...order }));
   state.machineMasters = [];
   state.source = "mock";
+  machtileResetScheduleContracts();
 }
 
 function deriveOrderStatus(order) {
@@ -9029,10 +9066,37 @@ function machineTypeLabel(type) {
 
 function machineStatus(machine) {
   if (machine.isUnassignedBucket) return "unassigned";
-  if (machine.rawStatus === "maintenance") return "maintenance";
-  if (machine.rawStatus === "paused") return "paused";
-  if (!machine.order) return "idle";
-  return deriveOrderStatus(machine.order);
+  const rawStatus = String(machine.rawStatus || "idle").toLowerCase();
+  if (rawStatus === "maintenance" || rawStatus === "offline") return rawStatus;
+  if (rawStatus === "paused" || machine.order?.processStatus === "paused") return "paused";
+  if (machine.order?.processStatus === "running" || rawStatus === "running") return "running";
+  return "idle";
+}
+
+function machtileIsSchedulableOrder(order) {
+  if (!order) return false;
+  const workStatus = String(order.workStatus || "").toLowerCase();
+  const processStatus = String(order.processStatus || "").toLowerCase();
+  if (["completed", "shipped", "cancelled"].includes(workStatus)) return false;
+  if (["completed", "skipped", "waiting_inspection"].includes(processStatus)) return false;
+  if (Number(order.total || 0) > 0 && Number(order.done || 0) >= Number(order.total || 0)) return false;
+  return true;
+}
+
+function machtileScheduleStatusRank(order) {
+  const processStatus = String(order?.processStatus || "").toLowerCase();
+  return ({ running: 0, paused: 1, abnormal: 2, pending: 3 })[processStatus] ?? 4;
+}
+
+function machtileCompareScheduleOrders(a, b) {
+  const aQueue = machtileQueuePosition(a);
+  const bQueue = machtileQueuePosition(b);
+  if (aQueue !== bQueue) return aQueue - bQueue;
+  const statusDiff = machtileScheduleStatusRank(a) - machtileScheduleStatusRank(b);
+  if (statusDiff) return statusDiff;
+  const dueDiff = String(a?.dueDate || "").localeCompare(String(b?.dueDate || ""));
+  if (dueDiff) return dueDiff;
+  return String(a?.id || "").localeCompare(String(b?.id || ""));
 }
 
 function deriveMachines() {
@@ -9059,50 +9123,35 @@ function deriveMachines() {
     });
   });
 
-  state.workOrders.forEach((order) => {
+  const ordersByMachine = new Map();
+  state.workOrders.filter(machtileIsSchedulableOrder).forEach((order) => {
     const hasAssignedMachine = isReportableMachineName(order.machine);
     const name = hasAssignedMachine ? order.machine : UNASSIGNED_MACHINE;
-    const base = machines.get(name) || {
-      name,
-      type: hasAssignedMachine ? machineTypeLabel(order.process) : order.process || "未指派",
-      department: hasAssignedMachine ? undefined : UNASSIGNED_MACHINE,
-      rawStatus: hasAssignedMachine && order.processStatus === "pending" ? "idle" : "running",
-      displayOrder: hasAssignedMachine ? undefined : 9999,
-      isUnassignedBucket: !hasAssignedMachine,
-      order: null,
-    };
-
-    machines.set(name, {
-      ...base,
-      type: base.type || machineTypeLabel(order.process),
-      rawStatus: hasAssignedMachine && order.processStatus === "paused" ? "paused" : base.rawStatus || "running",
-      isUnassignedBucket: !hasAssignedMachine,
-      order,
-      workOrderNo: order.id,
-      part: order.part,
-      customer: order.customer,
-      dueDate: order.dueDate,
-      processName: order.process,
-      done: order.done,
-      total: order.total,
-      lastReport: order.lastReport,
-    });
+    if (!machines.has(name)) {
+      machines.set(name, {
+        name,
+        type: hasAssignedMachine ? machineTypeLabel(order.process) : order.process || "未指派",
+        department: hasAssignedMachine ? undefined : UNASSIGNED_MACHINE,
+        rawStatus: "idle",
+        displayOrder: hasAssignedMachine ? undefined : 9999,
+        isUnassignedBucket: !hasAssignedMachine,
+        order: null,
+      });
+    }
+    if (!ordersByMachine.has(name)) ordersByMachine.set(name, []);
+    ordersByMachine.get(name).push(order);
   });
 
-  // SB3：排程佇列第一張＝機台卡「目前工單」（沒有排佇列的機台維持原邏輯）
-  const queueTops = new Map();
-  state.workOrders.forEach((order) => {
-    if (!order.machine || !order.processId) return;
-    const q = machtileScheduleState.queueOrderByProcess.get(order.processId);
-    if (q == null) return;
-    const current = queueTops.get(order.machine);
-    if (!current || q < current.q) queueTops.set(order.machine, { q, order });
-  });
-  queueTops.forEach(({ order }, name) => {
+  // 單一來源：排程有效清單的第一張，同時驅動監控卡的「目前工單」。
+  // 有 queue_order 時依佇列；未建立佇列時才以製程狀態、交期作穩定 fallback。
+  ordersByMachine.forEach((orders, name) => {
     const machine = machines.get(name);
     if (!machine) return;
+    const order = [...orders].sort(machtileCompareScheduleOrders)[0];
     machines.set(name, {
       ...machine,
+      type: machine.type || machineTypeLabel(order.process),
+      isUnassignedBucket: !isReportableMachineName(order.machine),
       order,
       workOrderNo: order.id,
       part: order.part,
@@ -9122,7 +9171,459 @@ function deriveMachines() {
 
 // 排程板（2026-07-14，SB1 頂層分頁/SB2 拖拉+按鈕/SB3 佇列第一張=機台卡目前工單）。
 // strict 由 machine_queue_reorder RPC 持久化（同時處理改派）；Dev 免登入=畫面內示範。
-const machtileScheduleState = { queueOrderByProcess: new Map() };
+const machtileScheduleCore = window.MachTileScheduleCore;
+const machtileScheduleState = {
+  queueOrderByProcess: new Map(),
+  estimateByProcess: new Map(),
+  inputByProcess: new Map(),
+  overrideByProcess: new Map(),
+  holdsByProcess: new Map(),
+  contractsStatus: "idle",
+  contractsError: "",
+  editingOrderId: "",
+  editingAction: "",
+  writePending: false,
+  auditEvents: [],
+};
+
+const machtileUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function machtileValidProcessId(value) {
+  return machtileUuidPattern.test(String(value || ""));
+}
+
+function machtileScheduleUsesServerContracts() {
+  return config.enableScheduleContracts === true
+    && machtileStrictMode()
+    && machtileSessionActive()
+    && state.source === "supabase";
+}
+
+function machtileResetScheduleContracts() {
+  machtileScheduleState.estimateByProcess = new Map();
+  machtileScheduleState.inputByProcess = new Map();
+  machtileScheduleState.overrideByProcess = new Map();
+  machtileScheduleState.holdsByProcess = new Map();
+  machtileScheduleState.contractsStatus = "idle";
+  machtileScheduleState.contractsError = "";
+  machtileScheduleState.editingOrderId = "";
+  machtileScheduleState.editingAction = "";
+  machtileScheduleState.writePending = false;
+}
+
+function machtileScheduleErrorMessage(error, fallback = "排程資料更新失敗") {
+  const code = machtileScheduleCore?.scheduleErrorCode?.(error) || "";
+  const messages = {
+    TENANT_REQUIRED: "登入帳號缺少公司範圍，請重新登入或聯絡管理員",
+    FORBIDDEN: "此操作需要排程以上權限",
+    ACTOR_NOT_FOUND: "登入帳號尚未建立有效的操作員資料",
+    PROCESS_NOT_FOUND: "找不到這筆製程，資料可能已更新",
+    PROCESS_ID_REQUIRED: "工單缺少製程識別，無法寫入排程",
+    IDEMPOTENCY_KEY_REQUIRED: "系統未產生防重複識別，請重試",
+    INVALID_STANDARD_TIME: "標準工時格式不正確；架機與上下料可為 0，單件時間必須大於 0",
+    INVALID_BASELINE_SOURCE: "標準工時來源不在允許範圍",
+    INVALID_SOURCE_DATA: "標準工時來源資料格式不正確",
+    PROCESS_CLOSED: "已完成、跳過、出貨或取消的製程不可再修改排程",
+    REASON_REQUIRED: "此操作必須填寫原因",
+    INVALID_DURATION: "修正工時必須大於 0",
+    MISSING_STANDARD_TIME: "請先建立標準工時，才能做主管修正",
+    OVERRIDE_NOT_FOUND: "目前沒有可撤銷的主管工時修正",
+    ACTIVE_REQUIRED: "停等操作缺少啟用或解除狀態",
+    INVALID_HOLD_TYPE: "停等類型不正確",
+    HOLD_ID_REQUIRED: "解除停等時缺少停等識別",
+    ACTIVE_HOLD_NOT_FOUND: "這筆停等已解除或不存在，畫面將重新整理",
+    INVALID_EVENT_KIND: "紀錄類型篩選不正確",
+    INVALID_TIME_RANGE: "紀錄查詢的起訖時間不正確",
+  };
+  return messages[code] || fallback;
+}
+
+function machtileScheduleIdempotencyKey(action) {
+  const uuid = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `machtile-ui:${action}:${uuid}`;
+}
+
+function machtileScheduleChunks(values, size = 100) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+  return chunks;
+}
+
+async function machtileLoadScheduleContracts() {
+  if (!machtileScheduleUsesServerContracts()) {
+    machtileResetScheduleContracts();
+    return;
+  }
+  const processIds = [...new Set(state.workOrders.map((order) => order.processId).filter(machtileValidProcessId))];
+  machtileScheduleState.contractsStatus = "loading";
+  machtileScheduleState.contractsError = "";
+  if (!processIds.length) {
+    machtileScheduleState.estimateByProcess = new Map();
+    machtileScheduleState.inputByProcess = new Map();
+    machtileScheduleState.overrideByProcess = new Map();
+    machtileScheduleState.holdsByProcess = new Map();
+    machtileScheduleState.contractsStatus = "ready";
+    return;
+  }
+
+  const chunks = machtileScheduleChunks(processIds);
+  const fetchTableRows = async (pathForIds) => (await Promise.all(chunks.map(async (chunk) => {
+    const rows = await supabaseFetch(pathForIds(chunk.join(",")));
+    return Array.isArray(rows) ? rows : [];
+  }))).flat();
+
+  try {
+    const [previewResults, inputRows, overrideRows, holdRows] = await Promise.all([
+      Promise.all(machtileScheduleChunks(processIds, 200).map((chunk) => supabaseFetch("rpc/schedule_preview", {
+        method: "POST",
+        body: JSON.stringify({ p_payload: { process_ids: chunk } }),
+      }))),
+      fetchTableRows((ids) => `process_schedule_inputs?select=id,process_id,input_version,setup_seconds,standard_unit_seconds,handling_seconds,baseline_source,baseline_version,captured_at,captured_by&is_current=eq.true&process_id=in.(${ids})`),
+      fetchTableRows((ids) => `process_schedule_overrides?select=id,process_id,baseline_total_minutes,override_total_minutes,reason,created_by,created_at&superseded_at=is.null&revoked_at=is.null&process_id=in.(${ids})`),
+      fetchTableRows((ids) => `process_schedule_holds?select=id,process_id,hold_type,reason,source_system,source_event_id,held_at,held_by&released_at=is.null&process_id=in.(${ids})`),
+    ]);
+
+    const estimates = previewResults.flatMap((result) => Array.isArray(result?.items) ? result.items : []);
+    machtileScheduleState.estimateByProcess = new Map(estimates.map((estimate) => {
+      const normalized = machtileScheduleCore.normalizeServerEstimate(estimate);
+      return [normalized.processId, normalized];
+    }).filter(([processId]) => processId));
+    machtileScheduleState.inputByProcess = new Map(inputRows.map((row) => [String(row.process_id), {
+      id: row.id,
+      version: Number(row.input_version || 0),
+      setupMinutes: row.setup_seconds == null ? null : Number(row.setup_seconds) / 60,
+      standardUnitMinutes: row.standard_unit_seconds == null ? null : Number(row.standard_unit_seconds) / 60,
+      handlingMinutes: row.handling_seconds == null ? null : Number(row.handling_seconds) / 60,
+      source: row.baseline_source || "unknown",
+      sourceVersion: row.baseline_version || "",
+      capturedAt: row.captured_at || "",
+      capturedBy: row.captured_by || "",
+    }]));
+    machtileScheduleState.overrideByProcess = new Map(overrideRows.map((row) => [String(row.process_id), {
+      id: row.id,
+      baselineMinutes: Number(row.baseline_total_minutes),
+      overrideMinutes: Number(row.override_total_minutes),
+      reason: row.reason || "",
+      createdBy: row.created_by || "",
+      createdAt: row.created_at || "",
+    }]));
+    const holds = new Map();
+    holdRows.forEach((row) => {
+      const key = String(row.process_id);
+      const list = holds.get(key) || [];
+      list.push({
+        id: row.id,
+        type: row.hold_type,
+        reason: row.reason || "",
+        source: row.source_system || "",
+        sourceEventId: row.source_event_id || "",
+        heldAt: row.held_at || "",
+        heldBy: row.held_by || "",
+      });
+      holds.set(key, list);
+    });
+    machtileScheduleState.holdsByProcess = holds;
+    machtileScheduleState.contractsStatus = "ready";
+  } catch (error) {
+    console.warn("schedule contract load failed", error);
+    machtileScheduleState.estimateByProcess = new Map();
+    machtileScheduleState.inputByProcess = new Map();
+    machtileScheduleState.overrideByProcess = new Map();
+    machtileScheduleState.holdsByProcess = new Map();
+    machtileScheduleState.contractsStatus = "error";
+    machtileScheduleState.contractsError = machtileScheduleErrorMessage(error, "無法讀取排程工時；未顯示推測完成時間");
+  }
+}
+
+function machtileScheduleCalendar() {
+  const configured = config.scheduleCalendar;
+  if (configured && Array.isArray(configured.workdays) && Array.isArray(configured.shifts) && configured.shifts.length) {
+    return {
+      workdays: configured.workdays,
+      holidays: Array.isArray(configured.holidays) ? configured.holidays : [],
+      shifts: configured.shifts,
+      sourceLabel: configured.sourceLabel || "正式班表設定",
+      isDemo: false,
+    };
+  }
+  if (state.source !== "mock") return null;
+  return {
+    workdays: [1, 2, 3, 4, 5],
+    holidays: [],
+    shifts: [
+      { label: "範例日班", startMinutes: 8 * 60, endMinutes: 17 * 60 },
+      { label: "範例夜班", startMinutes: 20 * 60, endMinutes: 29 * 60 },
+    ],
+    sourceLabel: "示範班表：週一至週五 08:00–17:00／20:00–翌日 05:00（未扣休息）",
+    isDemo: true,
+  };
+}
+
+function machtileScheduleDuration(order) {
+  if (!machtileScheduleCore) {
+    return { ready: false, missing: ["排程計算核心"], baselineMinutes: null, effectiveMinutes: null, source: "missing" };
+  }
+  if (machtileScheduleUsesServerContracts()) {
+    if (!machtileValidProcessId(order.processId)) {
+      return { ready: false, missing: ["製程識別"], baselineMinutes: null, effectiveMinutes: null, source: "missing" };
+    }
+    const estimate = machtileScheduleState.estimateByProcess.get(order.processId);
+    if (estimate) return estimate;
+    const missing = machtileScheduleState.contractsStatus === "loading"
+      ? ["排程工時載入中"]
+      : machtileScheduleState.contractsStatus === "error"
+        ? ["排程工時讀取失敗"]
+        : ["標準工時"];
+    return { ready: false, missing, baselineMinutes: null, effectiveMinutes: null, source: "missing" };
+  }
+  return machtileScheduleCore.estimateDuration({
+    setupMinutes: order.scheduleSetupMinutes,
+    standardUnitMinutes: order.scheduleStandardUnitMinutes,
+    handlingMinutes: order.scheduleHandlingMinutes,
+    remainingQty: Math.max(0, Number(order.total || 0) - Number(order.done || 0)),
+    overrideMinutes: order.scheduleOverrideMinutes,
+    overrideReason: order.scheduleOverrideReason,
+  });
+}
+
+function machtileScheduleInput(order) {
+  if (machtileScheduleUsesServerContracts()) {
+    return machtileScheduleState.inputByProcess.get(order.processId) || {
+      setupMinutes: null,
+      standardUnitMinutes: null,
+      handlingMinutes: null,
+      source: "unknown",
+    };
+  }
+  return {
+    setupMinutes: order.scheduleSetupMinutes,
+    standardUnitMinutes: order.scheduleStandardUnitMinutes,
+    handlingMinutes: order.scheduleHandlingMinutes,
+    source: "manual_standard",
+  };
+}
+
+function machtileScheduleOverride(order) {
+  if (machtileScheduleUsesServerContracts()) {
+    return machtileScheduleState.overrideByProcess.get(order.processId) || null;
+  }
+  return order.scheduleOverrideMinutes == null ? null : {
+    overrideMinutes: order.scheduleOverrideMinutes,
+    reason: order.scheduleOverrideReason || "",
+    createdBy: order.scheduleOverrideBy || "",
+    createdAt: order.scheduleOverrideAt || "",
+  };
+}
+
+function machtileScheduleHolds(order) {
+  if (!machtileScheduleUsesServerContracts()) return [];
+  return machtileScheduleState.holdsByProcess.get(order.processId) || [];
+}
+
+function machtileScheduleHoldReason(order) {
+  const holds = machtileScheduleHolds(order);
+  if (holds.length) {
+    const labels = { material: "缺料", inspection: "待品檢", abnormal: "異常", source_removed: "來源移除", manual: "人工停等" };
+    return holds.map((hold) => `${labels[hold.type] || hold.type}：${hold.reason}`).join("；");
+  }
+  const material = String(order.materialStatus || "").toLowerCase();
+  if (["missing", "shortage", "blocked"].includes(material)) return "缺料，需解除後重排";
+  if (order.inspectionHold) return "等待品檢，需解除後重排";
+  return "";
+}
+
+function machtileScheduleMachineBlocks(machine) {
+  return (Array.isArray(machine?.maintenanceWindows) ? machine.maintenanceWindows : [])
+    .map((window) => ({ start: window.start, end: window.end }))
+    .filter((window) => window.start && window.end);
+}
+
+function machtileScheduleDueAt(order) {
+  if (!order.dueDate) return null;
+  const due = new Date(`${order.dueDate}T23:59:59`);
+  return Number.isNaN(due.getTime()) ? null : due;
+}
+
+function machtileBuildScheduleForecast(byMachine) {
+  const items = new Map();
+  const calendar = machtileScheduleCalendar();
+  const now = new Date();
+
+  byMachine.forEach((column) => {
+    const machine = machtileScheduleMachine(column.def.code) || column.def;
+    const machineBlocked = column.def.assignable === false || ["maintenance", "offline"].includes(machine.status);
+    let cursor = now;
+    let unknownAhead = false;
+    const windows = calendar && machtileScheduleCore
+      ? machtileScheduleCore.buildAvailabilityWindows(calendar, now, 120, machtileScheduleMachineBlocks(machine))
+      : [];
+
+    column.list.forEach((order) => {
+      const duration = machtileScheduleDuration(order);
+      const holdReason = machtileScheduleHoldReason(order);
+      const key = order.processId || order.id;
+      if (machineBlocked) {
+        items.set(key, { status: "blocked", reason: `${statusMeta[machine.status]?.label || machine.status}機台不可排入`, duration });
+        unknownAhead = true;
+        return;
+      }
+      if (holdReason) {
+        items.set(key, { status: "blocked", reason: holdReason, duration });
+        unknownAhead = true;
+        return;
+      }
+      if (unknownAhead) {
+        items.set(key, { status: "blockedByPrevious", reason: "前序工單時間未定，無法推算", duration });
+        return;
+      }
+      if (!duration.ready) {
+        items.set(key, { status: "missing", reason: `缺少：${duration.missing.join("、")}`, duration });
+        unknownAhead = true;
+        return;
+      }
+      if (!calendar) {
+        items.set(key, { status: "noCalendar", reason: "正式班表尚未設定", duration });
+        unknownAhead = true;
+        return;
+      }
+      const allocation = machtileScheduleCore.allocateMinutes(windows, cursor, duration.effectiveMinutes);
+      if (!allocation) {
+        items.set(key, { status: "outOfRange", reason: "超出 120 天可排範圍", duration });
+        unknownAhead = true;
+        return;
+      }
+      const dueAt = machtileScheduleDueAt(order);
+      items.set(key, {
+        status: "scheduled",
+        start: allocation.start,
+        end: allocation.end,
+        duration,
+        atRisk: Boolean(dueAt && allocation.end > dueAt),
+      });
+      cursor = allocation.end;
+    });
+  });
+
+  return { items, calendar };
+}
+
+function machtileFormatScheduleMinutes(value) {
+  const minutes = Math.round(Number(value || 0));
+  if (minutes < 60) return `${minutes} 分鐘`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `${hours} 小時`;
+}
+
+function machtileFormatScheduleTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function machtileScheduleForecastMarkup(order, forecast) {
+  const duration = forecast?.duration || machtileScheduleDuration(order);
+  if (!duration.ready) {
+    return `<div class="schedule-time-state is-missing"><strong>無法計算工時</strong><span>${escapeHtml(forecast?.reason || `缺少：${duration.missing.join("、")}`)}</span></div>`;
+  }
+  const input = machtileScheduleInput(order);
+  const override = machtileScheduleOverride(order);
+  const remainingQty = duration.remainingQty == null
+    ? Math.max(0, Number(order.total || 0) - Number(order.done || 0))
+    : duration.remainingQty;
+  const formula = `${machtileFormatScheduleMinutes(input.setupMinutes)} 架機 + ${input.standardUnitMinutes} 分 × ${remainingQty} 件 + ${machtileFormatScheduleMinutes(input.handlingMinutes)} 上下料`;
+  const source = duration.source === "override" ? "主管修正" : "系統計算";
+  const statusMarkup = forecast?.status === "scheduled"
+    ? `<span class="schedule-forecast-pill ${forecast.atRisk ? "is-risk" : "is-ready"}">${forecast.atRisk ? "預計逾期" : "可依班表完成"}</span>`
+    : `<span class="schedule-forecast-pill is-waiting">${escapeHtml(forecast?.reason || "等待排程資料")}</span>`;
+  return `
+    <div class="schedule-time-state">
+      <div><strong>預計 ${escapeHtml(machtileFormatScheduleMinutes(duration.effectiveMinutes))}</strong>${statusMarkup}</div>
+      <span>${escapeHtml(source)} · 原始基準 ${escapeHtml(machtileFormatScheduleMinutes(duration.baselineMinutes))}</span>
+      <small>${escapeHtml(formula)}</small>
+      ${forecast?.status === "scheduled" ? `<time>${escapeHtml(machtileFormatScheduleTime(forecast.start))} → ${escapeHtml(machtileFormatScheduleTime(forecast.end))}</time>` : ""}
+      ${duration.source === "override" ? `<small class="schedule-override-note">修正原因：${escapeHtml(override?.reason || "已留存在稽核紀錄")} · ${escapeHtml(override?.createdBy || "主管")} · ${escapeHtml(machtileFormatAuditTime(override?.createdAt))}</small>` : ""}
+    </div>
+  `;
+}
+
+function machtileScheduleOverrideEditor(order, duration) {
+  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "override") return "";
+  const override = machtileScheduleOverride(order);
+  const currentHours = Math.round((duration.effectiveMinutes / 60) * 100) / 100;
+  return `
+    <form class="schedule-override-form" data-schedule-override-form="${escapeHtml(order.id)}">
+      <strong>主管修正預計工時</strong>
+      <p>原始基準保留為 ${escapeHtml(machtileFormatScheduleMinutes(duration.baselineMinutes))}，只改本次有效工時。</p>
+      <label><span>修正後總工時（小時）</span><input name="overrideHours" type="number" min="0.1" step="0.1" value="${escapeHtml(currentHours)}" required></label>
+      <label><span>修正原因（必填）</span><textarea name="overrideReason" rows="2" required placeholder="例如：新刀具試切、材料難加工">${escapeHtml(override?.reason || "")}</textarea></label>
+      <div>
+        <button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>套用修正</button>
+        ${duration.source === "override" ? `<button type="button" class="is-danger" data-schedule-editor="clear" data-schedule-order="${escapeHtml(order.id)}">恢復系統計算</button>` : ""}
+        <button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button>
+      </div>
+    </form>
+  `;
+}
+
+function machtileScheduleInputEditor(order) {
+  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "input") return "";
+  const input = machtileScheduleInput(order);
+  const value = (number) => number == null ? "" : String(Math.round(Number(number) * 1000) / 1000);
+  return `
+    <form class="schedule-override-form schedule-standard-form" data-schedule-input-form="${escapeHtml(order.id)}">
+      <strong>標準工時</strong>
+      <p>系統使用「架機＋單件 × 剩餘數量＋本批上下料」計算；更新會建立新版本，舊值不覆蓋。</p>
+      <div class="schedule-standard-grid">
+        <label><span>架機／換線（分鐘）</span><input name="setupMinutes" type="number" min="0" step="0.1" value="${escapeHtml(value(input.setupMinutes))}" required></label>
+        <label><span>標準單件（分鐘）</span><input name="standardUnitMinutes" type="number" min="0.001" step="0.001" value="${escapeHtml(value(input.standardUnitMinutes))}" required></label>
+        <label><span>本批上下料（分鐘）</span><input name="handlingMinutes" type="number" min="0" step="0.1" value="${escapeHtml(value(input.handlingMinutes))}" required></label>
+      </div>
+      <label><span>建立／修改原因（必填）</span><textarea name="reason" rows="2" required placeholder="例如：依新版製程卡建立、現場量測後修正"></textarea></label>
+      <div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>儲存標準工時</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div>
+    </form>
+  `;
+}
+
+function machtileScheduleClearEditor(order) {
+  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "clear") return "";
+  return `
+    <form class="schedule-override-form schedule-clear-form" data-schedule-clear-form="${escapeHtml(order.id)}">
+      <strong>恢復系統計算</strong>
+      <p>主管修正會撤銷，但原始修正與這次撤銷原因都會保留。</p>
+      <label><span>撤銷原因（必填）</span><textarea name="reason" rows="2" required placeholder="例如：試切完成，恢復標準工時"></textarea></label>
+      <div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>確認恢復</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div>
+    </form>
+  `;
+}
+
+function machtileScheduleHoldEditor(order) {
+  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "hold") return "";
+  return `
+    <form class="schedule-override-form schedule-hold-form" data-schedule-hold-form="${escapeHtml(order.id)}">
+      <strong>新增排程停等</strong>
+      <p>停等會阻止此製程進入可執行排程，解除前仍保留原始工時。</p>
+      <label><span>類型</span><select name="holdType" required><option value="manual">人工停等</option><option value="material">缺料</option><option value="inspection">待品檢</option><option value="abnormal">異常</option></select></label>
+      <label><span>原因（必填）</span><textarea name="reason" rows="2" required placeholder="例如：材料尚未到廠"></textarea></label>
+      <div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>設定停等</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div>
+    </form>
+  `;
+}
+
+function machtileScheduleHoldsMarkup(order, canEdit) {
+  const holds = machtileScheduleHolds(order);
+  if (!holds.length) return "";
+  const labels = { material: "缺料", inspection: "待品檢", abnormal: "異常", source_removed: "來源移除", manual: "人工停等" };
+  return `<div class="schedule-hold-list">${holds.map((hold) => {
+    const releaseOpen = machtileScheduleState.editingOrderId === order.id && machtileScheduleState.editingAction === `release:${hold.id}`;
+    return `
+      <section class="schedule-hold-item">
+        <div><strong>${escapeHtml(labels[hold.type] || hold.type)}</strong><span>${escapeHtml(hold.reason)}</span><small>${escapeHtml(hold.source || "machtile")} · ${escapeHtml(machtileFormatAuditTime(hold.heldAt))}</small></div>
+        ${canEdit ? `<button type="button" data-schedule-editor="release:${escapeHtml(hold.id)}" data-schedule-order="${escapeHtml(order.id)}">解除</button>` : ""}
+        ${releaseOpen ? `<form data-schedule-release-form="${escapeHtml(order.id)}" data-schedule-hold-id="${escapeHtml(hold.id)}" data-schedule-hold-type="${escapeHtml(hold.type)}"><label><span>解除原因（必填）</span><textarea name="reason" rows="2" required></textarea></label><div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>確認解除</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div></form>` : ""}
+      </section>`;
+  }).join("")}</div>`;
+}
 
 async function machtileLoadScheduleQueue() {
   if (!(machtileStrictMode() && machtileSessionActive())) return;
@@ -9139,29 +9640,80 @@ function machtileQueuePosition(order) {
   return q == null ? Infinity : q;
 }
 
+function machtileScheduleMachine(colKey) {
+  return state.machines.find((machine) => (machine.code || machine.name) === colKey || machine.name === colKey) || null;
+}
+
+function machtileCanAssignToMachine(colKey) {
+  if (!colKey) return true;
+  const machine = machtileScheduleMachine(colKey);
+  return Boolean(machine) && !["maintenance", "offline"].includes(machine.status);
+}
+
+function machtileAssignableMachineOptions() {
+  return managedMachineList()
+    .filter((machine) => machtileCanAssignToMachine(machine.code || machine.name))
+    .map((machine) => `<option value="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileMachineDisplay(machine.name))} · ${escapeHtml(statusMeta[machine.status]?.label || machine.status)}</option>`)
+    .join("");
+}
+
 function machtileScheduleColumns() {
   const deptMatch = (machine) => activeDepartmentFilter === "全部" || normalizedMachineDepartment(machine) === activeDepartmentFilter;
   const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
     .filter((machine) => !machine.isUnassignedBucket)
     .filter(deptMatch)
-    .map((machine) => ({ code: machine.code || machine.name, name: machine.name, dept: normalizedMachineDepartment(machine), location: machine.location || "" }));
+    .map((machine) => {
+      const liveMachine = machtileScheduleMachine(machine.code || machine.name) || machine;
+      const status = liveMachine.status || machineStatus(liveMachine);
+      return {
+        code: machine.code || machine.name,
+        name: machine.name,
+        dept: normalizedMachineDepartment(machine),
+        location: machine.location || "",
+        status,
+        assignable: !["maintenance", "offline"].includes(status),
+        maintenanceWindows: liveMachine.maintenanceWindows || machine.maintenanceWindows || [],
+        type: machine.type,
+      };
+    });
   // 與 deriveMachines 同步：主檔缺 HMC 示範機時從 baseMachines 補（Dev demo 相容）
   if (state.machineMasters.length) {
     const known = new Set(machineDefs.flatMap((machine) => [machine.name, machine.code]));
     baseMachines.filter(isHmcMachine).filter(deptMatch).forEach((machine) => {
-      if (!known.has(machine.name)) machineDefs.push({ code: machine.name, name: machine.name, dept: normalizedMachineDepartment(machine) });
+      if (!known.has(machine.name)) {
+        const liveMachine = machtileScheduleMachine(machine.name) || machine;
+        const status = liveMachine.status || machineStatus(liveMachine);
+        machineDefs.push({
+          code: machine.name,
+          name: machine.name,
+          dept: normalizedMachineDepartment(machine),
+          status,
+          assignable: !["maintenance", "offline"].includes(status),
+          maintenanceWindows: liveMachine.maintenanceWindows || machine.maintenanceWindows || [],
+          type: machine.type,
+        });
+      }
     });
   }
   const byMachine = new Map(machineDefs.map((machine) => [machine.name, { def: machine, list: [] }]));
   const unassigned = [];
-  state.workOrders.forEach((order) => {
+  state.workOrders.filter(machtileIsSchedulableOrder).forEach((order) => {
     if (order.machine && byMachine.has(order.machine)) byMachine.get(order.machine).list.push(order);
     // 課別篩選時，掛在其他課機台上的單不進「未排機」也不重建欄位
-    else if (order.machine) { if (activeDepartmentFilter === "全部") byMachine.set(order.machine, { def: { code: order.machine, name: order.machine }, list: [order] }); }
+    else if (order.machine) {
+      if (activeDepartmentFilter === "全部") {
+        const liveMachine = machtileScheduleMachine(order.machine);
+        const status = liveMachine?.status || "idle";
+        byMachine.set(order.machine, {
+          def: { code: order.machine, name: order.machine, status, assignable: !["maintenance", "offline"].includes(status) },
+          list: [order],
+        });
+      }
+    }
     else unassigned.push(order);
   });
-  byMachine.forEach((column) => column.list.sort((a, b) => machtileQueuePosition(a) - machtileQueuePosition(b) || String(a.dueDate || "").localeCompare(String(b.dueDate || ""))));
-  unassigned.sort((a, b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+  byMachine.forEach((column) => column.list.sort(machtileCompareScheduleOrders));
+  unassigned.sort(machtileCompareScheduleOrders);
   return { byMachine, unassigned };
 }
 
@@ -9169,9 +9721,12 @@ function machtileCanEditSchedule() {
   return machtileStrictMode() ? machtileCanManageWorkOrders() : true;
 }
 
-function machtileScheduleCard(order, index, total, colKey, canEdit) {
+function machtileScheduleCard(order, index, total, colKey, canEdit, forecast) {
   const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
   const isFirst = index === 0 && Boolean(colKey);
+  const duration = forecast?.duration || machtileScheduleDuration(order);
+  const canManageContract = canEdit && machtileScheduleUsesServerContracts() && machtileValidProcessId(order.processId);
+  const canOverride = canEdit && duration.ready && (state.source === "mock" || canManageContract);
   return `
     <article class="schedule-card ${status.className} ${isFirst ? "is-first" : ""}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(order.id)}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
       <span class="schedule-card-index" aria-label="第 ${index + 1} 順位">${index + 1}</span>
@@ -9182,10 +9737,27 @@ function machtileScheduleCard(order, index, total, colKey, canEdit) {
         </div>
         <p>${escapeHtml(order.part)}</p>
         <small>${order.done}/${order.total} 件 · 交期 ${escapeHtml(order.dueDate || "-")}</small>
+        ${machtileScheduleForecastMarkup(order, forecast)}
         ${canEdit ? `
         <div class="schedule-card-tools">
           <button type="button" data-schedule-move="up" ${index === 0 ? "disabled" : ""} aria-label="往前排">↑</button>
           <button type="button" data-schedule-move="down" ${index === total - 1 ? "disabled" : ""} aria-label="往後排">↓</button>
+          ${canManageContract ? `<button type="button" data-schedule-editor="input" data-schedule-order="${escapeHtml(order.id)}">${duration.ready ? "標準工時" : "補標準工時"}</button>` : ""}
+          ${canOverride ? `<button type="button" data-schedule-editor="override" data-schedule-order="${escapeHtml(order.id)}">${duration.source === "override" ? "查看修正" : "調整工時"}</button>` : ""}
+          ${canManageContract ? `<button type="button" data-schedule-editor="hold" data-schedule-order="${escapeHtml(order.id)}">設定停等</button>` : ""}
+        </div>` : ""}
+        ${machtileScheduleHoldsMarkup(order, canManageContract)}
+        ${machtileScheduleInputEditor(order)}
+        ${machtileScheduleOverrideEditor(order, duration)}
+        ${machtileScheduleClearEditor(order)}
+        ${machtileScheduleHoldEditor(order)}
+        ${canEdit && !colKey ? `
+        <div class="schedule-assign-row">
+          <select data-schedule-assign-select aria-label="選擇 ${escapeHtml(order.id)} 的指派機台">
+            <option value="">選擇機台</option>
+            ${machtileAssignableMachineOptions()}
+          </select>
+          <button type="button" data-schedule-assign="${escapeHtml(order.id)}">指派機台</button>
         </div>` : ""}
       </div>
     </article>
@@ -9195,11 +9767,68 @@ function machtileScheduleCard(order, index, total, colKey, canEdit) {
 // 排程板收合狀態（2026-07-15 owner：平時收合、點機台卡展開、✕ 關閉）
 let machtileScheduleExpanded = "";
 
+function machtileScheduleHmcPanel(machineDef) {
+  if (!isHmcMachine(machineDef)) return "";
+  if (state.source !== "mock") {
+    return `
+      <section class="schedule-hmc-resource">
+        <div><strong>臥式多盤容量規則</strong><span>主軸同一時間只能加工 1 個交換盤；其他交換盤可在外部準備或等待。</span></div>
+        <span class="schedule-forecast-pill is-waiting">交換盤即時狀態待接 HMC 清單</span>
+      </section>
+    `;
+  }
+  const activePalletId = machineDef.status === "running" ? hmcReportPallets[0]?.palletId : "";
+  return `
+    <section class="schedule-hmc-resource">
+      <div>
+        <strong>主軸互斥 · 交換盤可並行準備</strong>
+        <span>${activePalletId ? "目前只有 1 個交換盤標示加工中；其餘不計入主軸產能。" : "主軸目前空閒；交換盤只能顯示準備或等待。"}</span>
+      </div>
+      <div class="schedule-hmc-pallets">
+        ${hmcReportPallets.map((pallet, index) => {
+          const active = pallet.palletId === activePalletId;
+          const externalState = index === 1 ? "外部準備" : "外部等待";
+          return `<span class="${active ? "is-spindle" : ""}"><strong>${escapeHtml(pallet.palletName)}</strong><small>${active ? "主軸加工中" : externalState}</small></span>`;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function machtileScheduleOverview(forecast, byMachine, unassigned) {
+  const schedulable = state.workOrders.filter(machtileIsSchedulableOrder);
+  const readyCount = schedulable.filter((order) => machtileScheduleDuration(order).ready).length;
+  const missingCount = schedulable.length - readyCount;
+  const values = [...forecast.items.values()];
+  const riskCount = values.filter((item) => item.status === "scheduled" && item.atRisk).length;
+  const hardBlocked = [...byMachine.values()].filter((column) => column.def.assignable === false).length;
+  const contractNote = machtileScheduleUsesServerContracts()
+    ? machtileScheduleState.contractsStatus === "error"
+      ? `<small class="schedule-contract-note">${escapeHtml(machtileScheduleState.contractsError)}</small>`
+      : machtileScheduleState.contractsStatus === "loading"
+        ? '<small class="schedule-contract-note">正在讀取 Dev 排程工時契約…</small>'
+        : '<small>工時、主管修正與停等來自排程契約；畫面不以本機欄位補猜。</small>'
+    : "";
+  return `
+    <section class="schedule-overview" aria-label="時間排程資料狀態">
+      <div>
+        <span>可計算工時<strong>${readyCount}</strong></span>
+        <span class="${missingCount ? "is-warning" : ""}">缺工時標準<strong>${missingCount}</strong></span>
+        <span class="${riskCount ? "is-danger" : ""}">預計逾期<strong>${riskCount}</strong></span>
+        <span class="${hardBlocked ? "is-danger" : ""}">維修／停用<strong>${hardBlocked}</strong></span>
+        <span>未排機<strong>${unassigned.length}</strong></span>
+      </div>
+      <p><strong>${forecast.calendar ? escapeHtml(forecast.calendar.sourceLabel) : "正式班表尚未設定，因此不顯示完工時間"}</strong><small>公式：換線／架機＋標準單件 × 剩餘數量＋本批上下料。人工修正保留原始基準與原因。</small>${contractNote}</p>
+    </section>
+  `;
+}
+
 function renderSchedule() {
   const holder = $("#scheduleContent");
   if (!holder) return;
   const canEdit = machtileCanEditSchedule();
   const { byMachine, unassigned } = machtileScheduleColumns();
+  const forecast = machtileBuildScheduleForecast(byMachine);
   const columns = [...byMachine.values()];
   if (machtileScheduleExpanded && !columns.some((columnData) => columnData.def.code === machtileScheduleExpanded)) machtileScheduleExpanded = "";
   const tile = (columnData) => {
@@ -9207,10 +9836,17 @@ function renderSchedule() {
     const deptTone = def.dept === "車床課" ? "machine-dept-lathe" : def.dept === "銑床課" ? "machine-dept-mill" : "";
     const open = machtileScheduleExpanded === def.code;
     const first = list[0];
+    const assignable = def.assignable !== false;
+    const machineState = statusMeta[def.status] || statusMeta.idle;
+    const estimatedMinutes = list.reduce((sum, order) => {
+      const duration = machtileScheduleDuration(order);
+      return sum + (duration.ready ? duration.effectiveMinutes : 0);
+    }, 0);
     return `
-      <button type="button" class="schedule-tile ${deptTone} ${open ? "is-open" : ""}" data-schedule-expand="${escapeHtml(def.code)}" data-schedule-list="${escapeHtml(def.code)}" aria-expanded="${open}">
+      <button type="button" class="schedule-tile ${deptTone} ${open ? "is-open" : ""} ${assignable ? "" : "is-blocked"}" data-schedule-expand="${escapeHtml(def.code)}" ${assignable ? `data-schedule-list="${escapeHtml(def.code)}"` : ""} aria-expanded="${open}" ${assignable ? "" : 'aria-disabled="true"'}>
         <span class="schedule-tile-head"><strong>${escapeHtml(def.name)}${def.location ? ` <span class="schedule-tile-alias">${escapeHtml(def.location)}</span>` : ""}</strong><span class="schedule-tile-count">${list.length} 張</span></span>
-        <small>${first ? `① ${escapeHtml(first.id)} · ${escapeHtml(first.part)}` : "沒有排單"}</small>
+        <small>${assignable ? (first ? `① ${escapeHtml(first.id)} · ${escapeHtml(first.part)}` : "沒有排單") : `${escapeHtml(machineState.label)} · 不可指派`}</small>
+        <small>${estimatedMinutes ? `已知工時 ${escapeHtml(machtileFormatScheduleMinutes(estimatedMinutes))}` : (list.length ? "工時標準待補" : (isHmcMachine(def) ? "主軸 1 組 · 交換盤外部準備" : "尚無負荷"))}</small>
       </button>
     `;
   };
@@ -9228,13 +9864,15 @@ function renderSchedule() {
         <span class="schedule-expanded-count">${expandedData.list.length} 張</span>
         <button type="button" class="schedule-close" data-schedule-expand="" aria-label="收合排程">✕</button>
       </header>
-      <div class="schedule-list" data-schedule-list="${escapeHtml(expandedData.def.code)}">
-        ${expandedData.list.map((order, index) => machtileScheduleCard(order, index, expandedData.list.length, expandedData.def.code, canEdit)).join("") || '<p class="schedule-empty">沒有工單；從下方「未排機」拖卡片過來＝派給這台機</p>'}
+      ${machtileScheduleHmcPanel(expandedData.def)}
+      <div class="schedule-list" ${expandedData.def.assignable === false ? "" : `data-schedule-list="${escapeHtml(expandedData.def.code)}"`}>
+        ${expandedData.list.map((order, index) => machtileScheduleCard(order, index, expandedData.list.length, expandedData.def.code, canEdit, forecast.items.get(order.processId || order.id))).join("") || '<p class="schedule-empty">沒有工單；從下方「未排機」拖卡片過來＝派給這台機</p>'}
       </div>
     </section>
   ` : "";
   holder.innerHTML = `
-    <p class="schedule-hint">${canEdit ? "點機台卡展開排程（✕ 收合）；把「未排機」的卡直接拖到機台卡上＝派給那台機（排到最後）。展開後拖拉或 ↑↓ 排順序，第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：點機台卡看排程；排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
+    ${machtileScheduleOverview(forecast, byMachine, unassigned)}
+    <p class="schedule-hint">${canEdit ? "第 ① 張會同步為監控頁的目前工單。桌機可拖拉；手機請在未排機工單使用「指派機台」。維修與停用機台不可接受派工。" : "唯讀檢視：點機台卡看派工順序；調整需要排程以上權限。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
     ${zones.map((zone) => `
       <section class="schedule-zone">
         <h3 class="schedule-zone-title ${zone.tone}">${escapeHtml(zone.title)}</h3>
@@ -9248,7 +9886,7 @@ function renderSchedule() {
         <span>${unassigned.length} 張</span>
       </header>
       <div class="schedule-list schedule-unassigned-grid" data-schedule-list="">
-        ${unassigned.map((order, index) => machtileScheduleCard(order, index, unassigned.length, "", canEdit)).join("") || '<p class="schedule-empty">沒有未排機的工單</p>'}
+        ${unassigned.map((order, index) => machtileScheduleCard(order, index, unassigned.length, "", canEdit, { status: "unassigned", reason: "先指派機台", duration: machtileScheduleDuration(order) })).join("") || '<p class="schedule-empty">沒有未排機的工單</p>'}
       </div>
     </section>
   `;
@@ -9265,6 +9903,9 @@ function machtileScheduleListOrders(colKey) {
 }
 
 async function machtileApplyQueue(colKey, orderList) {
+  if (colKey && !machtileCanAssignToMachine(colKey)) {
+    throw new Error("維修或停用機台不可接受派工");
+  }
   if (!machtileStrictMode()) {
     orderList.forEach((order, index) => {
       if (order.processId) machtileScheduleState.queueOrderByProcess.set(order.processId, index + 1);
@@ -9299,6 +9940,202 @@ async function machtileScheduleCommit(actions) {
   }
 }
 
+function machtileScheduleOrderById(orderId) {
+  return state.workOrders.find((order) => order.id === orderId) || null;
+}
+
+function machtileRecordScheduleAudit(order, beforeMinutes, afterMinutes, reason, action) {
+  const now = new Date().toISOString();
+  machtileScheduleState.auditEvents.unshift({
+    id: `schedule-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type: "系統操作紀錄",
+    orderId: order.id,
+    part: order.part,
+    machine: order.machine || "未排機",
+    title: action === "clear" ? "恢復系統計算工時" : "主管修正預計工時",
+    eventTime: now,
+    writtenAt: now,
+    operator: "張家維（示範）",
+    beforeValue: machtileFormatScheduleMinutes(beforeMinutes),
+    afterValue: machtileFormatScheduleMinutes(afterMinutes),
+    reason,
+    source: "MachTile 排程（畫面內示範）",
+  });
+}
+
+async function machtileScheduleRpcWrite(path, payload, successMessage) {
+  if (machtileScheduleState.writePending) {
+    showToast("排程操作處理中，請稍候");
+    return false;
+  }
+  machtileScheduleState.writePending = true;
+  let succeeded = false;
+  try {
+    await supabaseFetch(`rpc/${path}`, {
+      method: "POST",
+      body: JSON.stringify({ p_payload: payload }),
+    });
+    await machtileLoadScheduleContracts();
+    machtileScheduleState.editingOrderId = "";
+    machtileScheduleState.editingAction = "";
+    machtileHistoryRealRows = null;
+    succeeded = true;
+    showToast(successMessage);
+  } catch (error) {
+    console.warn(`${path} failed`, error);
+    showToast(machtileScheduleErrorMessage(error));
+    await machtileLoadScheduleContracts();
+  } finally {
+    machtileScheduleState.writePending = false;
+    renderSchedule();
+    if (succeeded && $("#historyView")?.classList.contains("is-active")) renderHistory();
+  }
+  return succeeded;
+}
+
+async function machtileApplyScheduleInput(orderId, values) {
+  const order = machtileScheduleOrderById(orderId);
+  if (!order || !machtileScheduleUsesServerContracts() || !machtileCanEditSchedule()) return false;
+  const setupMinutes = Number(values.setupMinutes);
+  const standardUnitMinutes = Number(values.standardUnitMinutes);
+  const handlingMinutes = Number(values.handlingMinutes);
+  const reason = String(values.reason || "").trim();
+  if (!Number.isFinite(setupMinutes) || setupMinutes < 0
+    || !Number.isFinite(standardUnitMinutes) || standardUnitMinutes <= 0
+    || !Number.isFinite(handlingMinutes) || handlingMinutes < 0) {
+    showToast("架機與上下料可為 0；標準單件時間必須大於 0");
+    return false;
+  }
+  if (!reason) {
+    showToast("建立或修改標準工時必須填寫原因");
+    return false;
+  }
+  return machtileScheduleRpcWrite("schedule_input_upsert", {
+    process_id: order.processId,
+    setup_minutes: setupMinutes,
+    standard_unit_minutes: standardUnitMinutes,
+    handling_minutes: handlingMinutes,
+    baseline_source: "manual_standard",
+    source_data: { ui: "machtile-schedule" },
+    reason,
+    idempotency_key: machtileScheduleIdempotencyKey("input"),
+  }, "標準工時已建立新版本；舊值保留在稽核紀錄");
+}
+
+async function machtileApplyScheduleOverride(orderId, hours, reason) {
+  const order = machtileScheduleOrderById(orderId);
+  if (!order) return false;
+  const duration = machtileScheduleDuration(order);
+  const minutes = Number(hours) * 60;
+  if (!duration.ready || !Number.isFinite(minutes) || minutes <= 0) {
+    showToast("請輸入大於 0 的修正工時");
+    return false;
+  }
+  if (!String(reason || "").trim()) {
+    showToast("主管修正必須填寫原因");
+    return false;
+  }
+  if (machtileScheduleUsesServerContracts()) {
+    if (!machtileCanEditSchedule()) return false;
+    return machtileScheduleRpcWrite("schedule_override_set", {
+      process_id: order.processId,
+      override_total_minutes: Math.round(minutes * 1000) / 1000,
+      reason: String(reason).trim(),
+      idempotency_key: machtileScheduleIdempotencyKey("override"),
+    }, "主管修正已套用；原始標準工時仍保留");
+  }
+  if (state.source !== "mock") {
+    showToast("目前資料來源不支援主管修正");
+    return false;
+  }
+  const beforeMinutes = duration.effectiveMinutes;
+  order.scheduleOverrideMinutes = Math.round(minutes * 10) / 10;
+  order.scheduleOverrideReason = String(reason).trim();
+  order.scheduleOverrideBy = "張家維（示範）";
+  order.scheduleOverrideAt = new Date().toISOString();
+  machtileRecordScheduleAudit(order, beforeMinutes, order.scheduleOverrideMinutes, order.scheduleOverrideReason, "override");
+  machtileScheduleState.editingOrderId = "";
+  machtileScheduleState.editingAction = "";
+  renderAll();
+  showToast("已套用主管修正；原始標準工時仍保留");
+  return true;
+}
+
+async function machtileClearScheduleOverride(orderId, reason) {
+  const order = machtileScheduleOrderById(orderId);
+  if (!order) return false;
+  const duration = machtileScheduleDuration(order);
+  if (duration.source !== "override") return false;
+  const clearReason = String(reason || "").trim();
+  if (machtileScheduleUsesServerContracts()) {
+    if (!clearReason) {
+      showToast("撤銷主管修正必須填寫原因");
+      return false;
+    }
+    return machtileScheduleRpcWrite("schedule_override_clear", {
+      process_id: order.processId,
+      reason: clearReason,
+      idempotency_key: machtileScheduleIdempotencyKey("override-clear"),
+    }, "已恢復系統計算；撤銷原因已留痕");
+  }
+  if (state.source !== "mock") return false;
+  const beforeMinutes = duration.effectiveMinutes;
+  const auditReason = clearReason || `撤銷原修正：${order.scheduleOverrideReason || "未提供"}`;
+  order.scheduleOverrideMinutes = null;
+  order.scheduleOverrideReason = "";
+  order.scheduleOverrideBy = "";
+  order.scheduleOverrideAt = "";
+  const baseline = machtileScheduleDuration(order).baselineMinutes;
+  machtileRecordScheduleAudit(order, beforeMinutes, baseline, auditReason, "clear");
+  machtileScheduleState.editingOrderId = "";
+  machtileScheduleState.editingAction = "";
+  renderAll();
+  showToast("已恢復系統計算工時；撤銷動作已留痕");
+  return true;
+}
+
+async function machtileApplyScheduleHold(orderId, holdType, reason) {
+  const order = machtileScheduleOrderById(orderId);
+  if (!order || !machtileScheduleUsesServerContracts() || !machtileCanEditSchedule()) return false;
+  const normalizedType = String(holdType || "");
+  const normalizedReason = String(reason || "").trim();
+  if (!["manual", "material", "inspection", "abnormal"].includes(normalizedType)) {
+    showToast("請選擇有效的停等類型");
+    return false;
+  }
+  if (!normalizedReason) {
+    showToast("設定停等必須填寫原因");
+    return false;
+  }
+  return machtileScheduleRpcWrite("schedule_hold_set", {
+    process_id: order.processId,
+    hold_type: normalizedType,
+    active: true,
+    reason: normalizedReason,
+    source_system: "machtile",
+    idempotency_key: machtileScheduleIdempotencyKey("hold"),
+  }, "排程停等已設定；解除前不計入可執行排程");
+}
+
+async function machtileReleaseScheduleHold(orderId, holdId, holdType, reason) {
+  const order = machtileScheduleOrderById(orderId);
+  if (!order || !machtileScheduleUsesServerContracts() || !machtileCanEditSchedule()) return false;
+  const normalizedReason = String(reason || "").trim();
+  if (!normalizedReason) {
+    showToast("解除停等必須填寫原因");
+    return false;
+  }
+  return machtileScheduleRpcWrite("schedule_hold_set", {
+    process_id: order.processId,
+    hold_id: holdId,
+    hold_type: holdType,
+    active: false,
+    reason: normalizedReason,
+    source_system: "machtile",
+    idempotency_key: machtileScheduleIdempotencyKey("hold-release"),
+  }, "停等已解除；系統已重新讀取排程工時");
+}
+
 function machtileBindScheduleEvents(holder) {
   const canEdit = machtileCanEditSchedule();
   // onclick 覆寫式綁定：holder 跨重繪存活，addEventListener 會累積出 N 重觸發
@@ -9308,6 +10145,45 @@ function machtileBindScheduleEvents(holder) {
       const code = expandButton.dataset.scheduleExpand || "";
       machtileScheduleExpanded = code === machtileScheduleExpanded ? "" : code;
       renderSchedule();
+      return;
+    }
+    const editorButton = event.target.closest("[data-schedule-editor]");
+    if (editorButton) {
+      machtileScheduleState.editingOrderId = editorButton.dataset.scheduleOrder || "";
+      machtileScheduleState.editingAction = editorButton.dataset.scheduleEditor || "";
+      renderSchedule();
+      return;
+    }
+    const cancelEditorButton = event.target.closest("[data-schedule-editor-cancel]");
+    if (cancelEditorButton) {
+      machtileScheduleState.editingOrderId = "";
+      machtileScheduleState.editingAction = "";
+      renderSchedule();
+      return;
+    }
+    const assignButton = event.target.closest("[data-schedule-assign]");
+    if (assignButton) {
+      if (!canEdit) return;
+      const card = assignButton.closest("[data-schedule-card]");
+      const select = card?.querySelector("[data-schedule-assign-select]");
+      const toKey = select?.value || "";
+      if (!toKey) {
+        showToast("請先選擇指派機台");
+        return;
+      }
+      if (!machtileCanAssignToMachine(toKey)) {
+        showToast("維修或停用機台不可接受派工");
+        return;
+      }
+      const fromKey = card?.dataset.scheduleFrom || "";
+      const fromList = [...machtileScheduleListOrders(fromKey)];
+      const moving = fromList.find((order) => order.id === assignButton.dataset.scheduleAssign);
+      if (!moving) return;
+      const sourceRest = fromList.filter((order) => order.id !== moving.id);
+      const toList = [...machtileScheduleListOrders(toKey), moving];
+      const actions = [{ colKey: toKey, orders: toList }];
+      if (fromKey && sourceRest.length) actions.push({ colKey: fromKey, orders: sourceRest });
+      machtileScheduleCommit(actions);
       return;
     }
     const moveButton = event.target.closest("[data-schedule-move]");
@@ -9322,6 +10198,57 @@ function machtileBindScheduleEvents(holder) {
     if (target < 0 || target >= list.length) return;
     [list[index], list[target]] = [list[target], list[index]];
     machtileScheduleCommit([{ colKey, orders: list }]);
+  };
+
+  holder.onsubmit = (event) => {
+    const inputForm = event.target.closest("[data-schedule-input-form]");
+    if (inputForm) {
+      event.preventDefault();
+      const data = new FormData(inputForm);
+      machtileApplyScheduleInput(inputForm.dataset.scheduleInputForm || "", {
+        setupMinutes: data.get("setupMinutes"),
+        standardUnitMinutes: data.get("standardUnitMinutes"),
+        handlingMinutes: data.get("handlingMinutes"),
+        reason: data.get("reason"),
+      });
+      return;
+    }
+    const overrideForm = event.target.closest("[data-schedule-override-form]");
+    if (overrideForm) {
+      event.preventDefault();
+      const data = new FormData(overrideForm);
+      machtileApplyScheduleOverride(
+        overrideForm.dataset.scheduleOverrideForm || "",
+        data.get("overrideHours"),
+        data.get("overrideReason")
+      );
+      return;
+    }
+    const clearForm = event.target.closest("[data-schedule-clear-form]");
+    if (clearForm) {
+      event.preventDefault();
+      const data = new FormData(clearForm);
+      machtileClearScheduleOverride(clearForm.dataset.scheduleClearForm || "", data.get("reason"));
+      return;
+    }
+    const holdForm = event.target.closest("[data-schedule-hold-form]");
+    if (holdForm) {
+      event.preventDefault();
+      const data = new FormData(holdForm);
+      machtileApplyScheduleHold(holdForm.dataset.scheduleHoldForm || "", data.get("holdType"), data.get("reason"));
+      return;
+    }
+    const releaseForm = event.target.closest("[data-schedule-release-form]");
+    if (releaseForm) {
+      event.preventDefault();
+      const data = new FormData(releaseForm);
+      machtileReleaseScheduleHold(
+        releaseForm.dataset.scheduleReleaseForm || "",
+        releaseForm.dataset.scheduleHoldId || "",
+        releaseForm.dataset.scheduleHoldType || "",
+        data.get("reason")
+      );
+    }
   };
 
   holder.querySelectorAll("[data-schedule-card][draggable]").forEach((card) => {
@@ -9482,33 +10409,32 @@ function remainingProcesses(order) {
   return `${order.process || "CNC 加工"} · 去毛邊 · 品檢`;
 }
 
+function processStageLabel(order) {
+  const process = order.process || "目前製程";
+  const status = String(order.processStatus || "").trim().toLowerCase();
+  if (status === "waiting_inspection") return `${process} 已加工 · 待品檢`;
+  if (status === "running" || status === "in_progress") return `${process} · 加工中`;
+  if (status === "pending" || status === "not_started") return `${process} · 待開工`;
+  if (status === "paused") return `${process} · 已暫停`;
+  if (status === "abnormal") return `${process} · 異常處理中`;
+  if (status === "completed") return `${process} · 已完成`;
+  if (status === "skipped") return `${process} · 已略過`;
+  return process;
+}
+
 function alertActions(order) {
-  // H3：strict＝只給真動作（查看工單/調排程），假動作按鈕不進正式環境
-  if (machtileStrictMode() && machtileSessionActive()) {
-    return ["查看工單", "調排程"];
-  }
-  const status = primaryAlertStatus(order);
-  if (status === "overdue") return ["安排夜班", "拆單到 CNC-04", "通知客戶", "標記已處理", "忽略提醒"];
-  if (status === "aiRisk") return ["安排加班", "拆單到 CNC-05", "通知客戶", "標記已處理", "忽略提醒"];
-  if (status === "abnormal") return ["處理異常", "建立重工", "通知主管", "標記已處理"];
-  if (status === "inspection") return ["指派品檢", "標記已處理", "忽略提醒"];
-  if (status === "stale") return ["通知師傅", "查看機台", "忽略提醒"];
-  return ["查看工單", "標記已處理"];
+  // 第一階段只顯示已有完整導向的真動作；待處理狀態／負責人／結案需另行建模。
+  return machtileIsSchedulableOrder(order) ? ["調排程", "查看工單"] : ["查看工單"];
 }
 
 function renderStats() {
-  const abnormalCount = state.workOrders.filter((order) => order.workStatus === "abnormal" || order.processStatus === "abnormal").length;
   const actualMachines = managedMachineList();
-  const unassignedOrders = state.workOrders.filter((order) => !isOrderReportable(order)).length;
   const stats = [
     ["總機台", actualMachines.length, "risk-blue", "全部狀態"],
-    ["加工中", actualMachines.filter((machine) => machine.order && !["idle", "maintenance"].includes(machine.status)).length, "risk-blue", "加工中"],
-    ["可能延誤", state.workOrders.filter((order) => deriveOrderStatus(order) === "aiRisk").length, "risk-purple", "可能延誤"],
-    ["已延誤", state.workOrders.filter((order) => deriveOrderStatus(order) === "overdue").length, "risk-red", "已延誤"],
-    ["異常", abnormalCount + actualMachines.filter((machine) => ["maintenance", "paused"].includes(machine.status)).length, "risk-red", "異常"],
-    ["待品檢", state.workOrders.filter((order) => alertCategories(order).has("待品檢")).length, "risk-amber", "待品檢"],
-    ["未排機", unassignedOrders, "risk-gray", "未排機"],
-    ["未回報", state.workOrders.filter((order) => alertCategories(order).has("未回報")).length, "risk-gray", "未回報"],
+    ["加工中", actualMachines.filter((machine) => matchesStatusFilter(machine, "加工中")).length, "risk-blue", "加工中"],
+    ["空閒", actualMachines.filter((machine) => matchesStatusFilter(machine, "空閒")).length, "risk-gray", "空閒"],
+    ["暫停", actualMachines.filter((machine) => matchesStatusFilter(machine, "暫停")).length, "risk-amber", "暫停"],
+    ["維修／停用", actualMachines.filter((machine) => matchesStatusFilter(machine, "維修／停用")).length, "risk-red", "維修／停用"],
   ];
 
   $("#statsGrid").innerHTML = stats.map(([label, value, riskClass, filter]) => `
@@ -9539,7 +10465,7 @@ function renderFilters() {
 
   $("#statusChips").innerHTML = statusFilters.map((filter) => `
     <button class="filter-chip status-chip ${activeStatusFilter === filter ? "active" : ""}" data-status="${escapeHtml(filter)}" type="button">
-      ${escapeHtml(filter)}
+      ${escapeHtml(filter)}${filter === "全部狀態" ? "" : ` <span class="filter-chip-count">${machinesForStatusFilter(filter).length}</span>`}
     </button>
   `).join("");
 }
@@ -9552,30 +10478,38 @@ function matchesMillingModeFilter(machine) {
   return true;
 }
 
-function matchesStatusFilter(machine) {
-  if (activeStatusFilter === "全部狀態") return true;
-  if (activeStatusFilter === "加工中") return Boolean(machine.order) && !["idle", "maintenance"].includes(machine.status);
+function matchesStatusFilter(machine, filter = activeStatusFilter) {
+  if (filter === "全部狀態") return true;
+  if (filter === "加工中") return machine.status === "running";
+  if (filter === "空閒") return machine.status === "idle";
+  if (filter === "暫停") return machine.status === "paused";
+  if (filter === "維修／停用") return ["maintenance", "offline"].includes(machine.status);
   const order = machine.order;
-  if (activeStatusFilter === "可能延誤") return order && alertCategories(order).has("可能延誤");
-  if (activeStatusFilter === "已延誤") return order && alertCategories(order).has("已延誤");
-  if (activeStatusFilter === "異常") return machine.status === "maintenance" || machine.status === "paused" || (order && alertCategories(order).has("異常"));
-  if (activeStatusFilter === "待品檢") return order && alertCategories(order).has("待品檢");
-  if (activeStatusFilter === "今日到期") return order && alertCategories(order).has("今日到期");
-  if (activeStatusFilter === "未排機") return Boolean(machine.isUnassignedBucket);
-  if (activeStatusFilter === "未回報") return order ? alertCategories(order).has("未回報") : machine.status === "idle";
+  if (filter === "可能延誤") return Boolean(order && alertCategories(order).has("可能延誤"));
+  if (filter === "已延誤") return Boolean(order && alertCategories(order).has("已延誤"));
+  if (filter === "異常") return Boolean(order && alertCategories(order).has("異常"));
+  if (filter === "待品檢") return Boolean(order && alertCategories(order).has("待品檢"));
+  if (filter === "今日到期") return Boolean(order && alertCategories(order).has("今日到期"));
+  if (filter === "未排機") return Boolean(machine.isUnassignedBucket);
+  if (filter === "未回報") return Boolean(order && alertCategories(order).has("未回報"));
   return true;
 }
 
-function visibleMachines() {
+function machinesForStatusFilter(filter) {
   return state.machines
     .filter((machine) => activeDepartmentFilter === "全部" || machine.department === activeDepartmentFilter)
     .filter(matchesMillingModeFilter)
-    .filter(matchesStatusFilter);
+    .filter((machine) => matchesStatusFilter(machine, filter));
+}
+
+function visibleMachines() {
+  return machinesForStatusFilter(activeStatusFilter);
 }
 
 function renderWorkOrders() {
   const machines = visibleMachines();
-  $("#workOrderGrid").innerHTML = machines.length
+  const holder = $("#workOrderGrid");
+  holder.innerHTML = machines.length
     ? machines.map(renderMachineCard).join("")
     : `<article class="empty-card"><strong>沒有符合條件的機台</strong><span>請調整課別或狀態篩選。</span></article>`;
 }
@@ -9588,6 +10522,8 @@ function ensureHmcDashboardEntry() {
 function renderMachineCard(machine) {
   const order = machine.order;
   const status = statusMeta[machine.status] || statusMeta.idle;
+  const orderRiskKey = order ? deriveOrderStatus(order) : "";
+  const orderRisk = order ? (statusMeta[orderRiskKey] || statusMeta.normal) : null;
   const due = order ? dueInfo(order) : { label: machine.status === "maintenance" ? "維修中" : "空閒", date: "-", diffDays: 999 };
   const percent = order ? pct(order) : 0;
   const profile = order ? getProgramProfile(order) : null;
@@ -9606,7 +10542,6 @@ function renderMachineCard(machine) {
     ? `${machine.code || machine.name} · 已帶 ${order.id} 報工連結`
     : `${machine.code || machine.name} · ${qrReportUrl}`;
   const detailUrl = order ? workOrderDetailUrl(order.id) : "";
-  const qrUrl = qrReportUrl ? qrCodeUrl(qrReportUrl) : "";
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
 
@@ -9622,28 +10557,11 @@ function renderMachineCard(machine) {
           ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
         </div>
         <div class="machine-header-actions">
-          <span class="status-pill">${escapeHtml(status.label)}</span>
+          <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
+          ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
           ${order ? `<a class="machine-open-link" data-no-detail href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
         </div>
       </header>
-
-      ${canReport ? `
-        <a class="machine-qr-card" data-no-detail href="${escapeHtml(qrReportUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtml(machine.name)} 掃碼現場回報">
-          <img src="${escapeHtml(qrUrl)}" alt="${escapeHtml(machine.name)} 現場回報 QR Code">
-          <span>
-            <strong>${isHmc ? "多盤多工件每日盤點" : "掃碼報工"}</strong>
-            <small>${escapeHtml(reportLinkText)}</small>
-          </span>
-        </a>
-      ` : `
-        <div class="machine-qr-card machine-qr-card-disabled" aria-label="未排機不產生 QR">
-          <span class="qr-placeholder">--</span>
-          <span>
-            <strong>未排機</strong>
-            <small>請先指派實際機台，指派後才會產生報工 QR</small>
-          </span>
-        </div>
-      `}
 
       <div class="machine-job-strip">
         <span>目前工單</span>
@@ -9703,10 +10621,27 @@ function renderMachineCard(machine) {
         </div>
       ` : ""}
 
-      <section class="machine-advice">
-        <div class="advice-title"><span></span>AI 建議</div>
-        <p>${escapeHtml(order ? riskSuggestion(order) : machine.status === "idle" ? "目前空閒，可優先安排小批量急件或等待插單。" : "建議確認維修或暫停原因，避免排程仍把此機台視為可用。")}</p>
-      </section>
+      <details class="machine-card-more" data-no-detail>
+        <summary>${canReport ? "報工入口與建議" : "指派說明"}</summary>
+        ${canReport ? `
+          <a class="machine-qr-card" data-no-detail href="${escapeHtml(qrReportUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtml(machine.name)} 開啟現場回報">
+            <span class="qr-placeholder" aria-hidden="true">↗</span>
+            <span>
+              <strong>${isHmc ? "多盤多工件每日盤點" : "開啟報工頁"}</strong>
+              <small>${escapeHtml(reportLinkText)}</small>
+            </span>
+          </a>
+        ` : `
+          <div class="machine-qr-card machine-qr-card-disabled" aria-label="未排機不產生 QR">
+            <span class="qr-placeholder">--</span>
+            <span><strong>未排機</strong><small>請先指派實際機台，指派後才會產生報工 QR</small></span>
+          </div>
+        `}
+        <section class="machine-advice">
+          <div class="advice-title"><span></span>處理建議</div>
+          <p>${escapeHtml(order ? riskSuggestion(order) : machine.status === "idle" ? "目前空閒，可安排新工單。" : "請先確認機台狀態，再調整派工順序。")}</p>
+        </section>
+      </details>
 
       <footer class="machine-tile-footer">
         <span>${escapeHtml(order?.lastReport || machine.note || "尚未回報")}</span>
@@ -9714,7 +10649,11 @@ function renderMachineCard(machine) {
           ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>` : ""}
           ${isHmc
             ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
-            : `<button type="button" ${order && canReport ? 'class="machine-report-button"' : ""} ${reportAttr} ${canReport ? "" : "disabled"}>${order ? (canReport ? "回報" : "待指派") : "指派"}</button>`}
+            : order
+              ? canReport
+                ? `<button type="button" class="machine-report-button" ${reportAttr}>回報</button>`
+                : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}">前往指派</button>`
+              : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}
         </div>
       </footer>
     </article>
@@ -9787,6 +10726,9 @@ function renderAlertCard(order) {
   const due = dueInfo(order);
   const percent = pct(order);
   const categories = Array.from(alertCategories(order));
+  const actions = alertActions(order);
+  const primaryAction = actions[0];
+  const secondaryActions = actions.slice(1);
 
   return `
     <article class="alert-card ${status.className}">
@@ -9825,10 +10767,16 @@ function renderAlertCard(order) {
       </div>
 
       <div class="alert-progress">
-        <div class="progress-track" aria-label="完成進度 ${percent}%">
-          <div class="progress-fill" style="width:${percent}%"></div>
+        <div class="alert-progress-copy">
+          <strong>加工數量 ${order.done}/${order.total}</strong>
+          <small>製程階段 · ${escapeHtml(processStageLabel(order))}</small>
         </div>
-        <span>${percent}%</span>
+        <div class="alert-progress-meter">
+          <div class="progress-track" aria-label="加工數量 ${order.done}/${order.total}，${percent}%">
+            <div class="progress-fill" style="width:${percent}%"></div>
+          </div>
+          <span>${percent}%</span>
+        </div>
       </div>
 
       <section class="alert-ai-box">
@@ -9836,10 +10784,16 @@ function renderAlertCard(order) {
       </section>
 
       <div class="alert-actions">
-        ${alertActions(order).map((action) => `
-          <button type="button" data-alert-action="${escapeHtml(action)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(action)}</button>
-        `).join("")}
-        <button type="button" data-detail="${escapeHtml(order.id)}">查看明細</button>
+        <button type="button" data-alert-action="${escapeHtml(primaryAction)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(primaryAction)}</button>
+        <details class="alert-more">
+          <summary>更多操作</summary>
+          <div>
+            ${secondaryActions.map((action) => `
+              <button type="button" data-alert-action="${escapeHtml(action)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(action)}</button>
+            `).join("")}
+            <button type="button" data-detail="${escapeHtml(order.id)}">查看明細</button>
+          </div>
+        </details>
       </div>
     </article>
   `;
@@ -10032,91 +10986,252 @@ function renderNotificationCenter() {
   }).join("");
 }
 
-function renderHistory() {
-  const orders = state.workOrders.slice(0, 6);
-  const abnormalOrders = state.workOrders.filter((order) => alertCategories(order).has("異常") || alertCategories(order).has("已延誤"));
-  const reportOrders = state.workOrders.filter((order) => order.done > 0).slice(0, 5);
-  const programOrders = state.workOrders
+const historyTabs = ["全部", "生產事件", "系統操作"];
+let machtileHistoryRealRows = null;
+
+function historyRows() {
+  const reportRows = state.workOrders
+    .filter((order) => Number(order.done || 0) > 0)
+    .map((order) => ({
+      category: "生產事件",
+      recordType: "報工",
+      tone: "risk-blue",
+      orderId: order.id,
+      part: order.part,
+      machine: order.machine ? machtileMachineDisplay(order.machine) : "未排機",
+      title: `${order.machine ? machtileMachineDisplay(order.machine) : "未排機"} 回報 ${order.done}/${order.total}`,
+      detail: `${order.id} · ${order.part} · 加工數量 ${order.done}/${order.total}`,
+      time: order.lastReport || "未提供",
+      eventTime: order.lastReport || "未提供",
+      writtenAt: "未提供",
+      operator: "未提供",
+      modifier: "-",
+      beforeAfter: "-",
+      reason: "-",
+      source: state.source === "mock" ? "MachTile 示範工單摘要" : "MachTile 工單卡讀模型",
+    }));
+  const abnormalRows = state.workOrders
+    .filter((order) => alertCategories(order).has("異常"))
+    .map((order) => ({
+      category: "生產事件",
+      recordType: "異常",
+      tone: "risk-red",
+      orderId: order.id,
+      part: order.part,
+      machine: order.machine ? machtileMachineDisplay(order.machine) : "未排機",
+      title: alertReason(order),
+      detail: `${order.id} · ${order.part} · ${order.machine ? machtileMachineDisplay(order.machine) : "未排機"}`,
+      time: order.lastReport || "未提供",
+      eventTime: order.lastReport || "未提供",
+      writtenAt: "未提供",
+      operator: "未提供",
+      modifier: "-",
+      beforeAfter: "加工中 → 異常",
+      reason: alertReason(order),
+      source: state.source === "mock" ? "MachTile 示範工單摘要" : "MachTile 工單卡讀模型",
+    }));
+  const programRows = state.workOrders
     .filter((order) => getProgramProfile(order).programName !== "待上傳")
-    .slice(0, 5);
+    .map((order) => {
+      const profile = getProgramProfile(order);
+      const delta = cycleDelta(profile);
+      return {
+        category: "生產事件",
+        recordType: "加工履歷",
+        tone: delta !== null && delta > 8 ? "risk-amber" : "risk-blue",
+        orderId: order.id,
+        part: order.part,
+        machine: order.machine ? machtileMachineDisplay(order.machine) : "未排機",
+        title: `${order.drawing} · ${profile.programName}`,
+        detail: `${order.part} · 做過 ${Number(profile.historyRuns || 0)} 次 · 純加工 ${formatSeconds(profile.pureCycleSec)} · ${delta === null ? "無基準" : `較基準 ${delta > 0 ? "+" : ""}${delta}%`}`,
+        time: profile.lastRunDate || "未提供",
+        eventTime: profile.lastRunDate || "未提供",
+        writtenAt: "未提供",
+        operator: "未提供",
+        modifier: "-",
+        beforeAfter: "-",
+        reason: "-",
+        source: "MachTile CNC 加工履歷",
+      };
+    });
+  const scheduleAuditRows = machtileScheduleState.auditEvents.map((event) => ({
+    category: "系統操作",
+    recordType: "排程工時修正",
+    tone: "risk-purple",
+    orderId: event.orderId,
+    part: event.part,
+    machine: event.machine,
+    title: `${event.title} · ${event.orderId}`,
+    detail: `${event.beforeValue} → ${event.afterValue} · 原因 ${event.reason}`,
+    time: machtileFormatAuditTime(event.eventTime),
+    eventTime: machtileFormatAuditTime(event.eventTime),
+    writtenAt: machtileFormatAuditTime(event.writtenAt),
+    operator: "-",
+    modifier: event.operator,
+    beforeAfter: `${event.beforeValue} → ${event.afterValue}`,
+    reason: event.reason,
+    source: event.source,
+  }));
+  const productionRows = Array.isArray(machtileHistoryRealRows)
+    ? machtileHistoryRealRows
+    : [...reportRows, ...abnormalRows, ...programRows];
+  return [...scheduleAuditRows, ...productionRows];
+}
 
+function filteredHistoryRows() {
+  const query = historySearchQuery.trim().toLocaleLowerCase("zh-TW");
+  return historyRows().filter((row) => {
+    if (activeHistoryTab !== "全部" && row.category !== activeHistoryTab) return false;
+    if (!query) return true;
+    return [row.category, row.recordType, row.orderId, row.part, row.machine, row.title, row.detail, row.time, row.operator, row.modifier, row.source, row.reason]
+      .some((value) => String(value || "").toLocaleLowerCase("zh-TW").includes(query));
+  });
+}
+
+function renderHistoryTimeline() {
+  const rows = filteredHistoryRows();
+  const count = $("#historyResultCount");
+  if (count) count.textContent = `${rows.length} 筆`;
+  const timeline = $("#historyTimeline");
+  if (!timeline) return;
+  timeline.innerHTML = rows.length ? rows.map((row) => `
+    <button class="history-row ${row.tone}" type="button" data-detail="${escapeHtml(row.orderId)}">
+      <span class="timeline-dot"></span>
+      <div>
+        <span class="history-kind ${row.category === "系統操作" ? "is-system" : ""}">${escapeHtml(row.category)} · ${escapeHtml(row.recordType)}</span>
+        <strong>${escapeHtml(row.title)}</strong>
+        <small>${escapeHtml(row.detail)}</small>
+        <small class="history-event-meta">事件 ${escapeHtml(row.eventTime || row.time || "未提供")} · 寫入 ${escapeHtml(row.writtenAt || "未提供")} · 現場 ${escapeHtml(row.operator || "未提供")} · 修改人 ${escapeHtml(row.modifier || "-")} · 來源 ${escapeHtml(row.source || "未提供")}</small>
+      </div>
+      <time>${escapeHtml(row.time)}</time>
+    </button>
+  `).join("") : `<p class="empty-note">${activeHistoryTab === "系統操作" ? "目前沒有系統修改事件；不以生產摘要冒充稽核紀錄。" : "目前篩選條件沒有紀錄。"}</p>`;
+}
+
+function renderHistory() {
   $("#historyContent").innerHTML = `
-    <section class="history-panel">
-      <div class="panel-title">
-        <h2>工單歷程</h2>
-        <span>${orders.length} 筆</span>
+    <section class="history-tools">
+      <label class="history-search">
+        <span>搜尋紀錄</span>
+        <input id="historySearch" type="search" value="${escapeHtml(historySearchQuery)}" placeholder="工單、品號、機台或關鍵字" autocomplete="off">
+      </label>
+      <p>單一時間線保留生產事件與系統操作兩種類型。舊資料缺事件時間、寫入時間或操作員時會明確顯示「未提供」，不以推測值補齊。</p>
+      <div class="history-tabs" role="tablist" aria-label="紀錄類型">
+        ${historyTabs.map((tab) => `<button type="button" role="tab" aria-selected="${tab === activeHistoryTab}" class="${tab === activeHistoryTab ? "active" : ""}" data-history-tab="${escapeHtml(tab)}">${escapeHtml(tab)}</button>`).join("")}
       </div>
-      ${orders.map((order) => {
-        const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
-        return `
-          <button class="history-row ${status.className}" type="button" data-detail="${escapeHtml(order.id)}">
-            <span class="timeline-dot"></span>
-            <div>
-              <strong>${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>
-              <small>${escapeHtml(order.customer)} · ${escapeHtml(order.process)} · ${escapeHtml(status.label)}</small>
-            </div>
-            <time>${escapeHtml(order.dueDate || "-")}</time>
-          </button>
-        `;
-      }).join("")}
     </section>
-
-    <section class="history-panel">
-      <div class="panel-title">
-        <h2>報工紀錄</h2>
-        <span>${reportOrders.length} 筆</span>
-      </div>
-      ${reportOrders.map((order) => `
-        <button class="history-row risk-blue" type="button" data-detail="${escapeHtml(order.id)}">
-          <span class="timeline-dot"></span>
-          <div>
-            <strong>${escapeHtml(order.machine ? machtileMachineDisplay(order.machine) : "未排機")} 回報 ${order.done}/${order.total}</strong>
-            <small>${escapeHtml(order.id)} · ${escapeHtml(order.lastReport)}</small>
-          </div>
-          <time>${pct(order)}%</time>
-        </button>
-      `).join("")}
-    </section>
-
-    <section class="history-panel">
-      <div class="panel-title">
-        <h2>異常紀錄</h2>
-        <span>${abnormalOrders.length} 筆</span>
-      </div>
-      ${abnormalOrders.length ? abnormalOrders.map((order) => `
-        <button class="history-row risk-red" type="button" data-detail="${escapeHtml(order.id)}">
-          <span class="timeline-dot"></span>
-          <div>
-            <strong>${escapeHtml(alertReason(order))}</strong>
-            <small>${escapeHtml(order.id)} · ${escapeHtml(order.part)}</small>
-          </div>
-          <time>${escapeHtml(order.lastReport)}</time>
-        </button>
-      `).join("") : '<p class="empty-note">目前沒有異常紀錄。</p>'}
-    </section>
-
-    <section class="history-panel">
-      <div class="panel-title">
-        <h2>程式與加工履歷</h2>
-        <span>${programOrders.length} 筆</span>
-      </div>
-      ${programOrders.map((order) => {
-        const profile = getProgramProfile(order);
-        const delta = cycleDelta(profile);
-        return `
-          <button class="history-row ${delta !== null && delta > 8 ? "risk-amber" : "risk-blue"}" type="button" data-detail="${escapeHtml(order.id)}">
-            <span class="timeline-dot"></span>
-            <div>
-              <strong>${escapeHtml(order.drawing)} · ${escapeHtml(profile.programName)}</strong>
-              <small>做過 ${Number(profile.historyRuns || 0)} 次 · 純加工 ${escapeHtml(formatSeconds(profile.pureCycleSec))} · ${delta === null ? "無基準" : `較基準 ${delta > 0 ? "+" : ""}${delta}%`}</small>
-            </div>
-            <time>${escapeHtml(profile.lastRunDate || "-")}</time>
-          </button>
-        `;
-      }).join("")}
+    <section class="history-panel history-timeline-panel">
+      <div class="panel-title"><h2>${escapeHtml(activeHistoryTab === "全部" ? "全部紀錄" : activeHistoryTab)}</h2><span id="historyResultCount">0 筆</span></div>
+      <div id="historyTimeline"></div>
     </section>
   `;
-  if (machtileStrictMode() && machtileSessionActive()) machtileRenderHistoryReal().catch(() => {});
+  $("#historySearch")?.addEventListener("input", (event) => {
+    historySearchQuery = event.target.value;
+    renderHistoryTimeline();
+  });
+  renderHistoryTimeline();
+  if (machtileStrictMode() && machtileSessionActive()) machtileRenderUnifiedHistoryReal().catch(() => {});
+}
+
+let machtileUnifiedHistoryRequest = 0;
+
+function machtileHistoryDataSummary(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "-";
+  const labels = {
+    setup_seconds: "架機秒數",
+    standard_unit_seconds: "單件秒數",
+    handling_seconds: "上下料秒數",
+    effective_minutes: "有效分鐘",
+    completed_qty: "良品",
+    defect_qty: "不良",
+    cycle_time_seconds: "單件秒數",
+    held: "停等",
+    hold_type: "停等類型",
+    status: "狀態",
+    severity: "嚴重度",
+  };
+  const text = Object.entries(value).slice(0, 6).map(([key, item]) => {
+    const shown = item && typeof item === "object" ? JSON.stringify(item) : String(item ?? "-");
+    return `${labels[key] || key} ${shown.length > 80 ? `${shown.slice(0, 77)}…` : shown}`;
+  }).join("、");
+  return text || "-";
+}
+
+function machtileUnifiedEventRow(item, userNames) {
+  const order = state.workOrders.find((candidate) => String(candidate.workOrderId) === String(item.work_order_id)
+    || String(candidate.processId) === String(item.process_id));
+  const machine = state.machineMasters.find((candidate) => String(candidate.id) === String(item.machine_id));
+  const typeLabels = {
+    workStart: "開工",
+    dailyStart: "今日開工",
+    noon: "中午盤點",
+    afternoonCheck: "下午盤點",
+    finish: "完工",
+    abnormal: "異常",
+    pause: "暫停",
+    abnormal_event: "異常事件",
+    schedule_input_changed: "標準工時更新",
+    schedule_override_set: "主管修正工時",
+    schedule_override_clear: "撤銷工時修正",
+    schedule_hold_set: "排程停等",
+    schedule_hold_release: "解除排程停等",
+  };
+  const eventType = typeLabels[item.event_type] || item.event_type || "事件";
+  const isSystem = item.event_kind === "system_audit";
+  const isAbnormal = ["abnormal", "abnormal_event"].includes(item.event_type);
+  const beforeValue = machtileHistoryDataSummary(item.before_data);
+  const afterValue = machtileHistoryDataSummary(item.after_data);
+  const machineName = machine?.code || machine?.name || order?.machine || "未提供";
+  const actorName = userNames.get(String(item.actor_user_id)) || "未提供";
+  const operatorName = userNames.get(String(item.operator_user_id)) || "未提供";
+  return {
+    category: isSystem ? "系統操作" : "生產事件",
+    recordType: eventType,
+    tone: isSystem ? "risk-purple" : isAbnormal ? "risk-red" : item.event_type === "schedule_hold_set" ? "risk-amber" : "risk-blue",
+    orderId: order?.id || "-",
+    part: order?.part || "-",
+    machine: machtileMachineDisplay(machineName),
+    title: item.summary || `${eventType}${order?.id ? ` · ${order.id}` : ""}`,
+    detail: [order?.part, machineName !== "未提供" ? machtileMachineDisplay(machineName) : "", item.reason].filter(Boolean).join(" · ") || "未提供摘要",
+    time: machtileFormatAuditTime(item.event_at),
+    eventTime: machtileFormatAuditTime(item.event_at),
+    writtenAt: machtileFormatAuditTime(item.written_at),
+    operator: operatorName,
+    modifier: isSystem ? actorName : (item.actor_user_id && item.actor_user_id !== item.operator_user_id ? actorName : "-"),
+    beforeAfter: beforeValue === "-" && afterValue === "-" ? "-" : `${beforeValue} → ${afterValue}`,
+    reason: item.reason || "-",
+    source: [item.source_system || "未提供", item.source_event_id || ""].filter(Boolean).join(" · "),
+  };
+}
+
+async function machtileRenderUnifiedHistoryReal() {
+  const requestId = ++machtileUnifiedHistoryRequest;
+  try {
+    const eventKind = activeHistoryTab === "生產事件"
+      ? "production_event"
+      : activeHistoryTab === "系統操作"
+        ? "system_audit"
+        : undefined;
+    const payload = { limit: 300 };
+    if (eventKind) payload.event_kind = eventKind;
+    const [result, users] = await Promise.all([
+      supabaseFetch("rpc/unified_event_list", {
+        method: "POST",
+        body: JSON.stringify({ p_payload: payload }),
+      }),
+      machtileFetchOperatorList(),
+    ]);
+    if (requestId !== machtileUnifiedHistoryRequest) return;
+    const userNames = new Map((Array.isArray(users) ? users : []).map((user) => [String(user.id), user.name || "未提供"]));
+    machtileHistoryRealRows = (Array.isArray(result?.items) ? result.items : []).map((item) => machtileUnifiedEventRow(item, userNames));
+    renderHistoryTimeline();
+  } catch (error) {
+    if (requestId !== machtileUnifiedHistoryRequest) return;
+    console.warn("unified history RPC failed", error);
+    machtileHistoryRealRows = [];
+    renderHistoryTimeline();
+    showToast(machtileScheduleErrorMessage(error, "紀錄時間線讀取失敗"));
+  }
 }
 
 // H2 歷史真做（2026-07-14）：strict 模式下報工/異常/加工履歷三面板改吃真資料；
@@ -10230,24 +11345,27 @@ async function machtileRenderHistoryReal() {
 }
 
 function renderReports() {
-  const total = state.workOrders.length || 1;
-  const overdue = state.workOrders.filter((order) => alertCategories(order).has("已延誤")).length;
-  const abnormal = state.workOrders.filter((order) => alertCategories(order).has("異常")).length;
+  const activeOrders = state.workOrders.filter((order) => !["completed", "shipped", "cancelled"].includes(String(order.workStatus || "").toLowerCase()));
+  const total = activeOrders.length || 1;
+  const overdue = activeOrders.filter((order) => alertCategories(order).has("已延誤")).length;
+  const abnormal = activeOrders.filter((order) => alertCategories(order).has("異常")).length;
   const completedQty = state.workOrders.reduce((sum, order) => sum + Number(order.done || 0), 0);
   const totalQty = state.workOrders.reduce((sum, order) => sum + Number(order.total || 0), 0) || 1;
-  const loadPercent = Math.round((state.machines.filter((machine) => machine.order).length / Math.max(1, state.machines.length)) * 100);
-  const onTimeRate = Math.max(0, Math.round(((total - overdue) / total) * 100));
-  const defectRate = Math.round(((abnormal + state.workOrders.filter((order) => order.risk).length) / Math.max(1, totalQty)) * 1000) / 10;
+  const managedMachines = managedMachineList();
+  const assignedMachineCount = managedMachines.filter((machine) => machine.order).length;
+  const assignedMachineRate = Math.round((assignedMachineCount / Math.max(1, managedMachines.length)) * 100);
+  const currentNotOverdueRate = Math.max(0, Math.round(((total - overdue) / total) * 100));
+  const abnormalOrderRate = Math.round((abnormal / total) * 1000) / 10;
   const programOrders = state.workOrders.filter((order) => getProgramProfile(order).programName !== "待上傳");
   const deltas = programOrders.map((order) => cycleDelta(getProgramProfile(order))).filter((value) => value !== null);
   const avgDelta = deltas.length ? Math.round(deltas.reduce((sum, value) => sum + value, 0) / deltas.length) : 0;
   const historyRuns = programOrders.reduce((sum, order) => sum + Number(getProgramProfile(order).historyRuns || 0), 0);
 
   const reportCards = [
-    { title: "準交率", value: `${onTimeRate}%`, meta: `已延誤 ${overdue} 張`, status: onTimeRate >= 90 ? "risk-green" : "risk-amber" },
-    { title: "延誤統計", value: overdue, meta: "需主管追蹤", status: overdue ? "risk-red" : "risk-green" },
-    { title: "機台負載", value: `${loadPercent}%`, meta: `${state.machines.filter((machine) => machine.order).length}/${state.machines.length} 台有工單`, status: "risk-blue" },
-    { title: "不良統計", value: `${defectRate}%`, meta: "以異常與風險估算", status: abnormal ? "risk-amber" : "risk-green" },
+    { title: "在製未逾期占比", value: `${currentNotOverdueRate}%`, meta: `目前未結工單；非準交率`, status: currentNotOverdueRate >= 90 ? "risk-green" : "risk-amber" },
+    { title: "在製逾期工單", value: overdue, meta: "目前未結且已逾期", status: overdue ? "risk-red" : "risk-green" },
+    { title: "已排工機台占比", value: `${assignedMachineRate}%`, meta: `${assignedMachineCount}/${managedMachines.length} 台有目前工單；非稼動率`, status: "risk-blue" },
+    { title: "異常工單占比", value: `${abnormalOrderRate}%`, meta: `${abnormal}/${total} 張；非正式不良率`, status: abnormal ? "risk-amber" : "risk-green" },
     { title: "加工時間偏差", value: `${avgDelta > 0 ? "+" : ""}${avgDelta}%`, meta: "與標準純加工時間比", status: avgDelta > 8 ? "risk-amber" : "risk-green" },
     { title: "歷史加工次數", value: historyRuns, meta: `${programOrders.length} 個工件已有程式履歷`, status: "risk-purple" },
   ];
@@ -10265,17 +11383,17 @@ function renderReports() {
 
     <section class="report-panel">
       <div class="panel-title">
-        <h2>機台負載</h2>
-        <span>依目前工單</span>
+        <h2>目前工單分布</h2>
+        <span>是否有目前工單；非產能／稼動率</span>
       </div>
       <div class="load-list">
-        ${state.machines.map((machine) => {
-          const value = machine.order ? Math.max(12, pct(machine.order)) : 0;
+        ${managedMachines.map((machine) => {
+          const value = machine.order ? 100 : 0;
           return `
             <div class="load-row">
               <span>${escapeHtml(machtileMachineDisplay(machine.name))}</span>
               <div class="load-track"><i style="width:${value}%"></i></div>
-              <strong>${machine.order ? `${value}%` : "空閒"}</strong>
+              <strong>${machine.order ? "有目前工單" : "無目前工單"}</strong>
             </div>
           `;
         }).join("")}
@@ -10284,10 +11402,10 @@ function renderReports() {
 
     <section class="report-panel">
       <div class="panel-title">
-        <h2>今日摘要</h2>
+        <h2>目前資料摘要</h2>
         <span>${completedQty}/${totalQty} 件</span>
       </div>
-      <p class="report-copy">今天最需要注意的是已延誤、可能延誤與待品檢卡關。報表先做輕量統計，後續可接正式 MES 工時、不良、出貨資料。</p>
+      <p class="report-copy">本頁目前是即時在製快照，不是「本週」統計。準交率需以實際交貨日對承諾交期計算；不良率需使用正式良品／不良品數；稼動率與產能負載需先確認班表、停機與標準工時。</p>
     </section>
 
     <section class="report-panel">
@@ -12877,10 +13995,10 @@ function renderMachineAdminDetail(machine) {
     </section>
 
     <section class="machine-admin-qr-block">
-      <img src="${escapeHtml(qrCodeUrl(reportUrl, 180))}" alt="${escapeHtml(machine.name)} 報工 QR Code">
+      <div class="machine-admin-qr-placeholder" aria-hidden="true">↗</div>
       <div>
-        <h4>本機台報工 QR Code</h4>
-        <p>貼在機台旁，師傅掃碼後直接進入 ${escapeHtml(machine.name)} 的手機回報頁。</p>
+        <h4>本機台報工入口</h4>
+        <p>目前直接開啟 ${escapeHtml(machine.name)} 的手機回報頁。為避免把工單路由交給第三方 QR 服務，QR 圖將等本機產碼元件完成後再啟用。</p>
         <code>${escapeHtml(reportUrl)}</code>
         <div class="machine-admin-actions">
           <a data-no-detail href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">開啟報工頁</a>
@@ -13889,6 +15007,24 @@ function bindEvents() {
       return;
     }
 
+    const historyTabButton = event.target.closest("[data-history-tab]");
+    if (historyTabButton) {
+      activeHistoryTab = historyTabButton.dataset.historyTab;
+      renderHistory();
+      return;
+    }
+
+    if (event.target.closest("[data-history-export]")) {
+      const rows = filteredHistoryRows();
+      machtileCsvDownload(
+        `machtile-${activeHistoryTab}-${new Date().toISOString().slice(0, 10)}.csv`,
+        ["類型", "事件類別", "工單", "品號／工件", "機台", "摘要", "事件時間", "系統寫入時間", "現場操作員", "系統修改人", "修改前／後", "原因", "資料來源"],
+        rows.map((row) => [row.category, row.recordType, row.orderId, row.part, row.machine, row.title, row.eventTime, row.writtenAt, row.operator, row.modifier, row.beforeAfter, row.reason, row.source]),
+      );
+      showToast(`已依目前篩選匯出 ${rows.length} 筆`);
+      return;
+    }
+
     if (event.target.closest("#aiSupportFab")) {
       openAiSupport();
       return;
@@ -13992,6 +15128,13 @@ function bindEvents() {
       }
     }
 
+    const scheduleOpenButton = event.target.closest("[data-schedule-open]");
+    if (scheduleOpenButton) {
+      machtileScheduleExpanded = scheduleOpenButton.dataset.scheduleOpen || "";
+      switchView("schedule");
+      return;
+    }
+
     if (event.target.closest("[data-no-detail]")) {
       return;
     }
@@ -14073,9 +15216,12 @@ function bindEvents() {
     if (actionButton) {
       const action = actionButton.dataset.alertAction;
       const orderId = actionButton.dataset.alertOrder || "";
-      if (machtileStrictMode() && machtileSessionActive()) {
-        if (action === "查看工單" && orderId) { openDetail(orderId); return; }
-        if (action === "調排程") { switchView("schedule"); return; }
+      if (action === "查看工單" && orderId) { openDetail(orderId); return; }
+      if (action === "調排程") {
+        const order = state.workOrders.find((item) => item.id === orderId);
+        machtileScheduleExpanded = order?.machine || "";
+        switchView("schedule");
+        return;
       }
       showToast(`${action}${orderId ? `：${orderId}` : ""}`);
       return;
