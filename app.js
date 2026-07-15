@@ -8884,6 +8884,7 @@ function normalizeMachineMaster(row) {
     code: row.machine_code || row.machine_name,
     type: row.machine_type || "other",
     rawStatus: row.status || "idle",
+    location: row.location,
     assetNo: row.asset_no,
     displayOrder: Number(row.display_order || 0),
     department: row.department_name,
@@ -9135,7 +9136,7 @@ function machtileScheduleColumns() {
   const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
     .filter((machine) => !machine.isUnassignedBucket)
     .filter(deptMatch)
-    .map((machine) => ({ code: machine.code || machine.name, name: machine.name, dept: normalizedMachineDepartment(machine) }));
+    .map((machine) => ({ code: machine.code || machine.name, name: machine.name, dept: normalizedMachineDepartment(machine), location: machine.location || "" }));
   // 與 deriveMachines 同步：主檔缺 HMC 示範機時從 baseMachines 補（Dev demo 相容）
   if (state.machineMasters.length) {
     const known = new Set(machineDefs.flatMap((machine) => [machine.name, machine.code]));
@@ -9200,11 +9201,17 @@ function renderSchedule() {
     const first = list[0];
     return `
       <button type="button" class="schedule-tile ${deptTone} ${open ? "is-open" : ""}" data-schedule-expand="${escapeHtml(def.code)}" data-schedule-list="${escapeHtml(def.code)}" aria-expanded="${open}">
-        <span class="schedule-tile-head"><strong>${escapeHtml(def.name)}</strong><span class="schedule-tile-count">${list.length} 張</span></span>
+        <span class="schedule-tile-head"><strong>${escapeHtml(def.name)}${def.location ? ` <span class="schedule-tile-alias">${escapeHtml(def.location)}</span>` : ""}</strong><span class="schedule-tile-count">${list.length} 張</span></span>
         <small>${first ? `① ${escapeHtml(first.id)} · ${escapeHtml(first.part)}` : "沒有排單"}</small>
       </button>
     `;
   };
+  const zones = [
+    { title: "車床區", match: (dept) => dept === "車床課" },
+    { title: "銑床區", match: (dept) => dept === "銑床課" },
+    { title: "其他", match: (dept) => dept !== "車床課" && dept !== "銑床課" },
+  ].map((zone) => ({ ...zone, cols: columns.filter((columnData) => zone.match(columnData.def.dept)) }))
+    .filter((zone) => zone.cols.length);
   const expandedData = columns.find((columnData) => columnData.def.code === machtileScheduleExpanded);
   const expanded = expandedData ? `
     <section class="schedule-expanded" data-schedule-col="${escapeHtml(expandedData.def.code)}">
@@ -9220,7 +9227,12 @@ function renderSchedule() {
   ` : "";
   holder.innerHTML = `
     <p class="schedule-hint">${canEdit ? "點機台卡展開排程（✕ 收合）；把「未排機」的卡直接拖到機台卡上＝派給那台機（排到最後）。展開後拖拉或 ↑↓ 排順序，第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：點機台卡看排程；排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
-    <div class="schedule-tile-grid">${columns.map(tile).join("") || '<p class="schedule-empty">這個課別沒有機台</p>'}</div>
+    ${zones.map((zone) => `
+      <section class="schedule-zone">
+        <h3 class="schedule-zone-title">${escapeHtml(zone.title)}</h3>
+        <div class="schedule-tile-grid">${zone.cols.map(tile).join("")}</div>
+      </section>
+    `).join("") || '<p class="schedule-empty">這個課別沒有機台</p>'}
     ${expanded}
     <section class="schedule-unassigned" data-schedule-col="">
       <header class="schedule-column-head">
@@ -9281,7 +9293,8 @@ async function machtileScheduleCommit(actions) {
 
 function machtileBindScheduleEvents(holder) {
   const canEdit = machtileCanEditSchedule();
-  holder.addEventListener("click", (event) => {
+  // onclick 覆寫式綁定：holder 跨重繪存活，addEventListener 會累積出 N 重觸發
+  holder.onclick = (event) => {
     const expandButton = event.target.closest("[data-schedule-expand]");
     if (expandButton) {
       const code = expandButton.dataset.scheduleExpand || "";
@@ -9301,7 +9314,7 @@ function machtileBindScheduleEvents(holder) {
     if (target < 0 || target >= list.length) return;
     [list[index], list[target]] = [list[target], list[index]];
     machtileScheduleCommit([{ colKey, orders: list }]);
-  });
+  };
 
   holder.querySelectorAll("[data-schedule-card][draggable]").forEach((card) => {
     card.addEventListener("dragstart", (event) => {

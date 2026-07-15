@@ -4187,6 +4187,21 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
 .schedule-tile-head strong { font-size: 16px; }
 
+.schedule-tile-alias {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.schedule-zone { margin-bottom: 14px; }
+
+.schedule-zone-title {
+  margin: 0 0 8px;
+  color: #1e3a8a;
+  font-size: 14px;
+  font-weight: 900;
+}
+
 .schedule-tile-count {
   border-radius: 999px;
   padding: 2px 8px;
