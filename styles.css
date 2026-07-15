@@ -4170,12 +4170,32 @@ body.report-work-route-mode .machtile-route-brand-bar {
   box-shadow: 0 6px 16px rgba(20, 20, 19, 0.1);
 }
 
-.schedule-tile.machine-dept-lathe { border-left-color: #c2410c; }
-.schedule-tile.machine-dept-mill { border-left-color: #185fa5; }
+/* 課別色鮮明版（2026-07-15 owner）：整卡上色不只細邊條 */
+.schedule-tile.machine-dept-lathe {
+  border-color: rgba(194, 65, 12, 0.45);
+  border-left: 6px solid #c2410c;
+  background: #fff1e6;
+}
+
+.schedule-tile.machine-dept-lathe .schedule-tile-count {
+  background: #c2410c;
+  color: #ffffff;
+}
+
+.schedule-tile.machine-dept-mill {
+  border-color: rgba(24, 95, 165, 0.45);
+  border-left: 6px solid #185fa5;
+  background: #e7f1fb;
+}
+
+.schedule-tile.machine-dept-mill .schedule-tile-count {
+  background: #185fa5;
+  color: #ffffff;
+}
 
 .schedule-tile.is-open {
   border-color: var(--brand-blue);
-  box-shadow: 0 0 0 2px rgba(0, 103, 255, 0.18);
+  box-shadow: 0 0 0 3px rgba(0, 103, 255, 0.28);
 }
 
 .schedule-tile-head {
@@ -4204,11 +4224,17 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .schedule-zone { margin-bottom: 14px; }
 
 .schedule-zone-title {
+  display: inline-flex;
   margin: 0 0 8px;
+  border-radius: 999px;
+  padding: 4px 12px;
   color: #1e3a8a;
   font-size: 14px;
   font-weight: 900;
 }
+
+.schedule-zone-title.zone-lathe { background: #c2410c; color: #ffffff; }
+.schedule-zone-title.zone-mill { background: #185fa5; color: #ffffff; }
 
 .schedule-tile-count {
   border-radius: 999px;

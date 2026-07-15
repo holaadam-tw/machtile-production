@@ -9207,9 +9207,9 @@ function renderSchedule() {
     `;
   };
   const zones = [
-    { title: "車床區", match: (dept) => dept === "車床課" },
-    { title: "銑床區", match: (dept) => dept === "銑床課" },
-    { title: "其他", match: (dept) => dept !== "車床課" && dept !== "銑床課" },
+    { title: "車床區", tone: "zone-lathe", match: (dept) => dept === "車床課" },
+    { title: "銑床區", tone: "zone-mill", match: (dept) => dept === "銑床課" },
+    { title: "其他", tone: "", match: (dept) => dept !== "車床課" && dept !== "銑床課" },
   ].map((zone) => ({ ...zone, cols: columns.filter((columnData) => zone.match(columnData.def.dept)) }))
     .filter((zone) => zone.cols.length);
   const expandedData = columns.find((columnData) => columnData.def.code === machtileScheduleExpanded);
@@ -9229,7 +9229,7 @@ function renderSchedule() {
     <p class="schedule-hint">${canEdit ? "點機台卡展開排程（✕ 收合）；把「未排機」的卡直接拖到機台卡上＝派給那台機（排到最後）。展開後拖拉或 ↑↓ 排順序，第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：點機台卡看排程；排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
     ${zones.map((zone) => `
       <section class="schedule-zone">
-        <h3 class="schedule-zone-title">${escapeHtml(zone.title)}</h3>
+        <h3 class="schedule-zone-title ${zone.tone}">${escapeHtml(zone.title)}</h3>
         <div class="schedule-tile-grid">${zone.cols.map(tile).join("")}</div>
       </section>
     `).join("") || '<p class="schedule-empty">這個課別沒有機台</p>'}
