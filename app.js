@@ -8995,6 +8995,7 @@ function departmentForMachine(machine) {
   if (text.includes("車")) return "車床課";
   if (text.includes("lathe")) return "車床課";
   if (text.includes("銑") || text.includes("五軸") || text.includes("mill") || text.includes("milling")) return "銑床課";
+  if (text.includes("加工中心") || text.includes("machining")) return "銑床課";
   return "其他";
 }
 
@@ -9547,9 +9548,11 @@ function renderMachineCard(machine) {
     : `${machine.code || machine.name} · ${qrReportUrl}`;
   const detailUrl = order ? workOrderDetailUrl(order.id) : "";
   const qrUrl = qrReportUrl ? qrCodeUrl(qrReportUrl) : "";
+  const dept = normalizedMachineDepartment(machine);
+  const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
 
   return `
-    <article class="machine-tile-card ${status.className}" ${detailAttr}>
+    <article class="machine-tile-card ${status.className} ${deptTone}" ${detailAttr}>
       <header class="machine-tile-header">
         <div>
           <div class="machine-title-line">
@@ -9557,6 +9560,7 @@ function renderMachineCard(machine) {
             <h2>${escapeHtml(machine.name)}</h2>
           </div>
           <span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span>
+          ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
         </div>
         <div class="machine-header-actions">
           <span class="status-pill">${escapeHtml(status.label)}</span>
