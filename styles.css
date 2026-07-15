@@ -356,12 +356,12 @@ h1 {
   filter: brightness(0.98);
 }
 
+/* DrCoolant 式：整排左右撐滿（8 張統計卡一列），不再置中縮 980px */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
-  max-width: 980px;
-  margin: 0 auto 16px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
 }
 
 .stat-card {
@@ -405,7 +405,11 @@ h1 {
   line-height: 1;
 }
 
-.filter-area,
+/* 狀態籤靠左（DrCoolant 式），警報頁的籤維持原樣 */
+.filter-area {
+  margin: 0 0 16px;
+}
+
 .alert-chips {
   max-width: 980px;
   margin: 0 auto 16px;
@@ -430,8 +434,7 @@ h1 {
 }
 
 .department-bar .department-chips {
-  max-width: 980px;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .department-chips {
