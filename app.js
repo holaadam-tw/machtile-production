@@ -209,8 +209,8 @@ const baseMachines = [
   { name: "CNC-06", type: "五軸", rawStatus: "idle" },
   { name: "CNC-07", type: "車床", rawStatus: "paused", note: "換刀中，預計 11:00 恢復" },
   { name: "CNC-08", type: "銑床", rawStatus: "maintenance", note: "主軸異音，預計 04/30 恢復" },
-  { name: "HMC-01", type: "臥式加工中心", rawStatus: "running", department: "銑床課", note: "多盤多工件報工" },
-  { name: "HMC-02", type: "臥式加工中心", rawStatus: "idle", department: "銑床課", note: "多盤多工件報工" },
+  { name: "B01", type: "臥式加工中心", rawStatus: "running", department: "銑床課", note: "多盤多工件報工" },
+  { name: "B02", type: "臥式加工中心", rawStatus: "idle", department: "銑床課", note: "多盤多工件報工" },
 ];
 
 const programProfiles = {
@@ -394,7 +394,7 @@ function hmcReportRouteUrl(machineOrName) {
   const devReadParams = config.useHmcWorklistSupabase
     ? { worklistSource: "db", quantitySource: "db" }
     : {};
-  return appRouteUrl("", { route: hmcReportRoutePath(), machine: machineName || "HMC-01", ...devReadParams });
+  return appRouteUrl("", { route: hmcReportRoutePath(), machine: machineName || "B01", ...devReadParams });
 }
 
 function sameTabReportUrlFromLink(value) {
@@ -406,7 +406,7 @@ function sameTabReportUrlFromLink(value) {
     url.searchParams.forEach((paramValue, key) => {
       if (key !== "route") params[key] = paramValue;
     });
-    if (route === hmcReportRoutePath() && !params.machine) params.machine = "HMC-01";
+    if (route === hmcReportRoutePath() && !params.machine) params.machine = "B01";
     return appRouteUrl("", {
       ...params,
     });
@@ -417,7 +417,7 @@ function sameTabReportUrlFromLink(value) {
 
 function hmcWorklistSetupRouteUrl(machineOrName, shift = "day") {
   const machineName = typeof machineOrName === "object" ? machineOrName?.name : machineOrName;
-  return appRouteUrl("", { route: hmcWorklistSetupRoutePath(), machine: machineName || "HMC-01", shift: shift || "day" });
+  return appRouteUrl("", { route: hmcWorklistSetupRoutePath(), machine: machineName || "B01", shift: shift || "day" });
 }
 
 function hmcDashboardCardsUrl() {
@@ -430,7 +430,7 @@ function hmcReportDashboardBackUrl() {
 
 function hmcSetupBackToReportUrl(machineOrName = hmcRouteMachineLabel(), shift = hmcReportState.shift) {
   const machineName = typeof machineOrName === "object" ? machineOrName?.name : machineOrName;
-  return appRouteUrl("", { route: hmcReportRoutePath(), machine: machineName || "HMC-01", shift: shift || "day" });
+  return appRouteUrl("", { route: hmcReportRoutePath(), machine: machineName || "B01", shift: shift || "day" });
 }
 
 function machineReportUrl(machineOrName) {
@@ -685,7 +685,7 @@ function hmcGuideRoutePath() {
 
 function hmcGuideRouteUrl(machineOrName, shift = "day") {
   const machineName = typeof machineOrName === "object" ? machineOrName?.name : machineOrName;
-  return appRouteUrl("", { route: hmcGuideRoutePath(), machine: machineName || "HMC-01", shift: shift || "day" });
+  return appRouteUrl("", { route: hmcGuideRoutePath(), machine: machineName || "B01", shift: shift || "day" });
 }
 
 function hmcFormalReportDraftsRoutePath() {
@@ -1828,7 +1828,7 @@ function resetHmcSetupReplaceState(nextStatus = "idle") {
 
 function hmcRouteMachineKey() {
   const params = new URLSearchParams(window.location.search);
-  return (params.get("machine") || "HMC-01").trim() || "HMC-01";
+  return (params.get("machine") || "B01").trim() || "B01";
 }
 
 function hmcRouteMachineLabel() {
@@ -1860,7 +1860,7 @@ function hmcDbWorklistReadEnabled() {
 }
 
 function hmcWorklistReadCacheKey(machineCode = hmcRouteMachineKey(), shift = hmcReportState.shift) {
-  return `${machineCode || "HMC-01"}:${shift || "day"}`;
+  return `${machineCode || "B01"}:${shift || "day"}`;
 }
 
 function canReadHmcWorklistFromSupabase() {
@@ -2441,7 +2441,7 @@ function updateHmcReportPreview() {
 function bindHmcReportEvents() {
   $("[data-hmc-report-machine]")?.addEventListener("change", (event) => {
     const url = new URL(window.location.href);
-    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    url.searchParams.set("machine", event.currentTarget.value || "B01");
     window.location.href = url.toString();
   });
   $("[data-hmc-back]")?.addEventListener("click", (event) => {
@@ -3398,7 +3398,7 @@ function bindHmcWorklistSetupEvents() {
     });
   });
   $("[data-hmc-setup-machine]")?.addEventListener("change", (event) => {
-    const machineName = event.currentTarget.value || "HMC-01";
+    const machineName = event.currentTarget.value || "B01";
     window.location.href = hmcWorklistSetupRouteUrl(machineName, hmcReportState.shift);
   });
 
@@ -4135,7 +4135,7 @@ function hmcDailyQuantityReadCacheKey(
   workDate = hmcDailyQuantityWorkDate(),
   worklistId = hmcCurrentWorklistReadState().worklist?.id || ""
 ) {
-  return `${machineCode || "HMC-01"}:${shift || "day"}:${workDate || "-"}:${worklistId || "no-worklist"}`;
+  return `${machineCode || "B01"}:${shift || "day"}:${workDate || "-"}:${worklistId || "no-worklist"}`;
 }
 
 function hmcCurrentDailyQuantityReadState() {
@@ -5087,7 +5087,7 @@ function hmcDailyCheckReviewCacheKey(
   workDate = hmcDailyQuantityWorkDate(),
   status = hmcDailyCheckReviewStatusFilter()
 ) {
-  return `${machineCode || "HMC-01"}:${shift || "day"}:${workDate || "-"}:${status || "pending_review"}`;
+  return `${machineCode || "B01"}:${shift || "day"}:${workDate || "-"}:${status || "pending_review"}`;
 }
 
 function hmcDailyCheckReviewReadState() {
@@ -5957,7 +5957,7 @@ async function hmcRunDailyCheckConversion() {
 function bindHmcDailyCheckReviewEvents() {
   $("[data-hmc-review-machine]")?.addEventListener("change", (event) => {
     const url = new URL(window.location.href);
-    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    url.searchParams.set("machine", event.currentTarget.value || "B01");
     window.location.href = url.toString();
   });
   $("#hmcReviewNote")?.addEventListener("input", (event) => {
@@ -7622,7 +7622,7 @@ function renderHmcReportRoute() {
 function bindHmcReportEvents() {
   $("[data-hmc-report-machine]")?.addEventListener("change", (event) => {
     const url = new URL(window.location.href);
-    url.searchParams.set("machine", event.currentTarget.value || "HMC-01");
+    url.searchParams.set("machine", event.currentTarget.value || "B01");
     window.location.href = url.toString();
   });
   $("[data-hmc-back]")?.addEventListener("click", (event) => {
@@ -10415,7 +10415,8 @@ function renderWorkOrderAdminSection() {
 // 進料檢驗唯讀串接（階段一，2026-07-14）：經 inspection-bridge Edge Function 讀
 // I-Reporter 品檢資料（key 只在後端）；現場操作仍在 I-Reporter，這裡是 MachTile 檢視窗。
 const machtileIrStatusLabel = {
-  pending: "待檢", in_progress: "進行中", completed: "已完成", pass: "合格", fail: "不合格", skipped: "本次免檢",
+  pending: "待檢", in_progress: "進行中", completed: "已完成", pass: "合格", fail: "不合格",
+  special_pass: "特採", skipped: "本次免檢",
 };
 
 async function machtileInspectionFetch(query) {
@@ -10810,9 +10811,9 @@ function renderAddMachineModule() {
     return `
       <form id="machtileMachineForm" class="admin-module-form">
         <label class="admin-field"><span>機台代號 *（同代號再次送出＝更新）</span>
-          <input id="machtileMcCode" type="text" required value="${escapeHtml(seed?.machine_code || "")}" ${seed ? "readonly" : ""} placeholder="例：HMC-03"></label>
+          <input id="machtileMcCode" type="text" required value="${escapeHtml(seed?.machine_code || "")}" ${seed ? "readonly" : ""} placeholder="例：B03"></label>
         <label class="admin-field"><span>機台名稱 *</span>
-          <input id="machtileMcName" type="text" required value="${escapeHtml(seed?.name || "")}" placeholder="例：HMC-03 臥式加工中心"></label>
+          <input id="machtileMcName" type="text" required value="${escapeHtml(seed?.name || "")}" placeholder="例：B03 大立加工中心"></label>
         <label class="admin-field"><span>機型</span>
           <select id="machtileMcType">${machtileMachineTypes.map((type) => `<option ${((seed?.machine_type) || "銑床") === type ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
         <label class="admin-field"><span>位置（選填）</span>
@@ -13905,7 +13906,7 @@ function bindEvents() {
       const key = drawerItem.dataset.drawerModule;
       machtileToggleAdminDrawer(false);
       if (key === "__guide") {
-        window.location.href = hmcGuideRouteUrl("HMC-01", "day");
+        window.location.href = hmcGuideRouteUrl("B01", "day");
         return;
       }
       if (key === "add") machtileMachineEditSeed = null;
