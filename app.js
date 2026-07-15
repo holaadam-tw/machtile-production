@@ -9008,6 +9008,14 @@ function normalizedMachineDepartment(machine) {
   return departmentForMachine(machine);
 }
 
+// 「A01 小瀧澤」式顯示：代號＋俗名（machines.location）；查不到俗名就只回代號
+function machtileMachineDisplay(name) {
+  if (!name) return name || "";
+  const master = state.machineMasters.find((machine) => machine.name === name || machine.code === name)
+    || state.machines.find((machine) => machine.name === name);
+  return master?.location ? `${name} ${master.location}` : name;
+}
+
 function machineTypeLabel(type) {
   const text = String(type || "");
   if (text.includes("lathe")) return "車床";
@@ -9887,7 +9895,7 @@ async function machtileRenderQcBoard() {
             const time = machtileFormatAuditTime(punch.checked_at).slice(-5);
             return `
               <div class="machtile-qc-row ${punch.result === "fail" ? "is-fail" : "is-pass"}">
-                <strong>${escapeHtml(machine.name)}</strong>
+                <strong>${escapeHtml(machtileMachineDisplay(machine.name))}</strong>
                 <span>${orderInfo}</span>
                 <em>${punch.result === "fail" ? `✗ 異常 ${time}｜${escapeHtml(punch.note || "")}` : `✓ 合格 ${time}`}</em>
                 <button type="button" data-qc-redo="${escapeHtml(type)}" data-qc-machine="${escapeHtml(machine.name)}">改判</button>
@@ -9895,7 +9903,7 @@ async function machtileRenderQcBoard() {
           }
           return `
             <div class="machtile-qc-row" data-qc-slot="${escapeHtml(type)}" data-qc-machine="${escapeHtml(machine.name)}" data-qc-wo="${escapeHtml(machine.order?.id || "")}" data-qc-part="${escapeHtml(machine.part || "")}">
-              <strong>${escapeHtml(machine.name)}</strong>
+              <strong>${escapeHtml(machtileMachineDisplay(machine.name))}</strong>
               <span>${orderInfo}</span>
               <span class="machtile-qc-actions">
                 <button type="button" class="is-pass" data-qc-punch="pass">合格</button>
@@ -10062,7 +10070,7 @@ function renderHistory() {
         <button class="history-row risk-blue" type="button" data-detail="${escapeHtml(order.id)}">
           <span class="timeline-dot"></span>
           <div>
-            <strong>${escapeHtml(order.machine || "未排機")} 回報 ${order.done}/${order.total}</strong>
+            <strong>${escapeHtml(order.machine ? machtileMachineDisplay(order.machine) : "未排機")} 回報 ${order.done}/${order.total}</strong>
             <small>${escapeHtml(order.id)} · ${escapeHtml(order.lastReport)}</small>
           </div>
           <time>${pct(order)}%</time>
@@ -10146,7 +10154,7 @@ async function machtileRenderHistoryReal() {
       const groups = new Map();
       list.forEach((run) => {
         if (run.pure_cutting_seconds == null) return;
-        const key = `${machineOf(run.machine_id)}｜${run.cnc_program_versions?.version_no || "無程式版"}`;
+        const key = `${machtileMachineDisplay(machineOf(run.machine_id))}｜${run.cnc_program_versions?.version_no || "無程式版"}`;
         const slot = groups.get(key) || { sum: 0, count: 0, qty: 0, lastDate: "" };
         slot.sum += Number(run.pure_cutting_seconds) || 0;
         slot.count += 1;
@@ -10188,7 +10196,7 @@ async function machtileRenderHistoryReal() {
           <div class="history-row risk-blue">
             <span class="timeline-dot"></span>
             <div>
-              <strong>${escapeHtml(machineOf(row.machine_id))} · ${escapeHtml(typeLabel[row.report_type] || row.report_type || "報工")} · ${row.completed_qty}/${row.defect_qty} 件</strong>
+              <strong>${escapeHtml(machtileMachineDisplay(machineOf(row.machine_id)))} · ${escapeHtml(typeLabel[row.report_type] || row.report_type || "報工")} · ${row.completed_qty}/${row.defect_qty} 件</strong>
               <small>${escapeHtml(row.work_orders?.work_order_no || "-")} · ${escapeHtml(row.work_orders?.part_name || "")}${row.cycle_time_seconds != null ? ` · 單件 ${row.cycle_time_seconds} 秒` : ""}</small>
             </div>
             <time>${escapeHtml(machtileFormatAuditTime(row.created_at))}</time>
@@ -10202,7 +10210,7 @@ async function machtileRenderHistoryReal() {
           <div class="history-row risk-red">
             <span class="timeline-dot"></span>
             <div>
-              <strong>${escapeHtml(machineOf(row.machine_id))} · ${escapeHtml(row.work_orders?.work_order_no || "-")}</strong>
+              <strong>${escapeHtml(machtileMachineDisplay(machineOf(row.machine_id)))} · ${escapeHtml(row.work_orders?.work_order_no || "-")}</strong>
               <small>${escapeHtml(row.remark || "未填異常說明")}</small>
             </div>
             <time>${escapeHtml(machtileFormatAuditTime(row.created_at))}</time>
@@ -10265,7 +10273,7 @@ function renderReports() {
           const value = machine.order ? Math.max(12, pct(machine.order)) : 0;
           return `
             <div class="load-row">
-              <span>${escapeHtml(machine.name)}</span>
+              <span>${escapeHtml(machtileMachineDisplay(machine.name))}</span>
               <div class="load-track"><i style="width:${value}%"></i></div>
               <strong>${machine.order ? `${value}%` : "空閒"}</strong>
             </div>
@@ -10380,7 +10388,7 @@ async function machtileRenderTimeStats() {
           <table class="machtile-stats-table">
             <thead><tr><th>日期</th><th>機台</th><th>報工完成</th><th>報工不良</th><th>盤點完成</th><th>盤點不良</th><th>報工筆數</th><th>平均單件</th></tr></thead>
             <tbody>
-              ${dailyRows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.machine)}</td><td>${row.reportDone}</td><td>${row.reportDefect}</td><td>${row.checkDone}</td><td>${row.checkDefect}</td><td>${row.reportCount}</td><td>${avg(row) != null ? `${avg(row)} 秒` : "—"}</td></tr>`).join("")}
+              ${dailyRows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(machtileMachineDisplay(row.machine))}</td><td>${row.reportDone}</td><td>${row.reportDefect}</td><td>${row.checkDone}</td><td>${row.checkDefect}</td><td>${row.reportCount}</td><td>${avg(row) != null ? `${avg(row)} 秒` : "—"}</td></tr>`).join("")}
             </tbody>
           </table>
         </div>
