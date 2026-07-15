@@ -418,6 +418,22 @@ h1 {
   gap: 6px;
 }
 
+/* DrCoolant 式課別列：主導覽正下方、監控/排程共用 */
+.department-bar {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.department-bar[hidden] {
+  display: none;
+}
+
+.department-bar .department-chips {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
 .department-chips {
   margin-bottom: 8px;
 }
@@ -560,7 +576,8 @@ h1 {
   font-weight: 800;
 }
 
-/* 車床課／銑床課 顏色區隔：左邊條＋課別徽章（車床＝綠、銑床＝藍） */
+/* 車床課／銑床課 顏色區隔：掃碼報工橫條＋左邊條＋課別徽章（車床＝橘、銑床＝深藍；
+   紅色保留給延誤/異常，不作課別色；課別不明維持原綠色） */
 .machine-dept-pill {
   display: inline-flex;
   margin-top: 8px;
@@ -571,11 +588,19 @@ h1 {
   font-weight: 800;
 }
 
-.machine-tile-card.machine-dept-lathe { border-left: 5px solid #0e9f6e; }
-.machine-dept-pill.machine-dept-lathe { background: #def7ec; color: #046c4e; }
+.machine-tile-card.machine-dept-lathe { border-left: 5px solid #c2410c; }
+.machine-dept-pill.machine-dept-lathe { background: #ffedd5; color: #9a3412; }
+.machine-dept-lathe a.machine-qr-card {
+  border-color: #c2410c;
+  background: #c2410c;
+}
 
-.machine-tile-card.machine-dept-mill { border-left: 5px solid #2563eb; }
-.machine-dept-pill.machine-dept-mill { background: #dbeafe; color: #1d4ed8; }
+.machine-tile-card.machine-dept-mill { border-left: 5px solid #185fa5; }
+.machine-dept-pill.machine-dept-mill { background: var(--blue-soft); color: var(--blue); }
+.machine-dept-mill a.machine-qr-card {
+  border-color: #185fa5;
+  background: #185fa5;
+}
 
 .status-pill,
 .urgent-mark {

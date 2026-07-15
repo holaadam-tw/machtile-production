@@ -9131,13 +9131,15 @@ function machtileQueuePosition(order) {
 }
 
 function machtileScheduleColumns() {
+  const deptMatch = (machine) => activeDepartmentFilter === "全部" || normalizedMachineDepartment(machine) === activeDepartmentFilter;
   const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
     .filter((machine) => !machine.isUnassignedBucket)
+    .filter(deptMatch)
     .map((machine) => ({ code: machine.code || machine.name, name: machine.name }));
   // 與 deriveMachines 同步：主檔缺 HMC 示範機時從 baseMachines 補（Dev demo 相容）
   if (state.machineMasters.length) {
     const known = new Set(machineDefs.flatMap((machine) => [machine.name, machine.code]));
-    baseMachines.filter(isHmcMachine).forEach((machine) => {
+    baseMachines.filter(isHmcMachine).filter(deptMatch).forEach((machine) => {
       if (!known.has(machine.name)) machineDefs.push({ code: machine.name, name: machine.name });
     });
   }
@@ -9145,7 +9147,8 @@ function machtileScheduleColumns() {
   const unassigned = [];
   state.workOrders.forEach((order) => {
     if (order.machine && byMachine.has(order.machine)) byMachine.get(order.machine).list.push(order);
-    else if (order.machine) byMachine.set(order.machine, { def: { code: order.machine, name: order.machine }, list: [order] });
+    // 課別篩選時，掛在其他課機台上的單不進「未排機」也不重建欄位
+    else if (order.machine) { if (activeDepartmentFilter === "全部") byMachine.set(order.machine, { def: { code: order.machine, name: order.machine }, list: [order] }); }
     else unassigned.push(order);
   });
   byMachine.forEach((column) => column.list.sort((a, b) => machtileQueuePosition(a) - machtileQueuePosition(b) || String(a.dueDate || "").localeCompare(String(b.dueDate || ""))));
@@ -12867,6 +12870,9 @@ function switchView(view) {
   $$(".nav-item, .mobile-tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
+  // 課別籤全域列：監控與排程共用（DrCoolant 式），其他頁籤收起
+  const departmentBar = $("#departmentBar");
+  if (departmentBar) departmentBar.hidden = !(view === "dashboard" || view === "schedule");
 }
 
 function setSelectedOrder(order) {
@@ -13788,6 +13794,7 @@ function bindEvents() {
       activeDepartmentFilter = departmentButton.dataset.department;
       renderFilters();
       renderWorkOrders();
+      renderSchedule();
       return;
     }
 

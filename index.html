@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260715-dept-colors">
+  <link rel="stylesheet" href="./styles.css?v=20260715-dept-bar">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -118,6 +118,10 @@
       <button class="nav-item" data-view="reports" type="button">報表</button>
     </nav>
 
+    <div id="departmentBar" class="department-bar" aria-label="課別篩選">
+      <div id="departmentChips" class="filter-chips department-chips"></div>
+    </div>
+
     <main>
       <section id="dashboardView" class="view is-active" aria-labelledby="dashboardTitle">
         <div class="view-heading">
@@ -130,7 +134,6 @@
 
         <div id="statsGrid" class="stats-grid" aria-label="今日狀態總覽"></div>
         <div class="filter-area" aria-label="機台與狀態篩選">
-          <div id="departmentChips" class="filter-chips department-chips" aria-label="課別篩選"></div>
           <div id="statusChips" class="filter-chips status-chips" aria-label="狀態篩選"></div>
         </div>
         <div id="workOrderGrid" class="machine-wall"></div>
@@ -539,6 +542,6 @@
 
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260715-dept-colors"></script>
+  <script src="./app.js?v=20260715-dept-bar"></script>
 </body>
 </html>
