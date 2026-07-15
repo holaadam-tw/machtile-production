@@ -4145,6 +4145,109 @@ body.report-work-route-mode .machtile-route-brand-bar {
   align-items: start;
 }
 
+/* 收合式排程板（2026-07-15）：機台總覽卡格＋單機展開面板＋未排機多欄格 */
+.schedule-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.schedule-tile {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--cyan-edge);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+}
+
+.schedule-tile:hover {
+  box-shadow: 0 6px 16px rgba(20, 20, 19, 0.1);
+}
+
+.schedule-tile.machine-dept-lathe { border-left-color: #c2410c; }
+.schedule-tile.machine-dept-mill { border-left-color: #185fa5; }
+
+.schedule-tile.is-open {
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 2px rgba(0, 103, 255, 0.18);
+}
+
+.schedule-tile-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.schedule-tile-head strong { font-size: 16px; }
+
+.schedule-tile-count {
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.schedule-tile small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.schedule-expanded {
+  border: 1px solid var(--brand-blue);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px;
+  margin-bottom: 14px;
+  box-shadow: 0 10px 28px rgba(0, 103, 255, 0.08);
+}
+
+.schedule-expanded-count {
+  margin-left: auto;
+  margin-right: 10px;
+}
+
+.schedule-close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.schedule-close:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.schedule-unassigned {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.schedule-unassigned-grid {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  align-items: start;
+}
+
 .schedule-column {
   border: 1px solid var(--border);
   border-radius: 12px;

@@ -9135,12 +9135,12 @@ function machtileScheduleColumns() {
   const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
     .filter((machine) => !machine.isUnassignedBucket)
     .filter(deptMatch)
-    .map((machine) => ({ code: machine.code || machine.name, name: machine.name }));
+    .map((machine) => ({ code: machine.code || machine.name, name: machine.name, dept: normalizedMachineDepartment(machine) }));
   // 與 deriveMachines 同步：主檔缺 HMC 示範機時從 baseMachines 補（Dev demo 相容）
   if (state.machineMasters.length) {
     const known = new Set(machineDefs.flatMap((machine) => [machine.name, machine.code]));
     baseMachines.filter(isHmcMachine).filter(deptMatch).forEach((machine) => {
-      if (!known.has(machine.name)) machineDefs.push({ code: machine.name, name: machine.name });
+      if (!known.has(machine.name)) machineDefs.push({ code: machine.name, name: machine.name, dept: normalizedMachineDepartment(machine) });
     });
   }
   const byMachine = new Map(machineDefs.map((machine) => [machine.name, { def: machine, list: [] }]));
@@ -9183,30 +9183,56 @@ function machtileScheduleCard(order, index, total, colKey, canEdit) {
   `;
 }
 
+// 排程板收合狀態（2026-07-15 owner：平時收合、點機台卡展開、✕ 關閉）
+let machtileScheduleExpanded = "";
+
 function renderSchedule() {
   const holder = $("#scheduleContent");
   if (!holder) return;
   const canEdit = machtileCanEditSchedule();
   const { byMachine, unassigned } = machtileScheduleColumns();
-  const column = (key, title, list) => `
-    <section class="schedule-column ${key ? "" : "schedule-column-unassigned"}" data-schedule-col="${escapeHtml(key)}">
+  const columns = [...byMachine.values()];
+  if (machtileScheduleExpanded && !columns.some((columnData) => columnData.def.code === machtileScheduleExpanded)) machtileScheduleExpanded = "";
+  const tile = (columnData) => {
+    const { def, list } = columnData;
+    const deptTone = def.dept === "車床課" ? "machine-dept-lathe" : def.dept === "銑床課" ? "machine-dept-mill" : "";
+    const open = machtileScheduleExpanded === def.code;
+    const first = list[0];
+    return `
+      <button type="button" class="schedule-tile ${deptTone} ${open ? "is-open" : ""}" data-schedule-expand="${escapeHtml(def.code)}" data-schedule-list="${escapeHtml(def.code)}" aria-expanded="${open}">
+        <span class="schedule-tile-head"><strong>${escapeHtml(def.name)}</strong><span class="schedule-tile-count">${list.length} 張</span></span>
+        <small>${first ? `① ${escapeHtml(first.id)} · ${escapeHtml(first.part)}` : "沒有排單"}</small>
+      </button>
+    `;
+  };
+  const expandedData = columns.find((columnData) => columnData.def.code === machtileScheduleExpanded);
+  const expanded = expandedData ? `
+    <section class="schedule-expanded" data-schedule-col="${escapeHtml(expandedData.def.code)}">
       <header class="schedule-column-head">
-        <div><strong>${escapeHtml(title)}</strong><small>${key ? "① 在最上面＝現在做" : "還沒派機台的工單"}</small></div>
-        <span>${list.length} 張</span>
+        <div><strong>${escapeHtml(expandedData.def.name)}</strong><small>① 在最上面＝現在做${canEdit ? "；拖卡片或 ↑↓ 排順序" : ""}</small></div>
+        <span class="schedule-expanded-count">${expandedData.list.length} 張</span>
+        <button type="button" class="schedule-close" data-schedule-expand="" aria-label="收合排程">✕</button>
       </header>
-      <div class="schedule-list" data-schedule-list="${escapeHtml(key)}">
-        ${list.map((order, index) => machtileScheduleCard(order, index, list.length, key, canEdit)).join("") || '<p class="schedule-empty">沒有工單；拖卡片過來＝派給這台機</p>'}
+      <div class="schedule-list" data-schedule-list="${escapeHtml(expandedData.def.code)}">
+        ${expandedData.list.map((order, index) => machtileScheduleCard(order, index, expandedData.list.length, expandedData.def.code, canEdit)).join("") || '<p class="schedule-empty">沒有工單；從下方「未排機」拖卡片過來＝派給這台機</p>'}
+      </div>
+    </section>
+  ` : "";
+  holder.innerHTML = `
+    <p class="schedule-hint">${canEdit ? "點機台卡展開排程（✕ 收合）；把「未排機」的卡直接拖到機台卡上＝派給那台機（排到最後）。展開後拖拉或 ↑↓ 排順序，第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：點機台卡看排程；排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
+    <div class="schedule-tile-grid">${columns.map(tile).join("") || '<p class="schedule-empty">這個課別沒有機台</p>'}</div>
+    ${expanded}
+    <section class="schedule-unassigned" data-schedule-col="">
+      <header class="schedule-column-head">
+        <div><strong>未排機</strong><small>還沒派機台的工單${canEdit ? "；拖到上面的機台卡＝派機" : ""}</small></div>
+        <span>${unassigned.length} 張</span>
+      </header>
+      <div class="schedule-list schedule-unassigned-grid" data-schedule-list="">
+        ${unassigned.map((order, index) => machtileScheduleCard(order, index, unassigned.length, "", canEdit)).join("") || '<p class="schedule-empty">沒有未排機的工單</p>'}
       </div>
     </section>
   `;
-  holder.innerHTML = `
-    <p class="schedule-hint">${canEdit ? "號碼＝加工順序（由上而下）。拖拉卡片排順序或換機台，↑↓ 也可以；每欄第 ① 張就是現場機台卡的「目前工單」。" : "唯讀檢視：排程要排程以上權限的帳號。"}${machtileStrictMode() ? "" : "（示範模式：改動只在畫面上）"}</p>
-    <div class="schedule-board">
-      ${[...byMachine.values()].map((columnData) => column(columnData.def.code, columnData.def.name, columnData.list)).join("")}
-      ${column("", "未排機", unassigned)}
-    </div>
-  `;
-  if (canEdit) machtileBindScheduleEvents(holder);
+  machtileBindScheduleEvents(holder);
 }
 
 function machtileScheduleListOrders(colKey) {
@@ -9254,9 +9280,18 @@ async function machtileScheduleCommit(actions) {
 }
 
 function machtileBindScheduleEvents(holder) {
+  const canEdit = machtileCanEditSchedule();
   holder.addEventListener("click", (event) => {
+    const expandButton = event.target.closest("[data-schedule-expand]");
+    if (expandButton) {
+      const code = expandButton.dataset.scheduleExpand || "";
+      machtileScheduleExpanded = code === machtileScheduleExpanded ? "" : code;
+      renderSchedule();
+      return;
+    }
     const moveButton = event.target.closest("[data-schedule-move]");
     if (!moveButton) return;
+    if (!canEdit) return;
     const card = moveButton.closest("[data-schedule-card]");
     const colKey = card.dataset.scheduleFrom;
     const list = [...machtileScheduleListOrders(colKey)];
