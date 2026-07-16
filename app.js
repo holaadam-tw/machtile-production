@@ -22,6 +22,18 @@ const config = {
   // 正式班表由部署設定或未來排程契約提供。null 時不推算完工日期；
   // Dev mock 另使用畫面上明確標示的範例班表，不會混入正式資料。
   scheduleCalendar: null,
+  // 暫以 YCM TCV2000A 官方規格作保守速度上限：X/Y/Z 快移 40 m/min、
+  // 切削進給 10,000 mm/min。原廠頁未提供加速度，因此不在這裡猜值。
+  gcodeEstimatorLimits: {
+    rapidRateMmMin: 40000,
+    maxFeedRateMmMin: 10000,
+    reference: "YCM TCV2000A",
+  },
+  // 歷史校正需同程式、同機台累積 5 筆有效預估／實際配對才進入 ready。
+  // 即使 ready，也不覆蓋原始 G-code 估時，兩者分開顯示。
+  gcodeCalibration: {
+    minimumSamples: 5,
+  },
   ...window.MACHTILE_CONFIG,
 };
 
@@ -12004,7 +12016,7 @@ function renderAddMachineModule() {
         <label class="admin-field"><span>狀態</span>
           <select id="machtileMcStatus">${machtileMachineStatuses.map(([value, label]) => `<option value="${value}" ${((seed?.status) || "idle") === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
         <label class="admin-field"><span>快移速度 G0（mm/min，估時用）</span>
-          <input id="machtileMcRapid" type="number" min="1000" max="200000" value="${escapeHtml(seed?.rapid_rate_mm_min ?? 60000)}"></label>
+          <input id="machtileMcRapid" type="number" min="1000" max="200000" value="${escapeHtml(seed?.rapid_rate_mm_min ?? 40000)}"></label>
         <label class="admin-field"><span>換刀時間（秒，估時用）</span>
           <input id="machtileMcToolChange" type="number" min="0" max="120" step="0.1" value="${escapeHtml(seed?.tool_change_seconds ?? 4.5)}"></label>
         <button class="admin-save-button" type="submit">${seed ? "更新機台" : "建立機台"}</button>
@@ -12058,7 +12070,7 @@ async function machtileInitMachineModule() {
         location: document.getElementById("machtileMcLocation").value.trim() || null,
         display_order: Number(document.getElementById("machtileMcOrder").value) || 0,
         status: document.getElementById("machtileMcStatus").value,
-        rapid_rate_mm_min: Number(document.getElementById("machtileMcRapid").value) || 60000,
+        rapid_rate_mm_min: Number(document.getElementById("machtileMcRapid").value) || 40000,
         tool_change_seconds: Number(document.getElementById("machtileMcToolChange").value) || 4.5,
       };
       const result = await supabaseFetch("rpc/machine_upsert", {
@@ -12997,15 +13009,42 @@ function renderTemplateModule() {
   return renderSimpleAdminList("製程模板", templates, "新增製程模板");
 }
 
-// G-code 估時 v1（2026-07-14 owner 鎖定）：FANUC/EIA 方言輕量解析——切削段長÷F、
-// 快移÷機台快移速度、M6 換刀常數、G4 暫停、G81/G73/G83 孔循環近似、每段加減速補償。
+// G-code 估時 v2：保留 FANUC/EIA 輕量解析，並透過獨立核心加入各軸速度／加速度、
+// 短行程三角速度與長行程梯形速度模型。未設定加速度時明確回退 v1 等速模型。
 // 演算法參考 CAMotics 設計思想與 MIT 授權 gcodeEstimator（無程式碼移植）。
 // 已知限制：M98 子程式/宏不展開（列警告）、G95 每轉進給以 F×S 近似、天真模型 ±20~30%，
 // 之後用加工履歷（H1）校正收斂。
 function machtileEstimateGcode(text, params = {}) {
-  const rapidRate = Number(params.rapidRate) || 60000; // mm/min
+  const configuredLimits = config.gcodeEstimatorLimits || {};
+  const rapidRateCap = Number(configuredLimits.rapidRateMmMin) || 40000;
+  const maxFeedRateCap = Number(configuredLimits.maxFeedRateMmMin) || 10000;
+  const requestedRapidRate = Number(params.rapidRate) || rapidRateCap;
+  const requestedMaxFeedRate = Number(params.maxFeedRateMmMin) || maxFeedRateCap;
+  const rapidRate = Math.min(requestedRapidRate, rapidRateCap); // mm/min
+  const maxFeedRate = Math.min(requestedMaxFeedRate, maxFeedRateCap);
   const toolChangeSec = Number(params.toolChangeSeconds) || 4.5;
-  const segmentOverheadSec = 0.04; // 加減速/處理時間近似（每運動段）
+  const segmentOverheadSec = 0.04; // 控制器逐段處理時間近似；加減速由 v2 核心負責
+  const estimatorCore = globalThis.MachTileGcodeEstimatorCore;
+  const motionProfile = estimatorCore?.createMachineProfile({
+    rapidRate,
+    maxFeedRateMmMin: maxFeedRate,
+    accelerationMmSec2: params.accelerationMmSec2,
+    axes: params.axes,
+  });
+  let accelerationAwareSegments = 0;
+  const estimateMotion = (distanceMm, requestedRateMmMin, rapid, deltas = {}) => {
+    const cappedRateMmMin = Math.min(requestedRateMmMin, rapid ? rapidRate : maxFeedRate);
+    if (!estimatorCore || !motionProfile) return (distanceMm / cappedRateMmMin) * 60;
+    const estimate = estimatorCore.estimateMotionSeconds({
+      distanceMm,
+      requestedRateMmMin: cappedRateMmMin,
+      rapid,
+      deltas,
+      profile: motionProfile,
+    });
+    if (estimate.model === "acceleration-aware") accelerationAwareSegments += 1;
+    return estimate.seconds;
+  };
   // 車床模式：dialect 'lathe' 或 auto 偵測（G96 恆線速 / G71~G76 車削循環）
   const sourceText = String(text);
   const lathe = params.dialect === "lathe"
@@ -13127,9 +13166,9 @@ function machtileEstimateGcode(text, params = {}) {
             const avgDia = (state.x + contour.minDia) / 2;
             const feed = feedRateAt(avgDia);
             const passLen = g === 71 ? contour.zSpan : Math.max((state.x - contour.minDia) / 2, 1);
-            if (feed > 0) cuttingSec += passes * (passLen / feed) * 60;
+            if (feed > 0) cuttingSec += passes * estimateMotion(passLen, feed, false, g === 71 ? { z: passLen } : { x: passLen });
             else missingFeed += 1;
-            rapidSec += passes * ((passLen / rapidRate) * 60 + 0.2);
+            rapidSec += passes * (estimateMotion(passLen, rapidRate, true, g === 71 ? { z: passLen } : { x: passLen }) + 0.2);
             segments += passes;
             warnings.add(`G${g} 粗車循環以 ${passes} 刀近似`);
           } else warnings.add(`G${g} 找不到 P~Q 輪廓段，循環未估`);
@@ -13139,7 +13178,7 @@ function machtileEstimateGcode(text, params = {}) {
         const contour = simulateContour(value.P, value.Q);
         if (contour) {
           const feed = feedRateAt((state.x + contour.minDia) / 2);
-          if (feed > 0) { cuttingSec += (contour.length / feed) * 60; segments += 1; }
+          if (feed > 0) { cuttingSec += estimateMotion(contour.length, feed, false); segments += 1; }
           else missingFeed += 1;
         } else warnings.add("G70 找不到 P~Q 輪廓段，精車未估");
       } else if (lathe && g === 76) {
@@ -13154,8 +13193,8 @@ function machtileEstimateGcode(text, params = {}) {
           const targetZ = value.Z != null ? value.Z * state.unitScale : state.z;
           const zLen = Math.max(Math.abs(targetZ - state.z), 5);
           const rpm = state.css > 0 ? rpmAt(value.X * state.unitScale) : (state.spindle || 500);
-          if (lead > 0 && rpm > 0) cuttingSec += passes * (zLen / (lead * rpm)) * 60;
-          rapidSec += passes * ((zLen / rapidRate) * 60 + 0.2);
+          if (lead > 0 && rpm > 0) cuttingSec += passes * estimateMotion(zLen, lead * rpm, false, { z: zLen });
+          rapidSec += passes * (estimateMotion(zLen, rapidRate, true, { z: zLen }) + 0.2);
           segments += passes;
           warnings.add(`G76 螺紋循環以 ${passes} 刀近似`);
           pendingG76 = null;
@@ -13170,8 +13209,8 @@ function machtileEstimateGcode(text, params = {}) {
         const feed = feedRateAt(state.x);
         if (feed > 0 && plunge > 0) {
           const factor = g === 83 || g === 73 ? 1.5 : 1;
-          cuttingSec += (plunge / feed) * 60 * factor;
-          rapidSec += (plunge / rapidRate) * 60;
+          cuttingSec += estimateMotion(plunge * factor, feed, false, { z: plunge * factor });
+          rapidSec += estimateMotion(plunge, rapidRate, true, { z: plunge });
           segments += 1;
         }
         warnings.add("含孔加工循環（G73/G81~G89），以單次進退刀近似");
@@ -13207,11 +13246,18 @@ function machtileEstimateGcode(text, params = {}) {
       }
       if (dist > 0) {
         segments += 1;
+        const linearDeltas = state.motion === 2 || state.motion === 3
+          ? {}
+          : {
+              x: lathe ? (nx - state.x) / 2 : nx - state.x,
+              y: ny - state.y,
+              z: nz - state.z,
+            };
         if (state.motion === 0) {
-          rapidSec += (dist / rapidRate) * 60 + segmentOverheadSec;
+          rapidSec += estimateMotion(dist, rapidRate, true, linearDeltas) + segmentOverheadSec;
         } else {
           const feed = feedRateAt(lathe ? (state.x + nx) / 2 : state.x);
-          if (feed > 0) cuttingSec += (dist / feed) * 60 + segmentOverheadSec;
+          if (feed > 0) cuttingSec += estimateMotion(dist, feed, false, linearDeltas) + segmentOverheadSec;
           else missingFeed += 1;
         }
       }
@@ -13221,8 +13267,20 @@ function machtileEstimateGcode(text, params = {}) {
 
   if (subCalls) warnings.add(`含 ${subCalls} 次子程式呼叫（M98），估時不含子程式內容`);
   if (missingFeed) warnings.add(`${missingFeed} 段切削缺 F 進給，已略過`);
+  if (!estimatorCore) warnings.add("G-code Estimator v2 核心未載入，已回退 v1 等速模型");
+  else if (!motionProfile.hasAcceleration) warnings.add("機台尚未設定加速度，快移／切削沿用 v1 等速模型");
+  else if (accelerationAwareSegments) warnings.add(`已對 ${accelerationAwareSegments} 段套用加速度模型；連續轉角速度尚未納入，結果偏保守`);
+  warnings.add(`速度上限採 ${configuredLimits.reference || "YCM TCV2000A"}：快移 ${rapidRateCap.toLocaleString("en-US")}、切削 ${maxFeedRateCap.toLocaleString("en-US")} mm/min`);
   const totalSec = Math.round(cuttingSec + rapidSec + dwellSec + toolChanges * toolChangeSec);
   return {
+    estimatorVersion: "v2",
+    motionModel: accelerationAwareSegments ? "acceleration-aware" : "constant-speed",
+    accelerationAwareSegments,
+    speedLimits: {
+      rapidRateMmMin: rapidRate,
+      maxFeedRateMmMin: maxFeedRate,
+      reference: configuredLimits.reference || "YCM TCV2000A",
+    },
     totalSeconds: totalSec,
     cuttingSeconds: Math.round(cuttingSec),
     rapidSeconds: Math.round(rapidSec),
@@ -13355,6 +13413,37 @@ function machtileCncTimeTable(program, runs, machineNames) {
   `;
 }
 
+function machtileCncCalibrationSummary(program, runs, rawEstimateSeconds) {
+  const core = globalThis.MachTileGcodeEstimatorCore;
+  if (!core?.summarizeCalibration || !program?.id) return null;
+  const samples = (Array.isArray(runs) ? runs : [])
+    .filter((run) => String(run.program_id || "") === String(program.id))
+    .filter((run) => !program.machine_id || String(run.machine_id || "") === String(program.machine_id))
+    .map((run) => ({
+      actualSeconds: run.pure_cutting_seconds,
+      estimatedSeconds: run.cnc_program_versions?.estimated_seconds,
+    }));
+  return core.summarizeCalibration(samples, {
+    rawEstimateSeconds,
+    minimumSamples: config.gcodeCalibration?.minimumSamples,
+  });
+}
+
+function machtileCncCalibrationMarkup(summary) {
+  if (!summary || summary.status === "no-samples") {
+    return '<span>歷史校正：尚無同程式、同機台且同時具有預估／實際時間的樣本。</span>';
+  }
+  const factor = Number(summary.correctionFactor).toFixed(2);
+  const medianActual = machtileFormatDuration(Math.round(summary.medianActualSeconds));
+  if (summary.status === "threshold-not-configured") {
+    return `<span>歷史參考：中位實際 ${medianActual}・係數 ×${factor}・${summary.sampleCount} 筆；尚未設定自動校正樣本門檻，未改動原估時。</span>`;
+  }
+  if (summary.status === "collecting") {
+    return `<span>歷史校正累積中：${summary.sampleCount}/${summary.minimumSamples} 筆・目前係數 ×${factor}；未改動原估時。</span>`;
+  }
+  return `<span>歷史建議：${machtileFormatDuration(Math.round(summary.suggestedSeconds))}（原始 ${machtileFormatDuration(Math.round(summary.rawEstimateSeconds))}・係數 ×${factor}・${summary.sampleCount} 筆）；原始值仍保留。</span>`;
+}
+
 function machtileCncRenderList(programs, runs, machineNames) {
   const holder = document.getElementById("machtileCncList");
   if (!holder) return;
@@ -13409,7 +13498,7 @@ async function machtileInitCncModule() {
     try {
       const [programRows, runRows] = await Promise.all([
         machtileCncLoadPrograms(),
-        supabaseFetch("cnc_machining_runs?select=run_date,pure_cutting_seconds,machine_id,work_orders(part_name,part_no),cnc_program_versions(version_no)&order=created_at.desc&limit=500"),
+        supabaseFetch("cnc_machining_runs?select=run_date,pure_cutting_seconds,machine_id,program_id,program_version_id,work_orders(part_name,part_no),cnc_program_versions(version_no,estimated_seconds)&order=created_at.desc&limit=500"),
       ]);
       programs = programRows;
       runsCache = Array.isArray(runRows) ? runRows : [];
@@ -13435,9 +13524,11 @@ async function machtileInitCncModule() {
     }
     (await supabaseFetch("machines?select=id,machine_code,machine_type,rapid_rate_mm_min,tool_change_seconds")).forEach((m) => {
       machineNames.set(String(m.id), m.machine_code);
+      const configuredProfile = config.gcodeMachineProfiles?.[m.machine_code] || {};
       machineParams.set(String(m.id), {
-        rapidRate: m.rapid_rate_mm_min,
-        toolChangeSeconds: Number(m.tool_change_seconds),
+        ...configuredProfile,
+        rapidRate: Number(m.rapid_rate_mm_min) || configuredProfile.rapidRate,
+        toolChangeSeconds: Number(m.tool_change_seconds) || configuredProfile.toolChangeSeconds,
         dialect: /車/.test(m.machine_type || "") || /lathe|turn/i.test(m.machine_type || "") ? "lathe" : "auto",
       });
     });
@@ -13461,14 +13552,16 @@ async function machtileInitCncModule() {
     document.getElementById("machtileCncNewFields").style.display = match ? "none" : "";
     document.getElementById("machtileCncProgramNo").value = match ? "" : progGuess;
     const nextVersion = match ? `V${(match.cnc_program_versions || []).length + 1}` : "V1";
-    // 估時 v1：用歸屬程式的機台參數（沒有就 HCN-6000 預設 60m/min＋4.5s 換刀）
-    const params = (match?.machine_id && machineParams.get(String(match.machine_id))) || { rapidRate: 60000, toolChangeSeconds: 4.5, dialect: "auto" };
+    // 估時 v2：機台若有部署設定便套用加速度模型；否則明確回退 v1 等速模型。
+    const params = (match?.machine_id && machineParams.get(String(match.machine_id))) || { rapidRate: 40000, maxFeedRateMmMin: 10000, toolChangeSeconds: 4.5, dialect: "auto" };
     pendingEstimate = machtileEstimateGcode(text, params);
-    const estLine = `⏱ 預估純加工 <strong>${machtileFormatDuration(pendingEstimate.totalSeconds)}</strong>（切削 ${machtileFormatDuration(pendingEstimate.cuttingSeconds)}｜快移 ${pendingEstimate.rapidSeconds} 秒｜換刀 ${pendingEstimate.toolChanges} 次）${pendingEstimate.warnings.length ? `<br>⚠️ ${pendingEstimate.warnings.map((w) => escapeHtml(w)).join("；")}` : ""}`;
+    const calibration = match ? machtileCncCalibrationSummary(match, runsCache, pendingEstimate.totalSeconds) : null;
+    const modelLabel = pendingEstimate.motionModel === "acceleration-aware" ? "v2 加速度模型" : "v2／等速回退";
+    const estLine = `⏱ 預估純加工 <strong>${machtileFormatDuration(pendingEstimate.totalSeconds)}</strong>（${modelLabel}｜切削 ${machtileFormatDuration(pendingEstimate.cuttingSeconds)}｜快移 ${pendingEstimate.rapidSeconds} 秒｜換刀 ${pendingEstimate.toolChanges} 次）${pendingEstimate.warnings.length ? `<br>⚠️ ${pendingEstimate.warnings.map((w) => escapeHtml(w)).join("；")}` : ""}`;
     document.getElementById("machtileCncFileInfo").innerHTML = (match
       ? `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 偵測到既有程式 <strong>${escapeHtml(match.part_name)}${match.program_no ? `・${escapeHtml(match.program_no)}` : ""}</strong>，將登錄為 <strong>${nextVersion}</strong>`
       : `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 沒有相符的既有程式，將建立<strong>新程式</strong>（程式號 ${escapeHtml(progGuess)}，請填品名）`)
-      + `<br>${estLine}`;
+      + `<br>${estLine}<br>${machtileCncCalibrationMarkup(calibration)}`;
     form.hidden = false;
     document.getElementById("machtileCncStatus").textContent = "";
   };
