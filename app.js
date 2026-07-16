@@ -14367,6 +14367,113 @@ function machtileCncEstimateMarkup(estimate, calibration = null) {
   return `⏱ 預估純加工 <strong>${machtileFormatDuration(estimate.totalSeconds)}</strong>（${modelLabel}｜切削 ${machtileFormatDuration(estimate.cuttingSeconds)}｜快移 ${estimate.rapidSeconds} 秒｜暫停 ${estimate.dwellSeconds} 秒｜換刀 ${estimate.toolChanges} 次｜移動 ${estimate.segments} 段）${warningLine}${calibrationLine}`;
 }
 
+function machtileCncCalibrationReview(program, runs, machineNames) {
+  const core = globalThis.MachTileGcodeEstimatorCore;
+  if (!core?.buildCalibrationReview || !program?.id) return null;
+  const versions = [...(program.cnc_program_versions || [])]
+    .sort((left, right) => String(right.uploaded_at || "").localeCompare(String(left.uploaded_at || "")));
+  const currentVersion = versions.find((version) => String(version.id) === String(program.current_version_id)) || versions[0];
+  const samples = (Array.isArray(runs) ? runs : []).map((run) => ({
+    sampleId: run.id,
+    programId: run.program_id,
+    machineId: run.machine_id,
+    machineLabel: machineNames.get(String(run.machine_id)) || String(run.machine_id || ""),
+    programVersionId: run.program_version_id,
+    versionLabel: run.cnc_program_versions?.version_no || "未連結程式版",
+    runDate: run.run_date || run.created_at,
+    source: run.source,
+    remark: run.remark,
+    actualSeconds: run.pure_cutting_seconds,
+    estimatedSeconds: run.cnc_program_versions?.estimated_seconds,
+  }));
+  return core.buildCalibrationReview(samples, {
+    programId: program.id,
+    currentMachineId: program.machine_id,
+    rawEstimateSeconds: currentVersion?.estimated_seconds,
+    minimumSamples: config.gcodeCalibration?.minimumSamples,
+  });
+}
+
+function machtileCncCalibrationReasonLabel(reason) {
+  return ({
+    "missing-machine": "缺機台",
+    "missing-actual": "缺實際加工秒數",
+    "missing-estimate": "缺該程式版原估時",
+  })[reason] || "資料不完整";
+}
+
+function machtileCncCalibrationReviewMarkup(program, runs, machineNames) {
+  const review = machtileCncCalibrationReview(program, runs, machineNames);
+  if (!review) {
+    return '<p class="admin-module-note">校正證據核心尚未載入；不顯示推測結果。</p>';
+  }
+  if (!review.scopedSampleCount) {
+    return `
+      <section class="machtile-calibration-review" data-calibration-program="${escapeHtml(program.id)}">
+        <div class="machtile-calibration-review-head"><strong>校正證據</strong><span>只讀</span></div>
+        <p class="admin-module-note">尚無連結到這支程式的加工履歷。先累積帶原估時與實際加工秒數的真實報工。</p>
+      </section>
+    `;
+  }
+
+  const sourceLabels = { manual: "人工", program_upload: "程式上傳", machine_log: "機台紀錄", mes_import: "MES 匯入" };
+  const groupMarkup = review.groups.map((group) => {
+    const statusLabel = group.ready ? "已達建議門檻" : `累積 ${group.sampleCount}/${group.minimumSamples || "-"}`;
+    const suggestion = group.suggestedSeconds
+      ? `建議 ${machtileFormatDuration(Math.round(group.suggestedSeconds))}`
+      : "目前程式版缺原估時，暫無建議秒數";
+    const rows = group.samples.slice(0, 20).map((sample) => `
+      <tr>
+        <td>${escapeHtml(sample.runDate || "-")}</td>
+        <td>${escapeHtml(sample.versionLabel || "-")}</td>
+        <td>${escapeHtml(machtileFormatDuration(Math.round(sample.estimatedSeconds)))}</td>
+        <td>${escapeHtml(machtileFormatDuration(Math.round(sample.actualSeconds)))}</td>
+        <td>×${escapeHtml(Number(sample.ratio).toFixed(2))}</td>
+        <td>${escapeHtml(sourceLabels[sample.source] || sample.source || "-")}${sample.remark ? `<small>${escapeHtml(sample.remark)}</small>` : ""}</td>
+      </tr>
+    `).join("");
+    return `
+      <article class="machtile-calibration-machine ${group.isCurrentMachine ? "is-current" : ""}">
+        <header>
+          <div><strong>${escapeHtml(group.machineLabel)}</strong>${group.isCurrentMachine ? "<span>目前指定機台</span>" : ""}</div>
+          <em class="${group.ready ? "is-ready" : ""}">${escapeHtml(statusLabel)}</em>
+        </header>
+        <div class="machtile-calibration-metrics">
+          <span>有效樣本 <b>${escapeHtml(group.sampleCount)}</b></span>
+          <span>中位實際 <b>${escapeHtml(machtileFormatDuration(Math.round(group.medianActualSeconds)))}</b></span>
+          <span>中位係數 <b>×${escapeHtml(Number(group.correctionFactor).toFixed(2))}</b></span>
+          <span>${escapeHtml(suggestion)}</span>
+        </div>
+        <div class="machtile-stats-table-wrap">
+          <table class="machtile-stats-table machtile-calibration-samples">
+            <thead><tr><th>加工日</th><th>程式版</th><th>原估時</th><th>實際</th><th>比值</th><th>來源／備註</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  const rejectedMarkup = review.rejectedSampleCount ? `
+    <details class="machtile-calibration-rejected">
+      <summary>基本資格不完整 ${escapeHtml(review.rejectedSampleCount)} 筆</summary>
+      <ul>${review.rejected.slice(0, 20).map((sample) => `<li><b>${escapeHtml(machtileCncCalibrationReasonLabel(sample.reason))}</b><span>${escapeHtml(sample.runDate || "-")}・${escapeHtml(sample.versionLabel || "-")}・${escapeHtml(sample.machineLabel || "未指定機台")}</span></li>`).join("")}</ul>
+    </details>
+  ` : "";
+
+  return `
+    <section class="machtile-calibration-review" data-calibration-program="${escapeHtml(program.id)}">
+      <div class="machtile-calibration-review-head">
+        <div><strong>校正證據</strong><small>同程式、同機台分組</small></div>
+        <span>只讀</span>
+      </div>
+      ${groupMarkup || '<p class="admin-module-note">目前沒有同時具備機台、原估時與實際加工秒數的有效樣本。</p>'}
+      ${rejectedMarkup}
+      <p class="machtile-calibration-guard">不會自動套用建議，也不會因數字極端就自動排除。主管採用、修改或排除樣本必須等受稽核 RPC／權限契約完成。</p>
+    </section>
+  `;
+}
+
 function machtileCncRenderList(programs, runs, machineNames) {
   const holder = document.getElementById("machtileCncList");
   if (!holder) return;
@@ -14402,6 +14509,7 @@ function machtileCncRenderList(programs, runs, machineNames) {
         `).join("")}
         <p class="machtile-cnc-time-title">⏱ 加工時間（此工件・實際）</p>
         ${machtileCncTimeTable(program, runs, machineNames)}
+        ${machtileCncCalibrationReviewMarkup(program, runs, machineNames)}
       </section>
     `;
   }).join("");
@@ -14423,7 +14531,7 @@ async function machtileInitCncModule() {
     try {
       const [programRows, runRows] = await Promise.all([
         machtileCncLoadPrograms(),
-        supabaseFetch("cnc_machining_runs?select=run_date,pure_cutting_seconds,machine_id,program_id,program_version_id,work_orders(part_name,part_no),cnc_program_versions(version_no,estimated_seconds)&order=created_at.desc&limit=500"),
+        supabaseFetch("cnc_machining_runs?select=id,run_date,qty_good,qty_defect,pure_cutting_seconds,machine_id,program_id,program_version_id,source,remark,created_at,work_orders(part_name,part_no),cnc_program_versions(version_no,estimated_seconds)&order=created_at.desc&limit=500"),
       ]);
       programs = programRows;
       runsCache = Array.isArray(runRows) ? runRows : [];

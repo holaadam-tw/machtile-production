@@ -189,9 +189,88 @@
     };
   }
 
+  // Read-only evidence review. It groups eligible samples by machine and reports
+  // missing evidence without inventing an outlier rule or changing source data.
+  function buildCalibrationReview(samples = [], input = {}) {
+    const programId = String(input.programId ?? input.program_id ?? "").trim();
+    const currentMachineId = String(input.currentMachineId ?? input.current_machine_id ?? "").trim();
+    const rawEstimateSeconds = positiveNumber(input.rawEstimateSeconds ?? input.raw_estimate_seconds);
+    const minimumSamples = positiveNumber(input.minimumSamples ?? input.minimum_samples);
+    const groups = new Map();
+    const rejected = [];
+    let scopedSampleCount = 0;
+
+    (Array.isArray(samples) ? samples : []).forEach((sample, index) => {
+      const sampleProgramId = String(sample?.programId ?? sample?.program_id ?? "").trim();
+      if (programId && sampleProgramId !== programId) return;
+      scopedSampleCount += 1;
+
+      const machineId = String(sample?.machineId ?? sample?.machine_id ?? "").trim();
+      const actualSeconds = positiveNumber(sample?.actualSeconds ?? sample?.actual_seconds);
+      const estimatedSeconds = positiveNumber(sample?.estimatedSeconds ?? sample?.estimated_seconds);
+      const normalized = {
+        sampleId: String(sample?.sampleId ?? sample?.sample_id ?? sample?.id ?? `sample-${index + 1}`),
+        machineId,
+        machineLabel: String(sample?.machineLabel ?? sample?.machine_label ?? (machineId || "未指定機台")),
+        programVersionId: String(sample?.programVersionId ?? sample?.program_version_id ?? ""),
+        versionLabel: String(sample?.versionLabel ?? sample?.version_label ?? "未連結程式版"),
+        runDate: String(sample?.runDate ?? sample?.run_date ?? sample?.created_at ?? ""),
+        source: String(sample?.source ?? "unknown"),
+        remark: String(sample?.remark ?? ""),
+        actualSeconds,
+        estimatedSeconds,
+        ratio: actualSeconds && estimatedSeconds ? actualSeconds / estimatedSeconds : null,
+      };
+
+      let reason = "";
+      if (!machineId) reason = "missing-machine";
+      else if (!actualSeconds) reason = "missing-actual";
+      else if (!estimatedSeconds) reason = "missing-estimate";
+
+      if (reason) {
+        rejected.push({ ...normalized, reason });
+        return;
+      }
+
+      const group = groups.get(machineId) || {
+        machineId,
+        machineLabel: normalized.machineLabel,
+        isCurrentMachine: Boolean(currentMachineId && currentMachineId === machineId),
+        samples: [],
+      };
+      group.samples.push(normalized);
+      groups.set(machineId, group);
+    });
+
+    const normalizedGroups = [...groups.values()].map((group) => {
+      group.samples.sort((left, right) => String(right.runDate).localeCompare(String(left.runDate)));
+      const summary = summarizeCalibration(group.samples, { rawEstimateSeconds, minimumSamples });
+      return { ...group, ...summary };
+    }).sort((left, right) => {
+      if (left.isCurrentMachine !== right.isCurrentMachine) return left.isCurrentMachine ? -1 : 1;
+      return left.machineLabel.localeCompare(right.machineLabel);
+    });
+
+    const rejectedCounts = rejected.reduce((counts, sample) => {
+      counts[sample.reason] = (counts[sample.reason] || 0) + 1;
+      return counts;
+    }, {});
+
+    return {
+      programId,
+      scopedSampleCount,
+      eligibleSampleCount: normalizedGroups.reduce((total, group) => total + group.sampleCount, 0),
+      rejectedSampleCount: rejected.length,
+      rejectedCounts,
+      groups: normalizedGroups,
+      rejected,
+    };
+  }
+
   return {
     createMachineProfile,
     estimateMotionSeconds,
     summarizeCalibration,
+    buildCalibrationReview,
   };
 });
