@@ -9265,6 +9265,8 @@ const machtileHmcRuntimeState = {
   snapshot: null,
   error: "",
   lastRevisionByMachine: new Map(),
+  action: null,
+  writePending: false,
 };
 
 function machtileTimeToMinutes(value) {
@@ -9417,6 +9419,141 @@ function machtileEnsureHmcRuntimePolling() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) machtileRefreshHmcRuntime();
   });
+}
+
+function machtileHmcRuntimeCanWrite() {
+  return machtileStrictMode() && machtileSessionActive() && state.source === "supabase"
+    && ["admin", "manager", "planner"].includes(String(machtileAuthState.role || "").toLowerCase());
+}
+
+function machtileHmcRuntimeSourceEventId() {
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `machtile-ui:${id}`;
+}
+
+function machtileHmcRuntimeErrorMessage(error) {
+  const message = String(error?.message || error || "");
+  if (message.includes("FORBIDDEN")) return "此操作需要管理者、主管或排程權限";
+  if (message.includes("TENANT_REQUIRED")) return "登入帳號尚未綁定公司";
+  if (message.includes("REASON_REQUIRED")) return "缺料或停機原因至少需要 2 個字";
+  if (message.includes("PROCESS_NOT_FOUND")) return "盤位綁定的製程已不存在，請重新整理後再試";
+  if (message.includes("INVALID_HMC_MACHINE") || message.includes("INVALID_PALLET_NO")) return "機台或交換盤資料無效，請重新整理";
+  if (message.includes("INVALID_HMC_EVENT_TYPE")) return "不支援這個 HMC 回報事件";
+  return "HMC 狀態更新失敗，請稍後重試";
+}
+
+function machtileHmcRuntimeUpdateActionNote() {
+  const eventType = $("#hmcRuntimeEventSelect")?.value || "";
+  const meta = machtileHmcRuntimeCore?.EVENT_META?.[eventType] || {};
+  const reason = $("#hmcRuntimeReasonInput");
+  if (reason) {
+    reason.required = Boolean(meta.reasonRequired);
+    reason.minLength = meta.reasonRequired ? 2 : 0;
+  }
+  const note = $("#hmcRuntimeActionNote");
+  if (note) note.textContent = meta.risk
+    ? "此事件會觸發排程重算；原因、操作人、時間與修改前後都會留下稽核紀錄。"
+    : "送出成功後才會更新盤位；事件、操作人、時間與修改前後都會留下稽核紀錄。";
+  const submit = $("#hmcRuntimeActionSubmit");
+  if (submit) submit.textContent = meta.risk ? "確認回報並重排" : "確認回報";
+}
+
+function machtileOpenHmcRuntimeAction(machineCode, palletNo = null, requestedEvent = "") {
+  if (!machtileHmcRuntimeCanWrite()) {
+    showToast("HMC 即時狀態由管理者、主管或排程人員更新");
+    return;
+  }
+  const runtime = machtileHmcRuntimeMachine(machineCode);
+  if (!runtime) {
+    showToast("HMC 即時狀態尚未載入");
+    return;
+  }
+  const numericPalletNo = palletNo === null || palletNo === "" ? null : Number(palletNo);
+  const pallet = numericPalletNo ? runtime.pallets.find((item) => item.palletNo === numericPalletNo) : null;
+  const scope = pallet ? "pallet" : "machine";
+  const defaultEvent = requestedEvent || (pallet
+    ? machtileHmcRuntimeCore.defaultPalletEvent(pallet.state)
+    : runtime.status === "stopped" ? "machine_resume" : "machine_stop");
+  machtileHmcRuntimeState.action = {
+    machineCode: runtime.machineCode,
+    palletNo: pallet?.palletNo ?? null,
+    pallet,
+    scope,
+    sourceEventId: machtileHmcRuntimeSourceEventId(),
+  };
+  const options = machtileHmcRuntimeCore.eventOptions(scope);
+  const select = $("#hmcRuntimeEventSelect");
+  select.innerHTML = options.map((option) => `<option value="${escapeHtml(option.eventType)}">${escapeHtml(option.label)}</option>`).join("");
+  select.value = options.some((option) => option.eventType === defaultEvent) ? defaultEvent : options[0]?.eventType || "";
+  $("#hmcRuntimeReasonInput").value = "";
+  $("#hmcRuntimeActionTitle").textContent = pallet ? "更新交換盤狀態" : "更新機台狀態";
+  $("#hmcRuntimeActionSummary").textContent = pallet
+    ? `${runtime.machineCode} · 盤 ${pallet.palletNo} · 目前${pallet.stateLabel}`
+    : `${runtime.machineCode} · 目前${runtime.status === "stopped" ? "臨時停機" : "可運轉"}`;
+  machtileHmcRuntimeUpdateActionNote();
+  const sheet = $("#hmcRuntimeActionSheet");
+  sheet.classList.add("is-open");
+  sheet.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => select.focus(), 50);
+}
+
+function machtileCloseHmcRuntimeAction() {
+  if (machtileHmcRuntimeState.writePending) return;
+  const sheet = $("#hmcRuntimeActionSheet");
+  sheet?.classList.remove("is-open");
+  sheet?.setAttribute("aria-hidden", "true");
+  machtileHmcRuntimeState.action = null;
+}
+
+async function machtileSubmitHmcRuntimeAction() {
+  if (machtileHmcRuntimeState.writePending || !machtileHmcRuntimeState.action) return;
+  if (!machtileHmcRuntimeCanWrite()) {
+    showToast("目前帳號沒有 HMC 狀態更新權限");
+    return;
+  }
+  const action = machtileHmcRuntimeState.action;
+  const input = {
+    machine_code: action.machineCode,
+    event_type: $("#hmcRuntimeEventSelect").value,
+    source_system: "machtile_ui",
+    source_event_id: action.sourceEventId,
+    occurred_at: new Date().toISOString(),
+    reason: $("#hmcRuntimeReasonInput").value.trim(),
+  };
+  if (action.palletNo !== null) input.pallet_no = action.palletNo;
+  if (action.pallet?.processId) input.process_id = action.pallet.processId;
+  if (action.pallet?.palletId) input.pallet_id = action.pallet.palletId;
+  if (action.pallet?.fixtureName) input.fixture_name = action.pallet.fixtureName;
+  if (action.pallet?.workOrderNo) input.work_order_no = action.pallet.workOrderNo;
+  const built = machtileHmcRuntimeCore.buildEventPayload(input, config.hmcScheduleProfiles);
+  if (!built.ok) {
+    showToast(machtileHmcRuntimeErrorMessage(built.error));
+    return;
+  }
+  machtileHmcRuntimeState.writePending = true;
+  const submit = $("#hmcRuntimeActionSubmit");
+  submit.disabled = true;
+  submit.textContent = "更新中…";
+  try {
+    const result = await supabaseFetch("rpc/hmc_runtime_event_ingest", {
+      method: "POST",
+      body: JSON.stringify({ p_payload: built.value }),
+    });
+    await machtileLoadHmcRuntime();
+    if (result?.replan_required || built.replanRequired) await machtileLoadScheduleContracts();
+    deriveMachines();
+    renderWorkOrders();
+    renderSchedule();
+    machtileHmcRuntimeState.writePending = false;
+    machtileCloseHmcRuntimeAction();
+    showToast(result?.duplicate ? "此事件已處理，畫面已同步最新狀態" : "HMC 狀態已更新並留下稽核紀錄");
+  } catch (error) {
+    showToast(machtileHmcRuntimeErrorMessage(error));
+  } finally {
+    machtileHmcRuntimeState.writePending = false;
+    submit.disabled = false;
+    machtileHmcRuntimeUpdateActionNote();
+  }
 }
 
 async function machtileLoadAttentionCenter() {
@@ -10039,6 +10176,7 @@ function machtileScheduleHmcPanel(machineDef) {
   if (!isHmcMachine(machineDef)) return "";
   const runtime = machtileHmcRuntimeMachine(machineDef);
   if (runtime && machtileHmcRuntimeState.status === "ready") {
+    const canWrite = machtileHmcRuntimeCanWrite();
     const message = runtime.status === "stopped"
       ? "機台停機中；主軸容量已凍結，後續工單改列等待重排。"
       : runtime.spindlePalletNo
@@ -10052,13 +10190,21 @@ function machtileScheduleHmcPanel(machineDef) {
         </div>
         ${runtime.pendingReplanCount ? `<span class="schedule-forecast-pill is-risk">${runtime.pendingReplanCount} 個事件待確認重排</span>` : ""}
         <div class="schedule-hmc-pallets">
-          ${runtime.pallets.map((pallet) => `
+          ${runtime.pallets.map((pallet) => canWrite ? `
+            <button type="button" class="is-${escapeHtml(pallet.tone)}" data-hmc-runtime-pallet="${escapeHtml(pallet.palletNo)}" data-hmc-runtime-machine="${escapeHtml(runtime.machineCode)}">
+              <strong>第 ${escapeHtml(pallet.palletNo)} 盤</strong>
+              <small>${escapeHtml(pallet.stateLabel)}${pallet.workOrderNo ? ` · ${escapeHtml(pallet.workOrderNo)}` : ""}</small>
+            </button>
+          ` : `
             <span class="is-${escapeHtml(pallet.tone)}">
               <strong>第 ${escapeHtml(pallet.palletNo)} 盤</strong>
               <small>${escapeHtml(pallet.stateLabel)}${pallet.workOrderNo ? ` · ${escapeHtml(pallet.workOrderNo)}` : ""}</small>
             </span>
           `).join("")}
         </div>
+        ${canWrite ? `<div class="machine-hmc-runtime-actions">
+          <button type="button" class="${runtime.status === "stopped" ? "" : "is-risk"}" data-hmc-runtime-machine-action="${escapeHtml(runtime.machineCode)}" data-hmc-runtime-event="${runtime.status === "stopped" ? "machine_resume" : "machine_stop"}">${runtime.status === "stopped" ? "恢復機台" : "回報停機"}</button>
+        </div>` : ""}
       </section>
     `;
   }
@@ -10996,20 +11142,28 @@ function machtileMonitorHmcRuntime(machine) {
   if (!runtime || (machtileHmcRuntimeState.status !== "ready" && !preview)) {
     return `<section class="machine-hmc-runtime is-waiting"><div><strong>6 盤即時狀態</strong><span>等待 HMC runtime 契約</span></div></section>`;
   }
+  const canWrite = !preview && machtileHmcRuntimeCanWrite();
   return `
-    <section class="machine-hmc-runtime ${runtime.status === "stopped" ? "is-stopped" : ""}">
+    <section class="machine-hmc-runtime ${runtime.status === "stopped" ? "is-stopped" : ""}" data-no-detail>
       <div class="machine-hmc-runtime-head">
         <strong>${escapeHtml(runtime.palletCount)} 盤即時狀態</strong>
         <span>${runtime.status === "stopped" ? "停機・排程已凍結" : runtime.spindlePalletNo ? `主軸：第 ${runtime.spindlePalletNo} 盤` : "主軸空閒"}</span>
         ${runtime.pendingReplanCount ? `<em>${runtime.pendingReplanCount} 待重排</em>` : ""}
       </div>
       <div class="machine-hmc-runtime-grid">
-        ${runtime.pallets.map((pallet) => `
+        ${runtime.pallets.map((pallet) => canWrite ? `
+          <button type="button" class="is-${escapeHtml(pallet.tone)}" data-hmc-runtime-pallet="${escapeHtml(pallet.palletNo)}" data-hmc-runtime-machine="${escapeHtml(runtime.machineCode)}" title="更新盤 ${escapeHtml(pallet.palletNo)}：${escapeHtml(pallet.workOrderNo || pallet.fixtureName || pallet.stateLabel)}">
+            <b>${escapeHtml(pallet.palletNo)}</b><small>${escapeHtml(pallet.stateLabel)}</small>
+          </button>
+        ` : `
           <span class="is-${escapeHtml(pallet.tone)}" title="${escapeHtml(pallet.workOrderNo || pallet.fixtureName || pallet.stateLabel)}">
             <b>${escapeHtml(pallet.palletNo)}</b><small>${escapeHtml(pallet.stateLabel)}</small>
           </span>
         `).join("")}
       </div>
+      ${canWrite ? `<div class="machine-hmc-runtime-actions">
+        <button type="button" class="${runtime.status === "stopped" ? "" : "is-risk"}" data-hmc-runtime-machine-action="${escapeHtml(runtime.machineCode)}" data-hmc-runtime-event="${runtime.status === "stopped" ? "machine_resume" : "machine_stop"}">${runtime.status === "stopped" ? "恢復機台" : "回報停機"}</button>
+      </div>` : ""}
     </section>
   `;
 }
@@ -16015,6 +16169,23 @@ function bindEvents() {
       return;
     }
 
+    const hmcPalletButton = event.target.closest("[data-hmc-runtime-pallet]");
+    if (hmcPalletButton) {
+      machtileOpenHmcRuntimeAction(hmcPalletButton.dataset.hmcRuntimeMachine, hmcPalletButton.dataset.hmcRuntimePallet);
+      return;
+    }
+
+    const hmcMachineButton = event.target.closest("[data-hmc-runtime-machine-action]");
+    if (hmcMachineButton) {
+      machtileOpenHmcRuntimeAction(hmcMachineButton.dataset.hmcRuntimeMachineAction, null, hmcMachineButton.dataset.hmcRuntimeEvent);
+      return;
+    }
+
+    if (event.target.closest("[data-close-hmc-runtime-action]")) {
+      machtileCloseHmcRuntimeAction();
+      return;
+    }
+
     const historyTabButton = event.target.closest("[data-history-tab]");
     if (historyTabButton) {
       activeHistoryTab = historyTabButton.dataset.historyTab;
@@ -16263,6 +16434,12 @@ function bindEvents() {
   $("#attentionActionForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     machtileSubmitAttentionAction().catch((error) => showToast(String(error?.message || error || "待處理案件更新失敗")));
+  });
+
+  $("#hmcRuntimeEventSelect")?.addEventListener("change", machtileHmcRuntimeUpdateActionNote);
+  $("#hmcRuntimeActionForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    machtileSubmitHmcRuntimeAction().catch((error) => showToast(machtileHmcRuntimeErrorMessage(error)));
   });
 
   $$(".stepper button").forEach((button) => {

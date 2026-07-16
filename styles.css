@@ -5118,15 +5118,21 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .schedule-hmc-resource > div:first-child { display: grid; gap: 3px; }
 .schedule-hmc-resource > div:first-child span { color: #475569; font-size: 12px; }
 .schedule-hmc-pallets { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px; }
-.schedule-hmc-pallets > span {
+.schedule-hmc-pallets > span,
+.schedule-hmc-pallets > button {
   display: grid;
   gap: 2px;
   border: 1px solid #99f6e4;
   border-radius: 8px;
   padding: 7px;
   background: #ffffff;
+  text-align: left;
 }
-.schedule-hmc-pallets > span.is-spindle { border-color: #2563eb; background: #dbeafe; }
+.schedule-hmc-pallets > button { cursor: pointer; font: inherit; }
+.schedule-hmc-pallets > button:hover,
+.schedule-hmc-pallets > button:focus-visible { border-color: #2563eb; outline: 2px solid rgba(37, 99, 235, 0.18); }
+.schedule-hmc-pallets > span.is-spindle,
+.schedule-hmc-pallets > button.is-spindle { border-color: #2563eb; background: #dbeafe; }
 .schedule-hmc-pallets small { color: #0f766e; font-size: 10px; font-weight: 900; }
 .schedule-hmc-pallets > span.is-spindle small { color: #1d4ed8; }
 
@@ -9757,16 +9763,31 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 
 .machine-hmc-runtime-grid > span,
-.schedule-hmc-pallets > span {
+.machine-hmc-runtime-grid > button,
+.schedule-hmc-pallets > span,
+.schedule-hmc-pallets > button {
   border: 1px solid #d8e1ec;
   background: #fff;
 }
 
-.machine-hmc-runtime-grid > span {
+.machine-hmc-runtime-grid > span,
+.machine-hmc-runtime-grid > button {
   min-width: 0;
   padding: 7px 4px;
   border-radius: 10px;
   text-align: center;
+}
+
+.machine-hmc-runtime-grid > button {
+  cursor: pointer;
+  font: inherit;
+}
+
+.machine-hmc-runtime-grid > button:hover,
+.machine-hmc-runtime-grid > button:focus-visible {
+  border-color: #2878d0;
+  box-shadow: 0 0 0 2px rgba(40, 120, 208, 0.18);
+  outline: none;
 }
 
 .machine-hmc-runtime-grid b,
@@ -9811,6 +9832,82 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .schedule-hmc-pallets .is-blocked {
   border-color: #dc5d5d;
   background: #fff0f0;
+}
+
+.machine-hmc-runtime-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.machine-hmc-runtime-actions button {
+  min-height: 32px;
+  border: 1px solid #b9cbe0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  color: #214d7d;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.machine-hmc-runtime-actions button.is-risk {
+  border-color: #e09a9a;
+  color: #b42318;
+}
+
+.hmc-runtime-action-panel {
+  max-width: 560px;
+}
+
+.hmc-runtime-action-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.hmc-runtime-action-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hmc-runtime-action-form select,
+.hmc-runtime-action-form textarea {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.hmc-runtime-action-form textarea {
+  resize: vertical;
+}
+
+.hmc-runtime-action-note {
+  margin: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.hmc-runtime-action-form .primary-submit {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-blue);
+  color: #fff;
+  font-weight: 900;
 }
 
 .schedule-hmc-resource.is-stopped {

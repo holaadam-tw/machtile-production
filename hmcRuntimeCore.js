@@ -26,6 +26,17 @@
     "machine_stop",
     "machine_resume",
   ];
+  const EVENT_META = {
+    pallet_waiting: { label: "移至外部等待", scope: "pallet" },
+    pallet_prep_start: { label: "開始外部備盤", scope: "pallet" },
+    pallet_ready: { label: "備盤完成", scope: "pallet" },
+    pallet_spindle_start: { label: "進入主軸加工", scope: "pallet" },
+    pallet_spindle_complete: { label: "主軸加工完成", scope: "pallet" },
+    material_missing: { label: "回報缺料", scope: "pallet", reasonRequired: true, risk: true },
+    material_ready: { label: "補料完成", scope: "pallet" },
+    machine_stop: { label: "機台臨時停機", scope: "machine", reasonRequired: true, risk: true },
+    machine_resume: { label: "機台恢復運轉", scope: "machine" },
+  };
   const PALLET_EVENTS = new Set(EVENT_TYPES.filter((type) => !type.startsWith("machine_")));
   const REPLAN_EVENTS = new Set(["material_missing", "material_ready", "machine_stop", "machine_resume"]);
 
@@ -133,6 +144,47 @@
     };
   }
 
+  function eventOptions(scope) {
+    return EVENT_TYPES
+      .filter((eventType) => EVENT_META[eventType]?.scope === scope)
+      .map((eventType) => ({ eventType, ...EVENT_META[eventType] }));
+  }
+
+  function defaultPalletEvent(state) {
+    return {
+      empty: "pallet_prep_start",
+      waiting: "pallet_prep_start",
+      external_preparing: "pallet_ready",
+      ready: "pallet_spindle_start",
+      spindle: "pallet_spindle_complete",
+      blocked: "pallet_waiting",
+      material_missing: "material_ready",
+    }[state] || "pallet_waiting";
+  }
+
+  function buildEventPayload(input, profiles) {
+    const event = input && typeof input === "object" ? input : {};
+    const validation = validateEvent(event, profiles);
+    if (!validation.ok) return validation;
+    const value = validation.value;
+    const payload = {
+      machine_code: value.machineCode,
+      event_type: value.eventType,
+      source_system: String(event.source_system || event.sourceSystem || "machtile_ui").trim() || "machtile_ui",
+      source_event_id: value.sourceEventId,
+      occurred_at: event.occurred_at || event.occurredAt || new Date().toISOString(),
+    };
+    if (value.palletNo !== null) payload.pallet_no = value.palletNo;
+    const reason = String(event.reason || "").trim();
+    if (reason) payload.reason = reason;
+    ["process_id", "worklist_id", "worklist_item_id", "pallet_id", "fixture_name", "work_order_no"].forEach((key) => {
+      const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+      const fieldValue = event[key] ?? event[camelKey];
+      if (fieldValue !== undefined && fieldValue !== null && String(fieldValue).trim()) payload[key] = fieldValue;
+    });
+    return { ok: true, value: payload, replanRequired: value.replanRequired };
+  }
+
   function replanReason(eventType) {
     return {
       material_missing: "缺料：移出可排程並重新計算交期",
@@ -144,9 +196,13 @@
 
   return {
     EVENT_TYPES,
+    EVENT_META,
     MACHINE_CODES,
     PALLET_STATES,
     machineProfile,
+    buildEventPayload,
+    defaultPalletEvent,
+    eventOptions,
     normalizeMachineCode,
     normalizeSnapshot,
     replanReason,
