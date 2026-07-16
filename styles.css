@@ -9447,3 +9447,39 @@ body.report-work-route-mode .machtile-route-brand-bar {
   color: #ffffff;
   font-weight: 900;
 }
+
+.machtile-capacity-grid {
+  align-items: start;
+}
+
+.machtile-capacity-summary {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 18px;
+}
+
+.machtile-capacity-summary p {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.35fr) 1fr;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.machtile-capacity-summary span,
+.machtile-capacity-list span {
+  color: #5d6b7d;
+}
+
+.machtile-capacity-list {
+  margin-top: 14px;
+}
+
+@media (max-width: 720px) {
+  .machtile-capacity-summary p {
+    grid-template-columns: 1fr;
+  }
+}

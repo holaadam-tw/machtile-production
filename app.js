@@ -19,9 +19,37 @@ const config = {
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
   enableScheduleContracts: false,
-  // 正式班表由部署設定或未來排程契約提供。null 時不推算完工日期；
-  // Dev mock 另使用畫面上明確標示的範例班表，不會混入正式資料。
-  scheduleCalendar: null,
+  // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
+  // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
+  // available only through an explicitly approved calendar exception.
+  scheduleCalendar: {
+    workdays: [1, 2, 3, 4, 5],
+    holidays: [
+      "2026-01-01",
+      "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+      "2026-02-27",
+      "2026-04-03", "2026-04-06",
+      "2026-05-01",
+      "2026-06-19",
+      "2026-09-25", "2026-09-28",
+      "2026-10-09", "2026-10-26",
+      "2026-12-25",
+    ],
+    shifts: [{
+      label: "日班",
+      startMinutes: 8 * 60,
+      endMinutes: 17 * 60,
+      breakRanges: [{ startMinutes: 12 * 60, endMinutes: 13 * 60 }],
+    }],
+    exceptions: [],
+    overtimeTemplate: { startMinutes: 17 * 60 + 30, endMinutes: 20 * 60 + 30 },
+    sourceLabel: "正式班表：週一至週五 08:00–17:00；午休 12:00–13:00；加班需主管核准",
+    holidaySource: "行政院人事行政總處 115 年辦公日曆表",
+  },
+  hmcScheduleProfiles: {
+    B01: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
+    B02: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
+  },
   // 暫以 YCM TCV2000A 官方規格作保守速度上限：X/Y/Z 快移 40 m/min、
   // 切削進給 10,000 mm/min。原廠頁未提供加速度，因此不在這裡猜值。
   gcodeEstimatorLimits: {
@@ -8960,7 +8988,7 @@ async function loadFromSupabase() {
   }
   await machtileLoadScheduleQueue();
   state.source = "supabase";
-  await machtileLoadScheduleContracts();
+  await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar()]);
 }
 
 function loadMockData() {
@@ -9198,6 +9226,93 @@ const machtileScheduleState = {
   auditEvents: [],
 };
 
+const machtileCapacityCalendarState = {
+  status: "idle",
+  snapshot: null,
+  error: "",
+};
+
+function machtileTimeToMinutes(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function machtileBreakRangesToMinutes(ranges) {
+  return (Array.isArray(ranges) ? ranges : []).map((range) => ({
+    startMinutes: machtileTimeToMinutes(range.start ?? range.starts_at),
+    endMinutes: machtileTimeToMinutes(range.end ?? range.ends_at),
+  })).filter((range) => range.startMinutes !== null && range.endMinutes !== null && range.endMinutes > range.startMinutes);
+}
+
+function machtileCalendarFromSnapshot(snapshot) {
+  if (!snapshot?.calendar || !Array.isArray(snapshot.shifts) || !snapshot.shifts.length) return null;
+  const shiftGroups = new Map();
+  snapshot.shifts.forEach((shift) => {
+    const key = [shift.shift_code, shift.starts_at, shift.ends_at, JSON.stringify(shift.break_ranges || [])].join("|");
+    if (!shiftGroups.has(key)) {
+      shiftGroups.set(key, {
+        label: shift.name || shift.shift_code || "班別",
+        startMinutes: machtileTimeToMinutes(shift.starts_at),
+        endMinutes: machtileTimeToMinutes(shift.ends_at) + (shift.crosses_midnight ? 24 * 60 : 0),
+        breakRanges: machtileBreakRangesToMinutes(shift.break_ranges),
+        weekdays: [],
+      });
+    }
+    shiftGroups.get(key).weekdays.push(Number(shift.weekday));
+  });
+  const shifts = [...shiftGroups.values()];
+  return {
+    workdays: [...new Set(shifts.flatMap((shift) => shift.weekdays))],
+    holidays: Array.isArray(config.scheduleCalendar?.holidays) ? config.scheduleCalendar.holidays : [],
+    shifts,
+    exceptions: (Array.isArray(snapshot.exceptions) ? snapshot.exceptions : []).map((item) => ({
+      id: item.id,
+      availability: item.availability,
+      exceptionType: item.exception_type,
+      start: item.starts_at,
+      end: item.ends_at,
+      reason: item.reason,
+    })),
+    overtimeTemplate: config.scheduleCalendar?.overtimeTemplate,
+    sourceLabel: `正式產能日曆 v${snapshot.calendar.version_no || 1}（主管設定）`,
+    holidaySource: config.scheduleCalendar?.holidaySource,
+    isDemo: false,
+  };
+}
+
+async function machtileLoadCapacityCalendar() {
+  if (!machtileStrictMode() || !machtileSessionActive() || state.source !== "supabase") {
+    machtileCapacityCalendarState.status = "idle";
+    machtileCapacityCalendarState.snapshot = null;
+    return;
+  }
+  machtileCapacityCalendarState.status = "loading";
+  machtileCapacityCalendarState.error = "";
+  try {
+    const snapshot = await supabaseFetch("rpc/schedule_calendar_snapshot", {
+      method: "POST",
+      body: JSON.stringify({ p_payload: {} }),
+    });
+    machtileCapacityCalendarState.snapshot = snapshot || null;
+    machtileCapacityCalendarState.status = "ready";
+    const blocksByMachine = new Map();
+    (Array.isArray(snapshot?.machine_unavailability) ? snapshot.machine_unavailability : []).forEach((block) => {
+      const code = String(block.machine_code || "");
+      if (!blocksByMachine.has(code)) blocksByMachine.set(code, []);
+      blocksByMachine.get(code).push({ id: block.id, start: block.starts_at, end: block.ends_at, reason: block.reason, type: block.unavailability_type });
+    });
+    state.machineMasters.forEach((machine) => {
+      machine.maintenanceWindows = blocksByMachine.get(String(machine.code || "")) || [];
+    });
+  } catch (error) {
+    machtileCapacityCalendarState.snapshot = null;
+    machtileCapacityCalendarState.status = "unavailable";
+    machtileCapacityCalendarState.error = String(error?.message || error || "");
+    console.warn("capacity calendar snapshot unavailable; using verified deployment calendar", error);
+  }
+}
+
 const machtileUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function machtileValidProcessId(value) {
@@ -9349,6 +9464,8 @@ async function machtileLoadScheduleContracts() {
 }
 
 function machtileScheduleCalendar() {
+  const serverCalendar = machtileCalendarFromSnapshot(machtileCapacityCalendarState.snapshot);
+  if (serverCalendar) return serverCalendar;
   const configured = config.scheduleCalendar;
   if (configured && Array.isArray(configured.workdays) && Array.isArray(configured.shifts) && configured.shifts.length) {
     return {
@@ -10331,6 +10448,7 @@ function machtileAdminDrawerGroups() {
   groups.push({ title: "機台管理", items: [
     { key: "add", icon: "➕", label: "新增機台" },
     { key: "list", icon: "🏭", label: "機台列表管理" },
+    { key: "calendar", icon: "🗓️", label: "產能日曆與保養" },
     { key: "alarm", icon: "🔔", label: "警報參數設定" },
   ]});
   const people = [{ key: "users", icon: "👥", label: "員工帳號管理" }];
@@ -11855,6 +11973,7 @@ function renderSettings() {
       <div class="admin-action-grid" aria-label="主檔與規則設定">
         ${renderAdminActionCard("add", `新增機台 (${managedMachines.length} / 50)`, "新增 CNC、車銑複合、五軸或外包站點", "blue", "add")}
         ${renderAdminActionCard("list", "機台列表管理", "編輯機台資料、狀態與 QR Code", "blue", "list")}
+        ${renderAdminActionCard("time", "產能日曆與保養", "日班、午休、例外加班、假日與機台不可排時段", "green", "calendar")}
         ${renderAdminActionCard("alarm", "警報參數設定", "LINE 通知的開關與門檻（交期/未回報/複核/開工）", "blue", "alarm")}
         ${renderAdminActionCard("users", "員工帳號管理", "主管、排程、師傅、品檢角色權限", "green", "users")}
         ${renderAdminActionCard("company", "公司資料", "公司基本資料與廠區名稱（頁首品牌）", "amber", "company")}
@@ -11905,6 +12024,7 @@ function adminModuleMeta(moduleKey) {
     add: ["Machine Create", "新增機台"],
     list: ["Machine List", "機台列表管理"],
     alarm: ["Alarm Rules", "警報參數設定"],
+    calendar: ["Capacity Calendar", "產能日曆與保養"],
     users: ["User Accounts", "員工帳號管理"],
     platform: ["Platform Admin", "平台管理"],
     workOrders: ["Work Orders", "工單管理"],
@@ -11956,6 +12076,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderMachineListModule();
     case "alarm":
       return renderAlarmRulesModule();
+    case "calendar":
+      return renderCapacityCalendarModule();
     case "users":
       return renderUsersModule();
     case "workOrders":
@@ -12142,6 +12264,154 @@ function renderMachineListModule() {
 
 function machtilePlannedModuleNote(text) {
   return `<p class="admin-module-note">🚧 規劃中：${escapeHtml(text)}</p>`;
+}
+
+function machtileCapacityRows() {
+  const snapshot = machtileCapacityCalendarState.snapshot || {};
+  return {
+    exceptions: Array.isArray(snapshot.exceptions) ? snapshot.exceptions : [],
+    blocks: Array.isArray(snapshot.machine_unavailability) ? snapshot.machine_unavailability : [],
+  };
+}
+
+function machtileFactoryDateTimeIso(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) throw new Error("INVALID_TIME_RANGE");
+  return `${text}:00+08:00`;
+}
+
+function renderCapacityCalendarModule() {
+  if (machtileStrictMode() && !machtileCanManageCompany()) {
+    return `<p class="admin-module-note">此功能需要管理者或主管權限的正式環境帳號。</p>`;
+  }
+  const { exceptions, blocks } = machtileCapacityRows();
+  const calendar = machtileCapacityCalendarState.snapshot?.calendar;
+  const contractReady = machtileStrictMode() && machtileCapacityCalendarState.status !== "unavailable";
+  const statusText = machtileCapacityCalendarState.status === "unavailable"
+    ? "Production 尚未套用產能日曆契約；目前排程先使用已驗證的部署班表。"
+    : calendar
+      ? `資料庫正式日曆 v${escapeHtml(calendar.version_no || 1)} 已啟用`
+      : "資料庫尚未建立正式日曆；目前排程先使用已驗證的部署班表。";
+  const tomorrow = new Date(Date.now() + 86400000);
+  const date = [tomorrow.getFullYear(), String(tomorrow.getMonth() + 1).padStart(2, "0"), String(tomorrow.getDate()).padStart(2, "0")].join("-");
+  return `
+    <div class="admin-module-grid machtile-capacity-grid">
+      <section class="admin-form-card">
+        <h3>正式產能規則</h3>
+        <div class="machtile-capacity-summary">
+          <p><strong>日班</strong><span>週一至週五 08:00–17:00</span></p>
+          <p><strong>固定休息</strong><span>12:00–13:00；17:00–17:30 不排程</span></p>
+          <p><strong>例外加班</strong><span>17:30–20:30；需主管逐日核准，星期六同規則</span></p>
+          <p><strong>HMC</strong><span>B01／B02 各 6 盤；主軸同時 1 盤，外部可備盤</span></p>
+          <p><strong>假日</strong><span>2026 依行政院人事行政總處辦公日曆；主管可增修例外</span></p>
+        </div>
+        <form id="machtileCalendarBaseForm" class="admin-module-form">
+          <label class="admin-field"><span>建立／更新原因 *</span><input id="machtileCalendarReason" required value="依 2026-07-16 owner 確認規則建立正式產能日曆"></label>
+          <button class="admin-save-button" type="submit" ${contractReady ? "" : "disabled"}>${contractReady ? "套用正式班表與 HMC 資源" : machtileStrictMode() ? "等待 Production DB 契約" : "Dev 預覽：正式環境才可儲存"}</button>
+          <p class="admin-module-note">${escapeHtml(statusText)} 更新會保留版本、修改人與原因。</p>
+        </form>
+      </section>
+
+      <section class="admin-form-card">
+        <h3>新增假日／例外加班</h3>
+        <form id="machtileCalendarExceptionForm" class="admin-module-form">
+          <label class="admin-field"><span>類型</span><select id="machtileCalendarAvailability"><option value="available">可排：例外加班</option><option value="unavailable">不可排：假日／停班</option></select></label>
+          <label class="admin-field"><span>開始</span><input id="machtileCalendarExceptionStart" type="datetime-local" required value="${date}T17:30"></label>
+          <label class="admin-field"><span>結束</span><input id="machtileCalendarExceptionEnd" type="datetime-local" required value="${date}T20:30"></label>
+          <label class="admin-field"><span>核准／異動原因 *</span><input id="machtileCalendarExceptionReason" required placeholder="例如：急單，主管核准星期六加班"></label>
+          <button class="admin-save-button" type="submit" ${contractReady ? "" : "disabled"}>新增日曆例外</button>
+        </form>
+        <div class="admin-data-table machtile-capacity-list">
+          ${exceptions.length ? exceptions.map((item) => `<div class="admin-data-row"><strong>${item.availability === "available" ? "可排加班" : "不可排"}</strong><span>${escapeHtml(formatDateTime(item.starts_at))} → ${escapeHtml(formatDateTime(item.ends_at))}</span><span>${escapeHtml(item.reason)}</span><button type="button" data-calendar-exception-cancel="${escapeHtml(item.id)}">撤銷</button></div>`).join("") : `<p class="empty-note">目前沒有資料庫日曆例外。</p>`}
+        </div>
+      </section>
+
+      <section class="admin-form-card">
+        <h3>機台保養／停機硬限制</h3>
+        <form id="machtileMachineBlockForm" class="admin-module-form">
+          <label class="admin-field"><span>機台</span><select id="machtileMachineBlockCode">${managedMachineList().map((machine) => `<option value="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machine.code || machine.name)}</option>`).join("")}</select></label>
+          <label class="admin-field"><span>限制類型</span><select id="machtileMachineBlockType"><option value="maintenance">保養</option><option value="planned_stop">計畫停機</option><option value="unplanned_stop">臨時停機</option><option value="offline">停用</option></select></label>
+          <label class="admin-field"><span>開始</span><input id="machtileMachineBlockStart" type="datetime-local" required value="${date}T08:00"></label>
+          <label class="admin-field"><span>結束</span><input id="machtileMachineBlockEnd" type="datetime-local" required value="${date}T12:00"></label>
+          <label class="admin-field"><span>原因 *</span><input id="machtileMachineBlockReason" required placeholder="例如：主軸預防保養"></label>
+          <button class="admin-save-button" type="submit" ${contractReady ? "" : "disabled"}>建立不可排時段</button>
+        </form>
+        <div class="admin-data-table machtile-capacity-list">
+          ${blocks.length ? blocks.map((item) => `<div class="admin-data-row"><strong>${escapeHtml(item.machine_code || "-")}・${escapeHtml(item.unavailability_type)}</strong><span>${escapeHtml(formatDateTime(item.starts_at))} → ${escapeHtml(formatDateTime(item.ends_at))}</span><span>${escapeHtml(item.reason)}</span><button type="button" data-machine-block-cancel="${escapeHtml(item.id)}">撤銷</button></div>`).join("") : `<p class="empty-note">目前沒有機台不可排時段。</p>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+async function machtileInitCapacityCalendarModule() {
+  const holder = document.getElementById("adminModuleContent");
+  if (!holder || !machtileCanManageCompany()) return;
+  const refresh = async () => {
+    await machtileLoadCapacityCalendar();
+    holder.innerHTML = renderCapacityCalendarModule();
+    bind();
+    renderSchedule();
+  };
+  const write = async (path, payload, message) => {
+    try {
+      await supabaseFetch(`rpc/${path}`, { method: "POST", body: JSON.stringify({ p_payload: payload }) });
+      showToast(message);
+      await refresh();
+    } catch (error) {
+      const text = machtileScheduleErrorMessage(error, String(error?.message || error || "儲存失敗"));
+      showToast(`儲存失敗：${text}`);
+    }
+  };
+  const bind = () => {
+    document.getElementById("machtileCalendarBaseForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      write("schedule_calendar_configure", {
+        name: "MachTile 正式產能日曆",
+        timezone: "Asia/Taipei",
+        reason: document.getElementById("machtileCalendarReason").value.trim(),
+        shifts: [{
+          shift_code: "DAY", name: "日班", weekdays: [1, 2, 3, 4, 5],
+          starts_at: "08:00", ends_at: "17:00", crosses_midnight: false,
+          break_ranges: [{ start: "12:00", end: "13:00" }],
+        }],
+        machine_profiles: [
+          { machine_code: "B01", pallet_count: 6, external_prep_allowed: true },
+          { machine_code: "B02", pallet_count: 6, external_prep_allowed: true },
+        ],
+      }, "正式產能日曆與 B01／B02 資源已更新");
+    });
+    document.getElementById("machtileCalendarExceptionForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const availability = document.getElementById("machtileCalendarAvailability").value;
+      write("schedule_calendar_exception_set", {
+        availability,
+        exception_type: availability === "available" ? "overtime" : "holiday",
+        starts_at: machtileFactoryDateTimeIso(document.getElementById("machtileCalendarExceptionStart").value),
+        ends_at: machtileFactoryDateTimeIso(document.getElementById("machtileCalendarExceptionEnd").value),
+        reason: document.getElementById("machtileCalendarExceptionReason").value.trim(),
+      }, "日曆例外已建立，排程將重新計算");
+    });
+    document.getElementById("machtileMachineBlockForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      write("machine_unavailability_set", {
+        machine_code: document.getElementById("machtileMachineBlockCode").value,
+        unavailability_type: document.getElementById("machtileMachineBlockType").value,
+        starts_at: machtileFactoryDateTimeIso(document.getElementById("machtileMachineBlockStart").value),
+        ends_at: machtileFactoryDateTimeIso(document.getElementById("machtileMachineBlockEnd").value),
+        reason: document.getElementById("machtileMachineBlockReason").value.trim(),
+      }, "機台不可排時段已建立");
+    });
+    holder.querySelectorAll("[data-calendar-exception-cancel]").forEach((button) => button.addEventListener("click", () => {
+      const reason = window.prompt("請輸入撤銷日曆例外的原因");
+      if (reason?.trim()) write("schedule_calendar_exception_cancel", { exception_id: button.dataset.calendarExceptionCancel, reason: reason.trim() }, "日曆例外已撤銷");
+    }));
+    holder.querySelectorAll("[data-machine-block-cancel]").forEach((button) => button.addEventListener("click", () => {
+      const reason = window.prompt("請輸入撤銷機台不可排時段的原因");
+      if (reason?.trim()) write("machine_unavailability_cancel", { unavailability_id: button.dataset.machineBlockCancel, reason: reason.trim() }, "機台不可排時段已撤銷");
+    }));
+  };
+  bind();
 }
 
 function renderAlarmRulesModule() {
@@ -14191,6 +14461,7 @@ function openAdminModule(moduleKey) {
   if (moduleKey === "company") machtileInitCompanyModule().catch(() => {});
   if (moduleKey === "export") machtileInitExportModule();
   if (moduleKey === "alarm") machtileInitAlarmModule().catch(() => {});
+  if (moduleKey === "calendar") machtileInitCapacityCalendarModule().catch(() => {});
   if (moduleKey === "program") machtileInitCncModule().catch(() => {});
   if (moduleKey === "inspection") machtileInitInspectionModule();
   $("#adminModuleSheet").classList.add("is-open");

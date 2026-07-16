@@ -121,6 +121,27 @@
     }).filter((window) => window.end > window.start);
   }
 
+  function normalizeRange(range, fallbackLabel) {
+    const start = new Date(range?.start ?? range?.startsAt ?? range?.starts_at);
+    const end = new Date(range?.end ?? range?.endsAt ?? range?.ends_at);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
+    return { start, end, shift: range?.label || range?.reason || fallbackLabel };
+  }
+
+  function shiftBreakBlocks(day, shift) {
+    return (Array.isArray(shift?.breakRanges) ? shift.breakRanges : [])
+      .map((range) => {
+        const startMinutes = finiteNumber(range?.startMinutes);
+        const endMinutes = finiteNumber(range?.endMinutes);
+        if (startMinutes === null || endMinutes === null || startMinutes < 0 || endMinutes <= startMinutes) return null;
+        return {
+          start: dateAtLocalMinutes(day, startMinutes),
+          end: dateAtLocalMinutes(day, endMinutes),
+        };
+      })
+      .filter(Boolean);
+  }
+
   function buildAvailabilityWindows(calendar, from, dayCount, blocks) {
     if (!calendar || !Array.isArray(calendar.shifts) || !calendar.shifts.length) return [];
     const workdays = new Set(Array.isArray(calendar.workdays) ? calendar.workdays.map(Number) : []);
@@ -128,6 +149,7 @@
     const anchor = new Date(from);
     if (Number.isNaN(anchor.getTime())) return [];
     const windows = [];
+    const calendarBlocks = [];
 
     for (let offset = -1; offset <= dayCount; offset += 1) {
       const day = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + offset, 0, 0, 0, 0);
@@ -141,10 +163,19 @@
           end: dateAtLocalMinutes(day, endMinutes),
           shift: shift.label || "班別",
         });
+        calendarBlocks.push(...shiftBreakBlocks(day, shift));
       });
     }
 
-    return subtractBlocks(windows.sort((a, b) => a.start - b.start), blocks);
+    (Array.isArray(calendar.exceptions) ? calendar.exceptions : []).forEach((exception) => {
+      const range = normalizeRange(exception, exception?.availability === "available" ? "例外加班" : "不可排時段");
+      if (!range) return;
+      if (exception.availability === "available") windows.push(range);
+      else calendarBlocks.push(range);
+    });
+
+    const mergedBlocks = [...calendarBlocks, ...(Array.isArray(blocks) ? blocks : [])];
+    return subtractBlocks(windows.sort((a, b) => a.start - b.start), mergedBlocks);
   }
 
   function allocateMinutes(windows, requestedStart, durationMinutes) {
