@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260716-calibration-review-v1">
+  <link rel="stylesheet" href="./styles.css?v=20260716-quote-calibration">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -632,14 +632,31 @@
     </section>
   </div>
 
+  <div id="calibrationActionSheet" class="sheet calibration-action-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-calibration-action></div>
+    <section class="sheet-panel calibration-action-panel" role="dialog" aria-modal="true" aria-labelledby="calibrationActionTitle">
+      <div class="sheet-header">
+        <div><p class="eyebrow">Calibration Governance</p><h2 id="calibrationActionTitle">校正決策</h2><p id="calibrationActionSummary"></p></div>
+        <button class="icon-button" type="button" data-close-calibration-action aria-label="關閉">×</button>
+      </div>
+      <form id="calibrationActionForm" class="calibration-action-form">
+        <label id="calibrationSecondsField"><span>採用秒數</span><input id="calibrationSecondsInput" type="number" min="1" step="1"></label>
+        <label><span>原因</span><textarea id="calibrationReasonInput" rows="4" required minlength="2" placeholder="例如：排除新刀具試切；依近期材料批次調整"></textarea></label>
+        <p class="calibration-action-note">原始 G-code 估時與加工履歷不會被覆蓋；本次決策會記錄操作人、時間、原因與前後值。</p>
+        <button id="calibrationActionSubmit" class="primary-submit" type="submit">確認</button>
+      </form>
+    </section>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./scheduleCore.js?v=20260716-capacity-calendar"></script>
   <script src="./attentionCenterCore.js?v=20260716-attention-center"></script>
   <script src="./hmcRuntimeCore.js?v=20260716-hmc-runtime-actions"></script>
-  <script src="./gcodeEstimatorCore.js?v=20260716-calibration-review-v1"></script>
+  <script src="./gcodeEstimatorCore.js?v=20260716-calibration-governance"></script>
+  <script src="./quote3dCore.js?v=20260716-quote3d-v1"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260716-calibration-review-v1"></script>
+  <script src="./app.js?v=20260716-quote-calibration"></script>
 </body>
 </html>

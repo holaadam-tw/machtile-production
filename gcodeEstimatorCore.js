@@ -196,6 +196,7 @@
     const currentMachineId = String(input.currentMachineId ?? input.current_machine_id ?? "").trim();
     const rawEstimateSeconds = positiveNumber(input.rawEstimateSeconds ?? input.raw_estimate_seconds);
     const minimumSamples = positiveNumber(input.minimumSamples ?? input.minimum_samples);
+    const excludedSampleIds = new Set((input.excludedSampleIds ?? input.excluded_sample_ids ?? []).map(String));
     const groups = new Map();
     const rejected = [];
     let scopedSampleCount = 0;
@@ -220,6 +221,7 @@
         actualSeconds,
         estimatedSeconds,
         ratio: actualSeconds && estimatedSeconds ? actualSeconds / estimatedSeconds : null,
+        excluded: excludedSampleIds.has(String(sample?.sampleId ?? sample?.sample_id ?? sample?.id ?? `sample-${index + 1}`)),
       };
 
       let reason = "";
@@ -244,8 +246,9 @@
 
     const normalizedGroups = [...groups.values()].map((group) => {
       group.samples.sort((left, right) => String(right.runDate).localeCompare(String(left.runDate)));
-      const summary = summarizeCalibration(group.samples, { rawEstimateSeconds, minimumSamples });
-      return { ...group, ...summary };
+      const activeSamples = group.samples.filter((sample) => !sample.excluded);
+      const summary = summarizeCalibration(activeSamples, { rawEstimateSeconds, minimumSamples });
+      return { ...group, activeSamples, excludedSamples: group.samples.filter((sample) => sample.excluded), ...summary };
     }).sort((left, right) => {
       if (left.isCurrentMachine !== right.isCurrentMachine) return left.isCurrentMachine ? -1 : 1;
       return left.machineLabel.localeCompare(right.machineLabel);

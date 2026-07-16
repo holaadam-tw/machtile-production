@@ -62,6 +62,7 @@ const config = {
   gcodeCalibration: {
     minimumSamples: 5,
   },
+  enableCalibrationGovernance: false,
   ...window.MACHTILE_CONFIG,
 };
 
@@ -14206,7 +14207,7 @@ function renderProgramModule() {
     return `
       <div class="machtile-estimate-tabs" role="tablist" aria-label="估時與估價功能">
         <button class="machtile-estimate-tab is-active" type="button" role="tab" aria-selected="true" data-estimate-tab="gcode">G-code 估時</button>
-        <button class="machtile-estimate-tab" type="button" role="tab" aria-selected="false" data-estimate-tab="3d">3D 檔估價 <span class="status-pill">建置中</span></button>
+        <button class="machtile-estimate-tab" type="button" role="tab" aria-selected="false" data-estimate-tab="3d">3D 檔初估</button>
         <button class="machtile-estimate-tab" type="button" role="tab" aria-selected="false" data-estimate-tab="history">歷史／校正</button>
       </div>
 
@@ -14258,12 +14259,30 @@ function renderProgramModule() {
       </section>
 
       <section class="machtile-estimate-panel" data-estimate-panel="3d" role="tabpanel" hidden>
-        <div class="machtile-estimate-placeholder">
-          <span class="status-pill">建置中</span>
-          <strong>STEP／STL／IGES 估價尚未開放</strong>
-          <p>目前不接受 3D 檔寫入，也不產生正式價格。待材料、毛胚、裝夾次數、機台費率、品檢與利潤規則確認後，才會開放上傳與報價。</p>
-          <small>規劃流程：3D 模型 → CAM 刀路 → 加工時間 → 現場校正 → 成本與報價</small>
-        </div>
+        <form id="machtile3dQuoteForm" class="machtile-3d-quote-form">
+          <div id="machtile3dDrop" class="machtile-cnc-drop" role="button" tabindex="0"><strong>🧊 上傳 STEP／STL／IGES</strong><span>STL 自動讀取外框與體積；STEP／IGES 第一版由人工填毛胚尺寸</span><input id="machtile3dFile" type="file" accept=".stl,.step,.stp,.iges,.igs" hidden></div>
+          <p id="machtile3dModelInfo" class="admin-module-note">尚未選擇模型。檔案只在瀏覽器分析，不會上傳資料庫。</p>
+          <div class="machtile-3d-grid">
+            <label><span>數量</span><input id="quote3dQty" type="number" min="1" value="1" required></label>
+            <label><span>材料</span><input id="quote3dMaterial" type="text" placeholder="例：6061 鋁" required></label>
+            <label><span>材料密度 g/cm³</span><input id="quote3dDensity" type="number" min="0.01" step="0.01" required></label>
+            <label><span>材料單價 元/kg</span><input id="quote3dMaterialRate" type="number" min="0" step="0.01" required></label>
+            <label><span>毛胚 X mm</span><input id="quote3dStockX" type="number" min="0.01" step="0.01" required></label>
+            <label><span>毛胚 Y mm</span><input id="quote3dStockY" type="number" min="0.01" step="0.01" required></label>
+            <label><span>毛胚 Z mm</span><input id="quote3dStockZ" type="number" min="0.01" step="0.01" required></label>
+            <label><span>裝夾次數</span><input id="quote3dSetups" type="number" min="1" value="1" required></label>
+            <label><span>每次架機分鐘</span><input id="quote3dSetupMinutes" type="number" min="0" step="0.1" required></label>
+            <label><span>單件加工分鐘</span><input id="quote3dMachiningMinutes" type="number" min="0.1" step="0.1" required></label>
+            <label><span>機台費率 元/小時</span><input id="quote3dMachineRate" type="number" min="0.01" step="0.01" required></label>
+            <label><span>單件品檢分鐘</span><input id="quote3dInspectionMinutes" type="number" min="0" step="0.1" value="0"></label>
+            <label><span>品檢費率 元/小時</span><input id="quote3dInspectionRate" type="number" min="0" step="0.01" value="0"></label>
+            <label><span>刀具／外包等一次成本</span><input id="quote3dExtraCost" type="number" min="0" step="0.01" value="0"></label>
+            <label><span>目標毛利率 %</span><input id="quote3dMargin" type="number" min="0" max="79.99" step="0.1" value="20" required></label>
+          </div>
+          <button class="admin-save-button" type="submit">計算初估價格</button>
+          <p class="machtile-calibration-guard">這是參數化初估，不是 CAM 正式報價。3D 模型不知道刀具、刀路與裝夾策略，因此加工分鐘必須由工程人員確認。</p>
+          <div id="machtile3dQuoteResult" class="machtile-3d-result" hidden></div>
+        </form>
       </section>
 
       <section class="machtile-estimate-panel" data-estimate-panel="history" role="tabpanel" hidden>
@@ -14342,6 +14361,93 @@ function machtileCncCalibrationSummary(program, runs, rawEstimateSeconds) {
   });
 }
 
+const machtileCalibrationState = {
+  sampleDecisions: new Map(),
+  baselines: new Map(),
+  action: null,
+  writePending: false,
+  refresh: null,
+};
+
+function machtileCalibrationCanWrite() {
+  return config.enableCalibrationGovernance === true && machtileStrictMode() && machtileSessionActive()
+    && state.source === "supabase" && ["admin", "manager"].includes(String(machtileAuthState.role || "").toLowerCase());
+}
+
+function machtileCalibrationEventId() {
+  return `machtile-ui:calibration:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+async function machtileLoadCalibrationGovernance() {
+  machtileCalibrationState.sampleDecisions.clear();
+  machtileCalibrationState.baselines.clear();
+  if (config.enableCalibrationGovernance !== true) return;
+  const snapshot = await supabaseFetch("rpc/cnc_calibration_snapshot", { method: "POST", body: JSON.stringify({ p_payload: {} }) });
+  (snapshot?.sample_decisions || []).forEach((row) => machtileCalibrationState.sampleDecisions.set(String(row.machining_run_id), row));
+  (snapshot?.baselines || []).forEach((row) => machtileCalibrationState.baselines.set(`${row.program_id}|${row.machine_id}`, row));
+}
+
+function machtileOpenCalibrationAction(action) {
+  if (!machtileCalibrationCanWrite()) { showToast("校正決策需要主管或管理者權限"); return; }
+  machtileCalibrationState.action = { ...action, sourceEventId: machtileCalibrationEventId() };
+  const baselineAction = action.kind === "baseline";
+  $("#calibrationSecondsField").hidden = !baselineAction || action.decisionType === "adopted";
+  $("#calibrationSecondsInput").value = baselineAction ? String(action.suggestedSeconds || "") : "";
+  $("#calibrationReasonInput").value = "";
+  $("#calibrationActionTitle").textContent = action.kind === "sample" ? (action.excluded ? "恢復校正樣本" : "排除校正樣本") : action.decisionType === "adopted" ? "採用校正建議" : "人工修改校正";
+  $("#calibrationActionSummary").textContent = baselineAction ? `歷史建議 ${machtileFormatDuration(action.suggestedSeconds)}；有效樣本 ${action.sampleIds.length} 筆` : `加工履歷 ${action.runId}`;
+  $("#calibrationActionSubmit").textContent = action.kind === "sample" ? (action.excluded ? "確認恢復" : "確認排除") : "確認並留痕";
+  const sheet = $("#calibrationActionSheet"); sheet.classList.add("is-open"); sheet.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => $("#calibrationReasonInput")?.focus(), 50);
+}
+
+function machtileCloseCalibrationAction() {
+  if (machtileCalibrationState.writePending) return;
+  $("#calibrationActionSheet")?.classList.remove("is-open");
+  $("#calibrationActionSheet")?.setAttribute("aria-hidden", "true");
+  machtileCalibrationState.action = null;
+}
+
+async function machtileSubmitCalibrationAction() {
+  const action = machtileCalibrationState.action;
+  if (!action || machtileCalibrationState.writePending) return;
+  const reason = $("#calibrationReasonInput").value.trim();
+  if (reason.length < 2) { showToast("校正決策原因至少需要 2 個字"); return; }
+  const payload = { reason, source_event_id: action.sourceEventId };
+  let rpc = "";
+  if (action.kind === "sample") {
+    rpc = "cnc_calibration_sample_decide";
+    payload.machining_run_id = action.runId;
+    payload.excluded = !action.excluded;
+  } else {
+    rpc = "cnc_calibration_baseline_decide";
+    Object.assign(payload, {
+      program_id: action.programId, machine_id: action.machineId, program_version_id: action.versionId,
+      decision_type: action.decisionType, sample_ids: action.sampleIds,
+    });
+    if (action.decisionType === "modified") {
+      const seconds = Math.round(Number($("#calibrationSecondsInput").value));
+      if (!Number.isFinite(seconds) || seconds <= 0) { showToast("人工修改秒數必須大於 0"); return; }
+      payload.adopted_seconds = seconds;
+    }
+  }
+  machtileCalibrationState.writePending = true;
+  $("#calibrationActionSubmit").disabled = true;
+  try {
+    await supabaseFetch(`rpc/${rpc}`, { method: "POST", body: JSON.stringify({ p_payload: payload }) });
+    machtileCalibrationState.writePending = false;
+    machtileCloseCalibrationAction();
+    await machtileCalibrationState.refresh?.();
+    showToast("校正決策已保存並留下稽核紀錄");
+  } catch (error) {
+    const message = String(error?.message || error || "");
+    showToast(message.includes("MINIMUM_SAMPLES_REQUIRED") ? "至少需要 5 筆未排除的有效樣本" : message.includes("FORBIDDEN") ? "此操作需要主管或管理者權限" : `校正決策失敗：${message}`);
+  } finally {
+    machtileCalibrationState.writePending = false;
+    $("#calibrationActionSubmit").disabled = false;
+  }
+}
+
 function machtileCncCalibrationMarkup(summary) {
   if (!summary || summary.status === "no-samples") {
     return '<span>歷史校正：尚無同程式、同機台且同時具有預估／實際時間的樣本。</span>';
@@ -14391,6 +14497,7 @@ function machtileCncCalibrationReview(program, runs, machineNames) {
     currentMachineId: program.machine_id,
     rawEstimateSeconds: currentVersion?.estimated_seconds,
     minimumSamples: config.gcodeCalibration?.minimumSamples,
+    excludedSampleIds: [...machtileCalibrationState.sampleDecisions.entries()].filter(([, decision]) => decision.excluded).map(([runId]) => runId),
   });
 }
 
@@ -14404,6 +14511,9 @@ function machtileCncCalibrationReasonLabel(reason) {
 
 function machtileCncCalibrationReviewMarkup(program, runs, machineNames) {
   const review = machtileCncCalibrationReview(program, runs, machineNames);
+  const canWrite = machtileCalibrationCanWrite();
+  const versions = [...(program.cnc_program_versions || [])].sort((a, b) => String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || "")));
+  const currentVersion = versions.find((version) => String(version.id) === String(program.current_version_id)) || versions[0];
   if (!review) {
     return '<p class="admin-module-note">校正證據核心尚未載入；不顯示推測結果。</p>';
   }
@@ -14422,14 +14532,16 @@ function machtileCncCalibrationReviewMarkup(program, runs, machineNames) {
     const suggestion = group.suggestedSeconds
       ? `建議 ${machtileFormatDuration(Math.round(group.suggestedSeconds))}`
       : "目前程式版缺原估時，暫無建議秒數";
+    const baseline = machtileCalibrationState.baselines.get(`${program.id}|${group.machineId}`);
     const rows = group.samples.slice(0, 20).map((sample) => `
-      <tr>
+      <tr class="${sample.excluded ? "is-excluded" : ""}">
         <td>${escapeHtml(sample.runDate || "-")}</td>
         <td>${escapeHtml(sample.versionLabel || "-")}</td>
         <td>${escapeHtml(machtileFormatDuration(Math.round(sample.estimatedSeconds)))}</td>
         <td>${escapeHtml(machtileFormatDuration(Math.round(sample.actualSeconds)))}</td>
         <td>×${escapeHtml(Number(sample.ratio).toFixed(2))}</td>
         <td>${escapeHtml(sourceLabels[sample.source] || sample.source || "-")}${sample.remark ? `<small>${escapeHtml(sample.remark)}</small>` : ""}</td>
+        <td>${canWrite ? `<button type="button" data-calibration-sample="${escapeHtml(sample.sampleId)}" data-calibration-excluded="${sample.excluded ? "true" : "false"}">${sample.excluded ? "恢復" : "排除"}</button>` : sample.excluded ? "已排除" : "—"}</td>
       </tr>
     `).join("");
     return `
@@ -14446,10 +14558,15 @@ function machtileCncCalibrationReviewMarkup(program, runs, machineNames) {
         </div>
         <div class="machtile-stats-table-wrap">
           <table class="machtile-stats-table machtile-calibration-samples">
-            <thead><tr><th>加工日</th><th>程式版</th><th>原估時</th><th>實際</th><th>比值</th><th>來源／備註</th></tr></thead>
+            <thead><tr><th>加工日</th><th>程式版</th><th>原估時</th><th>實際</th><th>比值</th><th>來源／備註</th><th>樣本</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${baseline ? `<p class="machtile-calibration-active">目前採用：${escapeHtml(machtileFormatDuration(baseline.adopted_seconds))}・${baseline.decision_type === "modified" ? "主管修改" : "採用建議"}・${escapeHtml(baseline.reason)}</p>` : ""}
+        ${canWrite && group.ready && currentVersion?.id ? `<div class="machtile-calibration-actions">
+          <button type="button" data-calibration-baseline="adopted" data-calibration-program="${escapeHtml(program.id)}" data-calibration-machine="${escapeHtml(group.machineId)}" data-calibration-version="${escapeHtml(currentVersion.id)}" data-calibration-suggested="${escapeHtml(Math.round(group.suggestedSeconds))}" data-calibration-samples="${escapeHtml(group.activeSamples.map((sample) => sample.sampleId).join(","))}">採用建議</button>
+          <button type="button" data-calibration-baseline="modified" data-calibration-program="${escapeHtml(program.id)}" data-calibration-machine="${escapeHtml(group.machineId)}" data-calibration-version="${escapeHtml(currentVersion.id)}" data-calibration-suggested="${escapeHtml(Math.round(group.suggestedSeconds))}" data-calibration-samples="${escapeHtml(group.activeSamples.map((sample) => sample.sampleId).join(","))}">人工修改</button>
+        </div>` : ""}
       </article>
     `;
   }).join("");
@@ -14465,11 +14582,11 @@ function machtileCncCalibrationReviewMarkup(program, runs, machineNames) {
     <section class="machtile-calibration-review" data-calibration-program="${escapeHtml(program.id)}">
       <div class="machtile-calibration-review-head">
         <div><strong>校正證據</strong><small>同程式、同機台分組</small></div>
-        <span>只讀</span>
+        <span>${canWrite ? "主管治理" : "只讀"}</span>
       </div>
       ${groupMarkup || '<p class="admin-module-note">目前沒有同時具備機台、原估時與實際加工秒數的有效樣本。</p>'}
       ${rejectedMarkup}
-      <p class="machtile-calibration-guard">不會自動套用建議，也不會因數字極端就自動排除。主管採用、修改或排除樣本必須等受稽核 RPC／權限契約完成。</p>
+      <p class="machtile-calibration-guard">不會自動套用建議，也不會因數字極端就自動排除；主管每次採用、修改、排除或恢復都必須填原因並留下稽核。</p>
     </section>
   `;
 }
@@ -14515,9 +14632,56 @@ function machtileCncRenderList(programs, runs, machineNames) {
   }).join("");
 }
 
+function machtileInit3dQuote() {
+  const core = globalThis.MachTileQuote3dCore;
+  const form = document.getElementById("machtile3dQuoteForm");
+  const drop = document.getElementById("machtile3dDrop");
+  const input = document.getElementById("machtile3dFile");
+  if (!core || !form || !drop || !input) return;
+  let model = null;
+  const inspect = async (file) => {
+    if (!file) return;
+    const result = core.inspectModel({ name: file.name, buffer: await file.arrayBuffer(), text: await file.text() });
+    if (!result.ok) { showToast(result.error === "UNSUPPORTED_MODEL_FORMAT" ? "僅支援 STEP、STL、IGES" : "STL 模型無法解析"); return; }
+    model = { ...result, name: file.name, size: file.size };
+    if (result.geometryAvailable) {
+      const bounds = result.bounds;
+      [["quote3dStockX", bounds.x], ["quote3dStockY", bounds.y], ["quote3dStockZ", bounds.z]].forEach(([id, value]) => { document.getElementById(id).value = Number(value.toFixed(3)); });
+      document.getElementById("machtile3dModelInfo").textContent = `${file.name}・${result.triangleCount.toLocaleString("zh-TW")} 三角面・模型外框 ${bounds.x.toFixed(2)} × ${bounds.y.toFixed(2)} × ${bounds.z.toFixed(2)} mm・體積 ${(result.volumeMm3 / 1000).toFixed(2)} cm³；毛胚欄位已帶模型外框，請自行加入加工餘量。`;
+    } else {
+      document.getElementById("machtile3dModelInfo").textContent = `${file.name}・${result.warning}`;
+    }
+  };
+  drop.addEventListener("click", () => input.click());
+  drop.addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); input.click(); } });
+  input.addEventListener("change", () => inspect(input.files?.[0]));
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("is-over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
+  drop.addEventListener("drop", (event) => { event.preventDefault(); drop.classList.remove("is-over"); inspect(event.dataTransfer?.files?.[0]); });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!model) { showToast("請先選擇 STEP、STL 或 IGES 模型"); return; }
+    const value = (id) => document.getElementById(id).value;
+    const quote = core.calculateQuote({
+      quantity: value("quote3dQty"), stockX: value("quote3dStockX"), stockY: value("quote3dStockY"), stockZ: value("quote3dStockZ"),
+      materialDensity: value("quote3dDensity"), materialPricePerKg: value("quote3dMaterialRate"), setups: value("quote3dSetups"),
+      setupMinutes: value("quote3dSetupMinutes"), machiningMinutes: value("quote3dMachiningMinutes"), machineRate: value("quote3dMachineRate"),
+      inspectionMinutes: value("quote3dInspectionMinutes"), inspectionRate: value("quote3dInspectionRate"), extraCost: value("quote3dExtraCost"), marginPct: value("quote3dMargin"),
+    });
+    if (!quote.ok) { showToast("請確認數量、毛胚、材料、架機、加工費率與毛利率"); return; }
+    const money = (amount) => Number(amount).toLocaleString("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 });
+    const result = document.getElementById("machtile3dQuoteResult");
+    result.hidden = false;
+    result.innerHTML = `<header><div><span>參數化初估</span><strong>${money(quote.quoteTotal)}</strong></div><em>${quote.quantity} 件・單件 ${money(quote.quotePerPart)}</em></header>
+      <dl><div><dt>材料／單件</dt><dd>${money(quote.materialPerPart)}</dd></div><div><dt>架機成本</dt><dd>${money(quote.setupCost)}</dd></div><div><dt>加工／單件</dt><dd>${money(quote.machiningPerPart)}</dd></div><div><dt>品檢／單件</dt><dd>${money(quote.inspectionPerPart)}</dd></div><div><dt>總成本</dt><dd>${money(quote.cost)}</dd></div><div><dt>目標毛利</dt><dd>${money(quote.profit)}（${quote.marginPct}%）</dd></div></dl>
+      <p>${escapeHtml(value("quote3dMaterial"))}・毛胚重 ${quote.stockWeightKg.toFixed(3)} kg／件・模型 ${escapeHtml(model.name)}。尚未包含 CAM 刀路驗證，正式報價前需工程覆核。</p>`;
+  });
+}
+
 async function machtileInitCncModule() {
   const form = document.getElementById("machtileCncForm");
   if (!form) return;
+  machtileInit3dQuote();
   let programs = [];
   let runsCache = [];
   const machineNames = new Map();
@@ -14529,6 +14693,7 @@ async function machtileInitCncModule() {
   let activeSourceMode = "file";
   const refresh = async () => {
     try {
+      await machtileLoadCalibrationGovernance();
       const [programRows, runRows] = await Promise.all([
         machtileCncLoadPrograms(),
         supabaseFetch("cnc_machining_runs?select=id,run_date,qty_good,qty_defect,pure_cutting_seconds,machine_id,program_id,program_version_id,source,remark,created_at,work_orders(part_name,part_no),cnc_program_versions(version_no,estimated_seconds)&order=created_at.desc&limit=500"),
@@ -14640,6 +14805,7 @@ async function machtileInitCncModule() {
       panel.hidden = panel.dataset.gcodeSourcePanel !== selected;
     });
   };
+  machtileCalibrationState.refresh = refresh;
   sourceModeButtons.forEach((button) => button.addEventListener("click", () => setSourceMode(button.dataset.gcodeSourceMode)));
 
   const pasteInput = document.getElementById("machtileCncPasteInput");
@@ -16377,6 +16543,25 @@ function bindEvents() {
       return;
     }
 
+    const calibrationSample = event.target.closest("[data-calibration-sample]");
+    if (calibrationSample) {
+      machtileOpenCalibrationAction({ kind: "sample", runId: calibrationSample.dataset.calibrationSample, excluded: calibrationSample.dataset.calibrationExcluded === "true" });
+      return;
+    }
+
+    const calibrationBaseline = event.target.closest("[data-calibration-baseline]");
+    if (calibrationBaseline) {
+      machtileOpenCalibrationAction({
+        kind: "baseline", decisionType: calibrationBaseline.dataset.calibrationBaseline,
+        programId: calibrationBaseline.dataset.calibrationProgram, machineId: calibrationBaseline.dataset.calibrationMachine,
+        versionId: calibrationBaseline.dataset.calibrationVersion, suggestedSeconds: Number(calibrationBaseline.dataset.calibrationSuggested),
+        sampleIds: String(calibrationBaseline.dataset.calibrationSamples || "").split(",").filter(Boolean),
+      });
+      return;
+    }
+
+    if (event.target.closest("[data-close-calibration-action]")) { machtileCloseCalibrationAction(); return; }
+
     const adminModuleButton = event.target.closest("[data-admin-module]");
     if (adminModuleButton) {
       if (adminModuleButton.dataset.adminModule === "add") machtileMachineEditSeed = null;
@@ -16548,6 +16733,10 @@ function bindEvents() {
   $("#hmcRuntimeActionForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     machtileSubmitHmcRuntimeAction().catch((error) => showToast(machtileHmcRuntimeErrorMessage(error)));
+  });
+  $("#calibrationActionForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    machtileSubmitCalibrationAction();
   });
 
   $$(".stepper button").forEach((button) => {

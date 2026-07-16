@@ -10006,6 +10006,41 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 900;
 }
 
+.calibration-action-panel { max-width: 560px; }
+.calibration-action-form { display: grid; gap: 14px; padding: 18px; }
+.calibration-action-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.calibration-action-form input,
+.calibration-action-form textarea { width: 100%; border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; background: var(--surface); color: var(--text); font: inherit; }
+.calibration-action-note { margin: 0; border-radius: 10px; padding: 10px 12px; background: var(--surface-soft); color: var(--muted); font-size: 12px; line-height: 1.55; }
+.calibration-action-form .primary-submit { min-height: 44px; border: 0; border-radius: 10px; background: var(--brand-blue); color: #fff; font-weight: 900; }
+.machtile-calibration-samples tr.is-excluded { opacity: .55; text-decoration: line-through; }
+.machtile-calibration-samples td:last-child button { border: 1px solid #c7d4e3; border-radius: 7px; padding: 5px 8px; background: #fff; color: #345; font-weight: 800; }
+.machtile-calibration-actions { display: flex; gap: 8px; margin-top: 10px; }
+.machtile-calibration-actions button { border: 0; border-radius: 8px; padding: 8px 12px; background: var(--brand-blue); color: #fff; font-weight: 900; }
+.machtile-calibration-actions button + button { background: #eef3f8; color: #234; }
+.machtile-calibration-active { margin: 10px 0 0; border-radius: 8px; padding: 8px 10px; background: #eaf9f1; color: #17623d; font-size: 12px; font-weight: 800; }
+
+.machtile-3d-quote-form { display: grid; gap: 14px; }
+.machtile-3d-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.machtile-3d-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.machtile-3d-grid input { min-width: 0; border: 1px solid var(--border-strong); border-radius: 9px; padding: 9px 10px; background: #fff; font: inherit; }
+.machtile-3d-result { border: 1px solid #9fc6b0; border-radius: 12px; padding: 16px; background: #f0fbf5; }
+.machtile-3d-result header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.machtile-3d-result header span,
+.machtile-3d-result header strong { display: block; }
+.machtile-3d-result header strong { margin-top: 3px; color: #12613b; font-size: 28px; }
+.machtile-3d-result header em { color: #17623d; font-style: normal; font-weight: 900; }
+.machtile-3d-result dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.machtile-3d-result dl div { border-radius: 8px; padding: 9px; background: #fff; }
+.machtile-3d-result dt { color: var(--muted); font-size: 11px; }
+.machtile-3d-result dd { margin: 3px 0 0; font-weight: 900; }
+.machtile-3d-result p { margin: 0; color: #456; font-size: 12px; line-height: 1.55; }
+@media (max-width: 720px) {
+  .machtile-3d-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .machtile-3d-result dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .machtile-3d-result header { align-items: flex-start; flex-direction: column; }
+}
+
 .schedule-hmc-resource.is-stopped {
   border-color: #efaaaa;
   background: #fff4f4;

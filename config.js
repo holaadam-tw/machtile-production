@@ -20,5 +20,9 @@ window.MACHTILE_CONFIG = {
   // CNC 現場報工 offline outbox (2026-07-11 flag-on gate): submitReport goes
   // through the offline-first idempotent outbox seam (DB side = migrations
   // 202607110001–0003, applied). Rollback = set false (direct POST path).
-  enableOutboxSubmit: true
+  enableOutboxSubmit: true,
+  // Schedule foundation and capacity calendar are present and verified in Production.
+  enableScheduleContracts: true,
+  // 202607160005 is present and passed the Production rollback smoke.
+  enableCalibrationGovernance: true
 };
