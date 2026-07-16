@@ -12087,6 +12087,8 @@ function renderReports() {
   ];
 
   $("#reportsContent").innerHTML = `
+    ${machtileStrictMode() && machtileSessionActive() ? '<div id="machtileOperationalTracking"><p class="admin-module-note">正在載入營運追蹤（真資料）...</p></div>' : ""}
+
     <div class="report-card-grid">
       ${reportCards.map((card) => `
         <article class="report-card ${card.status}">
@@ -12146,7 +12148,128 @@ function renderReports() {
 
     ${machtileStrictMode() && machtileSessionActive() ? '<div id="machtileTimeStats"><p class="admin-module-note">正在載入加工時間統計（真資料）...</p></div>' : ""}
   `;
-  if (machtileStrictMode() && machtileSessionActive()) machtileRenderTimeStats().catch(() => {});
+  if (machtileStrictMode() && machtileSessionActive()) {
+    machtileRenderOperationalTracking(30).catch(() => {});
+    machtileRenderTimeStats().catch(() => {});
+  }
+}
+
+function machtileTrackingPercent(value, signed = false) {
+  if (!Number.isFinite(value)) return "—";
+  return `${signed && value > 0 ? "+" : ""}${Number(value).toFixed(1)}%`;
+}
+
+function machtileTrackingDelay(minutes) {
+  const value = Math.max(0, Number(minutes) || 0);
+  const days = Math.floor(value / 1440);
+  const hours = Math.floor((value % 1440) / 60);
+  const remaining = Math.floor(value % 60);
+  if (days) return `${days} 天 ${hours} 小時`;
+  if (hours) return `${hours} 小時 ${remaining} 分`;
+  return `${remaining} 分`;
+}
+
+async function machtileRenderOperationalTracking(days = 30) {
+  const holder = document.getElementById("machtileOperationalTracking");
+  const core = globalThis.MachTileOperationalTrackingCore;
+  if (!holder || !core) return;
+  const safeDays = [7, 30, 90].includes(Number(days)) ? Number(days) : 30;
+  holder.innerHTML = '<p class="admin-module-note">正在載入營運追蹤（真資料）...</p>';
+  const from = new Date(Date.now() - (safeDays - 1) * 86400000);
+  from.setHours(0, 0, 0, 0);
+  const fromDate = from.toISOString().slice(0, 10);
+  const nowIso = new Date().toISOString();
+
+  try {
+    const [runs, calibrationSnapshot, reservations, replans] = await Promise.all([
+      supabaseFetch(`cnc_machining_runs?select=id,run_date,pure_cutting_seconds,machine_id,program_id,program_version_id,created_at,work_orders(part_name),cnc_program_versions(version_no,estimated_seconds),machines(machine_code)&run_date=gte.${fromDate}&order=run_date.desc&limit=2000`),
+      supabaseFetch("rpc/cnc_calibration_snapshot", { method: "POST", body: JSON.stringify({ p_payload: {} }) }),
+      supabaseFetch(`schedule_reservations?select=process_id,machine_id,resource_kind,starts_at,ends_at,is_active,machines(machine_code)&is_active=eq.true&resource_kind=eq.machine_spindle&ends_at=lt.${encodeURIComponent(nowIso)}&order=ends_at.asc&limit=2000`),
+      supabaseFetch(`schedule_replan_requests?select=machine_code,trigger_type,reason,status,requested_at&requested_at=gte.${encodeURIComponent(from.toISOString())}&order=requested_at.desc&limit=2000`),
+    ]);
+    const processIds = [...new Set((reservations || []).map((row) => String(row.process_id || "")).filter(machtileValidProcessId))];
+    const processChunks = machtileScheduleChunks(processIds, 200);
+    const [processGroups, holdGroups] = processChunks.length ? await Promise.all([
+      Promise.all(processChunks.map((chunk) => supabaseFetch(`work_order_processes?select=id,status,process_name,work_order_id,work_orders(work_order_no,part_name)&id=in.(${chunk.join(",")})`))),
+      Promise.all(processChunks.map((chunk) => supabaseFetch(`process_schedule_holds?select=process_id,hold_type,reason,held_at,released_at&released_at=is.null&process_id=in.(${chunk.join(",")})&order=held_at.desc`))),
+    ]) : [[], []];
+    const processes = processGroups.flat();
+    const holds = holdGroups.flat();
+    const excludedIds = (calibrationSnapshot?.sample_decisions || [])
+      .filter((decision) => decision.excluded)
+      .map((decision) => decision.machining_run_id);
+    const accuracy = core.summarizeEstimateAccuracy(runs, { from: from.toISOString(), excludedIds });
+    const schedule = core.summarizeScheduleDelay({ reservations, processes, holds, replans, from: from.toISOString(), now: nowIso });
+    const accuracyTone = accuracy.averageAbsolutePct == null ? "risk-blue" : accuracy.averageAbsolutePct <= 20 ? "risk-green" : accuracy.averageAbsolutePct <= 30 ? "risk-amber" : "risk-red";
+    const direction = accuracy.averageSignedPct == null
+      ? "尚無可比樣本"
+      : accuracy.averageSignedPct > 0
+        ? `實際平均比預估多 ${machtileTrackingPercent(accuracy.averageSignedPct)}`
+        : accuracy.averageSignedPct < 0
+          ? `實際平均比預估少 ${machtileTrackingPercent(Math.abs(accuracy.averageSignedPct))}`
+          : "實際與預估平均相同";
+    const accuracyRows = accuracy.samples.slice(0, 20).map((sample) => `
+      <tr>
+        <td>${escapeHtml(String(sample.runDate || "").slice(0, 10) || "-")}</td>
+        <td>${escapeHtml(machtileMachineDisplay(sample.machineLabel))}</td>
+        <td>${escapeHtml(sample.programLabel)}・${escapeHtml(sample.versionLabel)}</td>
+        <td>${escapeHtml(machtileFormatDuration(Math.round(sample.estimatedSeconds)))}</td>
+        <td>${escapeHtml(machtileFormatDuration(Math.round(sample.actualSeconds)))}</td>
+        <td class="${Math.abs(sample.signedPct) <= 20 ? "tracking-good" : "tracking-bad"}">${escapeHtml(machtileTrackingPercent(sample.signedPct, true))}</td>
+      </tr>
+    `).join("");
+    const delayRows = schedule.overdue.slice(0, 20).map((item) => `
+      <tr>
+        <td>${escapeHtml(item.workOrderNo)}</td>
+        <td>${escapeHtml(item.partName || "-")}</td>
+        <td>${escapeHtml(item.processName)}</td>
+        <td>${escapeHtml(machtileMachineDisplay(item.machineLabel))}</td>
+        <td>${escapeHtml(machtileFormatAuditTime(item.plannedEndAt))}</td>
+        <td class="tracking-bad">${escapeHtml(machtileTrackingDelay(item.delayMinutes))}</td>
+        <td>${escapeHtml(item.reason)}</td>
+      </tr>
+    `).join("");
+    const reasonRows = schedule.replanReasons.slice(0, 10).map((item) => `<li><span>${escapeHtml(item.reason)}</span><strong>${item.count} 次</strong></li>`).join("");
+
+    holder.innerHTML = `
+      <section class="report-panel operational-tracking-panel">
+        <div class="panel-title operational-tracking-title">
+          <div><h2>營運追蹤</h2><small>只使用真實加工履歷與已發布排程；更新至 ${escapeHtml(machtileFormatAuditTime(nowIso))}</small></div>
+          <label><span>觀察期間</span><select id="machtileTrackingPeriod"><option value="7" ${safeDays === 7 ? "selected" : ""}>近 7 天</option><option value="30" ${safeDays === 30 ? "selected" : ""}>近 30 天</option><option value="90" ${safeDays === 90 ? "selected" : ""}>近 90 天</option></select></label>
+        </div>
+        <div class="operational-kpi-grid">
+          <article class="report-card ${accuracyTone}"><span>平均絕對估時誤差</span><strong>${machtileTrackingPercent(accuracy.averageAbsolutePct)}</strong><small>${accuracy.sampleCount} 筆有效樣本；${escapeHtml(direction)}</small></article>
+          <article class="report-card ${accuracy.within20Rate == null ? "risk-blue" : accuracy.within20Rate >= 80 ? "risk-green" : "risk-amber"}"><span>誤差在 ±20% 內</span><strong>${machtileTrackingPercent(accuracy.within20Rate)}</strong><small>${accuracy.within20Count}/${accuracy.sampleCount} 筆</small></article>
+          <article class="report-card ${schedule.overdueCount ? "risk-red" : "risk-green"}"><span>目前排程落後</span><strong>${schedule.overdueCount}</strong><small>預定結束已過且工序未完成</small></article>
+          <article class="report-card ${schedule.pendingReplanCount ? "risk-amber" : "risk-green"}"><span>待處理重排</span><strong>${schedule.pendingReplanCount}</strong><small>近 ${safeDays} 天共 ${schedule.replanCount} 次重排觸發</small></article>
+          <article class="report-card risk-blue operational-quote-gap"><span>估價與最終工時差異</span><strong>待接資料</strong><small>3D 初估尚未保存或綁定工單，現在不能產生可信差異</small></article>
+        </div>
+        <p class="operational-definition">定義：估時誤差＝平均 |實際純加工秒數－程式版原估秒數| ÷ 原估秒數；已由主管排除的樣本不計。排程落後只計已發布且仍有效的主軸排程，預定結束已過而工序未完成。</p>
+      </section>
+
+      <section class="report-panel">
+        <div class="panel-title"><h2>預估與實際誤差</h2><span>近 ${safeDays} 天・${accuracy.sampleCount} 筆</span></div>
+        ${accuracyRows ? `<div class="machtile-stats-table-wrap"><table class="machtile-stats-table"><thead><tr><th>加工日</th><th>機台</th><th>程式／版本</th><th>原估時</th><th>實際</th><th>差異</th></tr></thead><tbody>${accuracyRows}</tbody></table></div>` : '<p class="admin-module-note">這段期間沒有同時具備原估時與實際純加工時間的有效樣本。</p>'}
+        <p class="operational-footnote">未納入：主管排除 ${accuracy.rejected.excluded} 筆、缺實際時間 ${accuracy.rejected.missingActual} 筆、缺原估時 ${accuracy.rejected.missingEstimate} 筆。只顯示最近 20 筆。</p>
+      </section>
+
+      <section class="report-panel">
+        <div class="panel-title"><h2>排程落後原因</h2><span>${schedule.overdueCount} 個目前落後工序</span></div>
+        ${delayRows ? `<div class="machtile-stats-table-wrap"><table class="machtile-stats-table"><thead><tr><th>工單</th><th>品名</th><th>工序</th><th>機台</th><th>預定結束</th><th>已落後</th><th>原因</th></tr></thead><tbody>${delayRows}</tbody></table></div>` : '<p class="admin-module-note">目前沒有「預定結束已過且工序未完成」的有效排程。</p>'}
+        <div class="operational-replan-summary"><div><strong>近 ${safeDays} 天重排原因</strong><small>停機、缺料、恢復等正式重排請求</small></div>${reasonRows ? `<ol>${reasonRows}</ol>` : '<p class="admin-module-note">這段期間沒有重排請求。</p>'}</div>
+      </section>
+
+      <section class="report-panel operational-data-gap">
+        <div class="panel-title"><h2>估價與最終工時差異</h2><span>資料契約尚未建立</span></div>
+        <p>目前 3D 初估只在瀏覽器計算，沒有正式估價編號、版本、工單連結與最終工時口徑。因此本區不顯示推測值。下一階段需建立「估價版本 → 工單 → 完工實際工時」的可追溯關係。</p>
+      </section>
+    `;
+    document.getElementById("machtileTrackingPeriod")?.addEventListener("change", (event) => {
+      machtileRenderOperationalTracking(Number(event.target.value)).catch(() => {});
+    });
+  } catch (error) {
+    holder.innerHTML = `<section class="report-panel"><div class="panel-title"><h2>營運追蹤</h2><span>載入失敗</span></div><p class="admin-module-note">真資料讀取失敗：${escapeHtml(String(error?.message || error || ""))}</p></section>`;
+  }
 }
 
 // D 加工時間統計（2026-07-14 夜間 sprint）：strict-only 真資料區塊——

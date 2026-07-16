@@ -1982,6 +1982,119 @@ a.machine-qr-card small {
   line-height: 1;
 }
 
+.operational-tracking-panel {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, var(--surface) 55%);
+}
+
+.operational-tracking-title {
+  align-items: flex-end;
+}
+
+.operational-tracking-title small,
+.operational-tracking-title label span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.operational-tracking-title label {
+  display: grid;
+  gap: 4px;
+  min-width: 120px;
+}
+
+.operational-tracking-title select {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.operational-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operational-kpi-grid .report-card {
+  min-width: 0;
+}
+
+.operational-kpi-grid .report-card strong {
+  font-size: clamp(22px, 2.4vw, 30px);
+}
+
+.operational-quote-gap strong {
+  font-size: 20px !important;
+}
+
+.operational-definition,
+.operational-footnote {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.tracking-good {
+  color: #15803d;
+  font-weight: 800;
+}
+
+.tracking-bad {
+  color: #b91c1c;
+  font-weight: 800;
+}
+
+.operational-replan-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, .65fr) 1.35fr;
+  gap: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.operational-replan-summary small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.operational-replan-summary ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operational-replan-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.operational-data-gap {
+  border-style: dashed;
+}
+
+.operational-data-gap > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
 .load-list {
   display: grid;
   gap: 9px;
@@ -9112,6 +9225,10 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 
 @media (max-width: 1100px) {
+  .operational-kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .stats-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -9162,6 +9279,16 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 
 @media (max-width: 720px) {
+  .operational-kpi-grid,
+  .operational-replan-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .operational-tracking-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   body {
     background: var(--surface-warm);
   }
