@@ -10320,10 +10320,14 @@ function machtileAdminDrawerGroups() {
   if (canPlan) {
     groups.push({ title: "生產管理", items: [
       { key: "workOrders", icon: "📋", label: "工單管理" },
-      { key: "program", icon: "⚙️", label: "CNC 程式與加工" },
+      { key: "program", icon: "⏱️", label: "估時／估價" },
       { key: "inspection", icon: "🔬", label: "進料檢驗（I-Reporter）" },
     ]});
   }
+  groups.push({ title: "更多功能", items: [
+    { key: "__history", icon: "🕘", label: "紀錄查詢" },
+    { key: "__reports", icon: "📊", label: "營運分析" },
+  ]});
   groups.push({ title: "機台管理", items: [
     { key: "add", icon: "➕", label: "新增機台" },
     { key: "list", icon: "🏭", label: "機台列表管理" },
@@ -11910,7 +11914,7 @@ function adminModuleMeta(moduleKey) {
     company: ["Company Profile", "公司資料"],
     template: ["Process Templates", "製程模板管理"],
     reportRule: ["Report Rules", "報工規則管理"],
-    program: ["CNC Programs", "CNC 程式與加工"],
+    program: ["Estimate & Quote", "估時／估價"],
     time: ["Machining Time", "加工時間統計"],
     notify: ["Notification Rules", "通知規則管理"],
     integration: ["Integrations", "串接設定"],
@@ -13349,29 +13353,61 @@ function renderProgramModule() {
       return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
     }
     return `
-      <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
-        <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
-        <span>檔名自動辨識程式號並歸屬到既有程式（例：O9001-v3.nc → O9001 的下一版）</span>
-        <input id="machtileCncFile" type="file" hidden>
+      <div class="machtile-estimate-tabs" role="tablist" aria-label="估時與估價功能">
+        <button class="machtile-estimate-tab is-active" type="button" role="tab" aria-selected="true" data-estimate-tab="gcode">G-code 估時</button>
+        <button class="machtile-estimate-tab" type="button" role="tab" aria-selected="false" data-estimate-tab="3d">3D 檔估價 <span class="status-pill">建置中</span></button>
+        <button class="machtile-estimate-tab" type="button" role="tab" aria-selected="false" data-estimate-tab="history">歷史／校正</button>
       </div>
-      <form id="machtileCncForm" class="admin-module-form machtile-cnc-preview" hidden>
-        <p id="machtileCncFileInfo" class="admin-module-note"></p>
-        <label class="admin-field"><span>歸屬程式（自動判定，可改）</span>
-          <select id="machtileCncProgram"><option value="">＋ 建立新程式</option></select></label>
-        <span id="machtileCncNewFields">
-          <label class="admin-field"><span>品名 *（新程式用）</span><input id="machtileCncPartName" type="text" placeholder="例：油壓閥座本體"></label>
-          <label class="admin-field"><span>程式號</span><input id="machtileCncProgramNo" type="text" placeholder="自動帶入檔名辨識結果"></label>
-          <label class="admin-field"><span>機台（選填）</span><select id="machtileCncMachine"><option value="">不指定</option></select></label>
-        </span>
-        <label class="admin-field"><span>變更說明（選填）</span><input id="machtileCncSummary" type="text" placeholder="例：T03 進給調整"></label>
-        <button class="admin-save-button" type="submit" id="machtileCncSubmit">上傳並登錄</button>
-        <p class="admin-module-note" id="machtileCncStatus"></p>
-      </form>
-      <div id="machtileCncList"><p class="admin-module-note">載入程式清單中…</p></div>
-      <div id="machtileCncDiff"></div>
+
+      <section class="machtile-estimate-panel" data-estimate-panel="gcode" role="tabpanel">
+        <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
+          <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
+          <span>上傳後自動進行 FANUC／EIA 加工時間估算，並保留程式版本</span>
+          <input id="machtileCncFile" type="file" hidden>
+        </div>
+        <form id="machtileCncForm" class="admin-module-form machtile-cnc-preview" hidden>
+          <p id="machtileCncFileInfo" class="admin-module-note"></p>
+          <label class="admin-field"><span>歸屬程式（自動判定，可改）</span>
+            <select id="machtileCncProgram"><option value="">＋ 建立新程式</option></select></label>
+          <span id="machtileCncNewFields">
+            <label class="admin-field"><span>品名 *（新程式用）</span><input id="machtileCncPartName" type="text" placeholder="例：油壓閥座本體"></label>
+            <label class="admin-field"><span>程式號</span><input id="machtileCncProgramNo" type="text" placeholder="自動帶入檔名辨識結果"></label>
+            <label class="admin-field"><span>機台（選填）</span><select id="machtileCncMachine"><option value="">不指定</option></select></label>
+          </span>
+          <label class="admin-field"><span>變更說明（選填）</span><input id="machtileCncSummary" type="text" placeholder="例：T03 進給調整"></label>
+          <button class="admin-save-button" type="submit" id="machtileCncSubmit">上傳並估時</button>
+          <p class="admin-module-note" id="machtileCncStatus"></p>
+        </form>
+      </section>
+
+      <section class="machtile-estimate-panel" data-estimate-panel="3d" role="tabpanel" hidden>
+        <div class="machtile-estimate-placeholder">
+          <span class="status-pill">建置中</span>
+          <strong>STEP／STL／IGES 估價尚未開放</strong>
+          <p>目前不接受 3D 檔寫入，也不產生正式價格。待材料、毛胚、裝夾次數、機台費率、品檢與利潤規則確認後，才會開放上傳與報價。</p>
+          <small>規劃流程：3D 模型 → CAM 刀路 → 加工時間 → 現場校正 → 成本與報價</small>
+        </div>
+      </section>
+
+      <section class="machtile-estimate-panel" data-estimate-panel="history" role="tabpanel" hidden>
+        <div id="machtileCncList"><p class="admin-module-note">載入程式與校正紀錄中…</p></div>
+        <div id="machtileCncDiff"></div>
+      </section>
     `;
   }
-  return machtilePlannedModuleNote("CNC 程式與加工（O 檔上傳、版本比對、工件時間表）為正式環境功能。");
+  return machtilePlannedModuleNote("估時／估價（G-code 估時、3D 檔估價、歷史校正）為正式環境功能。");
+}
+
+function machtileSetEstimateTab(tabKey) {
+  const selected = ["gcode", "3d", "history"].includes(tabKey) ? tabKey : "gcode";
+  document.querySelectorAll("[data-estimate-tab]").forEach((button) => {
+    const active = button.dataset.estimateTab === selected;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-estimate-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.estimatePanel !== selected;
+  });
 }
 
 async function machtileCncLoadPrograms() {
@@ -15177,10 +15213,21 @@ function bindEvents() {
       return;
     }
 
+    const estimateTabButton = event.target.closest("[data-estimate-tab]");
+    if (estimateTabButton) {
+      machtileSetEstimateTab(estimateTabButton.dataset.estimateTab);
+      return;
+    }
+
     const adminModuleButton = event.target.closest("[data-admin-module]");
     if (adminModuleButton) {
       if (adminModuleButton.dataset.adminModule === "add") machtileMachineEditSeed = null;
       openAdminModule(adminModuleButton.dataset.adminModule);
+      return;
+    }
+
+    if (event.target.closest("[data-open-admin-drawer]")) {
+      machtileToggleAdminDrawer(true);
       return;
     }
 
@@ -15204,6 +15251,14 @@ function bindEvents() {
       machtileToggleAdminDrawer(false);
       if (key === "__guide") {
         window.location.href = hmcGuideRouteUrl("B01", "day");
+        return;
+      }
+      if (key === "__history") {
+        switchView("history");
+        return;
+      }
+      if (key === "__reports") {
+        switchView("reports");
         return;
       }
       if (key === "add") machtileMachineEditSeed = null;

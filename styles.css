@@ -269,6 +269,49 @@ textarea:focus-visible {
   color: var(--brand-blue);
 }
 
+.desktop-tool-nav {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.tool-nav-item {
+  display: grid;
+  gap: 2px;
+  min-height: 54px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 12px;
+  background: var(--surface);
+  color: #334155;
+  text-align: left;
+}
+
+.tool-nav-item span {
+  font-weight: 900;
+}
+
+.tool-nav-item small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tool-nav-item:hover,
+.tool-nav-item:focus-visible {
+  border-color: var(--brand-blue);
+  color: var(--brand-blue);
+  box-shadow: 0 6px 16px rgba(30, 58, 138, 0.08);
+}
+
+.tool-nav-item-primary {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 main {
   padding: 20px;
 }
@@ -4882,6 +4925,65 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .machtile-cnc-drop span { color: var(--muted); font-size: 12px; }
 .machtile-cnc-drop.is-over { background: #dbeafe; border-style: solid; }
 
+.machtile-estimate-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.machtile-estimate-tab {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 14px;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.machtile-estimate-tab.is-active {
+  border-color: var(--brand-blue);
+  background: var(--brand-blue);
+  color: #ffffff;
+}
+
+.machtile-estimate-panel[hidden] {
+  display: none;
+}
+
+.machtile-estimate-placeholder {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  align-content: center;
+  justify-items: center;
+  border: 2px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 28px 20px;
+  background: #f8fafc;
+  color: #475569;
+  text-align: center;
+}
+
+.machtile-estimate-placeholder strong {
+  color: #1e3a8a;
+  font-size: 18px;
+}
+
+.machtile-estimate-placeholder p {
+  max-width: 620px;
+  margin: 0;
+  line-height: 1.7;
+}
+
+.machtile-estimate-placeholder .status-pill {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .machtile-cnc-time-title {
   margin: 12px 0 6px;
   color: var(--muted);
@@ -8662,6 +8764,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
   .plant-meta,
   .desktop-nav,
+  .desktop-tool-nav,
   .user-chip {
     display: none;
   }

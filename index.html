@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260716-schedule-rpc">
+  <link rel="stylesheet" href="./styles.css?v=20260716-nav-5x2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -116,6 +116,24 @@
       <button class="nav-item" data-view="alerts" type="button">待處理</button>
       <button class="nav-item" data-view="history" type="button">紀錄</button>
       <button class="nav-item" data-view="reports" type="button">分析</button>
+    </nav>
+
+    <nav class="desktop-tool-nav" aria-label="工具導覽">
+      <button class="tool-nav-item tool-nav-item-primary" data-admin-module="program" type="button">
+        <span>估時／估價</span><small>G-code 與 3D</small>
+      </button>
+      <button class="tool-nav-item" data-admin-module="workOrders" type="button">
+        <span>工單</span><small>建立與維護</small>
+      </button>
+      <button class="tool-nav-item" data-admin-module="inspection" type="button">
+        <span>品檢</span><small>待檢與判定</small>
+      </button>
+      <button class="tool-nav-item" data-admin-module="list" type="button">
+        <span>機台管理</span><small>設備與狀態</small>
+      </button>
+      <button class="tool-nav-item" data-open-admin-drawer type="button">
+        <span>管理</span><small>更多設定</small>
+      </button>
     </nav>
 
     <div id="departmentBar" class="department-bar" aria-label="課別篩選">
@@ -247,8 +265,8 @@
     <button class="mobile-tab active" data-view="dashboard" type="button">監控</button>
     <button class="mobile-tab" data-view="schedule" type="button">排程</button>
     <button class="mobile-tab" data-view="alerts" type="button">待處理</button>
-    <button class="mobile-tab" data-view="history" type="button">紀錄</button>
-    <button class="mobile-tab" data-view="reports" type="button">分析</button>
+    <button class="mobile-tab" data-admin-module="program" type="button">估價</button>
+    <button class="mobile-tab" data-open-admin-drawer type="button">更多</button>
   </nav>
 
   <div id="reportSheet" class="sheet report-sheet" aria-hidden="true">
@@ -543,6 +561,6 @@
   <script src="./scheduleCore.js?v=20260716-schedule-rpc"></script>
   <script src="./gcodeEstimatorCore.js?v=20260716-estimator-v2"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260716-schedule-estimator-v2"></script>
+  <script src="./app.js?v=20260716-nav-5x2"></script>
 </body>
 </html>
