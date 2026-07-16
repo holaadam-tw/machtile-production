@@ -153,5 +153,27 @@
     };
   }
 
-  return { summarizeEstimateAccuracy, summarizeScheduleDelay };
+  function summarizeQuoteVariance(finals = []) {
+    const rows = (Array.isArray(finals) ? finals : []).map((item) => {
+      const quotedMinutes = finitePositive(item?.quoted_total_minutes ?? item?.quotedMinutes);
+      const actualMinutes = finitePositive(item?.actual_total_minutes ?? item?.actualMinutes);
+      if (!quotedMinutes || !actualMinutes) return null;
+      const signedPct = ((actualMinutes - quotedMinutes) / quotedMinutes) * 100;
+      return {
+        id: String(item?.id || ""), workOrderId: String(item?.work_order_id || ""),
+        workOrderNo: String(item?.work_order_no || "-"), partName: String(item?.part_name || ""),
+        quotedMinutes, actualMinutes, signedPct, absolutePct: Math.abs(signedPct),
+        decidedAt: item?.decided_at || "", actualQuantity: Number(item?.actual_quantity || 0),
+        machiningRunCount: Number(item?.machining_run_count || 0), reason: String(item?.reason || ""),
+      };
+    }).filter(Boolean).sort((left, right) => String(right.decidedAt).localeCompare(String(left.decidedAt)));
+    return {
+      comparisonCount: rows.length,
+      averageAbsolutePct: rows.length ? round(rows.reduce((sum, row) => sum + row.absolutePct, 0) / rows.length) : null,
+      averageSignedPct: rows.length ? round(rows.reduce((sum, row) => sum + row.signedPct, 0) / rows.length) : null,
+      rows,
+    };
+  }
+
+  return { summarizeEstimateAccuracy, summarizeScheduleDelay, summarizeQuoteVariance };
 });

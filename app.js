@@ -63,6 +63,7 @@ const config = {
     minimumSamples: 5,
   },
   enableCalibrationGovernance: false,
+  enableManufacturingQuoteTracking: false,
   ...window.MACHTILE_CONFIG,
 };
 
@@ -12181,11 +12182,12 @@ async function machtileRenderOperationalTracking(days = 30) {
   const nowIso = new Date().toISOString();
 
   try {
-    const [runs, calibrationSnapshot, reservations, replans] = await Promise.all([
+    const [runs, calibrationSnapshot, reservations, replans, quoteSnapshot] = await Promise.all([
       supabaseFetch(`cnc_machining_runs?select=id,run_date,pure_cutting_seconds,machine_id,program_id,program_version_id,created_at,work_orders(part_name),cnc_program_versions(version_no,estimated_seconds),machines(machine_code)&run_date=gte.${fromDate}&order=run_date.desc&limit=2000`),
       supabaseFetch("rpc/cnc_calibration_snapshot", { method: "POST", body: JSON.stringify({ p_payload: {} }) }),
       supabaseFetch(`schedule_reservations?select=process_id,machine_id,resource_kind,starts_at,ends_at,is_active,machines(machine_code)&is_active=eq.true&resource_kind=eq.machine_spindle&ends_at=lt.${encodeURIComponent(nowIso)}&order=ends_at.asc&limit=2000`),
       supabaseFetch(`schedule_replan_requests?select=machine_code,trigger_type,reason,status,requested_at&requested_at=gte.${encodeURIComponent(from.toISOString())}&order=requested_at.desc&limit=2000`),
+      config.enableManufacturingQuoteTracking === true ? machtileFormalQuoteRpc("manufacturing_quote_tracking_snapshot", {}) : Promise.resolve({ versions: [], links: [], finals: [] }),
     ]);
     const processIds = [...new Set((reservations || []).map((row) => String(row.process_id || "")).filter(machtileValidProcessId))];
     const processChunks = machtileScheduleChunks(processIds, 200);
@@ -12200,6 +12202,8 @@ async function machtileRenderOperationalTracking(days = 30) {
       .map((decision) => decision.machining_run_id);
     const accuracy = core.summarizeEstimateAccuracy(runs, { from: from.toISOString(), excludedIds });
     const schedule = core.summarizeScheduleDelay({ reservations, processes, holds, replans, from: from.toISOString(), now: nowIso });
+    const quoteLinks = new Map((quoteSnapshot?.links || []).map((link) => [String(link.work_order_id), link]));
+    const quoteVariance = core.summarizeQuoteVariance((quoteSnapshot?.finals || []).map((item) => ({ ...item, ...(quoteLinks.get(String(item.work_order_id)) || {}) })));
     const accuracyTone = accuracy.averageAbsolutePct == null ? "risk-blue" : accuracy.averageAbsolutePct <= 20 ? "risk-green" : accuracy.averageAbsolutePct <= 30 ? "risk-amber" : "risk-red";
     const direction = accuracy.averageSignedPct == null
       ? "尚無可比樣本"
@@ -12230,6 +12234,8 @@ async function machtileRenderOperationalTracking(days = 30) {
       </tr>
     `).join("");
     const reasonRows = schedule.replanReasons.slice(0, 10).map((item) => `<li><span>${escapeHtml(item.reason)}</span><strong>${item.count} 次</strong></li>`).join("");
+    const quoteRows = quoteVariance.rows.slice(0, 20).map((item) => `<tr><td>${escapeHtml(item.workOrderNo)}</td><td>${escapeHtml(item.partName || "-")}</td><td>${escapeHtml(machtileFormatScheduleMinutes(item.quotedMinutes))}</td><td>${escapeHtml(machtileFormatScheduleMinutes(item.actualMinutes))}</td><td class="${item.signedPct > 0 ? "tracking-bad" : "tracking-good"}">${escapeHtml(machtileTrackingPercent(item.signedPct, true))}</td><td>${item.actualQuantity} 件／${item.machiningRunCount} 筆</td><td>${escapeHtml(item.reason)}</td></tr>`).join("");
+    const quoteDirection = quoteVariance.averageSignedPct == null ? "尚無完工確認" : quoteVariance.averageSignedPct > 0 ? `實際平均超出 ${machtileTrackingPercent(quoteVariance.averageSignedPct)}` : `實際平均低於 ${machtileTrackingPercent(Math.abs(quoteVariance.averageSignedPct))}`;
 
     holder.innerHTML = `
       <section class="report-panel operational-tracking-panel">
@@ -12242,7 +12248,7 @@ async function machtileRenderOperationalTracking(days = 30) {
           <article class="report-card ${accuracy.within20Rate == null ? "risk-blue" : accuracy.within20Rate >= 80 ? "risk-green" : "risk-amber"}"><span>誤差在 ±20% 內</span><strong>${machtileTrackingPercent(accuracy.within20Rate)}</strong><small>${accuracy.within20Count}/${accuracy.sampleCount} 筆</small></article>
           <article class="report-card ${schedule.overdueCount ? "risk-red" : "risk-green"}"><span>目前排程落後</span><strong>${schedule.overdueCount}</strong><small>預定結束已過且工序未完成</small></article>
           <article class="report-card ${schedule.pendingReplanCount ? "risk-amber" : "risk-green"}"><span>待處理重排</span><strong>${schedule.pendingReplanCount}</strong><small>近 ${safeDays} 天共 ${schedule.replanCount} 次重排觸發</small></article>
-          <article class="report-card risk-blue operational-quote-gap"><span>估價與最終工時差異</span><strong>待接資料</strong><small>3D 初估尚未保存或綁定工單，現在不能產生可信差異</small></article>
+          <article class="report-card ${quoteVariance.comparisonCount ? quoteVariance.averageAbsolutePct <= 20 ? "risk-green" : "risk-amber" : "risk-blue"} operational-quote-gap"><span>估價與最終工時差異</span><strong>${quoteVariance.comparisonCount ? machtileTrackingPercent(quoteVariance.averageAbsolutePct) : "尚無資料"}</strong><small>${quoteVariance.comparisonCount} 張已完工工單；${escapeHtml(quoteDirection)}</small></article>
         </div>
         <p class="operational-definition">定義：估時誤差＝平均 |實際純加工秒數－程式版原估秒數| ÷ 原估秒數；已由主管排除的樣本不計。排程落後只計已發布且仍有效的主軸排程，預定結束已過而工序未完成。</p>
       </section>
@@ -12259,9 +12265,9 @@ async function machtileRenderOperationalTracking(days = 30) {
         <div class="operational-replan-summary"><div><strong>近 ${safeDays} 天重排原因</strong><small>停機、缺料、恢復等正式重排請求</small></div>${reasonRows ? `<ol>${reasonRows}</ol>` : '<p class="admin-module-note">這段期間沒有重排請求。</p>'}</div>
       </section>
 
-      <section class="report-panel operational-data-gap">
-        <div class="panel-title"><h2>估價與最終工時差異</h2><span>資料契約尚未建立</span></div>
-        <p>目前 3D 初估只在瀏覽器計算，沒有正式估價編號、版本、工單連結與最終工時口徑。因此本區不顯示推測值。下一階段需建立「估價版本 → 工單 → 完工實際工時」的可追溯關係。</p>
+      <section class="report-panel ${quoteRows ? "" : "operational-data-gap"}">
+        <div class="panel-title"><h2>估價與最終工時差異</h2><span>${quoteVariance.comparisonCount} 張已確認</span></div>
+        ${quoteRows ? `<div class="machtile-stats-table-wrap"><table class="machtile-stats-table"><thead><tr><th>工單</th><th>品名</th><th>報價總工時</th><th>實際總工時</th><th>差異</th><th>證據</th><th>確認原因</th></tr></thead><tbody>${quoteRows}</tbody></table></div>` : '<p>正式估價契約已啟用；完成「建立版本 → 主管核准 → 連結工單 → 工單完工 → 確認最終工時」後，這裡會顯示差異。</p>'}
       </section>
     `;
     document.getElementById("machtileTrackingPeriod")?.addEventListener("change", (event) => {
@@ -14406,6 +14412,20 @@ function renderProgramModule() {
           <p class="machtile-calibration-guard">這是參數化初估，不是 CAM 正式報價。3D 模型不知道刀具、刀路與裝夾策略，因此加工分鐘必須由工程人員確認。</p>
           <div id="machtile3dQuoteResult" class="machtile-3d-result" hidden></div>
         </form>
+        ${config.enableManufacturingQuoteTracking === true ? `
+          <section id="machtileFormalQuoteSave" class="machtile-formal-quote-save" hidden>
+            <div class="panel-title"><h3>儲存為正式估價草稿</h3><span>內容建立新版本，不覆寫舊版</span></div>
+            <div class="machtile-3d-grid">
+              <label><span>品名 *</span><input id="formalQuotePartName" type="text" required></label>
+              <label><span>品號</span><input id="formalQuotePartNo" type="text"></label>
+              <label><span>客戶</span><input id="formalQuoteCustomer" type="text"></label>
+              <label><span>估價單號</span><input id="formalQuoteNo" type="text" placeholder="留空由系統產生"></label>
+            </div>
+            <label class="admin-field"><span>建立原因 *</span><textarea id="formalQuoteReason" rows="2" placeholder="例如：依客戶 STEP 初估" required></textarea></label>
+            <button id="formalQuoteSaveBtn" class="admin-save-button" type="button">建立正式估價 V1 草稿</button>
+          </section>
+          <section class="machtile-formal-quote-list"><div class="panel-title"><h3>正式估價版本與工單</h3><span>主管核准後才能連結工單</span></div><div id="machtileFormalQuoteList"><p class="admin-module-note">正在載入正式估價...</p></div></section>
+        ` : ""}
       </section>
 
       <section class="machtile-estimate-panel" data-estimate-panel="history" role="tabpanel" hidden>
@@ -14755,6 +14775,81 @@ function machtileCncRenderList(programs, runs, machineNames) {
   }).join("");
 }
 
+const machtileFormalQuoteState = { candidate: null, snapshot: { versions: [], links: [], finals: [] }, workOrders: [], pending: false };
+
+function machtileFormalQuoteEnabled() {
+  return config.enableManufacturingQuoteTracking === true && machtileStrictMode() && machtileSessionActive();
+}
+
+function machtileFormalQuoteCanApprove() {
+  return ["admin", "manager"].includes(machtileAuthState.role);
+}
+
+function machtileFormalQuoteEventId(action) {
+  return `machtile-ui:quote:${action}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+async function machtileFormalQuoteRpc(name, payload) {
+  return supabaseFetch(`rpc/${name}`, { method: "POST", body: JSON.stringify({ p_payload: payload }) });
+}
+
+function machtileFormalQuoteMoney(value) {
+  return Number(value || 0).toLocaleString("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 });
+}
+
+function machtileFormalQuoteRender() {
+  const holder = document.getElementById("machtileFormalQuoteList");
+  if (!holder) return;
+  const versions = machtileFormalQuoteState.snapshot.versions || [];
+  const links = machtileFormalQuoteState.snapshot.links || [];
+  const finals = new Map((machtileFormalQuoteState.snapshot.finals || []).map((item) => [String(item.work_order_id), item]));
+  const statusLabels = { draft: "草稿", approved: "已核准", superseded: "已換版", cancelled: "已取消" };
+  if (!versions.length) { holder.innerHTML = '<p class="admin-module-note">尚無正式估價；完成上方初估後可建立 V1 草稿。</p>'; return; }
+  holder.innerHTML = versions.map((version) => {
+    const versionLinks = links.filter((link) => String(link.quote_version_id) === String(version.id));
+    const workOptions = machtileFormalQuoteState.workOrders.map((order) => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.work_order_no)}・${escapeHtml(order.part_name)}・${escapeHtml(order.status)}</option>`).join("");
+    const linkedRows = versionLinks.map((link) => {
+      const final = finals.get(String(link.work_order_id));
+      const isComplete = ["completed", "shipped"].includes(String(link.work_order_status));
+      return `<article class="formal-quote-link">
+        <div><strong>${escapeHtml(link.work_order_no)}</strong><span>${escapeHtml(link.part_name)}・${escapeHtml(link.work_order_status)}</span></div>
+        ${final ? `<div class="formal-quote-final"><span>報價 ${machtileFormatScheduleMinutes(final.quoted_total_minutes)} → 實際 ${machtileFormatScheduleMinutes(final.actual_total_minutes)}</span><strong class="${Number(final.variance_pct) > 0 ? "tracking-bad" : "tracking-good"}">${machtileTrackingPercent(Number(final.variance_pct), true)}</strong><small>${escapeHtml(final.reason)}</small></div>` : isComplete && machtileFormalQuoteCanApprove() ? `
+          <form data-formal-quote-finalize="${escapeHtml(link.id)}" class="formal-quote-action-form">
+            <label><span>實際架機分</span><input name="setup" type="number" min="0" step="0.1" value="0" required></label>
+            <label><span>實際品檢分</span><input name="inspection" type="number" min="0" step="0.1" value="0" required></label>
+            <label><span>其他時間分</span><input name="other" type="number" min="0" step="0.1" value="0" required></label>
+            <label><span>確認原因</span><input name="reason" type="text" required placeholder="完工覆核"></label>
+            <button type="submit">確認最終工時</button>
+          </form>` : '<small>工單完工後由主管確認最終工時。</small>'}
+      </article>`;
+    }).join("");
+    return `<section class="formal-quote-version">
+      <header><div><strong>${escapeHtml(version.quote_no)}・V${version.version_no}</strong><span>${escapeHtml(version.part_name)}${version.part_no ? `・${escapeHtml(version.part_no)}` : ""}</span></div><em class="is-${escapeHtml(version.status)}">${escapeHtml(statusLabels[version.status] || version.status)}</em></header>
+      <div class="formal-quote-metrics"><span>${version.quantity} 件</span><span>單件加工 ${machtileFormatScheduleMinutes(version.machining_minutes_per_part)}</span><span>總價 ${machtileFormalQuoteMoney(version.cost_snapshot?.quote_total)}</span><span>${escapeHtml(version.creation_reason)}</span></div>
+      ${version.status === "draft" && machtileFormalQuoteCanApprove() ? `<form data-formal-quote-approve="${escapeHtml(version.id)}" class="formal-quote-action-form is-compact"><label><span>核准原因</span><input name="reason" type="text" required placeholder="工程與價格已覆核"></label><button type="submit">主管核准</button></form>` : ""}
+      ${version.status === "approved" ? `<form data-formal-quote-link="${escapeHtml(version.id)}" class="formal-quote-action-form is-compact"><label><span>連結工單</span><select name="workOrder" required><option value="">請選擇</option>${workOptions}</select></label><label><span>連結原因</span><input name="reason" type="text" required placeholder="依核准估價開工"></label><button type="submit">連結</button></form>` : ""}
+      ${linkedRows ? `<div class="formal-quote-links">${linkedRows}</div>` : ""}
+    </section>`;
+  }).join("");
+}
+
+async function machtileFormalQuoteRefresh() {
+  if (!machtileFormalQuoteEnabled()) return;
+  const [snapshot, workOrders] = await Promise.all([
+    machtileFormalQuoteRpc("manufacturing_quote_tracking_snapshot", {}),
+    supabaseFetch("work_orders?select=id,work_order_no,part_name,status&status=not.in.(cancelled)&order=created_at.desc&limit=500"),
+  ]);
+  machtileFormalQuoteState.snapshot = snapshot || { versions: [], links: [], finals: [] };
+  machtileFormalQuoteState.workOrders = Array.isArray(workOrders) ? workOrders : [];
+  machtileFormalQuoteRender();
+}
+
+function machtileFormalQuoteError(error) {
+  const code = String(error?.message || error || "");
+  const labels = { FORBIDDEN: "權限不足", REASON_REQUIRED: "原因至少需要 2 個字", APPROVED_QUOTE_REQUIRED: "只能連結已核准的估價版本", WORK_ORDER_NOT_COMPLETE: "工單尚未完工", FINAL_MACHINING_DATA_REQUIRED: "缺少可彙總的實際加工時間", INVALID_QUOTE_INPUT: "估價參數不完整" };
+  return labels[Object.keys(labels).find((key) => code.includes(key))] || code;
+}
+
 function machtileInit3dQuote() {
   const core = globalThis.MachTileQuote3dCore;
   const form = document.getElementById("machtile3dQuoteForm");
@@ -14798,6 +14893,63 @@ function machtileInit3dQuote() {
     result.innerHTML = `<header><div><span>參數化初估</span><strong>${money(quote.quoteTotal)}</strong></div><em>${quote.quantity} 件・單件 ${money(quote.quotePerPart)}</em></header>
       <dl><div><dt>材料／單件</dt><dd>${money(quote.materialPerPart)}</dd></div><div><dt>架機成本</dt><dd>${money(quote.setupCost)}</dd></div><div><dt>加工／單件</dt><dd>${money(quote.machiningPerPart)}</dd></div><div><dt>品檢／單件</dt><dd>${money(quote.inspectionPerPart)}</dd></div><div><dt>總成本</dt><dd>${money(quote.cost)}</dd></div><div><dt>目標毛利</dt><dd>${money(quote.profit)}（${quote.marginPct}%）</dd></div></dl>
       <p>${escapeHtml(value("quote3dMaterial"))}・毛胚重 ${quote.stockWeightKg.toFixed(3)} kg／件・模型 ${escapeHtml(model.name)}。尚未包含 CAM 刀路驗證，正式報價前需工程覆核。</p>`;
+    if (machtileFormalQuoteEnabled()) {
+      machtileFormalQuoteState.candidate = {
+        model_name: model.name, model_extension: model.extension, model_size_bytes: model.size,
+        geometry_summary: model.geometryAvailable ? { bounds: model.bounds, triangle_count: model.triangleCount, volume_mm3: model.volumeMm3 } : { warning: model.warning || "manual geometry" },
+        quantity: value("quote3dQty"), material_name: value("quote3dMaterial"), material_density: value("quote3dDensity"),
+        material_price_per_kg: value("quote3dMaterialRate"), stock_x_mm: value("quote3dStockX"), stock_y_mm: value("quote3dStockY"), stock_z_mm: value("quote3dStockZ"),
+        setup_count: value("quote3dSetups"), setup_minutes: value("quote3dSetupMinutes"), machining_minutes_per_part: value("quote3dMachiningMinutes"),
+        machine_rate_per_hour: value("quote3dMachineRate"), inspection_minutes_per_part: value("quote3dInspectionMinutes"), inspection_rate_per_hour: value("quote3dInspectionRate"),
+        extra_cost: value("quote3dExtraCost"), margin_pct: value("quote3dMargin"),
+      };
+      document.getElementById("machtileFormalQuoteSave").hidden = false;
+    }
+  });
+  document.getElementById("formalQuoteSaveBtn")?.addEventListener("click", async () => {
+    const candidate = machtileFormalQuoteState.candidate;
+    if (!candidate || machtileFormalQuoteState.pending) return;
+    const partName = document.getElementById("formalQuotePartName")?.value.trim();
+    const reason = document.getElementById("formalQuoteReason")?.value.trim();
+    if (!partName || !reason || reason.length < 2) { showToast("請填品名與建立原因"); return; }
+    machtileFormalQuoteState.pending = true;
+    try {
+      await machtileFormalQuoteRpc("manufacturing_quote_version_create", {
+        ...candidate, part_name: partName, title: partName,
+        part_no: document.getElementById("formalQuotePartNo")?.value.trim(), customer_name: document.getElementById("formalQuoteCustomer")?.value.trim(),
+        quote_no: document.getElementById("formalQuoteNo")?.value.trim(), reason, source_event_id: machtileFormalQuoteEventId("create"),
+      });
+      showToast("正式估價草稿已建立");
+      document.getElementById("formalQuoteReason").value = "";
+      await machtileFormalQuoteRefresh();
+    } catch (error) { showToast(`建立失敗：${machtileFormalQuoteError(error)}`); }
+    finally { machtileFormalQuoteState.pending = false; }
+  });
+  document.getElementById("machtileFormalQuoteList")?.addEventListener("submit", async (event) => {
+    const form = event.target.closest("form");
+    if (!form || machtileFormalQuoteState.pending) return;
+    event.preventDefault();
+    const data = new FormData(form);
+    machtileFormalQuoteState.pending = true;
+    try {
+      if (form.dataset.formalQuoteApprove) {
+        await machtileFormalQuoteRpc("manufacturing_quote_version_approve", { quote_version_id: form.dataset.formalQuoteApprove, reason: String(data.get("reason") || ""), source_event_id: machtileFormalQuoteEventId("approve") });
+        showToast("正式估價已核准");
+      } else if (form.dataset.formalQuoteLink) {
+        await machtileFormalQuoteRpc("manufacturing_quote_work_order_link", { quote_version_id: form.dataset.formalQuoteLink, work_order_id: String(data.get("workOrder") || ""), reason: String(data.get("reason") || ""), source_event_id: machtileFormalQuoteEventId("link") });
+        showToast("估價版本已連結工單");
+      } else if (form.dataset.formalQuoteFinalize) {
+        await machtileFormalQuoteRpc("manufacturing_quote_work_order_finalize", { link_id: form.dataset.formalQuoteFinalize, actual_setup_minutes: data.get("setup"), actual_inspection_minutes: data.get("inspection"), actual_other_minutes: data.get("other"), reason: String(data.get("reason") || ""), source_event_id: machtileFormalQuoteEventId("finalize") });
+        showToast("最終工時已確認並留痕");
+      }
+      await machtileFormalQuoteRefresh();
+      renderReports();
+    } catch (error) { showToast(`操作失敗：${machtileFormalQuoteError(error)}`); }
+    finally { machtileFormalQuoteState.pending = false; }
+  });
+  machtileFormalQuoteRefresh().catch((error) => {
+    const holder = document.getElementById("machtileFormalQuoteList");
+    if (holder) holder.innerHTML = `<p class="admin-module-note">正式估價載入失敗：${escapeHtml(machtileFormalQuoteError(error))}</p>`;
   });
 }
 

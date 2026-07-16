@@ -24,5 +24,7 @@ window.MACHTILE_CONFIG = {
   // Schedule foundation and capacity calendar are present and verified in Production.
   enableScheduleContracts: true,
   // 202607160005 is present and passed the Production rollback smoke.
-  enableCalibrationGovernance: true
+  enableCalibrationGovernance: true,
+  // 202607160006 is present and passed the Production rollback smoke.
+  enableManufacturingQuoteTracking: true
 };
