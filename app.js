@@ -13360,11 +13360,37 @@ function renderProgramModule() {
       </div>
 
       <section class="machtile-estimate-panel" data-estimate-panel="gcode" role="tabpanel">
-        <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
-          <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
-          <span>上傳後自動進行 FANUC／EIA 加工時間估算，並保留程式版本</span>
-          <input id="machtileCncFile" type="file" hidden>
+        <div class="machtile-gcode-source-tabs" role="tablist" aria-label="G-code 輸入方式">
+          <button class="machtile-gcode-source-tab is-active" type="button" role="tab" aria-selected="true" data-gcode-source-mode="file">上傳程式檔</button>
+          <button class="machtile-gcode-source-tab" type="button" role="tab" aria-selected="false" data-gcode-source-mode="paste">直接貼上 G-code</button>
         </div>
+
+        <div data-gcode-source-panel="file">
+          <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
+            <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
+            <span>上傳後自動進行 FANUC／EIA 加工時間估算，並保留程式版本</span>
+            <input id="machtileCncFile" type="file" hidden>
+          </div>
+        </div>
+
+        <div class="machtile-gcode-paste" data-gcode-source-panel="paste" hidden>
+          <label class="admin-field" for="machtileCncPasteInput">
+            <span>直接貼上 FANUC／EIA G-code</span>
+            <textarea id="machtileCncPasteInput" class="machtile-gcode-paste-input" rows="14" spellcheck="false" placeholder="例如：&#10;O1234&#10;G21 G90&#10;G0 X0 Y0 Z10&#10;G1 Z-2 F300&#10;M30"></textarea>
+          </label>
+          <label class="admin-field" for="machtileCncPasteMachine">
+            <span>估算機台</span>
+            <select id="machtileCncPasteMachine"><option value="">保守預設（YCM TCV2000A 上限）</option></select>
+          </label>
+          <div class="machtile-gcode-paste-actions">
+            <button id="machtileCncPasteEstimateBtn" class="admin-save-button" type="button">立即估算</button>
+            <button id="machtileCncPasteClearBtn" type="button">清除</button>
+            <button id="machtileCncPasteSaveBtn" class="secondary-action" type="button" hidden>另存成程式版本…</button>
+          </div>
+          <p class="admin-module-note">直接貼上的內容只在此瀏覽器計算，按「另存成程式版本」並完成確認前，不會上傳或寫入資料庫。</p>
+          <div id="machtileCncPasteResult" class="machtile-gcode-paste-result" aria-live="polite" hidden></div>
+        </div>
+
         <form id="machtileCncForm" class="admin-module-form machtile-cnc-preview" hidden>
           <p id="machtileCncFileInfo" class="admin-module-note"></p>
           <label class="admin-field"><span>歸屬程式（自動判定，可改）</span>
@@ -13375,7 +13401,7 @@ function renderProgramModule() {
             <label class="admin-field"><span>機台（選填）</span><select id="machtileCncMachine"><option value="">不指定</option></select></label>
           </span>
           <label class="admin-field"><span>變更說明（選填）</span><input id="machtileCncSummary" type="text" placeholder="例：T03 進給調整"></label>
-          <button class="admin-save-button" type="submit" id="machtileCncSubmit">上傳並估時</button>
+          <button class="admin-save-button" type="submit" id="machtileCncSubmit">上傳並登錄</button>
           <p class="admin-module-note" id="machtileCncStatus"></p>
         </form>
       </section>
@@ -13480,6 +13506,16 @@ function machtileCncCalibrationMarkup(summary) {
   return `<span>歷史建議：${machtileFormatDuration(Math.round(summary.suggestedSeconds))}（原始 ${machtileFormatDuration(Math.round(summary.rawEstimateSeconds))}・係數 ×${factor}・${summary.sampleCount} 筆）；原始值仍保留。</span>`;
 }
 
+function machtileCncEstimateMarkup(estimate, calibration = null) {
+  if (!estimate) return "";
+  const modelLabel = estimate.motionModel === "acceleration-aware" ? "v2 加速度模型" : "v2／等速回退";
+  const warningLine = estimate.warnings?.length
+    ? `<br>⚠️ ${estimate.warnings.map((warning) => escapeHtml(warning)).join("；")}`
+    : "";
+  const calibrationLine = calibration ? `<br>${machtileCncCalibrationMarkup(calibration)}` : "";
+  return `⏱ 預估純加工 <strong>${machtileFormatDuration(estimate.totalSeconds)}</strong>（${modelLabel}｜切削 ${machtileFormatDuration(estimate.cuttingSeconds)}｜快移 ${estimate.rapidSeconds} 秒｜暫停 ${estimate.dwellSeconds} 秒｜換刀 ${estimate.toolChanges} 次｜移動 ${estimate.segments} 段）${warningLine}${calibrationLine}`;
+}
+
 function machtileCncRenderList(programs, runs, machineNames) {
   const holder = document.getElementById("machtileCncList");
   if (!holder) return;
@@ -13530,6 +13566,8 @@ async function machtileInitCncModule() {
   const versionById = new Map();
   let pendingFile = null;
   let pendingEstimate = null;
+  let pendingPasteText = "";
+  let activeSourceMode = "file";
   const refresh = async () => {
     try {
       const [programRows, runRows] = await Promise.all([
@@ -13558,7 +13596,8 @@ async function machtileInitCncModule() {
     if (machineSelect) {
       machineSelect.innerHTML = `<option value="">不指定</option>` + machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(m.machine_code)}</option>`).join("");
     }
-    (await supabaseFetch("machines?select=id,machine_code,machine_type,rapid_rate_mm_min,tool_change_seconds")).forEach((m) => {
+    const machineRows = await supabaseFetch("machines?select=id,machine_code,machine_type,rapid_rate_mm_min,tool_change_seconds");
+    machineRows.forEach((m) => {
       machineNames.set(String(m.id), m.machine_code);
       const configuredProfile = config.gcodeMachineProfiles?.[m.machine_code] || {};
       machineParams.set(String(m.id), {
@@ -13568,13 +13607,18 @@ async function machtileInitCncModule() {
         dialect: /車/.test(m.machine_type || "") || /lathe|turn/i.test(m.machine_type || "") ? "lathe" : "auto",
       });
     });
+    const pasteMachineSelect = document.getElementById("machtileCncPasteMachine");
+    if (pasteMachineSelect) {
+      pasteMachineSelect.innerHTML = `<option value="">保守預設（YCM TCV2000A 上限）</option>`
+        + machineRows.map((machine) => `<option value="${escapeHtml(machine.id)}">${escapeHtml(machine.machine_code)}</option>`).join("");
+    }
   } catch (error) { /* 機台清單失敗不擋上傳 */ }
   await refresh();
 
   // C 上傳體驗：拖放/點擊選檔 → 檔名自動辨識程式號＋自動歸屬 → 預覽確認
   const drop = document.getElementById("machtileCncDrop");
   const fileInput = document.getElementById("machtileCncFile");
-  const handleFile = async (file) => {
+  const handleFile = async (file, options = {}) => {
     if (!file) return;
     pendingFile = file;
     const text = await file.text();
@@ -13589,15 +13633,22 @@ async function machtileInitCncModule() {
     document.getElementById("machtileCncProgramNo").value = match ? "" : progGuess;
     const nextVersion = match ? `V${(match.cnc_program_versions || []).length + 1}` : "V1";
     // 估時 v2：機台若有部署設定便套用加速度模型；否則明確回退 v1 等速模型。
-    const params = (match?.machine_id && machineParams.get(String(match.machine_id))) || { rapidRate: 40000, maxFeedRateMmMin: 10000, toolChangeSeconds: 4.5, dialect: "auto" };
+    const params = options.estimateParams
+      || (match?.machine_id && machineParams.get(String(match.machine_id)))
+      || { rapidRate: 40000, maxFeedRateMmMin: 10000, toolChangeSeconds: 4.5, dialect: "auto" };
     pendingEstimate = machtileEstimateGcode(text, params);
+    if (options.machineCode) {
+      const machineSelect = document.getElementById("machtileCncMachine");
+      if (machineSelect && [...machineSelect.options].some((option) => option.value === options.machineCode)) {
+        machineSelect.value = options.machineCode;
+      }
+    }
     const calibration = match ? machtileCncCalibrationSummary(match, runsCache, pendingEstimate.totalSeconds) : null;
-    const modelLabel = pendingEstimate.motionModel === "acceleration-aware" ? "v2 加速度模型" : "v2／等速回退";
-    const estLine = `⏱ 預估純加工 <strong>${machtileFormatDuration(pendingEstimate.totalSeconds)}</strong>（${modelLabel}｜切削 ${machtileFormatDuration(pendingEstimate.cuttingSeconds)}｜快移 ${pendingEstimate.rapidSeconds} 秒｜換刀 ${pendingEstimate.toolChanges} 次）${pendingEstimate.warnings.length ? `<br>⚠️ ${pendingEstimate.warnings.map((w) => escapeHtml(w)).join("；")}` : ""}`;
+    const estLine = machtileCncEstimateMarkup(pendingEstimate, calibration);
     document.getElementById("machtileCncFileInfo").innerHTML = (match
       ? `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 偵測到既有程式 <strong>${escapeHtml(match.part_name)}${match.program_no ? `・${escapeHtml(match.program_no)}` : ""}</strong>，將登錄為 <strong>${nextVersion}</strong>`
       : `<strong>${escapeHtml(file.name)}</strong>（${lines} 行）→ 沒有相符的既有程式，將建立<strong>新程式</strong>（程式號 ${escapeHtml(progGuess)}，請填品名）`)
-      + `<br>${estLine}<br>${machtileCncCalibrationMarkup(calibration)}`;
+      + `<br>${estLine}`;
     form.hidden = false;
     document.getElementById("machtileCncStatus").textContent = "";
   };
@@ -13610,6 +13661,96 @@ async function machtileInitCncModule() {
     handleFile(event.dataTransfer.files?.[0]);
   });
   fileInput?.addEventListener("change", () => handleFile(fileInput.files?.[0]));
+
+  const sourceModeButtons = [...document.querySelectorAll("[data-gcode-source-mode]")];
+  const setSourceMode = (mode) => {
+    const selected = mode === "paste" ? "paste" : "file";
+    if (selected !== activeSourceMode) {
+      form.reset();
+      form.hidden = true;
+      pendingFile = null;
+      pendingEstimate = null;
+      activeSourceMode = selected;
+    }
+    sourceModeButtons.forEach((button) => {
+      const active = button.dataset.gcodeSourceMode === selected;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll("[data-gcode-source-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.gcodeSourcePanel !== selected;
+    });
+  };
+  sourceModeButtons.forEach((button) => button.addEventListener("click", () => setSourceMode(button.dataset.gcodeSourceMode)));
+
+  const pasteInput = document.getElementById("machtileCncPasteInput");
+  const pasteMachine = document.getElementById("machtileCncPasteMachine");
+  const pasteResult = document.getElementById("machtileCncPasteResult");
+  const pasteSaveButton = document.getElementById("machtileCncPasteSaveBtn");
+  const invalidatePastedEstimate = () => {
+    pendingPasteText = "";
+    if (pasteResult) pasteResult.hidden = true;
+    if (pasteSaveButton) pasteSaveButton.hidden = true;
+  };
+  const estimatePastedGcode = () => {
+    const text = String(pasteInput?.value || "").trim();
+    if (!text) {
+      if (pasteResult) {
+        pasteResult.innerHTML = "<p>請先貼上 G-code，再按立即估算。</p>";
+        pasteResult.hidden = false;
+      }
+      if (pasteSaveButton) pasteSaveButton.hidden = true;
+      pendingPasteText = "";
+      return;
+    }
+    const params = (pasteMachine?.value && machineParams.get(String(pasteMachine.value)))
+      || { rapidRate: 40000, maxFeedRateMmMin: 10000, toolChangeSeconds: 4.5, dialect: "auto" };
+    const estimate = machtileEstimateGcode(text, params);
+    const lineCount = text.split(/\r?\n/).length;
+    const noRecognizedMotion = !estimate.segments && !estimate.toolChanges && !estimate.dwellSeconds;
+    pendingPasteText = text;
+    if (pasteResult) {
+      pasteResult.innerHTML = `
+        <p>${machtileCncEstimateMarkup(estimate)}</p>
+        <p><small>${lineCount} 行・${text.length.toLocaleString("en-US")} 字元・只在此瀏覽器完成估算，尚未保存。</small></p>
+        ${noRecognizedMotion ? "<p>⚠️ 沒有辨識到可估算的移動、換刀或暫停，請確認程式是否完整。</p>" : ""}
+      `;
+      pasteResult.hidden = false;
+    }
+    if (pasteSaveButton) pasteSaveButton.hidden = false;
+  };
+  const savePastedGcode = async () => {
+    const text = String(pasteInput?.value || "").trim();
+    if (!pendingPasteText || text !== pendingPasteText) {
+      if (pasteResult) {
+        pasteResult.innerHTML = "<p>內容已變更，請重新估算後再另存成程式版本。</p>";
+        pasteResult.hidden = false;
+      }
+      if (pasteSaveButton) pasteSaveButton.hidden = true;
+      return;
+    }
+    const programNo = (text.match(/(?:^|\n)\s*(O\d{3,5})\b/i) || [])[1]?.toUpperCase();
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+    const fileName = programNo ? `${programNo}-paste.nc` : `PASTED-GCODE-${stamp}.nc`;
+    const pastedFile = new File([text], fileName, { type: "text/plain" });
+    const selectedMachineId = pasteMachine?.value || "";
+    await handleFile(pastedFile, {
+      estimateParams: selectedMachineId ? machineParams.get(String(selectedMachineId)) : undefined,
+      machineCode: selectedMachineId ? machineNames.get(String(selectedMachineId)) : "",
+    });
+    const summaryInput = document.getElementById("machtileCncSummary");
+    if (summaryInput && !summaryInput.value) summaryInput.value = "由直接貼上 G-code 建立";
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  pasteInput?.addEventListener("input", invalidatePastedEstimate);
+  pasteMachine?.addEventListener("change", invalidatePastedEstimate);
+  document.getElementById("machtileCncPasteEstimateBtn")?.addEventListener("click", estimatePastedGcode);
+  document.getElementById("machtileCncPasteClearBtn")?.addEventListener("click", () => {
+    if (pasteInput) pasteInput.value = "";
+    invalidatePastedEstimate();
+    pasteInput?.focus();
+  });
+  pasteSaveButton?.addEventListener("click", savePastedGcode);
 
   document.getElementById("machtileCncProgram")?.addEventListener("change", (event) => {
     const isNew = !event.currentTarget.value;
