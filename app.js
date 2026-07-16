@@ -84,6 +84,7 @@ const departmentFilters = ["全部", "車床課", "銑床課"];
 const millingModeFilters = ["全部銑床", "單盤單工件", "多盤多工件"];
 const statusFilters = ["全部狀態", "加工中", "空閒", "暫停", "維修／停用", "可能延誤", "已延誤", "異常", "待品檢", "今日到期", "未排機", "未回報"];
 const alertFilters = ["全部", "已延誤", "可能延誤", "異常", "待品檢", "今日到期", "未回報"];
+const attentionWorkflowFilters = ["待處理", "未指派", "處理中", "等待回覆", "已結案"];
 
 const reportTypeMeta = {
   workStart: {
@@ -128,6 +129,7 @@ let activeDepartmentFilter = "全部";
 let activeMillingModeFilter = "全部銑床";
 let activeStatusFilter = "全部狀態";
 let activeAlertFilter = "全部";
+let activeAttentionStatus = "待處理";
 let activeHistoryTab = "全部";
 let historySearchQuery = "";
 let activeReportType = "workStart";
@@ -8988,7 +8990,7 @@ async function loadFromSupabase() {
   }
   await machtileLoadScheduleQueue();
   state.source = "supabase";
-  await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar()]);
+  await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar(), machtileLoadAttentionCenter()]);
 }
 
 function loadMockData() {
@@ -8997,6 +8999,12 @@ function loadMockData() {
   state.machineMasters = [];
   state.source = "mock";
   machtileResetScheduleContracts();
+  machtileAttentionState.status = "idle";
+  machtileAttentionState.error = "";
+  machtileAttentionState.casesBySourceKey = new Map();
+  machtileAttentionState.assignees = [];
+  machtileAttentionState.history = [];
+  machtileAttentionState.selectedKeys.clear();
 }
 
 function deriveOrderStatus(order) {
@@ -9212,6 +9220,17 @@ function deriveMachines() {
 // 排程板（2026-07-14，SB1 頂層分頁/SB2 拖拉+按鈕/SB3 佇列第一張=機台卡目前工單）。
 // strict 由 machine_queue_reorder RPC 持久化（同時處理改派）；Dev 免登入=畫面內示範。
 const machtileScheduleCore = window.MachTileScheduleCore;
+const machtileAttentionCore = window.MachTileAttentionCenterCore;
+const machtileAttentionState = {
+  status: "idle",
+  error: "",
+  casesBySourceKey: new Map(),
+  assignees: [],
+  history: [],
+  selectedKeys: new Set(),
+  actionKeys: [],
+  writePending: false,
+};
 const machtileScheduleState = {
   queueOrderByProcess: new Map(),
   estimateByProcess: new Map(),
@@ -9310,6 +9329,34 @@ async function machtileLoadCapacityCalendar() {
     machtileCapacityCalendarState.status = "unavailable";
     machtileCapacityCalendarState.error = String(error?.message || error || "");
     console.warn("capacity calendar snapshot unavailable; using verified deployment calendar", error);
+  }
+}
+
+async function machtileLoadAttentionCenter() {
+  machtileAttentionState.casesBySourceKey = new Map();
+  machtileAttentionState.assignees = [];
+  machtileAttentionState.history = [];
+  machtileAttentionState.error = "";
+  if (!machtileStrictMode() || !machtileSessionActive() || state.source !== "supabase") {
+    machtileAttentionState.status = "idle";
+    return;
+  }
+  machtileAttentionState.status = "loading";
+  try {
+    const snapshot = await supabaseFetch("rpc/attention_case_snapshot", {
+      method: "POST",
+      body: JSON.stringify({ p_payload: { include_closed: true, limit: 300 } }),
+    });
+    (Array.isArray(snapshot?.cases) ? snapshot.cases : []).forEach((item) => {
+      if (item?.source_key) machtileAttentionState.casesBySourceKey.set(item.source_key, item);
+    });
+    machtileAttentionState.assignees = Array.isArray(snapshot?.assignees) ? snapshot.assignees : [];
+    machtileAttentionState.history = Array.isArray(snapshot?.history) ? snapshot.history : [];
+    machtileAttentionState.status = "ready";
+  } catch (error) {
+    machtileAttentionState.status = "unavailable";
+    machtileAttentionState.error = String(error?.message || error || "");
+    console.warn("attention center contract unavailable; computed alerts remain read-only", error);
   }
 }
 
@@ -10557,8 +10604,167 @@ function processStageLabel(order) {
 }
 
 function alertActions(order) {
-  // 第一階段只顯示已有完整導向的真動作；待處理狀態／負責人／結案需另行建模。
   return machtileIsSchedulableOrder(order) ? ["調排程", "查看工單"] : ["查看工單"];
+}
+
+function machtileAttentionSourceKey(order) {
+  return machtileAttentionCore?.sourceKey?.(order, primaryAlertStatus(order))
+    || `work_order:${order?.workOrderId || order?.id || "unknown"}:${primaryAlertStatus(order)}:${order?.dueDate || "no-date"}`;
+}
+
+function machtileAttentionCaseForOrder(order) {
+  const sourceKey = machtileAttentionSourceKey(order);
+  const persisted = machtileAttentionState.casesBySourceKey.get(sourceKey) || null;
+  return machtileAttentionCore?.mergeCase?.(order, primaryAlertStatus(order), persisted) || {
+    sourceKey,
+    status: persisted?.status || "unassigned",
+    statusLabel: persisted?.status || "未指派",
+    statusClassName: "attention-unassigned",
+    assigneeName: persisted?.assignee_name || "尚未指派",
+    assignedTo: persisted?.assigned_to || "",
+    resolutionReason: persisted?.resolution_reason || "",
+    updatedAt: persisted?.updated_at || "",
+  };
+}
+
+function machtileAttentionMatchesWorkflow(order, filter = activeAttentionStatus) {
+  const caseState = machtileAttentionCaseForOrder(order);
+  return machtileAttentionCore?.matchesWorkflow?.(caseState, filter) ?? (caseState.status !== "closed");
+}
+
+function machtileAttentionCanWrite() {
+  return machtileAttentionState.status === "ready"
+    && machtileStrictMode()
+    && machtileSessionActive()
+    && ["admin", "manager"].includes(String(machtileAuthState.role || "").toLowerCase());
+}
+
+function machtileAttentionSeverity(order) {
+  return ({ overdue: "critical", abnormal: "high", aiRisk: "high", inspection: "medium", stale: "low" })[primaryAlertStatus(order)] || "medium";
+}
+
+function machtileAttentionMutationItem(order) {
+  const payload = {
+    source_type: "work_order_risk",
+    source_key: machtileAttentionSourceKey(order),
+    title: `${order.id} · ${order.part}`,
+    reason_summary: alertReason(order),
+    severity: machtileAttentionSeverity(order),
+    observed_at: new Date().toISOString(),
+    source_snapshot: {
+      work_order_no: order.id,
+      part_name: order.part,
+      customer: order.customer,
+      process: order.process,
+      machine: order.machine,
+      due_date: order.dueDate,
+      alert_status: primaryAlertStatus(order),
+      categories: Array.from(alertCategories(order)),
+      completed_qty: Number(order.done || 0),
+      planned_qty: Number(order.total || 0),
+    },
+  };
+  if (machtileUuidPattern.test(String(order.workOrderId || ""))) payload.work_order_id = order.workOrderId;
+  if (machtileUuidPattern.test(String(order.processId || ""))) payload.process_id = order.processId;
+  return payload;
+}
+
+function machtileAttentionOrdersForKeys(keys) {
+  const keySet = new Set(keys);
+  return state.workOrders.filter((order) => keySet.has(machtileAttentionSourceKey(order)));
+}
+
+function machtileAttentionWriteStatusMessage() {
+  if (machtileAttentionState.status === "unavailable") return "等待 Production DB 契約";
+  if (!machtileStrictMode() || !machtileSessionActive()) return "正式環境登入後可處理";
+  if (!["admin", "manager"].includes(String(machtileAuthState.role || "").toLowerCase())) return "主管可指派與結案";
+  return "載入處理狀態中";
+}
+
+function machtileAttentionPrimaryAction(caseState) {
+  if (caseState.status === "unassigned") return { action: "assign", label: "指派負責人" };
+  if (caseState.status === "closed") return { action: "reopen", label: "重新開啟" };
+  return { action: "status", label: "更新處理狀態" };
+}
+
+function machtileOpenAttentionAction(keys, action) {
+  const uniqueKeys = [...new Set(keys)].filter(Boolean);
+  if (!uniqueKeys.length) return;
+  if (!machtileAttentionCanWrite()) {
+    showToast(machtileAttentionWriteStatusMessage());
+    return;
+  }
+  machtileAttentionState.actionKeys = uniqueKeys;
+  const orders = machtileAttentionOrdersForKeys(uniqueKeys);
+  const firstCase = orders[0] ? machtileAttentionCaseForOrder(orders[0]) : null;
+  const sheet = $("#attentionActionSheet");
+  const assignee = $("#attentionAssigneeSelect");
+  const status = $("#attentionStatusSelect");
+  const reason = $("#attentionReasonInput");
+  assignee.innerHTML = `<option value="">${action === "close" ? "結案者自動負責" : "請選擇負責人"}</option>`
+    + machtileAttentionState.assignees.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(user.role || "")}</option>`).join("");
+  assignee.value = firstCase?.assignedTo || "";
+  status.value = action === "close" ? "closed" : action === "reopen" || action === "assign" ? "in_progress" : (firstCase?.status || "in_progress");
+  status.disabled = action === "close" || action === "assign" || action === "reopen";
+  reason.value = "";
+  $("#attentionActionTitle").textContent = action === "close" ? "結案待處理案件" : action === "assign" ? "指派負責人" : action === "reopen" ? "重新開啟案件" : "更新處理狀態";
+  $("#attentionActionSummary").textContent = `${uniqueKeys.length} 筆案件；所有變更都會留下稽核紀錄`;
+  $("#attentionActionSubmit").textContent = action === "close" ? "確認結案" : "確認更新";
+  sheet.classList.add("is-open");
+  sheet.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => (action === "close" ? reason : assignee).focus(), 50);
+}
+
+function machtileCloseAttentionAction() {
+  const sheet = $("#attentionActionSheet");
+  sheet?.classList.remove("is-open");
+  sheet?.setAttribute("aria-hidden", "true");
+  machtileAttentionState.actionKeys = [];
+}
+
+async function machtileSubmitAttentionAction() {
+  if (machtileAttentionState.writePending) return;
+  const orders = machtileAttentionOrdersForKeys(machtileAttentionState.actionKeys);
+  const status = $("#attentionStatusSelect").value;
+  const assignedTo = $("#attentionAssigneeSelect").value;
+  const reason = $("#attentionReasonInput").value.trim();
+  const validation = machtileAttentionCore?.validateMutation?.({ status, assignedTo, reason, itemCount: orders.length }) || { valid: Boolean(orders.length && reason), errors: ["請確認輸入資料"] };
+  if (!validation.valid) {
+    showToast(validation.errors[0]);
+    return;
+  }
+  const idempotencyKey = globalThis.crypto?.randomUUID?.() || `attention-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  machtileAttentionState.writePending = true;
+  $("#attentionActionSubmit").disabled = true;
+  try {
+    const payload = {
+      status,
+      reason,
+      idempotency_key: idempotencyKey,
+      items: orders.map(machtileAttentionMutationItem),
+    };
+    if (assignedTo) payload.assigned_to = assignedTo;
+    const result = await supabaseFetch("rpc/attention_case_batch_update", {
+      method: "POST",
+      body: JSON.stringify({ p_payload: payload }),
+    });
+    await machtileLoadAttentionCenter();
+    machtileAttentionState.selectedKeys.clear();
+    machtileCloseAttentionAction();
+    renderAlerts();
+    showToast(`已更新 ${Number(result?.updated || 0)} 筆待處理案件`);
+  } catch (error) {
+    const message = String(error?.message || error || "");
+    const mapped = message.includes("REASON_REQUIRED") ? "修改與結案原因至少需要 2 個字"
+      : message.includes("ASSIGNEE_REQUIRED") ? "處理中或等待回覆必須指定負責人"
+      : message.includes("FORBIDDEN") ? "此操作需要主管或管理員權限"
+      : message.includes("ACTOR_NOT_FOUND") ? "登入帳號尚未對應到有效使用者"
+      : "待處理案件更新失敗，請稍後重試";
+    showToast(mapped);
+  } finally {
+    machtileAttentionState.writePending = false;
+    $("#attentionActionSubmit").disabled = false;
+  }
 }
 
 function renderStats() {
@@ -10798,8 +11004,10 @@ function alertOrders() {
   return state.workOrders
     .filter((order) => {
       const categories = alertCategories(order);
-      if (activeAlertFilter === "全部") return categories.size > 0 && deriveOrderStatus(order) !== "normal";
-      return categories.has(activeAlertFilter);
+      const categoryMatches = activeAlertFilter === "全部"
+        ? categories.size > 0 && deriveOrderStatus(order) !== "normal"
+        : categories.has(activeAlertFilter);
+      return categoryMatches && machtileAttentionMatchesWorkflow(order);
     })
     .sort((a, b) => {
       const rank = { overdue: 0, abnormal: 1, aiRisk: 2, inspection: 3, stale: 4, running: 5, normal: 6 };
@@ -10810,6 +11018,7 @@ function alertOrders() {
 function renderAlerts() {
   const counts = Object.fromEntries(alertFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
+    if (!machtileAttentionMatchesWorkflow(order)) return;
     const categories = alertCategories(order);
     if (categories.size > 0 && deriveOrderStatus(order) !== "normal") counts["全部"] += 1;
     categories.forEach((category) => {
@@ -10823,12 +11032,56 @@ function renderAlerts() {
     </button>
   `).join("");
 
+  const workflowCounts = Object.fromEntries(attentionWorkflowFilters.map((filter) => [filter, 0]));
+  state.workOrders.forEach((order) => {
+    if (alertCategories(order).size === 0 || deriveOrderStatus(order) === "normal") return;
+    attentionWorkflowFilters.forEach((filter) => {
+      if (machtileAttentionMatchesWorkflow(order, filter)) workflowCounts[filter] += 1;
+    });
+  });
+  $("#attentionWorkflowChips").innerHTML = attentionWorkflowFilters.map((filter) => `
+    <button class="filter-chip attention-workflow-chip ${activeAttentionStatus === filter ? "active" : ""}" data-attention-filter="${escapeHtml(filter)}" type="button">
+      ${escapeHtml(filter)} <span>${workflowCounts[filter] || 0}</span>
+    </button>
+  `).join("");
+
   const alerts = alertOrders();
   $("#alertList").innerHTML = alerts.length
     ? alerts.map(renderAlertCard).join("")
     : `<article class="empty-card"><strong>目前沒有待處理警報</strong><span>所有工單都在可控範圍內。</span></article>`;
 
+  const visibleKeys = new Set(alerts.map(machtileAttentionSourceKey));
+  [...machtileAttentionState.selectedKeys].forEach((key) => {
+    if (!visibleKeys.has(key)) machtileAttentionState.selectedKeys.delete(key);
+  });
+  const batchBar = $("#attentionBatchBar");
+  const selectedCount = machtileAttentionState.selectedKeys.size;
+  batchBar.hidden = selectedCount === 0;
+  $("#attentionSelectedCount").textContent = String(selectedCount);
+  batchBar.querySelectorAll("[data-attention-batch]").forEach((button) => { button.disabled = !machtileAttentionCanWrite(); });
+  machtileRenderAttentionAudit();
+
   if (machtileStrictMode() && machtileSessionActive()) machtileRenderNotifyLog().catch(() => {});
+}
+
+function machtileRenderAttentionAudit() {
+  const panel = $("#attentionAuditPanel");
+  const list = $("#attentionAuditList");
+  if (!panel || !list) return;
+  const rows = machtileAttentionState.history.slice(0, 12);
+  panel.hidden = rows.length === 0;
+  if (!rows.length) {
+    list.innerHTML = "";
+    return;
+  }
+  const actionLabels = { created: "建立", assigned: "指派", status_changed: "更新狀態", closed: "結案", reopened: "重新開啟" };
+  list.innerHTML = rows.map((row) => `
+    <article>
+      <div><strong>${escapeHtml(row.case_title || row.source_key || "待處理案件")}</strong><span>${escapeHtml(actionLabels[row.action] || row.action || "更新")}</span></div>
+      <p>${escapeHtml(row.reason || "-")}</p>
+      <small>${escapeHtml(row.actor_name || "系統")} · ${escapeHtml(machtileFormatAuditTime(row.created_at))}</small>
+    </article>
+  `).join("");
 }
 
 // H3 通知紀錄（strict）：警報頁尾顯示 LINE 已推播內容，與群組看到的一致。
@@ -10863,11 +11116,20 @@ function renderAlertCard(order) {
   const actions = alertActions(order);
   const primaryAction = actions[0];
   const secondaryActions = actions.slice(1);
+  const caseState = machtileAttentionCaseForOrder(order);
+  const attentionAction = machtileAttentionPrimaryAction(caseState);
+  const attentionWritable = machtileAttentionCanWrite();
+  const sourceKey = caseState.sourceKey;
+  const selected = machtileAttentionState.selectedKeys.has(sourceKey);
 
   return `
-    <article class="alert-card ${status.className}">
+    <article class="alert-card ${status.className} ${caseState.status === "closed" ? "is-attention-closed" : ""}">
       <header class="alert-card-header">
         <div class="alert-title-group">
+          <label class="attention-select-control" title="選取後可批次指派或結案">
+            <input type="checkbox" data-attention-select="${escapeHtml(sourceKey)}" ${selected ? "checked" : ""}>
+            <span>選取</span>
+          </label>
           <span class="status-pill">${escapeHtml(status.label)}</span>
           <code>${escapeHtml(order.id)}</code>
           <strong>${escapeHtml(order.part)}</strong>
@@ -10880,6 +11142,13 @@ function renderAlertCard(order) {
           <small>${escapeHtml(due.date)}</small>
         </div>
       </header>
+
+      <div class="attention-workflow-strip ${escapeHtml(caseState.statusClassName)}">
+        <div><span>處理狀態</span><strong>${escapeHtml(caseState.statusLabel)}</strong></div>
+        <div><span>負責人</span><strong>${escapeHtml(caseState.assigneeName)}</strong></div>
+        <div><span>已等待</span><strong>${escapeHtml(order.lastReport || "尚未回報")}</strong></div>
+        ${caseState.resolutionReason ? `<div><span>結案原因</span><strong>${escapeHtml(caseState.resolutionReason)}</strong></div>` : ""}
+      </div>
 
       <div class="alert-meta-grid">
         <div>
@@ -10918,10 +11187,11 @@ function renderAlertCard(order) {
       </section>
 
       <div class="alert-actions">
-        <button type="button" data-alert-action="${escapeHtml(primaryAction)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(primaryAction)}</button>
+        <button type="button" data-attention-open="${escapeHtml(attentionAction.action)}" data-attention-key="${escapeHtml(sourceKey)}" ${attentionWritable ? "" : `disabled title="${escapeHtml(machtileAttentionWriteStatusMessage())}"`}>${escapeHtml(attentionWritable ? attentionAction.label : machtileAttentionWriteStatusMessage())}</button>
         <details class="alert-more">
           <summary>更多操作</summary>
           <div>
+            <button type="button" data-alert-action="${escapeHtml(primaryAction)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(primaryAction)}</button>
             ${secondaryActions.map((action) => `
               <button type="button" data-alert-action="${escapeHtml(action)}" data-alert-order="${escapeHtml(order.id)}">${escapeHtml(action)}</button>
             `).join("")}
@@ -15548,6 +15818,46 @@ function bindEvents() {
       return;
     }
 
+    const attentionFilterButton = event.target.closest("[data-attention-filter]");
+    if (attentionFilterButton) {
+      activeAttentionStatus = attentionFilterButton.dataset.attentionFilter;
+      machtileAttentionState.selectedKeys.clear();
+      renderAlerts();
+      return;
+    }
+
+    const attentionSelect = event.target.closest("[data-attention-select]");
+    if (attentionSelect) {
+      const key = attentionSelect.dataset.attentionSelect;
+      if (attentionSelect.checked) machtileAttentionState.selectedKeys.add(key);
+      else machtileAttentionState.selectedKeys.delete(key);
+      renderAlerts();
+      return;
+    }
+
+    const attentionOpen = event.target.closest("[data-attention-open]");
+    if (attentionOpen) {
+      machtileOpenAttentionAction([attentionOpen.dataset.attentionKey], attentionOpen.dataset.attentionOpen);
+      return;
+    }
+
+    const attentionBatch = event.target.closest("[data-attention-batch]");
+    if (attentionBatch) {
+      machtileOpenAttentionAction([...machtileAttentionState.selectedKeys], attentionBatch.dataset.attentionBatch);
+      return;
+    }
+
+    if (event.target.closest("[data-attention-clear]")) {
+      machtileAttentionState.selectedKeys.clear();
+      renderAlerts();
+      return;
+    }
+
+    if (event.target.closest("[data-close-attention-action]")) {
+      machtileCloseAttentionAction();
+      return;
+    }
+
     const historyTabButton = event.target.closest("[data-history-tab]");
     if (historyTabButton) {
       activeHistoryTab = historyTabButton.dataset.historyTab;
@@ -15791,6 +16101,11 @@ function bindEvents() {
     if (adminSaveButton) {
       showToast(`${adminSaveButton.dataset.adminSave}已建立草稿`);
     }
+  });
+
+  $("#attentionActionForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    machtileSubmitAttentionAction().catch((error) => showToast(String(error?.message || error || "待處理案件更新失敗")));
   });
 
   $$(".stepper button").forEach((button) => {

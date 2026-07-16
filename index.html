@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260716-capacity-calendar">
+  <link rel="stylesheet" href="./styles.css?v=20260716-attention-center">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -189,7 +189,23 @@
               </div>
             </div>
             <div id="alertChips" class="filter-chips alert-chips" aria-label="警報篩選"></div>
+            <div id="attentionWorkflowChips" class="filter-chips attention-workflow-chips" aria-label="處理狀態篩選"></div>
+            <div id="attentionBatchBar" class="attention-batch-bar" hidden>
+              <strong><span id="attentionSelectedCount">0</span> 筆已選取</strong>
+              <div>
+                <button type="button" data-attention-batch="assign">批次指派</button>
+                <button type="button" data-attention-batch="close">批次結案</button>
+                <button type="button" data-attention-clear>取消選取</button>
+              </div>
+            </div>
             <div id="alertList" class="alert-list"></div>
+            <section id="attentionAuditPanel" class="attention-audit-panel" hidden>
+              <div class="panel-title">
+                <div><p class="eyebrow">Audit Trail</p><h3>近期處理紀錄</h3></div>
+                <span>主管可見</span>
+              </div>
+              <div id="attentionAuditList" class="attention-audit-list"></div>
+            </section>
           </section>
 
           <section class="alarm-panel inspection-panel" aria-labelledby="inspectionQueueTitle">
@@ -555,12 +571,48 @@
     </form>
   </aside>
 
+  <div id="attentionActionSheet" class="sheet attention-action-sheet" aria-hidden="true">
+    <div class="sheet-backdrop" data-close-attention-action></div>
+    <section class="sheet-panel attention-action-panel" role="dialog" aria-modal="true" aria-labelledby="attentionActionTitle">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">Action Workflow</p>
+          <h2 id="attentionActionTitle">更新待處理案件</h2>
+          <p id="attentionActionSummary">0 筆案件</p>
+        </div>
+        <button class="icon-button" type="button" data-close-attention-action aria-label="關閉">×</button>
+      </div>
+      <form id="attentionActionForm" class="attention-action-form">
+        <label>
+          <span>負責人</span>
+          <select id="attentionAssigneeSelect"></select>
+        </label>
+        <label>
+          <span>處理狀態</span>
+          <select id="attentionStatusSelect">
+            <option value="unassigned">未指派</option>
+            <option value="in_progress">處理中</option>
+            <option value="waiting">等待回覆</option>
+            <option value="closed">已結案</option>
+          </select>
+        </label>
+        <label>
+          <span>修改／結案原因</span>
+          <textarea id="attentionReasonInput" rows="4" required minlength="2" placeholder="例如：已與客戶確認延後一天，並完成排程調整"></textarea>
+        </label>
+        <p class="attention-action-note">每次修改都會記錄操作人、修改前後、原因與時間；結案不會改寫原工單或警報來源。</p>
+        <button id="attentionActionSubmit" class="primary-submit" type="submit">確認更新</button>
+      </form>
+    </section>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./scheduleCore.js?v=20260716-capacity-calendar"></script>
+  <script src="./attentionCenterCore.js?v=20260716-attention-center"></script>
   <script src="./gcodeEstimatorCore.js?v=20260716-estimator-v2"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260716-capacity-calendar"></script>
+  <script src="./app.js?v=20260716-attention-center"></script>
 </body>
 </html>

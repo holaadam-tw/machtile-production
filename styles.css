@@ -269,6 +269,27 @@ textarea:focus-visible {
   color: var(--brand-blue);
 }
 
+@media (max-width: 720px) {
+  .attention-batch-bar,
+  .attention-audit-list article > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .attention-batch-bar > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .attention-workflow-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .attention-action-panel {
+    max-height: min(88vh, 720px);
+  }
+}
+
 .desktop-tool-nav {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1242,6 +1263,206 @@ a.machine-qr-card small {
   border-color: var(--brand-blue);
   background: var(--brand-blue);
   color: var(--surface);
+}
+
+.attention-workflow-chips {
+  margin-top: -4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.attention-workflow-chip.active {
+  border-color: #256d4a;
+  background: #e8f6ef;
+  color: #175437;
+}
+
+.attention-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid #a9c9ef;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #eef6ff;
+}
+
+.attention-batch-bar[hidden] {
+  display: none;
+}
+
+.attention-batch-bar > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attention-batch-bar button,
+.attention-audit-panel button {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.attention-select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.attention-select-control input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--brand-blue);
+}
+
+.attention-workflow-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--border);
+}
+
+.attention-workflow-strip > div {
+  min-width: 0;
+  padding: 9px 11px;
+  background: var(--surface);
+}
+
+.attention-workflow-strip span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attention-workflow-strip strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-workflow-strip.attention-unassigned { border-left: 4px solid #8c929d; }
+.attention-workflow-strip.attention-progress { border-left: 4px solid var(--brand-blue); }
+.attention-workflow-strip.attention-waiting { border-left: 4px solid #d38b14; }
+.attention-workflow-strip.attention-closed { border-left: 4px solid #279563; }
+
+.alert-card.is-attention-closed {
+  --risk: #77a98f;
+  background: #f7fbf9;
+}
+
+.attention-audit-panel {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.attention-audit-panel[hidden] {
+  display: none;
+}
+
+.attention-audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.attention-audit-list article {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-soft);
+}
+
+.attention-audit-list article > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.attention-audit-list article span,
+.attention-audit-list article small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attention-audit-list article p {
+  margin: 5px 0;
+  font-size: 13px;
+}
+
+.attention-action-panel {
+  max-width: 560px;
+}
+
+.attention-action-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.attention-action-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attention-action-form select,
+.attention-action-form textarea {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.attention-action-form textarea {
+  resize: vertical;
+}
+
+.attention-action-note {
+  margin: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.attention-action-form .primary-submit {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-blue);
+  color: #fff;
+  font-weight: 900;
 }
 
 .detail-action-row .detail-link-button {
