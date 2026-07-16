@@ -8990,7 +8990,12 @@ async function loadFromSupabase() {
   }
   await machtileLoadScheduleQueue();
   state.source = "supabase";
-  await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar(), machtileLoadAttentionCenter()]);
+  await Promise.all([
+    machtileLoadScheduleContracts(),
+    machtileLoadCapacityCalendar(),
+    machtileLoadAttentionCenter(),
+    machtileLoadHmcRuntime(),
+  ]);
 }
 
 function loadMockData() {
@@ -9005,6 +9010,9 @@ function loadMockData() {
   machtileAttentionState.assignees = [];
   machtileAttentionState.history = [];
   machtileAttentionState.selectedKeys.clear();
+  machtileHmcRuntimeState.status = "idle";
+  machtileHmcRuntimeState.error = "";
+  machtileHmcRuntimeState.snapshot = machtileHmcRuntimeCore?.normalizeSnapshot({ machines: [] }, config.hmcScheduleProfiles) || null;
 }
 
 function deriveOrderStatus(order) {
@@ -9221,6 +9229,7 @@ function deriveMachines() {
 // strict 由 machine_queue_reorder RPC 持久化（同時處理改派）；Dev 免登入=畫面內示範。
 const machtileScheduleCore = window.MachTileScheduleCore;
 const machtileAttentionCore = window.MachTileAttentionCenterCore;
+const machtileHmcRuntimeCore = window.MachTileHmcRuntimeCore;
 const machtileAttentionState = {
   status: "idle",
   error: "",
@@ -9249,6 +9258,13 @@ const machtileCapacityCalendarState = {
   status: "idle",
   snapshot: null,
   error: "",
+};
+
+const machtileHmcRuntimeState = {
+  status: "idle",
+  snapshot: null,
+  error: "",
+  lastRevisionByMachine: new Map(),
 };
 
 function machtileTimeToMinutes(value) {
@@ -9330,6 +9346,77 @@ async function machtileLoadCapacityCalendar() {
     machtileCapacityCalendarState.error = String(error?.message || error || "");
     console.warn("capacity calendar snapshot unavailable; using verified deployment calendar", error);
   }
+}
+
+function machtileHmcRuntimeMachine(machineOrCode) {
+  const code = String(machineOrCode?.code || machineOrCode?.name || machineOrCode || "").trim().toUpperCase();
+  return (machtileHmcRuntimeState.snapshot?.machines || []).find((machine) => machine.machineCode === code) || null;
+}
+
+async function machtileLoadHmcRuntime() {
+  machtileHmcRuntimeState.error = "";
+  if (!machtileHmcRuntimeCore) {
+    machtileHmcRuntimeState.status = "unavailable";
+    machtileHmcRuntimeState.snapshot = null;
+    machtileHmcRuntimeState.error = "HMC runtime core unavailable";
+    return;
+  }
+  if (!machtileStrictMode() || !machtileSessionActive() || state.source !== "supabase") {
+    machtileHmcRuntimeState.status = "idle";
+    machtileHmcRuntimeState.snapshot = machtileHmcRuntimeCore.normalizeSnapshot({ machines: [] }, config.hmcScheduleProfiles);
+    return;
+  }
+  machtileHmcRuntimeState.status = "loading";
+  try {
+    const raw = await supabaseFetch("rpc/hmc_runtime_snapshot", {
+      method: "POST",
+      body: JSON.stringify({ p_payload: { machine_codes: ["B01", "B02"] } }),
+    });
+    const snapshot = machtileHmcRuntimeCore.normalizeSnapshot(raw, config.hmcScheduleProfiles);
+    snapshot.machines.forEach((runtime) => {
+      const previousRevision = machtileHmcRuntimeState.lastRevisionByMachine.get(runtime.machineCode);
+      if (previousRevision && runtime.replanRevision && previousRevision !== runtime.replanRevision) {
+        showToast(`${runtime.machineCode} 收到停機／缺料事件，排程已重新計算`);
+      }
+      if (runtime.replanRevision) machtileHmcRuntimeState.lastRevisionByMachine.set(runtime.machineCode, runtime.replanRevision);
+    });
+    machtileHmcRuntimeState.snapshot = snapshot;
+    machtileHmcRuntimeState.status = "ready";
+  } catch (error) {
+    machtileHmcRuntimeState.status = "unavailable";
+    machtileHmcRuntimeState.snapshot = null;
+    machtileHmcRuntimeState.error = String(error?.message || error || "");
+    console.warn("HMC runtime contract unavailable; pallet UI remains read-only", error);
+  }
+}
+
+let machtileHmcRuntimePollTimer = null;
+let machtileHmcRuntimePollPending = false;
+
+async function machtileRefreshHmcRuntime() {
+  if (machtileHmcRuntimePollPending || document.hidden || state.source !== "supabase" || !machtileSessionActive()) return;
+  machtileHmcRuntimePollPending = true;
+  try {
+    const previousRevisions = new Map(machtileHmcRuntimeState.lastRevisionByMachine);
+    await machtileLoadHmcRuntime();
+    const replanChanged = (machtileHmcRuntimeState.snapshot?.machines || []).some((runtime) => (
+      runtime.replanRevision && previousRevisions.get(runtime.machineCode) !== runtime.replanRevision
+    ));
+    if (replanChanged) await machtileLoadScheduleContracts();
+    deriveMachines();
+    renderWorkOrders();
+    renderSchedule();
+  } finally {
+    machtileHmcRuntimePollPending = false;
+  }
+}
+
+function machtileEnsureHmcRuntimePolling() {
+  if (!machtileStrictMode() || machtileHmcRuntimePollTimer) return;
+  machtileHmcRuntimePollTimer = window.setInterval(machtileRefreshHmcRuntime, 30000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) machtileRefreshHmcRuntime();
+  });
 }
 
 async function machtileLoadAttentionCenter() {
@@ -9628,7 +9715,7 @@ function machtileBuildScheduleForecast(byMachine) {
 
   byMachine.forEach((column) => {
     const machine = machtileScheduleMachine(column.def.code) || column.def;
-    const machineBlocked = column.def.assignable === false || ["maintenance", "offline"].includes(machine.status);
+    const machineBlocked = column.def.assignable === false || machtileScheduleMachineHardBlocked(machine);
     let cursor = now;
     let unknownAhead = false;
     const windows = calendar && machtileScheduleCore
@@ -9820,10 +9907,15 @@ function machtileScheduleMachine(colKey) {
   return state.machines.find((machine) => (machine.code || machine.name) === colKey || machine.name === colKey) || null;
 }
 
+function machtileScheduleMachineHardBlocked(machine) {
+  const runtime = machtileHmcRuntimeMachine(machine);
+  return ["maintenance", "offline"].includes(machine?.status) || runtime?.status === "stopped";
+}
+
 function machtileCanAssignToMachine(colKey) {
   if (!colKey) return true;
   const machine = machtileScheduleMachine(colKey);
-  return Boolean(machine) && !["maintenance", "offline"].includes(machine.status);
+  return Boolean(machine) && !machtileScheduleMachineHardBlocked(machine);
 }
 
 function machtileAssignableMachineOptions() {
@@ -9847,7 +9939,7 @@ function machtileScheduleColumns() {
         dept: normalizedMachineDepartment(machine),
         location: machine.location || "",
         status,
-        assignable: !["maintenance", "offline"].includes(status),
+        assignable: !machtileScheduleMachineHardBlocked(liveMachine),
         maintenanceWindows: liveMachine.maintenanceWindows || machine.maintenanceWindows || [],
         type: machine.type,
       };
@@ -9864,7 +9956,7 @@ function machtileScheduleColumns() {
           name: machine.name,
           dept: normalizedMachineDepartment(machine),
           status,
-          assignable: !["maintenance", "offline"].includes(status),
+          assignable: !machtileScheduleMachineHardBlocked(liveMachine),
           maintenanceWindows: liveMachine.maintenanceWindows || machine.maintenanceWindows || [],
           type: machine.type,
         });
@@ -9881,7 +9973,7 @@ function machtileScheduleColumns() {
         const liveMachine = machtileScheduleMachine(order.machine);
         const status = liveMachine?.status || "idle";
         byMachine.set(order.machine, {
-          def: { code: order.machine, name: order.machine, status, assignable: !["maintenance", "offline"].includes(status) },
+          def: { code: order.machine, name: order.machine, status, assignable: !machtileScheduleMachineHardBlocked(liveMachine || { name: order.machine, status }) },
           list: [order],
         });
       }
@@ -9945,11 +10037,36 @@ let machtileScheduleExpanded = "";
 
 function machtileScheduleHmcPanel(machineDef) {
   if (!isHmcMachine(machineDef)) return "";
+  const runtime = machtileHmcRuntimeMachine(machineDef);
+  if (runtime && machtileHmcRuntimeState.status === "ready") {
+    const message = runtime.status === "stopped"
+      ? "機台停機中；主軸容量已凍結，後續工單改列等待重排。"
+      : runtime.spindlePalletNo
+        ? `目前只有第 ${runtime.spindlePalletNo} 盤使用主軸；其他盤只計外部準備或等待。`
+        : "主軸目前空閒；交換盤可外部準備，但不計入主軸加工產能。";
+    return `
+      <section class="schedule-hmc-resource ${runtime.status === "stopped" ? "is-stopped" : ""}">
+        <div>
+          <strong>主軸互斥 · ${escapeHtml(runtime.palletCount)} 盤即時狀態</strong>
+          <span>${escapeHtml(message)}</span>
+        </div>
+        ${runtime.pendingReplanCount ? `<span class="schedule-forecast-pill is-risk">${runtime.pendingReplanCount} 個事件待確認重排</span>` : ""}
+        <div class="schedule-hmc-pallets">
+          ${runtime.pallets.map((pallet) => `
+            <span class="is-${escapeHtml(pallet.tone)}">
+              <strong>第 ${escapeHtml(pallet.palletNo)} 盤</strong>
+              <small>${escapeHtml(pallet.stateLabel)}${pallet.workOrderNo ? ` · ${escapeHtml(pallet.workOrderNo)}` : ""}</small>
+            </span>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
   if (state.source !== "mock") {
     return `
       <section class="schedule-hmc-resource">
         <div><strong>臥式多盤容量規則</strong><span>主軸同一時間只能加工 1 個交換盤；其他交換盤可在外部準備或等待。</span></div>
-        <span class="schedule-forecast-pill is-waiting">交換盤即時狀態待接 HMC 清單</span>
+        <span class="schedule-forecast-pill is-waiting">${machtileHmcRuntimeState.status === "loading" ? "正在讀取交換盤即時狀態" : "Production 尚未套用 HMC runtime 契約"}</span>
       </section>
     `;
   }
@@ -10859,6 +10976,44 @@ function ensureHmcDashboardEntry() {
   if (entry) entry.remove();
 }
 
+function machtileMonitorHmcRuntime(machine) {
+  if (!isHmcMachine(machine) || !machtileHmcRuntimeCore) return "";
+  let runtime = machtileHmcRuntimeMachine(machine);
+  let preview = false;
+  if (machtileHmcRuntimeState.status !== "ready" && state.source === "mock") {
+    preview = true;
+    const profile = machtileHmcRuntimeCore.machineProfile(machine.code || machine.name, config.hmcScheduleProfiles);
+    runtime = machtileHmcRuntimeCore.normalizeSnapshot({
+      machines: [{
+        machine_code: profile.machineCode,
+        pallets: Array.from({ length: profile.palletCount }, (_, index) => ({
+          pallet_no: index + 1,
+          state: index === 0 && machine.status === "running" ? "spindle" : index === 1 ? "external_preparing" : "waiting",
+        })),
+      }],
+    }, config.hmcScheduleProfiles).machines.find((item) => item.machineCode === profile.machineCode);
+  }
+  if (!runtime || (machtileHmcRuntimeState.status !== "ready" && !preview)) {
+    return `<section class="machine-hmc-runtime is-waiting"><div><strong>6 盤即時狀態</strong><span>等待 HMC runtime 契約</span></div></section>`;
+  }
+  return `
+    <section class="machine-hmc-runtime ${runtime.status === "stopped" ? "is-stopped" : ""}">
+      <div class="machine-hmc-runtime-head">
+        <strong>${escapeHtml(runtime.palletCount)} 盤即時狀態</strong>
+        <span>${runtime.status === "stopped" ? "停機・排程已凍結" : runtime.spindlePalletNo ? `主軸：第 ${runtime.spindlePalletNo} 盤` : "主軸空閒"}</span>
+        ${runtime.pendingReplanCount ? `<em>${runtime.pendingReplanCount} 待重排</em>` : ""}
+      </div>
+      <div class="machine-hmc-runtime-grid">
+        ${runtime.pallets.map((pallet) => `
+          <span class="is-${escapeHtml(pallet.tone)}" title="${escapeHtml(pallet.workOrderNo || pallet.fixtureName || pallet.stateLabel)}">
+            <b>${escapeHtml(pallet.palletNo)}</b><small>${escapeHtml(pallet.stateLabel)}</small>
+          </span>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderMachineCard(machine) {
   const order = machine.order;
   const status = statusMeta[machine.status] || statusMeta.idle;
@@ -10913,6 +11068,8 @@ function renderMachineCard(machine) {
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
         `}
       </div>
+
+      ${machtileMonitorHmcRuntime(machine)}
 
       ${order ? `
         <div class="program-strip">
@@ -16396,6 +16553,7 @@ async function machtileResumeInit() {
   }
 
   renderAll();
+  machtileEnsureHmcRuntimePolling();
   applyInitialRoute();
   startDemo();
 }

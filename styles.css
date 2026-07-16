@@ -9704,3 +9704,132 @@ body.report-work-route-mode .machtile-route-brand-bar {
     grid-template-columns: 1fr;
   }
 }
+
+/* HMC runtime: one spindle, six externally prepared pallets. */
+.machine-hmc-runtime {
+  margin: 0 16px 14px;
+  padding: 12px;
+  border: 1px solid #c9d8ea;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f7fbff, #eef6ff);
+}
+
+.machine-hmc-runtime.is-stopped {
+  border-color: #f0a5a5;
+  background: #fff4f4;
+}
+
+.machine-hmc-runtime.is-waiting {
+  color: #64748b;
+}
+
+.machine-hmc-runtime-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.machine-hmc-runtime-head strong {
+  color: #17375e;
+}
+
+.machine-hmc-runtime-head span {
+  margin-left: auto;
+  font-size: 12px;
+  color: #52667e;
+}
+
+.machine-hmc-runtime-head em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #b42318;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.machine-hmc-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.machine-hmc-runtime-grid > span,
+.schedule-hmc-pallets > span {
+  border: 1px solid #d8e1ec;
+  background: #fff;
+}
+
+.machine-hmc-runtime-grid > span {
+  min-width: 0;
+  padding: 7px 4px;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.machine-hmc-runtime-grid b,
+.machine-hmc-runtime-grid small {
+  display: block;
+}
+
+.machine-hmc-runtime-grid b {
+  color: #17375e;
+  font-size: 15px;
+}
+
+.machine-hmc-runtime-grid small {
+  overflow: hidden;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-hmc-runtime-grid .is-spindle,
+.schedule-hmc-pallets .is-spindle {
+  border-color: #2878d0;
+  background: #e8f3ff;
+  box-shadow: inset 0 0 0 1px #2878d0;
+}
+
+.machine-hmc-runtime-grid .is-preparing,
+.schedule-hmc-pallets .is-preparing {
+  border-color: #dfaa35;
+  background: #fff8df;
+}
+
+.machine-hmc-runtime-grid .is-ready,
+.schedule-hmc-pallets .is-ready {
+  border-color: #3ca873;
+  background: #eaf9f1;
+}
+
+.machine-hmc-runtime-grid .is-blocked,
+.schedule-hmc-pallets .is-blocked {
+  border-color: #dc5d5d;
+  background: #fff0f0;
+}
+
+.schedule-hmc-resource.is-stopped {
+  border-color: #efaaaa;
+  background: #fff4f4;
+}
+
+@media (max-width: 720px) {
+  .machine-hmc-runtime-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .machine-hmc-runtime-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .machine-hmc-runtime-head span {
+    width: 100%;
+    margin-left: 0;
+  }
+}
