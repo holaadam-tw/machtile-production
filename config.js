@@ -31,8 +31,8 @@ window.MACHTILE_CONFIG = {
   // password login stays the only path until oauthEnabled flips to true
   // with the registered production public client id (Phase C).
   // Break-glass for users after the flip: https://app.machtile.com/?legacyLogin=1
-  oauthEnabled: false,
-  oauthClientId: "365b1a41-08b4-43bb-9580-5f0f115f5500",
+  oauthEnabled: true,
+  oauthClientId: "365b1a41-08b4-43bb-9500-5f0f115f5580",
   oauthAuthorizationEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/authorize",
   oauthTokenEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/token",
   oauthRedirectUri: "https://app.machtile.com/",
