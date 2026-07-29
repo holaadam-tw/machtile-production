@@ -13,6 +13,9 @@ window.MACHTILE_CONFIG = {
   oauthTokenEndpoint: "https://YOUR_PROJECT_REF.supabase.co/auth/v1/oauth/token",
   oauthRedirectUri: "https://staging.machtile.com/",
   oauthScope: "openid email profile",
+  // Stage 2 central-access gate tag matched against app_metadata.systems
+  // ("cloud" in production, "staging" on Cloud Staging).
+  oauthSystemTag: "staging",
   supabaseUrl: "https://YOUR_PROJECT_REF.supabase.co",
   supabaseAnonKey: "YOUR_SUPABASE_ANON_KEY",
   tenantId: "00000000-0000-0000-0000-000000000001",

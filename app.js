@@ -8412,6 +8412,9 @@ const machtileAuthState = {
   // auth account; orthogonal to tenant role — only gates the 平台管理 card
   // (the Edge Functions stay authoritative server-side).
   platformRole: "",
+  // Stage 2: central per-system access list from app_metadata.systems;
+  // null = account predates the admin console (grandfathered in).
+  centralSystems: null,
   // polish-1: app_users.id for the signed-in account, lazily resolved by
   // machtileResolveAppUserId() so legacy REST writes can carry the actor.
   appUserId: "",
@@ -8600,6 +8603,11 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.tenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || config.tenantId || "";
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
   machtileAuthState.platformRole = appMetadata.platform_role || "";
+  // Central per-system access list managed at login.machtile.com/admin/users.
+  // null = the account has no list yet (pre-console accounts stay allowed).
+  machtileAuthState.centralSystems = Array.isArray(appMetadata.systems)
+    ? appMetadata.systems.map(String)
+    : null;
   machtileAuthState.appUserId = "";
   machtileAuthState.appUserName = "";
   machtileAuthState.refreshToken = authResponse?.refresh_token || "";
@@ -8616,6 +8624,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.tenantId = "";
   machtileAuthState.role = "";
   machtileAuthState.platformRole = "";
+  machtileAuthState.centralSystems = null;
   machtileAuthState.appUserId = "";
   machtileAuthState.appUserName = "";
   machtileAuthState.refreshToken = "";
@@ -8630,6 +8639,26 @@ function machtileClearSession(message = "") {
 
 function machtileSessionActive() {
   return Boolean(machtileAuthState.accessToken && machtileAuthState.status === "signedIn" && (!machtileAuthState.expiresAt || machtileAuthState.expiresAt > Date.now()));
+}
+
+// Stage 2 central-access gate: config.oauthSystemTag names this deployment
+// ("cloud" in production, "staging" on Cloud Staging). An account whose
+// central systems list exists but excludes the tag is signed out at the
+// gate. Accounts without a list (created before the admin console) pass.
+function machtileCentralAccessDenied() {
+  const tag = String(config.oauthSystemTag || "").trim();
+  if (!tag) return false;
+  const systems = machtileAuthState.centralSystems;
+  if (!Array.isArray(systems)) return false;
+  return !systems.includes(tag);
+}
+
+function machtileEnforceCentralAccess() {
+  if (!machtileStrictMode() || !machtileSessionActive()) return true;
+  if (!machtileCentralAccessDenied()) return true;
+  machtileClearSession("此帳號未開通本系統的使用權限，請聯絡管理員。");
+  machtileRenderLoginGate();
+  return false;
 }
 
 // Internal login suffix for username-style accounts (AM6). PERMANENT — changing
@@ -9123,6 +9152,7 @@ function machtileRenderLoginGate() {
     machtileRenderLoginGate();
     try {
       await machtileLogin(email, password, rememberDevice);
+      if (!machtileEnforceCentralAccess()) return;
       machtileRemoveLoginGate();
       machtileEnsureSessionBadge();
       machtileApplyBranding();
@@ -17592,6 +17622,7 @@ async function init() {
     machtileRenderLoginGate();
     return;
   }
+  if (!machtileEnforceCentralAccess()) return;
 
   machtileRemoveLoginGate();
   machtileEnsureSessionBadge();

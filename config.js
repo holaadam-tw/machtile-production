@@ -36,5 +36,9 @@ window.MACHTILE_CONFIG = {
   oauthAuthorizationEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/authorize",
   oauthTokenEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/token",
   oauthRedirectUri: "https://app.machtile.com/",
-  oauthScope: "openid email profile"
+  oauthScope: "openid email profile",
+  // Stage 2 central-access gate: this deployment's tag in the per-account
+  // app_metadata.systems list managed at login.machtile.com/admin/users.
+  // Accounts whose list exists but excludes "cloud" are refused here.
+  oauthSystemTag: "cloud"
 };
