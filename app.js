@@ -5,6 +5,14 @@ const config = {
   // "strict" = production UI track (Gate P / P2): app-level login gate +
   // session Bearer on every read/write (production DB has zero anon access).
   authMode: "dev-nologin",
+  // Staging-first unified sign-in. OAuth 2.1 uses a public client with PKCE;
+  // no client secret belongs in this static application.
+  oauthEnabled: false,
+  oauthClientId: "",
+  oauthAuthorizationEndpoint: "",
+  oauthTokenEndpoint: "",
+  oauthRedirectUri: "",
+  oauthScope: "openid email profile",
   tenantId: "00000000-0000-0000-0000-000000000001",
   reportAttachmentBucket: "machtile-report-files",
   enableFileUpload: true,
@@ -8414,6 +8422,10 @@ const machtileAuthState = {
   // access token renews silently instead of re-gating mid-shift.
   refreshToken: "",
   expiresAt: 0,
+  persistenceMode: "session",
+  persistenceCreatedAt: 0,
+  rememberUntil: 0,
+  authenticationMethod: "password",
   error: "",
 };
 
@@ -8437,55 +8449,119 @@ function hmcDecodeJwtPayload(token) {
   }
 }
 
-// Route changes in this app are full page loads, so the strict session is
-// persisted in sessionStorage (per-tab, gone when the tab closes); the gate
-// stays the only way to create one.
+// Shared devices stay per-tab in sessionStorage. A user can explicitly opt a
+// personal device into a fixed seven-day localStorage window. The pure core
+// keeps selection and expiry rules deterministic and independently testable.
+const machtileAuthSessionCore = globalThis.MachTileAuthSessionPersistenceCore;
 const MACHTILE_SESSION_STORAGE_KEY = "machtileAuthSession";
+const MACHTILE_REMEMBERED_SESSION_STORAGE_KEY = "machtileRememberedAuthSession";
+
+function machtileRemoveStorageValue(storage, key) {
+  try {
+    storage.removeItem(key);
+  } catch (error) {
+    // Storage unavailable (private mode etc.) — memory-only fallback remains.
+  }
+}
+
+function machtileReadStorageValue(storage, key) {
+  try {
+    return storage.getItem(key) || "";
+  } catch (error) {
+    return "";
+  }
+}
 
 function machtilePersistSession() {
+  if (!machtileAuthSessionCore) return;
+  const record = machtileAuthSessionCore.createRecord({
+    accessToken: machtileAuthState.accessToken,
+    refreshToken: machtileAuthState.refreshToken,
+    email: machtileAuthState.email,
+    authMethod: machtileAuthState.authenticationMethod,
+    mode: machtileAuthState.persistenceMode,
+    createdAt: machtileAuthState.persistenceCreatedAt,
+    rememberUntil: machtileAuthState.rememberUntil,
+  });
+
+  if (record.mode === machtileAuthSessionCore.REMEMBERED_MODE) {
+    try {
+      localStorage.setItem(
+        MACHTILE_REMEMBERED_SESSION_STORAGE_KEY,
+        JSON.stringify(record),
+      );
+      machtileRemoveStorageValue(sessionStorage, MACHTILE_SESSION_STORAGE_KEY);
+      return;
+    } catch (error) {
+      // Fail safely back to the shared-device per-tab behavior instead of
+      // losing the active session when localStorage is unavailable.
+      machtileAuthState.persistenceMode = machtileAuthSessionCore.SESSION_MODE;
+      machtileAuthState.persistenceCreatedAt = 0;
+      machtileAuthState.rememberUntil = 0;
+    }
+  }
+
   try {
-    sessionStorage.setItem(MACHTILE_SESSION_STORAGE_KEY, JSON.stringify({
-      accessToken: machtileAuthState.accessToken,
-      refreshToken: machtileAuthState.refreshToken,
-      email: machtileAuthState.email,
-    }));
+    const perTabRecord = machtileAuthSessionCore.createRecord({
+      ...record,
+      mode: machtileAuthSessionCore.SESSION_MODE,
+      createdAt: Date.now(),
+      rememberUntil: 0,
+    });
+    sessionStorage.setItem(
+      MACHTILE_SESSION_STORAGE_KEY,
+      JSON.stringify(perTabRecord),
+    );
   } catch (error) {
     // Storage unavailable (private mode etc.) — session stays memory-only.
   }
+  machtileRemoveStorageValue(localStorage, MACHTILE_REMEMBERED_SESSION_STORAGE_KEY);
 }
 
 function machtileDropPersistedSession() {
-  try {
-    sessionStorage.removeItem(MACHTILE_SESSION_STORAGE_KEY);
-  } catch (error) {
-    // ignore
-  }
+  machtileRemoveStorageValue(sessionStorage, MACHTILE_SESSION_STORAGE_KEY);
+  machtileRemoveStorageValue(localStorage, MACHTILE_REMEMBERED_SESSION_STORAGE_KEY);
 }
 
 async function machtileRestoreSession() {
-  if (!machtileStrictMode()) return false;
-  let stored = null;
-  try {
-    stored = JSON.parse(sessionStorage.getItem(MACHTILE_SESSION_STORAGE_KEY) || "null");
-  } catch (error) {
-    stored = null;
+  if (!machtileStrictMode() || !machtileAuthSessionCore) return false;
+
+  const selected = machtileAuthSessionCore.selectRecord(
+    machtileReadStorageValue(sessionStorage, MACHTILE_SESSION_STORAGE_KEY),
+    machtileReadStorageValue(localStorage, MACHTILE_REMEMBERED_SESSION_STORAGE_KEY),
+  );
+  if (selected.removeSession) {
+    machtileRemoveStorageValue(sessionStorage, MACHTILE_SESSION_STORAGE_KEY);
   }
+  if (selected.removeRemembered) {
+    machtileRemoveStorageValue(localStorage, MACHTILE_REMEMBERED_SESSION_STORAGE_KEY);
+  }
+
+  const stored = selected.record;
   if (!stored?.accessToken) return false;
+  machtileAuthState.persistenceMode = stored.mode;
+  machtileAuthState.persistenceCreatedAt = stored.createdAt;
+  machtileAuthState.rememberUntil = stored.rememberUntil;
+  machtileAuthState.authenticationMethod = stored.authMethod
+    || machtileAuthSessionCore.PASSWORD_AUTH_METHOD;
+
   const claims = hmcDecodeJwtPayload(stored.accessToken);
   if (claims.exp && Number(claims.exp) * 1000 > Date.now()) {
-    machtileSetSession({ access_token: stored.accessToken, refresh_token: stored.refreshToken || "" }, stored.email || "");
+    machtileSetSession(
+      { access_token: stored.accessToken, refresh_token: stored.refreshToken || "" },
+      stored.email || "",
+    );
     return machtileSessionActive();
   }
-  // polish-2 (PB1=TimerPlusRestore): expired access token but a stored
-  // refresh token → renew silently instead of gating.
+  // Expired access tokens can resume with the stored refresh token. Rotation
+  // preserves the original seven-day deadline instead of extending it.
   if (stored.refreshToken) {
     machtileAuthState.refreshToken = stored.refreshToken;
     machtileAuthState.email = stored.email || "";
     const outcome = await machtileRefreshSession();
     if (outcome === "ok" && machtileSessionActive()) return true;
     if (outcome === "retry") {
-      // Network hiccup — keep the stored pair so a later reload can retry;
-      // this load falls back to the gate.
+      // Keep the stored pair for a later retry after a temporary network issue.
       machtileAuthState.refreshToken = "";
       machtileAuthState.email = "";
       return false;
@@ -8495,10 +8571,28 @@ async function machtileRestoreSession() {
   return false;
 }
 
-function machtileSetSession(authResponse, email) {
+function machtileSetSession(authResponse, email, persistence = null) {
   const accessToken = authResponse?.access_token || "";
   const jwtPayload = hmcDecodeJwtPayload(accessToken);
   const appMetadata = jwtPayload.app_metadata || {};
+  if (persistence && machtileAuthSessionCore) {
+    const mode = persistence.mode === machtileAuthSessionCore.REMEMBERED_MODE
+      ? machtileAuthSessionCore.REMEMBERED_MODE
+      : machtileAuthSessionCore.SESSION_MODE;
+    const createdAt = Number(persistence.createdAt) || Date.now();
+    machtileAuthState.persistenceMode = mode;
+    machtileAuthState.persistenceCreatedAt = createdAt;
+    machtileAuthState.rememberUntil = mode === machtileAuthSessionCore.REMEMBERED_MODE
+      ? Math.min(
+          Number(persistence.rememberUntil) || createdAt + machtileAuthSessionCore.REMEMBER_DEVICE_MS,
+          createdAt + machtileAuthSessionCore.REMEMBER_DEVICE_MS,
+        )
+      : 0;
+    machtileAuthState.authenticationMethod = persistence.authMethod
+      === machtileAuthSessionCore.OAUTH_AUTH_METHOD
+      ? machtileAuthSessionCore.OAUTH_AUTH_METHOD
+      : machtileAuthSessionCore.PASSWORD_AUTH_METHOD;
+  }
   machtileAuthState.status = "signedIn";
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
@@ -8526,6 +8620,10 @@ function machtileClearSession(message = "") {
   machtileAuthState.appUserName = "";
   machtileAuthState.refreshToken = "";
   machtileAuthState.expiresAt = 0;
+  machtileAuthState.persistenceMode = machtileAuthSessionCore?.SESSION_MODE || "session";
+  machtileAuthState.persistenceCreatedAt = 0;
+  machtileAuthState.rememberUntil = 0;
+  machtileAuthState.authenticationMethod = machtileAuthSessionCore?.PASSWORD_AUTH_METHOD || "password";
   machtileAuthState.error = message;
   machtileDropPersistedSession();
 }
@@ -8568,7 +8666,7 @@ document.addEventListener("click", (event) => {
   button.setAttribute("aria-label", show ? "隱藏密碼" : "顯示密碼");
 });
 
-async function machtileLogin(email, password) {
+async function machtileLogin(email, password, rememberDevice = false) {
   if (!machtileAuthConfigured()) {
     throw new Error("尚未設定 Supabase 連線參數，無法登入。");
   }
@@ -8598,13 +8696,188 @@ async function machtileLogin(email, password) {
     throw new Error(payload.error_description || payload.msg || payload.message || `${response.status} 登入失敗`);
   }
 
-  machtileSetSession(payload, email);
+  const createdAt = Date.now();
+  const persistenceMode = rememberDevice
+    ? machtileAuthSessionCore?.REMEMBERED_MODE || "remembered"
+    : machtileAuthSessionCore?.SESSION_MODE || "session";
+  machtileSetSession(payload, email, {
+    mode: persistenceMode,
+    createdAt,
+    rememberUntil: rememberDevice
+      ? createdAt + (machtileAuthSessionCore?.REMEMBER_DEVICE_MS || 7 * 24 * 60 * 60 * 1000)
+      : 0,
+    authMethod: machtileAuthSessionCore?.PASSWORD_AUTH_METHOD || "password",
+  });
   return payload;
+}
+
+const machtileOauthCore = globalThis.MachTileOauthPkceCore;
+const MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY = "machtileOauthPkceTransaction";
+const MACHTILE_OAUTH_EXCHANGE_TIMEOUT_MS = 20_000;
+
+function machtileOauthConfigured() {
+  return Boolean(machtileOauthCore?.configured?.(config));
+}
+
+function machtileLegacyLoginRequested() {
+  return new URLSearchParams(window.location.search).get("legacyLogin") === "1";
+}
+
+function machtileOauthFriendlyError(reason = "") {
+  const messages = {
+    access_denied: "登入授權已取消，尚未登入 MachTile。",
+    "state-mismatch": "登入驗證碼不一致，已安全中止；請重新登入。",
+    expired: "登入流程已逾時，請重新登入。",
+    missing: "找不到登入驗證資料，請重新登入。",
+    malformed: "登入驗證資料格式不正確，已安全中止。",
+    exchange_failed: "統一登入暫時無法完成，請稍後重試。",
+    exchange_timeout: "統一登入等候逾時，請重新登入。",
+  };
+  return messages[String(reason || "").toLowerCase()] || "統一登入未完成，請重新登入。";
+}
+
+function machtileDropOauthTransaction() {
+  machtileRemoveStorageValue(sessionStorage, MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY);
+}
+
+function machtileScrubOauthCallback() {
+  try {
+    const cleanPath = machtileOauthCore.scrubCallbackUrl(window.location.href);
+    history.replaceState(null, "", cleanPath);
+  } catch (error) {
+    history.replaceState(null, "", window.location.pathname);
+  }
+}
+
+function machtileLegacyLoginPath() {
+  const url = new URL(window.location.href);
+  ["code", "state", "error", "error_description"].forEach((name) => url.searchParams.delete(name));
+  url.searchParams.set("legacyLogin", "1");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function machtileRenderOauthProgress(message = "正在連線統一登入…") {
+  let overlay = document.getElementById("machtileLoginGate");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "machtileLoginGate";
+    overlay.className = "machtile-login-gate";
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <section class="machtile-login-card" aria-label="MachTile unified login progress" aria-live="polite">
+      <p class="eyebrow">MachTile 統一登入</p>
+      <strong>${escapeHtml(message)}</strong>
+      <p>驗證完成後會自動進入 Cloud Staging，請勿重複點擊或重新整理。</p>
+    </section>
+  `;
+}
+
+async function machtileBeginOauthSignIn() {
+  if (!machtileOauthConfigured()) throw new Error("OAUTH_NOT_CONFIGURED");
+  machtileRenderOauthProgress("正在前往統一登入…");
+  const authorization = await machtileOauthCore.createAuthorization(config, window.crypto);
+  sessionStorage.setItem(
+    MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY,
+    JSON.stringify(authorization.transaction),
+  );
+  window.location.assign(authorization.url);
+}
+
+async function machtileExchangeOauthCode(code, transaction) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    MACHTILE_OAUTH_EXCHANGE_TIMEOUT_MS,
+  );
+  let response;
+  try {
+    response = await fetch(config.oauthTokenEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: machtileOauthCore.tokenRequestBody(config, code, transaction),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("OAUTH_EXCHANGE_TIMEOUT");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch (error) {
+    payload = {};
+  }
+  if (!response.ok || !payload.access_token) {
+    throw new Error("OAUTH_EXCHANGE_FAILED");
+  }
+  const createdAt = Date.now();
+  machtileSetSession(payload, "", {
+    mode: machtileAuthSessionCore?.SESSION_MODE || "session",
+    createdAt,
+    rememberUntil: 0,
+    authMethod: machtileAuthSessionCore?.OAUTH_AUTH_METHOD || "oauth",
+  });
+}
+
+async function machtileTryOauthSignIn() {
+  if (!machtileOauthConfigured() || machtileLegacyLoginRequested()) return false;
+
+  const callback = machtileOauthCore.parseCallback(window.location.href);
+  if (callback.kind === "error") {
+    machtileDropOauthTransaction();
+    machtileScrubOauthCallback();
+    machtileAuthState.error = machtileOauthFriendlyError(callback.error);
+    return false;
+  }
+
+  if (callback.kind === "code") {
+    const parsed = machtileOauthCore.parseTransaction(
+      machtileReadStorageValue(sessionStorage, MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY),
+    );
+    machtileDropOauthTransaction();
+    machtileScrubOauthCallback();
+    if (!parsed.transaction) {
+      machtileAuthState.error = machtileOauthFriendlyError(parsed.reason);
+      return false;
+    }
+    const validation = machtileOauthCore.validateCallback(callback, parsed.transaction);
+    if (!validation.ok) {
+      machtileAuthState.error = machtileOauthFriendlyError(validation.reason);
+      return false;
+    }
+    try {
+      machtileRenderOauthProgress("正在驗證登入身分…");
+      await machtileExchangeOauthCode(callback.code, parsed.transaction);
+      return machtileSessionActive();
+    } catch (error) {
+      const reason = error?.message === "OAUTH_EXCHANGE_TIMEOUT"
+        ? "exchange_timeout"
+        : "exchange_failed";
+      machtileAuthState.error = machtileOauthFriendlyError(reason);
+      return false;
+    }
+  }
+
+  try {
+    await machtileBeginOauthSignIn();
+    return true;
+  } catch (error) {
+    machtileAuthState.error = machtileOauthFriendlyError("exchange_failed");
+    return false;
+  }
 }
 
 // polish-2 (PB1=TimerPlusRestore): single-flight refresh of the 1h access
 // token. GoTrue ROTATES the refresh token on every call, so the new pair must
-// overwrite state + sessionStorage atomically (machtileSetSession does both)
+// overwrite state + the selected persistence store atomically
+// (machtileSetSession does both)
 // and concurrent callers must share one in-flight request.
 // Returns "ok" (rotated), "retry" (network hiccup — token may still be valid,
 // keep the session and let the next tick retry) or "dead" (definitive auth
@@ -8615,17 +8888,27 @@ function machtileRefreshSession() {
   if (machtileRefreshPromise) return machtileRefreshPromise;
   machtileRefreshPromise = (async () => {
     if (!machtileAuthConfigured() || !machtileAuthState.refreshToken) return "dead";
+    const usesOauth = machtileAuthState.authenticationMethod
+      === (machtileAuthSessionCore?.OAUTH_AUTH_METHOD || "oauth");
     const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
     let response;
     try {
-      response = await fetch(`${baseUrl}/auth/v1/token?grant_type=refresh_token`, {
-        method: "POST",
-        headers: {
-          apikey: config.supabaseAnonKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ refresh_token: machtileAuthState.refreshToken }),
-      });
+      response = usesOauth
+        ? await fetch(config.oauthTokenEndpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: machtileOauthCore.refreshRequestBody(config, machtileAuthState.refreshToken),
+          })
+        : await fetch(`${baseUrl}/auth/v1/token?grant_type=refresh_token`, {
+            method: "POST",
+            headers: {
+              apikey: config.supabaseAnonKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ refresh_token: machtileAuthState.refreshToken }),
+          });
     } catch (error) {
       console.warn("MachTile session refresh network error; will retry", error);
       return "retry";
@@ -8673,24 +8956,26 @@ async function machtileRefreshTick() {
   if (outcome === "dead") machtileHandleUnauthorized();
 }
 
-// polish-2 (PB2=RevokeOnLogout): explicit sign-out also kills the refresh
-// chain server-side. Fire-and-forget — the local clear + reload must never
-// wait on (or fail because of) this call.
-function machtileServerSignOut() {
-  if (!machtileAuthConfigured() || !machtileAuthState.accessToken) return;
+// polish-2 (PB2=RevokeOnLogout): explicit sign-out revokes the current refresh
+// chain server-side before the browser discards both persistence stores.
+async function machtileServerSignOut() {
+  if (!machtileAuthConfigured() || !machtileAuthState.accessToken) return true;
   const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
   try {
-    fetch(`${baseUrl}/auth/v1/logout`, {
+    const response = await fetch(`${baseUrl}/auth/v1/logout?scope=local`, {
       method: "POST",
       headers: {
         apikey: config.supabaseAnonKey,
         Authorization: `Bearer ${machtileAuthState.accessToken}`,
       },
       keepalive: true,
-    }).catch(() => {});
+    });
+    if (response.ok || response.status === 401) return true;
+    console.warn("MachTile server sign-out rejected", response.status);
   } catch (error) {
-    // ignore — local clear proceeds regardless
+    console.warn("MachTile server sign-out network error", error);
   }
+  return false;
 }
 
 function machtileSupabaseBearerToken() {
@@ -8777,6 +9062,29 @@ function machtileRenderLoginGate() {
   }
 
   const busy = machtileAuthState.status === "signingIn";
+  const showOauthRetry = machtileOauthConfigured() && !machtileLegacyLoginRequested();
+  if (showOauthRetry) {
+    overlay.innerHTML = `
+      <section class="machtile-login-card" aria-label="MachTile unified login">
+        <p class="eyebrow">MachTile 統一登入</p>
+        <strong>登入尚未完成</strong>
+        <p>請重新回到統一登入中心；這次不會使用或保存另一組密碼。</p>
+        ${machtileAuthState.error ? `<p class="machtile-login-error">${escapeHtml(machtileAuthState.error)}</p>` : ""}
+        <button type="button" data-machtile-oauth-login>使用 MachTile 統一登入</button>
+        <a class="machtile-login-fallback" href="${escapeHtml(machtileLegacyLoginPath())}">改用原帳密備援</a>
+      </section>
+    `;
+    overlay.querySelector("[data-machtile-oauth-login]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await machtileBeginOauthSignIn();
+      } catch (error) {
+        machtileAuthState.error = machtileOauthFriendlyError("exchange_failed");
+        machtileRenderLoginGate();
+      }
+    });
+    return;
+  }
   overlay.innerHTML = `
     <section class="machtile-login-card" aria-label="MachTile login">
       <p class="eyebrow">MachTile 正式環境</p>
@@ -8792,6 +9100,13 @@ function machtileRenderLoginGate() {
           <span>密碼</span>
           ${machtilePasswordField(`<input type="password" name="password" autocomplete="current-password" required ${busy ? "disabled" : ""}>`)}
         </label>
+        <label class="machtile-login-remember">
+          <input type="checkbox" name="rememberDevice" value="1" ${busy ? "disabled" : ""}>
+          <span>
+            <b>記住此裝置 7 天</b>
+            <small>僅限個人電腦；現場共用電腦請勿勾選，關閉分頁後即需重新登入。</small>
+          </span>
+        </label>
         <button type="submit" ${busy ? "disabled" : ""}>${busy ? "登入中..." : "登入"}</button>
       </form>
     </section>
@@ -8802,11 +9117,12 @@ function machtileRenderLoginGate() {
     const formData = new FormData(event.currentTarget);
     const email = machtileAccountToEmail(formData.get("email"));
     const password = String(formData.get("password") || "");
+    const rememberDevice = formData.get("rememberDevice") === "1";
     machtileAuthState.status = "signingIn";
     machtileAuthState.error = "";
     machtileRenderLoginGate();
     try {
-      await machtileLogin(email, password);
+      await machtileLogin(email, password, rememberDevice);
       machtileRemoveLoginGate();
       machtileEnsureSessionBadge();
       machtileApplyBranding();
@@ -8834,12 +9150,18 @@ function machtileEnsureSessionBadge() {
     <small>${escapeHtml(machtileAuthState.role || "member")}</small>
     <button type="button" data-machtile-logout>登出</button>
   `;
-  badge.querySelector("[data-machtile-logout]")?.addEventListener("click", () => {
-    machtileServerSignOut();
-    machtileClearSession();
-    // Local session (incl. per-tab storage) is gone — the reload lands back
-    // on the login gate.
-    window.location.reload();
+  badge.querySelector("[data-machtile-logout]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "登出中...";
+    try {
+      await machtileServerSignOut();
+    } finally {
+      machtileClearSession();
+      // Both per-tab and remembered storage are gone — the reload lands back
+      // on the login gate.
+      window.location.reload();
+    }
   });
 }
 
@@ -17263,10 +17585,15 @@ async function init() {
     await machtileRestoreSession();
   }
   if (machtileStrictMode() && !machtileSessionActive()) {
+    const oauthPendingOrComplete = await machtileTryOauthSignIn();
+    if (oauthPendingOrComplete && !machtileSessionActive()) return;
+  }
+  if (machtileStrictMode() && !machtileSessionActive()) {
     machtileRenderLoginGate();
     return;
   }
 
+  machtileRemoveLoginGate();
   machtileEnsureSessionBadge();
   machtileApplyBranding();
   machtileEnsureRefreshTimer();

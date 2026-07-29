@@ -26,5 +26,15 @@ window.MACHTILE_CONFIG = {
   // 202607160005 is present and passed the Production rollback smoke.
   enableCalibrationGovernance: true,
   // 202607160006 is present and passed the Production rollback smoke.
-  enableManufacturingQuoteTracking: true
+  enableManufacturingQuoteTracking: true,
+  // Unified login (Login Center SSO). Phase A ships the code dormant:
+  // password login stays the only path until oauthEnabled flips to true
+  // with the registered production public client id (Phase C).
+  // Break-glass for users after the flip: https://app.machtile.com/?legacyLogin=1
+  oauthEnabled: false,
+  oauthClientId: "",
+  oauthAuthorizationEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/authorize",
+  oauthTokenEndpoint: "https://muditjubqflrqofbkmav.supabase.co/auth/v1/oauth/token",
+  oauthRedirectUri: "https://app.machtile.com/",
+  oauthScope: "openid email profile"
 };

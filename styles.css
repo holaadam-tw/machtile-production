@@ -9851,7 +9851,46 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font: inherit;
 }
 
-.machtile-login-form button {
+.machtile-login-form .machtile-login-remember {
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.machtile-login-form .machtile-login-remember input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--brand-blue);
+}
+
+.machtile-login-form .machtile-login-remember span {
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.machtile-login-form .machtile-login-remember b {
+  font-weight: 900;
+}
+
+.machtile-login-form .machtile-login-remember small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.machtile-login-form button,
+.machtile-login-card > button {
   min-height: 42px;
   border: 0;
   border-radius: 8px;
@@ -9861,8 +9900,18 @@ body.report-work-route-mode .machtile-route-brand-bar {
   font-weight: 900;
 }
 
-.machtile-login-form button[disabled] {
+.machtile-login-form button[disabled],
+.machtile-login-card > button[disabled] {
   opacity: 0.6;
+}
+
+.machtile-login-fallback {
+  justify-self: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .machtile-session-badge {

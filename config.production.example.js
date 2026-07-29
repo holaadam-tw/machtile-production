@@ -17,5 +17,23 @@ window.MACHTILE_CONFIG = {
   useQueryRoutesForFieldReports: true,
   useTenantHeaderAuth: true,
   useSupabase: false,
-  useHmcWorklistSupabase: true
+  useHmcWorklistSupabase: true,
+  enableScheduleContracts: false,
+  scheduleCalendar: {
+    workdays: [1, 2, 3, 4, 5],
+    holidays: [],
+    shifts: [{
+      label: "日班",
+      startMinutes: 480,
+      endMinutes: 1020,
+      breakRanges: [{ startMinutes: 720, endMinutes: 780 }]
+    }],
+    exceptions: [],
+    overtimeTemplate: { startMinutes: 1050, endMinutes: 1230 },
+    sourceLabel: "正式班表：週一至週五 08:00–17:00；午休 12:00–13:00；加班需主管核准"
+  },
+  hmcScheduleProfiles: {
+    B01: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
+    B02: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true }
+  }
 };
