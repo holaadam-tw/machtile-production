@@ -8641,12 +8641,37 @@ function machtileSessionActive() {
   return Boolean(machtileAuthState.accessToken && machtileAuthState.status === "signedIn" && (!machtileAuthState.expiresAt || machtileAuthState.expiresAt > Date.now()));
 }
 
-// Stage 2 central-access gate: config.oauthSystemTag names this deployment
+// This deployment's tag in the central per-account systems list. A missing
+// config value must not silently disable the gate, so the two real hosts fall
+// back to their own tag; an unknown host (localhost, previews) keeps the gate
+// off for development. Failing fully closed is not an option here — one config
+// typo would lock the whole shop floor out of reporting.
+const MACHTILE_HOST_SYSTEM_TAGS = {
+  "app.machtile.com": "cloud",
+  "staging.machtile.com": "staging"
+};
+
+function machtileSystemTag() {
+  const configured = String(config.oauthSystemTag || "").trim();
+  if (configured) return configured;
+  const fallback = MACHTILE_HOST_SYSTEM_TAGS[
+    String(location.hostname || "").toLowerCase()
+  ];
+  if (fallback) {
+    console.error(
+      `MachTile config.oauthSystemTag is missing; falling back to "${fallback}" for this host. Fix config.js.`
+    );
+    return fallback;
+  }
+  return "";
+}
+
+// Stage 2 central-access gate: the system tag names this deployment
 // ("cloud" in production, "staging" on Cloud Staging). An account whose
 // central systems list exists but excludes the tag is signed out at the
 // gate. Accounts without a list (created before the admin console) pass.
 function machtileCentralAccessDenied() {
-  const tag = String(config.oauthSystemTag || "").trim();
+  const tag = machtileSystemTag();
   if (!tag) return false;
   const systems = machtileAuthState.centralSystems;
   if (!Array.isArray(systems)) return false;
