@@ -16777,7 +16777,9 @@ async function machtileFetchOperatorList() {
   if (!machtileStrictMode() || !machtileSessionActive()) return [];
   if (machtileOperatorListCache) return machtileOperatorListCache;
   try {
-    const rows = await supabaseFetch("app_users?select=id,name&is_active=eq.true&order=name");
+    // legacy_user_id 一起撈：它是「這個人能不能被歸產值」唯一機器可判的準則
+    // （回寫 feed 只收有對照的，見 machtile-mini-mes 的 2026-09-02 F-3 migration）。
+    const rows = await supabaseFetch("app_users?select=id,name,legacy_user_id&is_active=eq.true&order=name");
     machtileOperatorListCache = Array.isArray(rows) ? rows : [];
   } catch (error) {
     console.warn("operator list lookup failed; falling back to single actor", error);
@@ -16786,9 +16788,19 @@ async function machtileFetchOperatorList() {
   return machtileOperatorListCache;
 }
 
-// Injected before the 備註 field each time the report sheet opens; default =
-// current actor checked. Reuses the existing .checklist-card styling (zero
-// styles.css change).
+// 有 legacy_user_id 才算「歸得了產值的人」。站別/面板帳號（HMC-01 站別…）
+// 沒有對照，回寫 feed 也收不了它，所以在 UI 就不當成有效作業員。
+function machtileIsMappedOperator(u) {
+  return Boolean(String(u?.legacy_user_id ?? "").trim());
+}
+
+// Injected before the 備註 field each time the report sheet opens.
+//
+// ⚠️ 2026-09-02（owner 決策 F-2）：原本是「預設勾選當下登入帳號」。但現場平板
+// 是用站別帳號登入的，於是預設就把報工掛在機台身上——實測 8 筆有署名的報工
+// 100% 掛在 HMC-01/02 站別上，掛真人的 0 筆。現在改成：只有當登入帳號本身
+// 是有對照的真人時才預設勾選；站別帳號不預設勾選，且必須至少選一位有對照的
+// 人員才能送出（見 machtileValidateOperatorSelection）。
 async function machtileRenderOperatorSection() {
   if (!machtileOutboxEnabled() || !machtileStrictMode() || !machtileSessionActive()) return;
   const form = document.getElementById("reportForm");
@@ -16804,32 +16816,59 @@ async function machtileRenderOperatorSection() {
     section.className = "report-section";
     form.insertBefore(section, anchor);
   }
+  const actor = users.find((u) => u.id === actorId);
+  const actorIsMapped = machtileIsMappedOperator(actor);
+  // 提示沿用既有的 .report-section-head span（muted / 12px / 右對齊），
+  // 維持原作者「zero styles.css change」的設計。
   section.innerHTML = `
-    <div class="report-section-head"><strong>操作人員</strong></div>
+    <div class="report-section-head"><strong>操作人員</strong><span id="machtileOperatorHint"></span></div>
     <div class="checklist-card" id="machtileOperatorList"></div>
   `;
   const list = section.querySelector("#machtileOperatorList");
   users.forEach((u) => {
+    const mapped = machtileIsMappedOperator(u);
     const label = document.createElement("label");
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = u.id;
-    input.checked = u.id === actorId;
+    input.dataset.mapped = mapped ? "1" : "0";
+    // 只有「登入的就是本人、而且有對照」才預設勾選。站別帳號一律不預設。
+    input.checked = mapped && u.id === actorId;
     label.appendChild(input);
-    label.appendChild(document.createTextNode(` ${u.name || u.id}`));
+    label.appendChild(document.createTextNode(` ${u.name || u.id}${mapped ? "" : "（未對照工號）"}`));
     list.appendChild(label);
   });
+  const hint = section.querySelector("#machtileOperatorHint");
+  if (hint) {
+    hint.textContent = actorIsMapped
+      ? "請確認實際操作的人員；可複選。"
+      : "此裝置以站別帳號登入，請勾選實際操作的人員（至少一位）才能送出。";
+  }
 }
 
-// Checked operators from the section; falls back to the single actor when the
-// section is absent (dev-nologin, lookup failure) or nothing is checked.
+// Checked operators from the section. 區段存在時就以勾選為準——**不再**在沒勾
+// 任何人時退回登入帳號，那個 fallback 正是報工掛到站別帳號上的第二個來源。
+// 區段不存在（dev-nologin、清單查詢失敗）維持原本的單人 fallback 不變。
 function machtileSelectedOperators(actorAppUserId) {
   const list = document.getElementById("machtileOperatorList");
   if (list) {
-    const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((i) => i.value);
-    if (checked.length) return checked;
+    return Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((i) => i.value);
   }
   return actorAppUserId ? [actorAppUserId] : [];
+}
+
+// 送出前的閘門：區段有出現時，至少要勾一位「有對照工號」的人員。
+// 回傳提示字串代表擋下，回傳 null 代表放行。
+// 區段不存在時一律放行（維持 dev-nologin / 查詢失敗時的既有行為）。
+function machtileValidateOperatorSelection() {
+  const list = document.getElementById("machtileOperatorList");
+  if (!list) return null;
+  const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'));
+  if (!checked.length) return "請勾選實際操作的人員（至少一位）。";
+  if (!checked.some((i) => i.dataset.mapped === "1")) {
+    return "勾選的人員都還沒對照到 SoftNet 工號，產值會歸不到人。請改選已對照的人員，或請管理者先補上工號對照。";
+  }
+  return null;
 }
 
 // Eager driver start (flag on only): resend leftovers from a previous
@@ -17432,6 +17471,13 @@ function bindEvents() {
     const validationMessage = validateReportForm(activeReportType);
     if (validationMessage) {
       showToast(validationMessage);
+      return;
+    }
+    // F-2（2026-09-02）：站別帳號登入時，沒選到有對照的真人就不讓送出——
+    // 否則產值會掛在機台上，而且回寫 feed 也會把整筆擋下（F-3=A）。
+    const operatorMessage = machtileValidateOperatorSelection();
+    if (operatorMessage) {
+      showToast(operatorMessage);
       return;
     }
     const meta = reportTypeMeta[activeReportType] || reportTypeMeta.workStart;
