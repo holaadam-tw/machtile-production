@@ -12939,8 +12939,10 @@ function renderWorkOrderModule() {
   }
   return `
     <form id="machtileWoForm" class="admin-module-form">
-      <label class="admin-field"><span>派工單號 *（請照抄 ERP/MES 派工單號）</span>
-        <input id="machtileWoNo" type="text" required placeholder="例：XX01202607100012"></label>
+      <label class="admin-field"><span>派工單號 *（貼上或從清單選；已同步的單會自動帶出其餘欄位）</span>
+        <input id="machtileWoNo" type="text" required list="machtileWoNoList" autocomplete="off" inputmode="latin" placeholder="例：XX01202607100012">
+        <datalist id="machtileWoNoList"></datalist></label>
+      <p id="machtileWoPrefillNote" class="admin-module-note" hidden></p>
       <label class="admin-field"><span>品號</span>
         <input id="machtileWoPartNo" type="text" placeholder="例：DSHG-04-01"></label>
       <label class="admin-field"><span>品名 *</span>
@@ -12971,6 +12973,51 @@ async function machtileWoMachines() {
     machtileWoMachinesCache = [];
   }
   return machtileWoMachinesCache;
+}
+
+// 依單號取單。機台與製程掛在 work_order_processes，取 process_order 最小的那關
+// 當代表（建單表單只有一組機台/製程欄位）。
+async function machtileWoFetchByNo(workOrderNo) {
+  const rows = await supabaseFetch(
+    `work_orders?select=work_order_no,part_no,part_name,quantity,due_date,work_order_processes(machine_id,process_name,process_order)&work_order_no=eq.${encodeURIComponent(workOrderNo)}&limit=1`
+  );
+  const row = (rows || [])[0];
+  if (!row) return null;
+  const procs = (row.work_order_processes || [])
+    .slice()
+    .sort((a, b) => Number(a.process_order || 0) - Number(b.process_order || 0));
+  const first = procs[0] || {};
+  const machines = await machtileWoMachines();
+  const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+  return {
+    work_order_no: row.work_order_no,
+    part_no: row.part_no,
+    part_name: row.part_name,
+    quantity: row.quantity,
+    due_date: row.due_date,
+    process_name: first.process_name || "",
+    machine_code: first.machine_id ? (codeById.get(first.machine_id) || "") : "",
+  };
+}
+
+// 讓人「選」而不是「照抄 16 碼」。label 帶品號品名，才認得出是哪一張。
+async function machtileWoPopulateNoDatalist() {
+  const list = document.getElementById("machtileWoNoList");
+  if (!list) return;
+  try {
+    const rows = await supabaseFetch(
+      "work_orders?select=work_order_no,part_no,part_name&order=created_at.desc&limit=50"
+    );
+    list.innerHTML = (rows || [])
+      .filter((r) => r.work_order_no)
+      .map((r) => {
+        const desc = [r.part_no, r.part_name].filter(Boolean).join(" ");
+        return `<option value="${escapeHtml(r.work_order_no)}"${desc ? ` label="${escapeHtml(desc)}"` : ""}></option>`;
+      })
+      .join("");
+  } catch (error) {
+    console.warn("work order datalist failed", error);
+  }
 }
 
 async function machtileRefreshWorkOrderList() {
@@ -13015,6 +13062,97 @@ async function machtileInitWorkOrderModule() {
       machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(m.machine_code)}</option>`).join("");
   }
   machtileRefreshWorkOrderList();
+
+  // --- ISSUE-007：貼單號 → 其餘欄位自動帶出 ---
+  // 派工橋早就把這些值同步進 work_orders 了；先前要人逐格照抄，16 碼抄錯一碼
+  // 不會當場報錯，要到現場掃碼被拒才發現。決策邏輯在 workOrderPrefillCore.js。
+  const prefillFieldIds = {
+    partNo: "machtileWoPartNo",
+    partName: "machtileWoPartName",
+    qty: "machtileWoQty",
+    due: "machtileWoDue",
+    process: "machtileWoProcess",
+    machine: "machtileWoMachine",
+  };
+  const prefillEdited = {};
+  const prefillNoteEl = document.getElementById("machtileWoPrefillNote");
+  const prefillCore = () => (typeof window === "undefined" ? null : window.MachTileWorkOrderPrefillCore);
+
+  // 只有真人打字／選單才算「手動改過」。程式帶入時直接設 .value、不發事件，
+  // 所以不會把自己的帶入誤記成使用者的修改。
+  for (const [field, id] of Object.entries(prefillFieldIds)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const mark = () => { prefillEdited[field] = true; };
+    el.addEventListener("input", mark);
+    el.addEventListener("change", mark);
+  }
+
+  const showPrefillNote = (text) => {
+    if (!prefillNoteEl) return;
+    prefillNoteEl.textContent = text || "";
+    prefillNoteEl.hidden = !text;
+  };
+
+  const readPrefillCurrent = () => {
+    const out = {};
+    for (const [field, id] of Object.entries(prefillFieldIds)) {
+      out[field] = document.getElementById(id)?.value ?? "";
+    }
+    return out;
+  };
+
+  const applyPrefill = (plan) => {
+    const skippedMachine = [];
+    for (const [field, value] of Object.entries(plan.fill)) {
+      const el = document.getElementById(prefillFieldIds[field]);
+      if (!el) continue;
+      // 下拉沒有這個選項就別硬塞（塞了會靜默變成「暫不指派」，比不填更誤導）。
+      if (el.tagName === "SELECT" && !Array.from(el.options).some((o) => o.value === value)) {
+        skippedMachine.push(value);
+        continue;
+      }
+      el.value = value;
+    }
+    const note = prefillCore().prefillNote(plan);
+    showPrefillNote(skippedMachine.length
+      ? `${note}；機台 ${skippedMachine.join("、")} 不在可選清單，未帶入`
+      : note);
+  };
+
+  const noInput = document.getElementById("machtileWoNo");
+  let prefillSeq = 0;
+  let prefillTimer = null;
+  const lookupAndPrefill = async () => {
+    const core = prefillCore();
+    if (!core || !noInput) return;
+    const normalized = core.normalizeWorkOrderNo(noInput.value);
+    if (normalized !== noInput.value) noInput.value = normalized;
+    if (normalized.length < 4) { showPrefillNote(""); return; }
+    const seq = ++prefillSeq;
+    showPrefillNote("查詢中…");
+    try {
+      const record = await machtileWoFetchByNo(normalized);
+      if (seq !== prefillSeq) return;   // 使用者已改成別的單號，丟掉這個舊回應
+      applyPrefill(core.planPrefill({ record, current: readPrefillCurrent(), edited: prefillEdited }));
+    } catch (error) {
+      if (seq !== prefillSeq) return;
+      showPrefillNote(`帶入失敗，請手動填寫：${machtileWoErrorText(error)}`);
+    }
+  };
+  if (noInput) {
+    noInput.addEventListener("input", () => {
+      clearTimeout(prefillTimer);
+      prefillTimer = setTimeout(lookupAndPrefill, 400);
+    });
+    // 回傳 promise：瀏覽器不理回傳值，但讓測試（與未來的呼叫端）等得到查詢完成。
+    noInput.addEventListener("change", () => {
+      clearTimeout(prefillTimer);
+      return lookupAndPrefill();
+    });
+  }
+  machtileWoPopulateNoDatalist();
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector("button[type=submit]");
