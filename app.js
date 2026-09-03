@@ -9203,6 +9203,7 @@ function machtileEnsureSessionBadge() {
   badge.innerHTML = `
     <span>${escapeHtml(machtileAuthState.email || "已登入")}</span>
     <small>${escapeHtml(machtileAuthState.role || "member")}</small>
+    <a href="https://login.machtile.com/" data-machtile-system-switch>切換系統</a>
     <button type="button" data-machtile-logout>登出</button>
   `;
   badge.querySelector("[data-machtile-logout]")?.addEventListener("click", async (event) => {
