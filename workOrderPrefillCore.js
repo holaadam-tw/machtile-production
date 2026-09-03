@@ -101,5 +101,42 @@
     return parts.join("；");
   }
 
-  return { FIELD_MAP, normalizeWorkOrderNo, asDateInputValue, planPrefill, prefillNote };
+
+  // ---- 「最近使用值」：ISSUE-007 第 2 條（數字／文字欄位記最近用過的，點選帶入）----
+  // 純資料操作：去重、最近的排前面、上限筆數；儲存格式是 JSON 陣列。
+  // 不在這裡碰 localStorage —— 讀寫失敗（隱私模式、配額）由 app.js 包 try/catch。
+  const RECENT_MAX = 5;
+
+  function rememberRecent(list, value, max) {
+    const cap = Number.isFinite(max) && max > 0 ? max : RECENT_MAX;
+    const v = String(value ?? "").trim();
+    const base = Array.isArray(list) ? list.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+    if (!v) return Object.freeze(base.slice(0, cap));
+    const rest = base.filter((x) => x !== v);
+    return Object.freeze([v, ...rest].slice(0, cap));
+  }
+
+  function parseRecent(json) {
+    try {
+      const arr = JSON.parse(String(json ?? ""));
+      return Array.isArray(arr) ? Object.freeze(arr.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, RECENT_MAX)) : Object.freeze([]);
+    } catch (error) {
+      return Object.freeze([]);
+    }
+  }
+
+  function serializeRecent(list) {
+    return JSON.stringify(Array.isArray(list) ? list.slice(0, RECENT_MAX) : []);
+  }
+
+  // ---- Enter 逐欄跳轉：ISSUE-007 第 5 條（全程免滑鼠）----
+  // 給定「可聚焦欄位的順序」與目前所在 index，回傳下一個要聚焦的 index；
+  // 已是最後一格回 -1（呼叫端據此送出表單）。
+  function nextFieldIndex(order, currentIndex) {
+    const n = Array.isArray(order) ? order.length : 0;
+    if (n === 0 || currentIndex < 0 || currentIndex >= n - 1) return -1;
+    return currentIndex + 1;
+  }
+
+  return { FIELD_MAP, RECENT_MAX, normalizeWorkOrderNo, asDateInputValue, planPrefill, prefillNote, rememberRecent, parseRecent, serializeRecent, nextFieldIndex };
 });

@@ -73,5 +73,28 @@ eq("無參數不炸", p.status, "no-record");
 
 eq("回傳物件已凍結（呼叫端改不到）", Object.isFrozen(p) && Object.isFrozen(p.fill), true);
 
+
+console.log("== rememberRecent ==");
+eq("空清單加一筆", c.rememberRecent([], "液壓閥體"), ["液壓閥體"]);
+eq("最近的排前面", c.rememberRecent(["A", "B"], "C"), ["C", "A", "B"]);
+eq("重複值移到最前、不重複出現", c.rememberRecent(["A", "B", "C"], "B"), ["B", "A", "C"]);
+eq("上限 5 筆", c.rememberRecent(["1", "2", "3", "4", "5"], "6"), ["6", "1", "2", "3", "4"]);
+eq("空值不加入但仍正規化清單", c.rememberRecent([" A ", "", null, "B"], "   "), ["A", "B"]);
+eq("非陣列輸入不炸", c.rememberRecent(null, "X"), ["X"]);
+eq("回傳凍結", Object.isFrozen(c.rememberRecent([], "X")), true);
+
+console.log("== parseRecent / serializeRecent ==");
+eq("往返一致", c.parseRecent(c.serializeRecent(["A", "B"])), ["A", "B"]);
+eq("壞 JSON 回空", c.parseRecent("{not json"), []);
+eq("非陣列 JSON 回空", c.parseRecent('{"a":1}'), []);
+eq("超過上限截斷", c.parseRecent(JSON.stringify(["1","2","3","4","5","6","7"])).length, 5);
+eq("null 安全", c.parseRecent(null), []);
+
+console.log("== nextFieldIndex ==");
+eq("中間往下一格", c.nextFieldIndex(["a","b","c"], 0), 1);
+eq("最後一格回 -1（呼叫端送出）", c.nextFieldIndex(["a","b","c"], 2), -1);
+eq("越界回 -1", c.nextFieldIndex(["a","b"], 5), -1);
+eq("空順序回 -1", c.nextFieldIndex([], 0), -1);
+
 console.log(`\n== ${pass} passed, ${fail} failed ==`);
 process.exit(fail ? 1 : 0);
