@@ -9938,6 +9938,20 @@ body.report-work-route-mode .machtile-route-brand-bar {
   color: #cbd5f5;
 }
 
+.machtile-session-badge a {
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #d9f7ff;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.machtile-session-badge a:hover,
+.machtile-session-badge a:focus-visible {
+  background: #164e63;
+  color: #ffffff;
+}
+
 .machtile-session-badge button {
   border: 0;
   border-radius: 999px;
