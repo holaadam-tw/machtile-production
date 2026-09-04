@@ -12944,17 +12944,21 @@ function renderWorkOrderModule() {
         <datalist id="machtileWoNoList"></datalist></label>
       <p id="machtileWoPrefillNote" class="admin-module-note" hidden></p>
       <label class="admin-field"><span>品號</span>
-        <input id="machtileWoPartNo" type="text" placeholder="例：DSHG-04-01"></label>
+        <input id="machtileWoPartNo" type="text" list="machtileWoRecentPartNo" autocomplete="off" placeholder="例：DSHG-04-01">
+        <datalist id="machtileWoRecentPartNo"></datalist></label>
       <label class="admin-field"><span>品名 *</span>
-        <input id="machtileWoPartName" type="text" required></label>
+        <input id="machtileWoPartName" type="text" list="machtileWoRecentPartName" autocomplete="off" required>
+        <datalist id="machtileWoRecentPartName"></datalist></label>
       <label class="admin-field"><span>數量 *</span>
-        <input id="machtileWoQty" type="number" min="1" required></label>
+        <input id="machtileWoQty" type="number" min="1" inputmode="numeric" list="machtileWoRecentQty" required>
+        <datalist id="machtileWoRecentQty"></datalist></label>
       <label class="admin-field"><span>交期 *</span>
         <input id="machtileWoDue" type="date" required></label>
       <label class="admin-field"><span>指派機台</span>
         <select id="machtileWoMachine"><option value="">暫不指派</option></select></label>
       <label class="admin-field"><span>製程名稱</span>
-        <input id="machtileWoProcess" type="text" placeholder="CNC 加工"></label>
+        <input id="machtileWoProcess" type="text" list="machtileWoRecentProcess" autocomplete="off" placeholder="CNC 加工">
+        <datalist id="machtileWoRecentProcess"></datalist></label>
       <button class="admin-save-button" type="submit">建立／更新工單</button>
       <p class="admin-module-note">同單號再次送出＝更新內容或改派機台；選「暫不指派」＝取消指派。</p>
     </form>
@@ -13153,6 +13157,71 @@ async function machtileInitWorkOrderModule() {
   }
   machtileWoPopulateNoDatalist();
 
+  // --- ISSUE-007 第 2 條：數字／文字欄位記「最近使用值」，點選帶入 ---
+  // 存在瀏覽器 localStorage（每台平板各自的），只是方便，不是資料來源；
+  // 讀寫失敗（隱私模式／配額）一律靜默——絕不能因為記不住上次的值而擋住建單。
+  const RECENT_STORAGE_KEY = "machtile.wo.recent.v1";
+  const recentFields = {
+    partNo: "machtileWoRecentPartNo",
+    partName: "machtileWoRecentPartName",
+    qty: "machtileWoRecentQty",
+    process: "machtileWoRecentProcess",
+  };
+  const readRecentAll = () => {
+    const core = prefillCore();
+    let raw = "";
+    try { raw = window.localStorage.getItem(RECENT_STORAGE_KEY) || ""; } catch (error) { raw = ""; }
+    let obj = {};
+    try { obj = JSON.parse(raw || "{}") || {}; } catch (error) { obj = {}; }
+    const out = {};
+    for (const field of Object.keys(recentFields)) {
+      out[field] = core ? core.parseRecent(JSON.stringify(obj[field] || [])) : [];
+    }
+    return out;
+  };
+  const renderRecentLists = (all) => {
+    for (const [field, listId] of Object.entries(recentFields)) {
+      const list = document.getElementById(listId);
+      if (!list) continue;
+      list.innerHTML = (all[field] || []).map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
+    }
+  };
+  const rememberRecentFromForm = () => {
+    const core = prefillCore();
+    if (!core) return;
+    const all = readRecentAll();
+    const cur = readPrefillCurrent();
+    const next = {};
+    for (const field of Object.keys(recentFields)) {
+      next[field] = Array.from(core.rememberRecent(all[field], cur[field]));
+    }
+    try { window.localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next)); } catch (error) { /* 記不住就算了 */ }
+    renderRecentLists(next);
+  };
+  renderRecentLists(readRecentAll());
+
+  // --- ISSUE-007 第 5 條：Enter 逐欄跳轉，最後一格 Enter＝送出 ---
+  // 不用滑鼠也能整張填完。跳轉順序＝表單裡的視覺順序。
+  const enterOrder = [
+    "machtileWoNo", "machtileWoPartNo", "machtileWoPartName", "machtileWoQty",
+    "machtileWoDue", "machtileWoMachine", "machtileWoProcess",
+  ];
+  enterOrder.forEach((id, index) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;   // 中文輸入法選字中的 Enter 不算
+      event.preventDefault();
+      const core = prefillCore();
+      const nextIndex = core ? core.nextFieldIndex(enterOrder, index) : -1;
+      if (nextIndex >= 0) {
+        document.getElementById(enterOrder[nextIndex])?.focus();
+      } else {
+        form.requestSubmit ? form.requestSubmit() : form.querySelector("button[type=submit]")?.click();
+      }
+    });
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector("button[type=submit]");
@@ -13173,6 +13242,7 @@ async function machtileInitWorkOrderModule() {
       });
       const machineText = result?.machine_code ? `，指派 ${result.machine_code}` : "（未指派）";
       showToast(`${result?.action === "created" ? "已建立" : "已更新"}工單 ${payload.work_order_no}${machineText}`);
+      rememberRecentFromForm();
       machtileRefreshWorkOrderList();
       // card wall picks up the new/assigned order on next data load
       loadFromSupabase().then(renderAll).catch(() => {});
