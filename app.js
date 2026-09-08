@@ -12969,10 +12969,16 @@ function renderWorkOrderModule() {
 
 let machtileWoMachinesCache = null;
 
+function machtileWoMachineLabel(machine) {
+  const code = String(machine.machine_code || "");
+  const name = typeof machine.name === "string" ? machine.name.trim() : "";
+  return name && name !== code ? `${code} ${name}` : code;
+}
+
 async function machtileWoMachines() {
   if (machtileWoMachinesCache) return machtileWoMachinesCache;
   try {
-    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code&order=machine_code");
+    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code,name&order=machine_code");
   } catch (error) {
     console.warn("machines lookup failed", error);
     machtileWoMachinesCache = [];
@@ -13033,7 +13039,7 @@ async function machtileRefreshWorkOrderList() {
       supabaseFetch("work_orders?select=work_order_no,part_no,part_name,quantity,due_date,work_order_processes(machine_id)&order=created_at.desc&limit=10"),
       machtileWoMachines(),
     ]);
-    const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+    const codeById = new Map(machines.map((m) => [m.id, machtileWoMachineLabel(m)]));
     const rows = (orders || []).map((o) => {
       const machineId = o.work_order_processes?.[0]?.machine_id;
       const machine = machineId ? (codeById.get(machineId) || "?") : "未指派";
@@ -13064,7 +13070,7 @@ async function machtileInitWorkOrderModule() {
   const select = document.getElementById("machtileWoMachine");
   if (select) {
     select.innerHTML = `<option value="">暫不指派</option>` +
-      machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(m.machine_code)}</option>`).join("");
+      machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(machtileWoMachineLabel(m))}</option>`).join("");
   }
   machtileRefreshWorkOrderList();
 
