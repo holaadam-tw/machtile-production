@@ -12972,7 +12972,8 @@ let machtileWoMachinesCache = null;
 function machtileWoMachineLabel(machine) {
   const code = String(machine.machine_code || "");
   const name = typeof machine.name === "string" ? machine.name.trim() : "";
-  return name && name !== code ? `${code} ${name}` : code;
+  const alreadyLabeled = name.startsWith(code) && /^\s/.test(name.slice(code.length));
+  return name && name !== code ? (alreadyLabeled ? name : `${code} ${name}`) : code;
 }
 
 async function machtileWoMachines() {
