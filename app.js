@@ -12971,7 +12971,9 @@ let machtileWoMachinesCache = null;
 
 function machtileWoMachineLabel(machine) {
   const code = String(machine.machine_code || "");
-  const name = typeof machine.name === "string" ? machine.name.trim() : "";
+  // The machine cards display the shop-floor alias from location, not name.
+  const alias = typeof machine.location === "string" ? machine.location.trim() : "";
+  const name = alias || (typeof machine.name === "string" ? machine.name.trim() : "");
   const alreadyLabeled = name.startsWith(code) && /^\s/.test(name.slice(code.length));
   return name && name !== code ? (alreadyLabeled ? name : `${code} ${name}`) : code;
 }
@@ -12979,7 +12981,7 @@ function machtileWoMachineLabel(machine) {
 async function machtileWoMachines() {
   if (machtileWoMachinesCache) return machtileWoMachinesCache;
   try {
-    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code,name&order=machine_code");
+    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code,name,location&order=machine_code");
   } catch (error) {
     console.warn("machines lookup failed", error);
     machtileWoMachinesCache = [];
