@@ -27,6 +27,56 @@ const config = {
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
   enableScheduleContracts: false,
+  // Source-only HMC Staging packet. Separate activation and write gates;
+  // exact Dev project + signed identity are also required by app-host.js.
+  hmcFixedStagingEnabled: false,
+  hmcFixedStagingWrites: false,
+  // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
+  // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
+  // available only through an explicitly approved calendar exception.
+  scheduleCalendar: {
+    workdays: [1, 2, 3, 4, 5],
+    holidays: [
+      "2026-01-01",
+      "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+      "2026-02-27",
+      "2026-04-03", "2026-04-06",
+      "2026-05-01",
+      "2026-06-19",
+      "2026-09-25", "2026-09-28",
+      "2026-10-09", "2026-10-26",
+      "2026-12-25",
+    ],
+    shifts: [{
+      label: "日班",
+      startMinutes: 8 * 60,
+      endMinutes: 17 * 60,
+      breakRanges: [{ startMinutes: 12 * 60, endMinutes: 13 * 60 }],
+    }],
+    exceptions: [],
+    overtimeTemplate: { startMinutes: 17 * 60 + 30, endMinutes: 20 * 60 + 30 },
+    sourceLabel: "正式班表：週一至週五 08:00–17:00；午休 12:00–13:00；加班需主管核准",
+    holidaySource: "行政院人事行政總處 115 年辦公日曆表",
+  },
+  hmcScheduleProfiles: {
+    B01: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
+    B02: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
+  },
+  // 暫以 YCM TCV2000A 官方規格作保守速度上限：X/Y/Z 快移 40 m/min、
+  // 切削進給 10,000 mm/min。原廠頁未提供加速度，因此不在這裡猜值。
+  gcodeEstimatorLimits: {
+    rapidRateMmMin: 40000,
+    maxFeedRateMmMin: 10000,
+    reference: "YCM TCV2000A",
+  },
+  // 歷史校正需同程式、同機台累積 5 筆有效預估／實際配對才進入 ready。
+  // 即使 ready，也不覆蓋原始 G-code 估時，兩者分開顯示。
+  gcodeCalibration: {
+    minimumSamples: 5,
+  },
+  enableCalibrationGovernance: false,
+  enableManufacturingQuoteTracking: false,
+  ...window.MACHTILE_CONFIG,
   // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
   // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
   // available only through an explicitly approved calendar exception.
@@ -74,6 +124,60 @@ const config = {
   enableManufacturingQuoteTracking: false,
   ...window.MACHTILE_CONFIG,
 };
+
+let machtileHmcFixedHost = null;
+function machtileGetHmcFixedHost() {
+  if (!machtileHmcFixedHost && window.HmcFixedAppHost) {
+    machtileHmcFixedHost = window.HmcFixedAppHost.create({
+      getSettings: () => ({ enabled: config.hmcFixedStagingEnabled,
+        allowWrites: config.hmcFixedStagingWrites, strict: machtileStrictMode(),
+        source: state.source, projectUrl: config.supabaseUrl }),
+      getIdentity: () => ({ status: machtileAuthState.status,
+        authUserId: machtileAuthState.userId,
+        // Never fall back to config.tenantId for this feature.
+        tenantId: machtileAuthState.hmcFixedSignedTenantId,
+        expiresAt: machtileAuthState.expiresAt }),
+      request: (path, options) => supabaseFetch(path, options),
+      getRoot: () => document.getElementById("hmcFixedStagingRoot"),
+      getSheet: () => document.getElementById("hmcFixedStagingSheet"),
+      getStorage: () => window.localStorage,
+      getLocks: () => window.navigator.locks, events: window,
+    });
+  }
+  return machtileHmcFixedHost;
+}
+
+function machtileHmcFixedSessionChanged() {
+  // Bootstrap auth monitoring on login/restore, even before machine data is
+  // ready or a department filter renders a B-series card.
+  if (config.hmcFixedStagingEnabled === true) machtileGetHmcFixedHost()?.authChanged();
+  else machtileHmcFixedHost?.invalidate();
+}
+
+function machtileHmcFixedEntries(machine) {
+  const code = machine.code || machine.name;
+  if (!["B01", "B02"].includes(code) || !machtileGetHmcFixedHost()?.available()) return "";
+  return `<div class="machine-hmc-runtime" data-no-detail>
+    <strong>固定工件配置 · Staging</strong><div class="machine-hmc-runtime-grid">
+    ${Array.from({ length: 6 }, (_, i) => `<button type="button" data-hmc-fixed-pallet="${i + 1}" data-hmc-fixed-machine="${code}">盤 ${i + 1}<small>固定工件</small></button>`).join("")}
+    </div></div>`;
+}
+
+function machtileHandleHmcFixedClick(event) {
+  if (event.target.closest("[data-close-hmc-fixed]")) {
+    machtileHmcFixedHost?.close(); return true;
+  }
+  const entry = event.target.closest("[data-hmc-fixed-pallet]");
+  if (!entry) return false;
+  const host = machtileGetHmcFixedHost();
+  if (host?.available()) {
+    void host.open("slots", {
+      machineCode: entry.dataset.hmcFixedMachine,
+      palletNo: Number(entry.dataset.hmcFixedPallet),
+    });
+  }
+  return true;
+}
 
 const statusMeta = {
   aiRisk: { label: "可能延誤", className: "risk-purple", group: "可能延誤" },
@@ -8600,7 +8704,9 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
-  machtileAuthState.tenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || config.tenantId || "";
+  const signedTenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || "";
+  machtileAuthState.hmcFixedSignedTenantId = signedTenantId;
+  machtileAuthState.tenantId = signedTenantId || config.tenantId || "";
   machtileAuthState.role = appMetadata.role || jwtPayload.role || "";
   machtileAuthState.platformRole = appMetadata.platform_role || "";
   // Central per-system access list managed at login.machtile.com/admin/users.
@@ -8613,10 +8719,13 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.refreshToken = authResponse?.refresh_token || "";
   machtileAuthState.expiresAt = jwtPayload.exp ? Number(jwtPayload.exp) * 1000 : Date.now() + Number(authResponse?.expires_in || 0) * 1000;
   machtileAuthState.error = "";
+  machtileHmcFixedSessionChanged();
   machtilePersistSession();
 }
 
 function machtileClearSession(message = "") {
+  machtileHmcFixedHost?.invalidate();
+  machtileAuthState.hmcFixedSignedTenantId = "";
   machtileAuthState.status = "signedOut";
   machtileAuthState.accessToken = "";
   machtileAuthState.email = "";
@@ -9173,6 +9282,7 @@ function machtileRenderLoginGate() {
     const password = String(formData.get("password") || "");
     const rememberDevice = formData.get("rememberDevice") === "1";
     machtileAuthState.status = "signingIn";
+    machtileHmcFixedHost?.invalidate();
     machtileAuthState.error = "";
     machtileRenderLoginGate();
     try {
@@ -9210,6 +9320,7 @@ function machtileEnsureSessionBadge() {
     const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "登出中...";
+    machtileHmcFixedHost?.invalidate();
     try {
       await machtileServerSignOut();
     } finally {
@@ -11604,6 +11715,7 @@ function renderMachineCard(machine) {
       </div>
 
       ${machtileMonitorHmcRuntime(machine)}
+      ${machtileHmcFixedEntries(machine)}
 
       ${order ? `
         <div class="program-strip">
@@ -17351,6 +17463,8 @@ function bindEvents() {
       machtileCloseAttentionAction();
       return;
     }
+
+    if (machtileHandleHmcFixedClick(event)) return;
 
     const hmcPalletButton = event.target.closest("[data-hmc-runtime-pallet]");
     if (hmcPalletButton) {
