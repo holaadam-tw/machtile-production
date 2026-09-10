@@ -29,8 +29,8 @@ const config = {
   enableScheduleContracts: false,
   // Source-only HMC Staging packet. Separate activation and write gates;
   // exact Dev project + signed identity are also required by app-host.js.
-  hmcFixedStagingEnabled: false,
-  hmcFixedStagingWrites: false,
+  hmcFixedStagingEnabled: true,
+  hmcFixedStagingWrites: true,
   // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
   // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
   // available only through an explicitly approved calendar exception.
