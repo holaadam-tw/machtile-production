@@ -9936,6 +9936,15 @@ function machtileHmcRuntimeErrorMessage(error) {
 function machtileHmcRuntimeUpdateActionNote() {
   const eventType = $("#hmcRuntimeEventSelect")?.value || "";
   const meta = machtileHmcRuntimeCore?.EVENT_META?.[eventType] || {};
+  const suggestedEvent = machtileHmcRuntimeState.action?.suggestedEvent || "";
+  const suggested = $("#hmcRuntimeSuggestedAction");
+  if (suggested) suggested.textContent = machtileHmcRuntimeCore?.EVENT_META?.[suggestedEvent]?.label || "下一步";
+  const suggestedButton = $("#hmcRuntimeSuggestedUse");
+  if (suggestedButton) {
+    const selected = eventType === suggestedEvent;
+    suggestedButton.textContent = selected ? "已選擇" : "改用建議動作";
+    suggestedButton.setAttribute("aria-pressed", String(selected));
+  }
   const reason = $("#hmcRuntimeReasonInput");
   if (reason) {
     reason.required = Boolean(meta.reasonRequired);
@@ -9970,12 +9979,15 @@ function machtileOpenHmcRuntimeAction(machineCode, palletNo = null, requestedEve
     palletNo: pallet?.palletNo ?? null,
     pallet,
     scope,
+    suggestedEvent: defaultEvent,
     sourceEventId: machtileHmcRuntimeSourceEventId(),
   };
   const options = machtileHmcRuntimeCore.eventOptions(scope);
   const select = $("#hmcRuntimeEventSelect");
   select.innerHTML = options.map((option) => `<option value="${escapeHtml(option.eventType)}">${escapeHtml(option.label)}</option>`).join("");
   select.value = options.some((option) => option.eventType === defaultEvent) ? defaultEvent : options[0]?.eventType || "";
+  const otherEvents = $("#hmcRuntimeOtherEvents");
+  if (otherEvents) otherEvents.open = false;
   $("#hmcRuntimeReasonInput").value = "";
   $("#hmcRuntimeActionTitle").textContent = pallet ? "更新交換盤狀態" : "更新機台狀態";
   $("#hmcRuntimeActionSummary").textContent = pallet
@@ -17753,6 +17765,15 @@ function bindEvents() {
   });
 
   $("#hmcRuntimeEventSelect")?.addEventListener("change", machtileHmcRuntimeUpdateActionNote);
+  $("#hmcRuntimeSuggestedUse")?.addEventListener("click", () => {
+    const select = $("#hmcRuntimeEventSelect");
+    const suggestedEvent = machtileHmcRuntimeState.action?.suggestedEvent || "";
+    if (!select || !suggestedEvent) return;
+    select.value = suggestedEvent;
+    const otherEvents = $("#hmcRuntimeOtherEvents");
+    if (otherEvents) otherEvents.open = false;
+    machtileHmcRuntimeUpdateActionNote();
+  });
   $("#hmcRuntimeActionForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     machtileSubmitHmcRuntimeAction().catch((error) => showToast(machtileHmcRuntimeErrorMessage(error)));
