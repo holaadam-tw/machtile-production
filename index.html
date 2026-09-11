@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260910-hmc-fixed-slots-port">
+  <link rel="stylesheet" href="./styles.css?v=20260911-hmc-ui-simplify">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -618,10 +618,21 @@
         <button class="icon-button" type="button" data-close-hmc-runtime-action aria-label="關閉">×</button>
       </div>
       <form id="hmcRuntimeActionForm" class="hmc-runtime-action-form">
-        <label>
-          <span>回報事件</span>
-          <select id="hmcRuntimeEventSelect" required></select>
-        </label>
+        <section class="hmc-runtime-recommended" aria-labelledby="hmcRuntimeSuggestedLabel">
+          <div>
+            <span id="hmcRuntimeSuggestedLabel">依目前盤況建議</span>
+            <strong id="hmcRuntimeSuggestedAction">下一步</strong>
+          </div>
+          <button id="hmcRuntimeSuggestedUse" type="button">使用這個動作</button>
+        </section>
+        <details id="hmcRuntimeOtherEvents" class="hmc-runtime-other-events">
+          <summary>其他狀況或補登</summary>
+          <label>
+            <span>選擇其他事件</span>
+            <select id="hmcRuntimeEventSelect" required></select>
+          </label>
+          <p>只有缺料、狀態補登或流程未依序進行時才需要展開。</p>
+        </details>
         <label>
           <span>原因／現場說明</span>
           <textarea id="hmcRuntimeReasonInput" rows="4" placeholder="缺料與停機至少填 2 個字；其他事件可補充說明"></textarea>
@@ -664,7 +675,7 @@
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./scheduleCore.js?v=20260716-capacity-calendar"></script>
   <script src="./attentionCenterCore.js?v=20260716-attention-center"></script>
-  <script src="./hmcRuntimeCore.js?v=20260716-hmc-runtime-actions"></script>
+  <script src="./hmcRuntimeCore.js?v=20260911-hmc-runtime-simple-actions"></script>
   <script src="./gcodeEstimatorCore.js?v=20260716-calibration-governance"></script>
   <script src="./quote3dCore.js?v=20260716-quote3d-v1"></script>
   <script src="./operationalTrackingCore.js?v=20260716-formal-quote-v1"></script>
@@ -676,11 +687,11 @@
   <script src="./previews/hmc-fixed-slots/rpc-port.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/staging-controller.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/staging-rest.js?v=20260910-hmc-fixed-slots-port"></script>
-  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20260910-hmc-fixed-slots-port"></script>
+  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20260911-hmc-machine-tabs"></script>
   <script src="./previews/hmc-fixed-slots/durable-transport.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/staging-session.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/app-host.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260910-hmc-fixed-slots-live"></script>
+  <script src="./app.js?v=20260911-hmc-ui-simplify"></script>
 </body>
 </html>
