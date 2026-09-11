@@ -10706,6 +10706,13 @@ body.report-work-route-mode .machtile-route-brand-bar {
   margin-top: 2px;
 }
 
+.hmc-fixed-part-search-result {
+  margin-top: -5px !important;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @media (max-width: 720px) {
   .hmc-runtime-recommended {
     align-items: stretch;
