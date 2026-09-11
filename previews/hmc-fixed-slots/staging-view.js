@@ -292,6 +292,7 @@
       };
 
       let part;
+      let partSearch;
       let operation;
       let fixture;
       let order;
@@ -300,6 +301,12 @@
         const available = Array.isArray(view.catalog.availableParts)
           ? view.catalog.availableParts
           : [];
+        partSearch = el("input");
+        partSearch.type = "search";
+        partSearch.placeholder = "輸入品號或品名，例如 CPDG";
+        partSearch.autocomplete = "off";
+        partSearch.spellcheck = false;
+        label("搜尋品號或品名", partSearch);
         part = select(
           [
             ["", "請選工件品號"],
@@ -309,6 +316,39 @@
         );
         part.required = true;
         label("工件品號", part);
+        const partSearchResult = el(
+          "p",
+          available.length
+            ? `輸入一個字即可篩選，目前共 ${available.length} 筆。`
+            : "目前沒有可選的工件品號；請先確認本租戶的工單。",
+          "hmc-fixed-part-search-result"
+        );
+        form.append(partSearchResult);
+        partSearch.addEventListener("input", () => {
+          const query = partSearch.value.trim().toLocaleLowerCase();
+          const current = part.value;
+          const matches = query
+            ? available.filter((item) =>
+                `${item.partNo} ${item.name}`.toLocaleLowerCase().includes(query)
+              )
+            : available;
+          part.replaceChildren();
+          const placeholder = el(
+            "option",
+            matches.length ? "請選工件品號" : "找不到符合的工件"
+          );
+          placeholder.value = "";
+          part.append(placeholder);
+          for (const item of matches) {
+            const option = el("option", `${item.partNo} · ${item.name}`);
+            option.value = item.partNo;
+            part.append(option);
+          }
+          if (matches.some((item) => item.partNo === current)) part.value = current;
+          partSearchResult.textContent = query
+            ? `符合 ${matches.length} 筆；請從下方清單選擇完整品號。`
+            : `輸入一個字即可篩選，目前共 ${available.length} 筆。`;
+        });
         operation = el("input");
         operation.value = slot?.part.operationName || "";
         operation.maxLength = 60;
@@ -317,9 +357,6 @@
         fixture.value = slot?.fixtureName || "";
         fixture.maxLength = 120;
         label("模具／夾具（選填）", fixture);
-        if (!available.length) {
-          form.append(el("p", "目前沒有可選的工件品號；請先確認本租戶的工單。"));
-        }
       }
       if (edit.type === "bind") {
         const candidates = view.catalog.orders.filter(
@@ -347,7 +384,7 @@
       form.append(
         el("p", "此確認只適用本次操作，不是機台自動偵測，也不取代現場安全程序。")
       );
-      for (const input of [part, operation, fixture, order, confirmed, palletConfirmed].filter(Boolean)) {
+      for (const input of [partSearch, part, operation, fixture, order, confirmed, palletConfirmed].filter(Boolean)) {
         input.disabled = !view.canWrite;
       }
       const formActions = el("div", undefined, "hmc-fixed-editor-actions");

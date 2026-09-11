@@ -10688,7 +10688,7 @@ function machtileScheduleHmcPanel(machineDef) {
     return `
       <section class="schedule-hmc-resource ${runtime.status === "stopped" ? "is-stopped" : ""}">
         <div>
-          <strong>主軸互斥 · ${escapeHtml(runtime.palletCount)} 盤即時狀態</strong>
+          <strong>主軸互斥 · ${escapeHtml(runtime.palletCount)} 盤最近人工盤況</strong>
           <span>${escapeHtml(message)}</span>
         </div>
         ${runtime.pendingReplanCount ? `<span class="schedule-forecast-pill is-risk">${runtime.pendingReplanCount} 個事件待確認重排</span>` : ""}
@@ -10715,7 +10715,7 @@ function machtileScheduleHmcPanel(machineDef) {
     return `
       <section class="schedule-hmc-resource">
         <div><strong>臥式多盤容量規則</strong><span>主軸同一時間只能加工 1 個交換盤；其他交換盤可在外部準備或等待。</span></div>
-        <span class="schedule-forecast-pill is-waiting">${machtileHmcRuntimeState.status === "loading" ? "正在讀取交換盤即時狀態" : "Production 尚未套用 HMC runtime 契約"}</span>
+        <span class="schedule-forecast-pill is-waiting">${machtileHmcRuntimeState.status === "loading" ? "正在讀取交換盤最近盤況" : "Production 尚未套用 HMC runtime 契約"}</span>
       </section>
     `;
   }
@@ -11643,19 +11643,19 @@ function machtileMonitorHmcRuntime(machine) {
     }, config.hmcScheduleProfiles).machines.find((item) => item.machineCode === profile.machineCode);
   }
   if (!runtime || (machtileHmcRuntimeState.status !== "ready" && !preview)) {
-    return `<section class="machine-hmc-runtime is-waiting"><div><strong>6 盤即時狀態</strong><span>等待 HMC runtime 契約</span></div></section>`;
+    return `<section class="machine-hmc-runtime is-waiting"><div><strong>6 盤最近人工盤況</strong><span>等待 HMC runtime 契約</span></div></section>`;
   }
   const canWrite = !preview && machtileHmcRuntimeCanWrite();
   return `
     <section class="machine-hmc-runtime ${runtime.status === "stopped" ? "is-stopped" : ""}" data-no-detail>
       <div class="machine-hmc-runtime-head">
-        <strong>${escapeHtml(runtime.palletCount)} 盤即時狀態</strong>
-        <span>${runtime.status === "stopped" ? "停機・排程已凍結" : runtime.spindlePalletNo ? `主軸：第 ${runtime.spindlePalletNo} 盤` : "主軸空閒"}</span>
+        <strong>${escapeHtml(runtime.palletCount)} 盤最近人工盤況</strong>
+        <span title="目前沒有 IoT；只需在換料、開始加工、完成或異常時更新">人工回報 · ${runtime.status === "stopped" ? "停機・排程已凍結" : runtime.spindlePalletNo ? `主軸：第 ${runtime.spindlePalletNo} 盤` : "主軸空閒"}</span>
         ${runtime.pendingReplanCount ? `<em>${runtime.pendingReplanCount} 待重排</em>` : ""}
       </div>
       <div class="machine-hmc-runtime-grid">
         ${runtime.pallets.map((pallet) => canWrite ? `
-          <button type="button" class="is-${escapeHtml(pallet.tone)}" data-hmc-runtime-pallet="${escapeHtml(pallet.palletNo)}" data-hmc-runtime-machine="${escapeHtml(runtime.machineCode)}" title="更新盤 ${escapeHtml(pallet.palletNo)}：${escapeHtml(pallet.workOrderNo || pallet.fixtureName || pallet.stateLabel)}">
+          <button type="button" class="is-${escapeHtml(pallet.tone)}" data-hmc-runtime-pallet="${escapeHtml(pallet.palletNo)}" data-hmc-runtime-machine="${escapeHtml(runtime.machineCode)}" title="更新人工盤況：盤 ${escapeHtml(pallet.palletNo)} · ${escapeHtml(pallet.workOrderNo || pallet.fixtureName || pallet.stateLabel)}">
             <b>${escapeHtml(pallet.palletNo)}</b><small>${escapeHtml(pallet.stateLabel)}</small>
           </button>
         ` : `
