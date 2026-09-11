@@ -292,7 +292,6 @@
       };
 
       let part;
-      let partSearch;
       let operation;
       let fixture;
       let order;
@@ -301,54 +300,114 @@
         const available = Array.isArray(view.catalog.availableParts)
           ? view.catalog.availableParts
           : [];
-        partSearch = el("input");
-        partSearch.type = "search";
-        partSearch.placeholder = "輸入品號或品名，例如 CPDG";
-        partSearch.autocomplete = "off";
-        partSearch.spellcheck = false;
-        label("搜尋品號或品名", partSearch);
-        part = select(
-          [
-            ["", "請選工件品號"],
-            ...available.map((item) => [item.partNo, `${item.partNo} · ${item.name}`]),
-          ],
-          slot?.part.partNo
-        );
+        const picker = el("div", undefined, "hmc-fixed-part-picker");
+        const partLabel = el("label", "工件品號");
+        part = el("input");
+        part.type = "search";
+        part.value = slot?.part.partNo || "";
+        part.placeholder = "輸入品號或品名";
+        part.autocomplete = "off";
+        part.spellcheck = false;
         part.required = true;
-        label("工件品號", part);
-        const partSearchResult = el(
-          "p",
-          available.length
-            ? `輸入一個字即可篩選，目前共 ${available.length} 筆。`
-            : "目前沒有可選的工件品號；請先確認本租戶的工單。",
-          "hmc-fixed-part-search-result"
-        );
-        form.append(partSearchResult);
-        partSearch.addEventListener("input", () => {
-          const query = partSearch.value.trim().toLocaleLowerCase();
-          const current = part.value;
+        part.setAttribute("role", "combobox");
+        part.setAttribute("aria-autocomplete", "list");
+        part.setAttribute("aria-expanded", "false");
+        const results = el("div", undefined, "hmc-fixed-part-options");
+        results.id = `hmc-fixed-part-options-${edit.key}`;
+        results.setAttribute("role", "listbox");
+        results.hidden = true;
+        part.setAttribute("aria-controls", results.id);
+        let pickerOpen = false;
+        const closePicker = () => {
+          pickerOpen = false;
+          results.hidden = true;
+          part.setAttribute("aria-expanded", "false");
+        };
+        const renderPartOptions = () => {
+          const query = part.value.trim().toLocaleLowerCase();
           const matches = query
             ? available.filter((item) =>
                 `${item.partNo} ${item.name}`.toLocaleLowerCase().includes(query)
               )
             : available;
-          part.replaceChildren();
-          const placeholder = el(
-            "option",
-            matches.length ? "請選工件品號" : "找不到符合的工件"
-          );
-          placeholder.value = "";
-          part.append(placeholder);
-          for (const item of matches) {
-            const option = el("option", `${item.partNo} · ${item.name}`);
-            option.value = item.partNo;
-            part.append(option);
+          results.replaceChildren();
+          if (!matches.length) {
+            results.append(
+              el(
+                "p",
+                available.length
+                  ? "找不到符合的工件"
+                  : "目前沒有可選品號；請先確認工單或品項主檔來源。",
+                "hmc-fixed-part-empty"
+              )
+            );
+          } else {
+            for (const item of matches.slice(0, 50)) {
+              const option = el("button", undefined, "hmc-fixed-part-option");
+              option.type = "button";
+              option.setAttribute("role", "option");
+              option.setAttribute("aria-selected", String(part.value === item.partNo));
+              option.append(el("strong", item.partNo), el("span", item.name));
+              option.addEventListener("pointerdown", (event) => event.preventDefault());
+              option.addEventListener("click", () => {
+                part.value = item.partNo;
+                closePicker();
+                part.focus();
+              });
+              option.addEventListener("keydown", (event) => {
+                const options = Array.from(results.querySelectorAll('[role="option"]'));
+                const index = options.indexOf(option);
+                if (event.key === "ArrowDown" && options[index + 1]) {
+                  event.preventDefault();
+                  options[index + 1].focus();
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  (options[index - 1] || part).focus();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  closePicker();
+                  part.focus();
+                }
+              });
+              results.append(option);
+            }
+            if (matches.length > 50) {
+              results.append(
+                el("p", `目前顯示前 50 筆，共 ${matches.length} 筆；請再輸入關鍵字。`, "hmc-fixed-part-limit")
+              );
+            }
           }
-          if (matches.some((item) => item.partNo === current)) part.value = current;
-          partSearchResult.textContent = query
-            ? `符合 ${matches.length} 筆；請從下方清單選擇完整品號。`
-            : `輸入一個字即可篩選，目前共 ${available.length} 筆。`;
+          results.hidden = !pickerOpen;
+          part.setAttribute("aria-expanded", String(pickerOpen));
+        };
+        part.addEventListener("focus", () => {
+          pickerOpen = true;
+          renderPartOptions();
         });
+        part.addEventListener("input", () => {
+          pickerOpen = true;
+          renderPartOptions();
+        });
+        part.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") closePicker();
+          if (event.key === "ArrowDown") {
+            pickerOpen = true;
+            renderPartOptions();
+            const first = results.querySelector('[role="option"]');
+            if (first) {
+              event.preventDefault();
+              first.focus();
+            }
+          }
+        });
+        part.addEventListener("blur", () =>
+          root.ownerDocument.defaultView.setTimeout(() => {
+            if (!picker.contains(root.ownerDocument.activeElement)) closePicker();
+          }, 0)
+        );
+        partLabel.append(part);
+        picker.append(partLabel, results);
+        form.append(picker);
         operation = el("input");
         operation.value = slot?.part.operationName || "";
         operation.maxLength = 60;
@@ -384,7 +443,7 @@
       form.append(
         el("p", "此確認只適用本次操作，不是機台自動偵測，也不取代現場安全程序。")
       );
-      for (const input of [partSearch, part, operation, fixture, order, confirmed, palletConfirmed].filter(Boolean)) {
+      for (const input of [part, operation, fixture, order, confirmed, palletConfirmed].filter(Boolean)) {
         input.disabled = !view.canWrite;
       }
       const formActions = el("div", undefined, "hmc-fixed-editor-actions");
