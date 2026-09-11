@@ -10706,11 +10706,65 @@ body.report-work-route-mode .machtile-route-brand-bar {
   margin-top: 2px;
 }
 
-.hmc-fixed-part-search-result {
-  margin-top: -5px !important;
+.hmc-fixed-part-picker {
+  position: relative;
+}
+
+.hmc-fixed-part-options {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  padding: 5px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgb(15 43 74 / 18%);
+}
+
+.hmc-fixed-part-options[hidden] {
+  display: none;
+}
+
+.hmc-fixed-part-option {
+  display: grid;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: transparent;
+  color: #172b45;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hmc-fixed-part-option:hover,
+.hmc-fixed-part-option:focus,
+.hmc-fixed-part-option[aria-selected="true"] {
+  outline: none;
+  background: #eaf4ff;
+}
+
+.hmc-fixed-part-option strong,
+.hmc-fixed-part-option span {
+  display: block;
+}
+
+.hmc-fixed-part-option span {
+  margin-top: 2px;
   color: #64748b;
   font-size: 12px;
-  line-height: 1.45;
+}
+
+.hmc-fixed-part-empty,
+.hmc-fixed-part-limit {
+  margin: 0 !important;
+  padding: 10px;
+  color: #64748b;
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {
