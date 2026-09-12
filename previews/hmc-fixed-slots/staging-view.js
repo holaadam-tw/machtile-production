@@ -91,6 +91,7 @@
         NOT_LOADED: "請選機台與盤號。",
         LOADING: "讀取中…",
         READ_UNAVAILABLE: "無法讀取，不能判定為空盤。",
+        CATALOG_UNAVAILABLE: "正式 ERP 料件主檔目前無法讀取；沒有改用工單清單，請稍後再試。",
         READY: "資料已讀取。",
         SAVING: "保存中，請勿重複送出。",
         RECONCILING: "查核原請求中…",
@@ -108,6 +109,17 @@
       );
       status.setAttribute("role", "status");
       root.append(status);
+
+      if (view.catalog?.partCatalogSource) {
+        const source = view.catalog.partCatalogSource;
+        root.append(
+          el(
+            "p",
+            `工件來源：正式 ERP 料件主檔（${source.machineCode} 製程）· 讀取時間 ${new Date(source.retrievedAtUtc).toLocaleString("zh-TW")}`,
+            "hmc-fixed-source"
+          )
+        );
+      }
 
       if (view.code === "PALLET_LOCKED") {
         root.append(
@@ -296,7 +308,8 @@
       let fixture;
       let order;
       if (["add", "configure"].includes(edit.type)) {
-        // 2026-09-10 owner decision: part number is chosen from the tenant's work orders; process and fixture are optional.
+        // 2026-09-12 owner decision: part number comes from the formal ERP CNC
+        // part/semi-finished catalog; process and fixture remain optional.
         const available = Array.isArray(view.catalog.availableParts)
           ? view.catalog.availableParts
           : [];

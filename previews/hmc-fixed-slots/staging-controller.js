@@ -7,9 +7,23 @@
   const uuid=x=>typeof x==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
   const shape=(x,keys)=>x!==null&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
   const validScope=s=>shape(s,['machineCode','palletNo'])&&['B01','B02'].includes(s.machineCode)&&Number.isInteger(s.palletNo)&&s.palletNo>=1&&s.palletNo<=6;
+  const sameCatalog=(server,external,machineCode)=>{
+    if(!server||!Array.isArray(server.availableParts)||!server.catalogSource||!external||!Array.isArray(external.items)||!external.source)return false;
+    const source=server.catalogSource,remote=external.source;
+    if(!shape(remote,['contractVersion','sourceSystem','retrievedAtUtc','machineCode']))return false;
+    if(!external.items.every(item=>shape(item,['partNo','name'])&&typeof item.partNo==='string'&&typeof item.name==='string'))return false;
+    if(source.contractVersion!==remote.contractVersion||source.sourceSystem!==remote.sourceSystem||source.machineCode!==machineCode||remote.machineCode!==machineCode||source.itemCount!==server.availableParts.length||source.itemCount!==external.items.length)return false;
+    // Factory's retrievedAtUtc is the time of each GET, so a later verification
+    // request is expected to differ. It must not predate the admitted mirror.
+    if(!Number.isFinite(Date.parse(remote.retrievedAtUtc))||Date.parse(remote.retrievedAtUtc)<Date.parse(source.retrievedAtUtc))return false;
+    const admitted=new Map(server.availableParts.map(item=>[item.partNo,item.name]));
+    const observed=new Map(external.items.map(item=>[item.partNo,item.name]));
+    if(admitted.size!==server.availableParts.length||observed.size!==external.items.length||admitted.size!==observed.size)return false;
+    return [...admitted].every(([partNo,name])=>observed.get(partNo)===name);
+  };
   // getContext supplies non-secret host identity only, never authority in RPC payloads.
   // Host must notify refreshContext on auth/tenant changes. Server remains authoritative.
-  function create({rpc,getContext,enabled=false,allowWrites=false,requestId=()=>globalThis.crypto.randomUUID(),transportFactory=Transport.create}={}){
+  function create({rpc,getContext,enabled=false,allowWrites=false,requireExternalCatalog=false,loadCatalog,requestId=()=>globalThis.crypto.randomUUID(),transportFactory=Transport.create}={}){
     const transport=transportFactory(RpcPort.create({rpc,enabled}));
     let identity=null,closed=false,busy=false,scope=null,state=null,catalog=null,edit=null,serial=0;
     let phase=enabled===true?'NOT_LOADED':'DISABLED',code=phase;
@@ -43,12 +57,28 @@
       if(transport.unresolved())return fail('OUTCOME_UNKNOWN');
       if(!validScope(next))return fail('INVALID_SCOPE');
       scope=clone(next);state=catalog=edit=null;phase=code='LOADING';busy=true;
-      const result=await transport.read(scope);busy=false;
+      let result,externalCatalog;
+      try{
+        // Refresh the private mirror before reading it. The refresh service derives
+        // tenant scope from the signed user and admits only the exact Factory data.
+        externalCatalog=requireExternalCatalog===true
+          ? await (typeof loadCatalog==='function'?loadCatalog(scope.machineCode):Promise.reject(Error('CATALOG_UNAVAILABLE')))
+          : null;
+        result=await transport.read(scope);
+      }catch(_){busy=false;if(!sync())return snapshot();phase=code='CATALOG_UNAVAILABLE';return snapshot();}
+      busy=false;
       if(!sync())return snapshot();
       if(!result.ok){phase=code='READ_UNAVAILABLE';return snapshot();}
       const expected=JSON.parse(identity)[1];
       if((Object.hasOwn(result.catalog,'tenantId')&&result.catalog.tenantId!==expected)||result.state.audit.some(e=>e.tenantId!==expected)){
         phase=code='READ_UNAVAILABLE';return snapshot();
+      }
+      if(requireExternalCatalog===true){
+        // The tenant-scoped server mirror is the sole admission and display authority.
+        // The direct Factory read is only an exact freshness/provenance check and may
+        // never replace a list that the server would reject at save time.
+        if(!sameCatalog(result.catalog,externalCatalog,scope.machineCode)){phase=code='CATALOG_UNAVAILABLE';return snapshot();}
+        result.catalog={...result.catalog,partCatalogSource:clone(result.catalog.catalogSource)};
       }
       state=result.state;catalog=result.catalog;phase=code='READY';return snapshot();
     }
@@ -70,7 +100,9 @@
       if(result.ok){
         edit=null;
         if(catalog){state=result.state;phase='READY';code='SAVED';}
-        else{state=null;scope={machineCode:result.state.machineCode,palletNo:result.state.palletNo};phase='STALE';code='RECOVERED_RELOAD_REQUIRED';}
+        // Show the verified receipt immediately, but never call read() automatically: the
+        // server read may release completed bindings. A fresh catalog is still required to edit.
+        else{state=result.state;scope={machineCode:result.state.machineCode,palletNo:result.state.palletNo};phase='STALE';code='RECOVERED_RELOAD_REQUIRED';}
       }
       else if(transport.unresolved()){phase=code='OUTCOME_UNKNOWN';}
       else {phase='STALE';code=result.code;state=catalog=edit=null;}

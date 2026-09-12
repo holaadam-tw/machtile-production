@@ -126,8 +126,16 @@ const config = {
 };
 
 let machtileHmcFixedHost = null;
+let machtileHmcPartCatalog = null;
 function machtileGetHmcFixedHost() {
   if (!machtileHmcFixedHost && window.HmcFixedAppHost) {
+    if (!machtileHmcPartCatalog && window.HmcCncPartCatalog) {
+      machtileHmcPartCatalog = window.HmcCncPartCatalog.create({
+        projectUrl: config.supabaseUrl,
+        publishableKey: config.supabaseAnonKey,
+        getAccessToken: () => machtileAuthState.accessToken,
+      });
+    }
     machtileHmcFixedHost = window.HmcFixedAppHost.create({
       getSettings: () => ({ enabled: config.hmcFixedStagingEnabled,
         allowWrites: config.hmcFixedStagingWrites, strict: machtileStrictMode(),
@@ -138,6 +146,7 @@ function machtileGetHmcFixedHost() {
         tenantId: machtileAuthState.hmcFixedSignedTenantId,
         expiresAt: machtileAuthState.expiresAt }),
       request: (path, options) => supabaseFetch(path, options),
+      loadCatalog: (machineCode) => machtileHmcPartCatalog.load(machineCode),
       getRoot: () => document.getElementById("hmcFixedStagingRoot"),
       getSheet: () => document.getElementById("hmcFixedStagingSheet"),
       getStorage: () => window.localStorage,
