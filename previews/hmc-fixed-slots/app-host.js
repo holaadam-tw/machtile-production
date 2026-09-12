@@ -8,7 +8,7 @@
   const PROJECT=Target&&Target.url;
   const uuid=x=>typeof x==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x);
   const machine=x=>x==='B01'||x==='B02';
-  function create({getSettings,getIdentity,request,getRoot,getSheet,getStorage,getLocks,events,requestId,
+  function create({getSettings,getIdentity,request,loadCatalog,getRoot,getSheet,getStorage,getLocks,events,requestId,
     now=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,mountSlots=Session.mount}={}){
     // Fail closed rather than defaulting to some project when the deploy-target guard is absent.
     if(typeof PROJECT!=='string'||!PROJECT)throw new Error('PROJECT_TARGET_REQUIRED');
@@ -54,7 +54,7 @@
       const context=()=>{const c=identity();return c&&JSON.stringify(c)===JSON.stringify(captured)?c:null;};
       const options={enabled:true,allowWrites:settings().allowWrites===true,getContext:context,
         subscribe:cb=>{subscribers.add(cb);return ()=>subscribers.delete(cb);},
-        request,getProjectUrl:()=>settings().projectUrl,storage,locks,requestId};
+        request,getProjectUrl:()=>settings().projectUrl,requireExternalCatalog:true,loadCatalog,storage,locks,requestId};
       const mounted=mountSlots(root,options);panel=mounted;
       sheet.classList.add('is-open');sheet.setAttribute('aria-hidden','false');
       try{

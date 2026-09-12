@@ -28,6 +28,9 @@
   const optional=(x,max)=>typeof x==='string'&&x===x.trim()&&x.length<=max;
   const part=x=>shape(x,['id','partNo','name','operationId'],['operationName'])&&id(x.id)&&id(x.partNo)&&x.partNo.length<=60&&text(x.name)&&id(x.operationId)&&(!Object.hasOwn(x,'operationName')||optional(x.operationName,60));
   const availablePart=x=>shape(x,['partNo','name'])&&id(x.partNo)&&x.partNo.length<=60&&text(x.name);
+  const catalogSource=(x,scope,parts)=>shape(x,['contractVersion','sourceSystem','retrievedAtUtc','machineCode','itemCount'])&&
+    x.contractVersion==='machtile-cnc-part-catalog.v1'&&x.sourceSystem==='SoftNetERP.Material+BOM'&&timestamp(x.retrievedAtUtc)&&
+    x.machineCode===scope.machineCode&&Number.isSafeInteger(x.itemCount)&&x.itemCount>=0&&x.itemCount<=500&&x.itemCount===parts.length;
   // Bound orders are keyed by part number only (no partId/operationId anywhere in orders).
   const binding=x=>shape(x,['id','orderNo','partNo'])&&id(x.id)&&id(x.orderNo)&&text(x.partNo);
   const slot=x=>shape(x,['slotId','fixtureName','part','order'])&&slotId(x.slotId)&&optional(x.fixtureName,120)&&part(x.part)&&(x.order===null||(binding(x.order)&&x.order.partNo===x.part.partNo));
@@ -36,9 +39,10 @@
   const sameConfiguration=(a,b)=>equal(a.map(s=>({...s,order:s.order&&{...s.order,orderNo:null}})),b.map(s=>({...s,order:s.order&&{...s.order,orderNo:null}})));
   function validCatalog(c,scope){
     // availableParts is validated when present; a read without it simply cannot configure positions (controller fails closed).
-    if(!shape(c,['parts','orders'],['ok','tenantId','machineCode','version','availableParts','excluded'])||!list(c.parts,part)||!unique(c.parts,'id'))return false;
+    if(!shape(c,['parts','orders'],['ok','tenantId','machineCode','version','availableParts','catalogSource','excluded'])||!list(c.parts,part)||!unique(c.parts,'id'))return false;
     if(Object.hasOwn(c,'ok')&&c.ok!==true||Object.hasOwn(c,'tenantId')&&!uuid(c.tenantId)||Object.hasOwn(c,'machineCode')&&c.machineCode!==scope.machineCode||Object.hasOwn(c,'version')&&!text(c.version))return false;
     if(Object.hasOwn(c,'availableParts')&&(!list(c.availableParts,availablePart)||!unique(c.availableParts,'partNo')))return false;
+    if(Object.hasOwn(c,'catalogSource')&&(!Object.hasOwn(c,'availableParts')||!catalogSource(c.catalogSource,scope,c.availableParts)))return false;
     if(Object.hasOwn(c,'excluded')&&!list(c.excluded,x=>shape(x,['processId','code'])&&id(x.processId)&&x.code==='ORDER_NOT_ELIGIBLE'))return false;
     return list(c.orders,x=>shape(x,['id','orderNo','partNo','machineCode','status'])&&id(x.id)&&id(x.orderNo)&&text(x.partNo)&&x.machineCode===scope.machineCode&&['open','closed'].includes(x.status))&&unique(c.orders,'id');
   }
@@ -49,6 +53,21 @@
     const requests=new Set();
     for(let i=0;i<state.audit.length;i++){
       const e=state.audit[i];
+      if(shape(e,['revision','type','released','tenantId','occurredAt','before','after'])&&e.type==='auto_unbind'){
+        if(e.revision!==i+1||!uuid(e.tenantId)||!timestamp(e.occurredAt)||!slots(e.before)||!slots(e.after)
+          ||e.before.length!==e.after.length||!list(e.released,r=>shape(r,['slotId','workOrderId','orderStatus'])
+            &&slotId(r.slotId)&&uuid(r.workOrderId)&&['waiting_inspection','completed','shipped','cancelled'].includes(r.orderStatus))
+          ||e.released.length===0||!unique(e.released,'slotId')||(tenant!==null&&tenant!==e.tenantId))return false;
+        const released=new Set(e.released.map(r=>r.slotId));
+        if(e.before.some(before=>{const after=e.after.find(s=>s.slotId===before.slotId);
+          return !after||released.has(before.slotId)
+            ?!after||before.order===null||after.order!==null||!equal(before.part,after.part)||before.fixtureName!==after.fixtureName
+            :!equal(before,after);
+        })||e.released.some(r=>!e.before.some(s=>s.slotId===r.slotId&&s.order!==null)))return false;
+        tenant=e.tenantId;
+        if(i===state.audit.length-1&&!sameConfiguration(e.after,state.slots))return false;
+        continue;
+      }
       if(!shape(e,['revision','type','slotId','before','after','requestId','actorId','tenantId','occurredAt'],['catalogVersion'])||e.revision!==i+1||!['add','configure','bind','unbind'].includes(e.type)||!slotId(e.slotId)||!uuid(e.requestId)||!uuid(e.actorId)||!uuid(e.tenantId)||!timestamp(e.occurredAt)||Object.hasOwn(e,'catalogVersion')&&!text(e.catalogVersion))return false;
       if(tenant!==null&&tenant!==e.tenantId)return false;
       const receiptKey=e.tenantId+':'+e.actorId+':'+e.requestId;
