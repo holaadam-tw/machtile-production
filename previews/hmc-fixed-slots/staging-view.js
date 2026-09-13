@@ -217,7 +217,28 @@
         );
       }
 
-      if (!view.state) return;
+      if (!view.state) {
+        // Keep the selected pallet and its entry visible during source errors,
+        // without claiming the pallet is empty or enabling a write path.
+        if (view.scope) {
+          const unavailable = el("section", undefined, `hmc-fixed-content is-${machine.tone}`);
+          const heading = el("header", undefined, "hmc-fixed-content-header");
+          heading.append(el("h3", `${view.scope.machineCode} · 盤 ${view.scope.palletNo}`));
+          unavailable.append(
+            heading,
+            el(
+              "p",
+              view.phase === "CATALOG_UNAVAILABLE"
+                ? "料件來源尚未驗證，暫不能選擇品號或保存；請按「重新讀取」。既有配置不會因此清除。"
+                : "盤位資料尚未驗證，不能判定為空盤或新增配置。",
+              "hmc-fixed-warning"
+            ),
+            button("新增固定位置", () => {}, true, "hmc-fixed-add")
+          );
+          root.append(unavailable);
+        }
+        return;
+      }
 
       const content = el("section", undefined, `hmc-fixed-content is-${machine.tone}`);
       const contentHeader = el("header", undefined, "hmc-fixed-content-header");
