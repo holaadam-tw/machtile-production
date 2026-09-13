@@ -18,7 +18,8 @@
     'CATALOG_REFRESH_CATALOG_FACTORY_DATA_INVALID',
     'CATALOG_REFRESH_CATALOG_FACTORY_PROVIDER_UNAVAILABLE',
     'CATALOG_REFRESH_CATALOG_FACTORY_HTTP_UNAVAILABLE',
-    'CATALOG_REFRESH_CATALOG_FACTORY_TRANSPORT_UNAVAILABLE'
+    'CATALOG_REFRESH_CATALOG_FACTORY_TRANSPORT_UNAVAILABLE',
+    'CATALOG_REFRESH_CATALOG_FACTORY_ACCESS_REDIRECT'
   ]);
   const sameCatalog=(server,external,machineCode)=>{
     if(!server||!Array.isArray(server.availableParts)||!server.catalogSource||!external||!Array.isArray(external.items)||!external.source)return false;
