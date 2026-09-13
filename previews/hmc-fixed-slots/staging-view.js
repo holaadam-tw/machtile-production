@@ -349,6 +349,7 @@
         const results = el("div", undefined, "hmc-fixed-part-options");
         results.id = `hmc-fixed-part-options-${edit.key}`;
         results.setAttribute("role", "listbox");
+        results.tabIndex = -1;
         results.hidden = true;
         part.setAttribute("aria-controls", results.id);
         let pickerOpen = false;
@@ -381,6 +382,7 @@
             for (const item of matches) {
               const option = el("button", undefined, "hmc-fixed-part-option");
               option.type = "button";
+              option.tabIndex = -1;
               option.setAttribute("role", "option");
               option.setAttribute("aria-selected", String(part.value === item.partNo));
               option.append(el("strong", item.partNo), el("span", item.name));
