@@ -376,7 +376,9 @@
               )
             );
           } else {
-            for (const item of matches.slice(0, 50)) {
+            // The server admits at most 500 CNC parts; keep every admitted part
+            // reachable by scrolling as well as by typing in this same field.
+            for (const item of matches) {
               const option = el("button", undefined, "hmc-fixed-part-option");
               option.type = "button";
               option.setAttribute("role", "option");
@@ -404,11 +406,6 @@
                 }
               });
               results.append(option);
-            }
-            if (matches.length > 50) {
-              results.append(
-                el("p", `目前顯示前 50 筆，共 ${matches.length} 筆；請再輸入關鍵字。`, "hmc-fixed-part-limit")
-              );
             }
           }
           results.hidden = !pickerOpen;
