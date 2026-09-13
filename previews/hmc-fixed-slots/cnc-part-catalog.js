@@ -50,11 +50,11 @@
       source:Object.freeze({contractVersion:CONTRACT,sourceSystem:SOURCE,retrievedAtUtc:payload.retrievedAtUtc,machineCode:expectedMachine})
     });
   }
-  function create({fetch:fetcher=globalThis.fetch,getAccessToken,projectUrl,publishableKey,timeoutMs=25000,setTimer=setTimeout,clearTimer=clearTimeout}={}){
+  function create({fetch:fetcher=globalThis.fetch,getAccessToken,projectUrl,publishableKey,timeoutMs=45000,setTimer=setTimeout,clearTimer=clearTimeout}={}){
     let target;
     try{target=new URL(FUNCTION_PATH,String(projectUrl||'').replace(/\/$/,'')+'/');}catch(_){throw Error('CATALOG_ENDPOINT_INVALID');}
     if(target.protocol!=='https:'||!/^[a-z0-9]{20}\.supabase\.co$/.test(target.hostname)||target.pathname!==FUNCTION_PATH||target.search||target.hash)throw Error('CATALOG_ENDPOINT_INVALID');
-    if(typeof fetcher!=='function'||typeof getAccessToken!=='function'||typeof publishableKey!=='string'||publishableKey.length<20||!Number.isInteger(timeoutMs)||timeoutMs<1000||timeoutMs>30000)throw Error('CATALOG_CONFIG_INVALID');
+    if(typeof fetcher!=='function'||typeof getAccessToken!=='function'||typeof publishableKey!=='string'||publishableKey.length<20||!Number.isInteger(timeoutMs)||timeoutMs<1000||timeoutMs>45000)throw Error('CATALOG_CONFIG_INVALID');
     async function load(machineCode){
       if(!machine(machineCode))throw Error('CATALOG_SCOPE_INVALID');
       const token=String(getAccessToken()||'').trim();
