@@ -98,15 +98,15 @@
         OUTCOME_UNKNOWN: "原請求結果不明；禁止重送，請查核原請求。",
         STALE: "未套用變更；請重新讀取後核對。",
       };
-      const status = el(
-        "p",
-        view.code === "SAVED"
+      let statusText = view.code === "SAVED"
           ? "已確認保存成功。"
           : view.code === "RECOVERED_RELOAD_REQUIRED"
             ? "已查核原請求成功；請重新讀取最新盤位。"
-            : messages[view.phase] || "目前不可操作。",
-        "hmc-fixed-status"
-      );
+            : messages[view.phase] || "目前不可操作。";
+      if (view.phase === "CATALOG_UNAVAILABLE" && view.code !== view.phase) {
+        statusText += `（診斷碼：${view.code}）`;
+      }
+      const status = el("p", statusText, "hmc-fixed-status");
       status.setAttribute("role", "status");
       root.append(status);
 

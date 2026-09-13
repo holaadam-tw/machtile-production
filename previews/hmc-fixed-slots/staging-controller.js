@@ -7,6 +7,13 @@
   const uuid=x=>typeof x==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
   const shape=(x,keys)=>x!==null&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
   const validScope=s=>shape(s,['machineCode','palletNo'])&&['B01','B02'].includes(s.machineCode)&&Number.isInteger(s.palletNo)&&s.palletNo>=1&&s.palletNo<=6;
+  const catalogDiagnostics=new Set([
+    'CATALOG_AUTH_REQUIRED','CATALOG_ACCESS_DENIED','CATALOG_INVALID',
+    'CATALOG_REFRESH_REFRESH_NOT_CONFIGURED','CATALOG_REFRESH_AUTH_UNAVAILABLE',
+    'CATALOG_REFRESH_TENANT_LOOKUP_UNAVAILABLE','CATALOG_REFRESH_CATALOG_SOURCE_UNAVAILABLE',
+    'CATALOG_REFRESH_CATALOG_SOURCE_INVALID','CATALOG_REFRESH_CATALOG_WRITE_REJECTED',
+    'CATALOG_REFRESH_REFRESH_UNAVAILABLE','CATALOG_HTTP_502','CATALOG_HTTP_503','CATALOG_HTTP_504'
+  ]);
   const sameCatalog=(server,external,machineCode)=>{
     if(!server||!Array.isArray(server.availableParts)||!server.catalogSource||!external||!Array.isArray(external.items)||!external.source)return false;
     const source=server.catalogSource,remote=external.source;
@@ -57,15 +64,21 @@
       if(transport.unresolved())return fail('OUTCOME_UNKNOWN');
       if(!validScope(next))return fail('INVALID_SCOPE');
       scope=clone(next);state=catalog=edit=null;phase=code='LOADING';busy=true;
-      let result,externalCatalog;
+      let result,externalCatalog,loadingExternalCatalog=true;
       try{
         // Refresh the private mirror before reading it. The refresh service derives
         // tenant scope from the signed user and admits only the exact Factory data.
         externalCatalog=requireExternalCatalog===true
           ? await (typeof loadCatalog==='function'?loadCatalog(scope.machineCode):Promise.reject(Error('CATALOG_UNAVAILABLE')))
           : null;
+        loadingExternalCatalog=false;
         result=await transport.read(scope);
-      }catch(_){busy=false;if(!sync())return snapshot();phase=code='CATALOG_UNAVAILABLE';return snapshot();}
+      }catch(error){
+        busy=false;if(!sync())return snapshot();
+        phase='CATALOG_UNAVAILABLE';
+        code=loadingExternalCatalog&&catalogDiagnostics.has(error?.message)?error.message:phase;
+        return snapshot();
+      }
       busy=false;
       if(!sync())return snapshot();
       if(!result.ok){phase=code='READ_UNAVAILABLE';return snapshot();}
