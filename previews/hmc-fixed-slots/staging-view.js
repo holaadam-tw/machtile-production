@@ -78,7 +78,7 @@
         ),
         el(
           "p",
-          "目前沒有 IoT 即時盤況。保存時才會檢查人工回報是否在 8 小時內、此盤是否可操作及機台是否維修；未回報或資料過期時，請先由現場人員如實回報。"
+          "固定工件是長期配置，不要求 8 小時盤況回報；掛入或解除工單仍須通過現場人工盤況、機台與停機鎖。目前沒有 IoT 即時盤況，請如實回報。"
         )
       );
       root.append(help);
@@ -125,7 +125,7 @@
         root.append(
           el(
             "p",
-            "未保存：盤況未確認、已過期、正在加工，或機台鎖定。請現場人員確認並如實回報，再重新讀取；勾選確認不能解除伺服器鎖。",
+            "未保存：掛單或解掛時，盤況未確認、已過期、正在加工，或機台鎖定。請現場人員如實回報，再重新讀取；勾選確認不能解除伺服器鎖。",
             "hmc-fixed-warning"
           )
         );
@@ -470,11 +470,16 @@
       const confirmed = el("input");
       confirmed.type = "checkbox";
       label("我已核對機台、盤號、位置及本次內容", confirmed);
-      const palletConfirmed = el("input");
-      palletConfirmed.type = "checkbox";
-      label("我已在現場確認此盤未加工，現在可進行本次配置或掛單變更", palletConfirmed);
+      let palletConfirmed;
+      if (edit.type === "bind" || edit.type === "unbind") {
+        palletConfirmed = el("input");
+        palletConfirmed.type = "checkbox";
+        label("我已在現場確認此盤未加工，現在可掛入或解除工單", palletConfirmed);
+      }
       form.append(
-        el("p", "此確認只適用本次操作，不是機台自動偵測，也不取代現場安全程序。")
+        el("p", palletConfirmed
+          ? "此確認只適用本次掛單變更，不是機台自動偵測，也不取代現場安全程序。"
+          : "固定配置僅記錄長期工件與模具，不代表換料、開工或增加產量；請核對與現場實物一致。")
       );
       for (const input of [part, operation, fixture, order, confirmed, palletConfirmed].filter(Boolean)) {
         input.disabled = !view.canWrite;
@@ -487,7 +492,7 @@
           () =>
             controller.save(edit.key, {
               confirmed: confirmed.checked,
-              palletConfirmed: palletConfirmed.checked,
+              ...(palletConfirmed ? { palletConfirmed: palletConfirmed.checked } : {}),
               ...(part
                 ? {
                     partNo: part.value,
