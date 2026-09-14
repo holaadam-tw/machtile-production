@@ -132,12 +132,17 @@
       if(!snapshot().canWrite)return fail(transport.unresolved()?'OUTCOME_UNKNOWN':'EDIT_NOT_AVAILABLE');
       if(!edit||key!==edit.key)return fail('STALE_EDITOR');
       // 2026-09-10 owner decision: part number (from catalog.availableParts) is required; process name and fixture are optional.
-      const keys=edit.type==='add'||edit.type==='configure'?['partNo','operationName','fixtureName','confirmed','palletConfirmed']:edit.type==='bind'?['orderId','confirmed','palletConfirmed']:['confirmed','palletConfirmed'];
-      if(!shape(values,keys)||values.confirmed!==true)return fail('CONFIRMATION_REQUIRED');
+      const fixedConfig=['add','configure'].includes(edit.type);
+      const keys=fixedConfig?['partNo','operationName','fixtureName','confirmed']:edit.type==='bind'?['orderId','confirmed','palletConfirmed']:['confirmed','palletConfirmed'];
+      const legacyFixedKeys=[...keys,'palletConfirmed'];
+      const validShape=fixedConfig
+        ? shape(values,keys)||(shape(values,legacyFixedKeys)&&typeof values.palletConfirmed==='boolean')
+        : shape(values,keys);
+      if(!validShape||values.confirmed!==true)return fail('CONFIRMATION_REQUIRED');
       // Per-edit human acknowledgement, not an IoT observation or server permission.
       // Never cache it across edits, send a fabricated timestamp, or bypass runtime locks.
-      if(values.palletConfirmed!==true)return fail('MANUAL_PALLET_CONFIRMATION_REQUIRED');
-      if(['add','configure'].includes(edit.type)){
+      if(!fixedConfig&&values.palletConfirmed!==true)return fail('MANUAL_PALLET_CONFIRMATION_REQUIRED');
+      if(fixedConfig){
         const str=(v,max)=>typeof v==='string'&&v.trim().length<=max;
         if(!str(values.partNo,60)||!values.partNo.trim()||!str(values.operationName,60)||!str(values.fixtureName,120))return fail('INVALID_COMMAND');
         if(!Array.isArray(catalog.availableParts)||!catalog.availableParts.some(a=>a&&a.partNo===values.partNo.trim()))return fail('PART_UNKNOWN');
