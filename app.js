@@ -12613,20 +12613,38 @@ function renderReports() {
 
     <section class="report-panel">
       <div class="panel-title">
-        <h2>目前工單分布</h2>
-        <span>是否有目前工單；非產能／稼動率</span>
+        <h2>各機台目前工單進度</h2>
+        <span>長條＝完成數／總數；逾期最多的排最上面；非產能／稼動率</span>
       </div>
-      <div class="load-list">
-        ${managedMachines.map((machine) => {
-          const value = machine.order ? 100 : 0;
-          return `
-            <div class="load-row">
-              <span>${escapeHtml(machtileMachineDisplay(machine.name))}</span>
-              <div class="load-track"><i style="width:${value}%"></i></div>
-              <strong>${machine.order ? "有目前工單" : "無目前工單"}</strong>
-            </div>
-          `;
-        }).join("")}
+      <div class="load-list load-list-progress">
+        ${(() => {
+          // owner 2026-09-20: the old "has a current order" bar was binary and read as 11
+          // identical lines. Show what differs between machines instead — how far the
+          // current order is and how late it runs — from the same loaded state.
+          const rows = managedMachines.map((machine) => {
+            const order = machine.order;
+            const total = Number(order?.total || 0);
+            const done = Number(order?.done || 0);
+            const pct = order && total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
+            const due = order ? dueInfo(order) : null;
+            return { machine, order, total, done, pct, due };
+          });
+          rows.sort((a, b) => {
+            if (!a.order !== !b.order) return a.order ? -1 : 1; // idle machines last
+            return (a.due?.diffDays ?? 999) - (b.due?.diffDays ?? 999) || a.pct - b.pct;
+          });
+          return rows.map(({ machine, order, total, done, pct, due }) => {
+            const tone = !order ? "is-idle" : due.diffDays < 0 ? "is-late" : due.diffDays <= 3 ? "is-soon" : "";
+            return `
+              <div class="load-row ${tone}">
+                <span>${escapeHtml(machtileMachineDisplay(machine.name))}</span>
+                <div class="load-track" aria-label="${order ? `${done}/${total} 件` : "無工單"}"><i style="width:${pct}%"></i></div>
+                <strong>${order ? `${done}/${total}` : "無工單"}</strong>
+                <small>${order ? `${escapeHtml(due.label)} · ${escapeHtml(due.date)}` : "—"}</small>
+              </div>
+            `;
+          }).join("");
+        })()}
       </div>
     </section>
 
