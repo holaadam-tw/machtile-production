@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260912-hmc-part-combobox">
+  <link rel="stylesheet" href="./styles.css?v=20260920-report-sheet-ui">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -329,7 +329,7 @@
               <label class="field-label" for="workTotalQty">工件總數 <small>必填</small></label>
               <input id="workTotalQty" class="report-input" type="number" min="1" value="100">
 
-              <label class="field-label" for="cycleMinutes">Cycle time <small>必填，不含上下料</small></label>
+              <label class="field-label" for="cycleMinutes">Cycle time <small>必填</small><em>不含上下料</em></label>
               <div class="cycle-inputs">
                 <input id="cycleMinutes" class="report-input" type="number" min="0" value="9" aria-label="Cycle time 分">
                 <span>分</span>
@@ -337,7 +337,7 @@
                 <span>秒 / 件</span>
               </div>
 
-              <label class="field-label" for="programUpload">CNC 程式上傳 <small>選填</small></label>
+              <label class="field-label" for="programUpload">CNC 程式上傳 <small class="opt">選填</small></label>
               <input id="programUpload" class="upload-input" type="file" accept=".nc,.tap,.txt,.min,.eia,.cnc">
 
               <label class="field-label" for="startPhoto">開啟相機拍開工照片 <small>必填</small></label>
@@ -400,9 +400,9 @@
               <label><input name="pmAbnormal" type="radio" value="no"> 無異常</label>
               <label><input name="pmAbnormal" type="radio" value="yes"> 有異常</label>
             </div>
-            <label class="field-label" for="pmAbnormalNote">異常備註 <small>有異常才填</small></label>
+            <label class="field-label" for="pmAbnormalNote">異常備註 <em>有異常才填</em></label>
             <textarea id="pmAbnormalNote" rows="2" placeholder="例如：刀具磨耗偏快，已通知主管確認"></textarea>
-            <label class="field-label" for="overtimePlan">加班安排確認 <small>選填</small></label>
+            <label class="field-label" for="overtimePlan">加班安排確認 <small class="opt">選填</small></label>
             <select id="overtimePlan" class="report-input">
               <option value="">尚未決定</option>
               <option value="none">不加班</option>
