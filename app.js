@@ -7943,9 +7943,12 @@ function dueInfo(order) {
   const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const diffDays = Math.round((due - todayOnly) / 86400000);
   const label = diffDays < 0 ? `逾期 +${Math.abs(diffDays)}` : diffDays === 0 ? "今日" : `D-${diffDays}`;
+  // Owner 2026-09-20: 「逾期 +355 · 09/30」read as this year's 9/30. Show the year whenever
+  // it is not the current one.
+  const monthDay = `${String(due.getMonth() + 1).padStart(2, "0")}/${String(due.getDate()).padStart(2, "0")}`;
   return {
     label,
-    date: `${String(due.getMonth() + 1).padStart(2, "0")}/${String(due.getDate()).padStart(2, "0")}`,
+    date: due.getFullYear() === today.getFullYear() ? monthDay : `${due.getFullYear()}/${monthDay}`,
     diffDays,
   };
 }
