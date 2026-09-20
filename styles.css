@@ -11143,3 +11143,18 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .load-row { grid-template-columns: 84px 1fr 96px; font-size: 14px; }
 .load-row > :last-child { color: #475467; font-size: 13px; text-align: right; }
 .panel-title > span { font-size: 13px; }
+
+/* ==== 分析頁「各機台目前工單進度」（owner 2026-09-20：原圖只畫有無工單，11 條一樣長）==== */
+.load-list-progress .load-row { grid-template-columns: 96px 1fr 84px 128px; }
+.load-list-progress .load-row strong { text-align: right; font-variant-numeric: tabular-nums; }
+.load-list-progress .load-row small { color: #475467; font-size: 13px; text-align: right; white-space: nowrap; }
+.load-list-progress .load-row.is-late small { color: #c81e1e; font-weight: 800; }
+.load-list-progress .load-row.is-late .load-track i { background: var(--red); }
+.load-list-progress .load-row.is-soon small { color: #b45309; font-weight: 800; }
+.load-list-progress .load-row.is-soon .load-track i { background: var(--amber); }
+.load-list-progress .load-row.is-idle { color: var(--muted); }
+.load-list-progress .load-row.is-idle .load-track { background: repeating-linear-gradient(90deg, var(--surface-soft) 0 6px, #e6e9ef 6px 8px); }
+@media (max-width: 760px) {
+  .load-list-progress .load-row { grid-template-columns: 72px 1fr 64px; }
+  .load-list-progress .load-row small { grid-column: 2 / -1; text-align: left; }
+}
