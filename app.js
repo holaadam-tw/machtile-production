@@ -16685,7 +16685,6 @@ function renderDetail(order, detail) {
   const workDays = estimatedWorkDays(order, profile);
   const fullOrderUrl = workOrderDetailUrl(order.id);
   const reportable = isOrderReportable(order);
-  const mobileReportUrl = reportable ? detailReportRouteUrl(order, "dailyStart") : "";
 
   $("#detailContent").innerHTML = `
     <section class="detail-machine-top ${status.className}">
@@ -16733,12 +16732,9 @@ function renderDetail(order, detail) {
         ${reportable
           ? `<button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="workStart">首次開工</button>
              <button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="dailyStart">今日開工</button>
-             <a class="detail-link-button" data-no-detail href="${escapeHtml(mobileReportUrl)}" target="_blank" rel="noopener">開啟手機報工</a>
              <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單</a>`
           : `<button type="button" class="disabled-action" disabled>未指派機台</button>
              <span class="detail-link-button disabled-action">無報工 QR</span>`}
-        <button type="button" data-alert-action="安排加班">安排加班</button>
-        <button type="button" data-alert-action="通知客戶">通知客戶</button>
       </div>
     </section>
 
@@ -17158,8 +17154,11 @@ async function machtileRenderOperatorSection() {
   const anchor = form?.querySelector('label[for="reportNote"]');
   if (!form || !anchor) return;
   const actorId = await machtileResolveAppUserId();
-  const users = await machtileFetchOperatorList();
-  if (!users.length) return;
+  const allUsers = await machtileFetchOperatorList();
+  // 只列「有對照工號」的人：沒對照的本來就過不了送出閘門（產值歸不到人），
+  // 站別／測試／管理帳號列出來只是讓現場多滑一頁（owner 2026-09-20）。
+  const users = allUsers.filter(machtileIsMappedOperator);
+  if (!allUsers.length) return;
   let section = document.getElementById("machtileOperatorSection");
   if (!section) {
     section = document.createElement("section");
@@ -17167,7 +17166,7 @@ async function machtileRenderOperatorSection() {
     section.className = "report-section";
     form.insertBefore(section, anchor);
   }
-  const actor = users.find((u) => u.id === actorId);
+  const actor = allUsers.find((u) => u.id === actorId);
   const actorIsMapped = machtileIsMappedOperator(actor);
   // 提示沿用既有的 .report-section-head span（muted / 12px / 右對齊），
   // 維持原作者「zero styles.css change」的設計。
@@ -17191,9 +17190,11 @@ async function machtileRenderOperatorSection() {
   });
   const hint = section.querySelector("#machtileOperatorHint");
   if (hint) {
-    hint.textContent = actorIsMapped
-      ? "請確認實際操作的人員；可複選。"
-      : "此裝置以站別帳號登入，請勾選實際操作的人員（至少一位）才能送出。";
+    hint.textContent = !users.length
+      ? "還沒有任何人員對照到 SoftNet 工號，請管理者先補上工號對照。"
+      : actorIsMapped
+        ? "請確認實際操作的人員；可複選。"
+        : "此裝置以站別帳號登入，請勾選實際操作的人員（至少一位）才能送出。";
   }
 }
 
