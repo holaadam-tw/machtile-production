@@ -10791,3 +10791,177 @@ body.report-work-route-mode .machtile-route-brand-bar {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==== 現場回報表單重排（owner 2026-09-20「UI 設計得清楚好看一點」）====
+   只動樣式，不動 app.js：左欄改成固定不捲動、標籤上下排、必填改成徽章、
+   六個回報類型加步驟號碼、操作人員改成可點的大方塊。 */
+
+/* 左欄：原本跟表單一起捲動，捲到下面只剩一大塊淡紫色（截圖左邊的空框）。 */
+.report-layout {
+  grid-template-columns: minmax(240px, 0.6fr) minmax(520px, 1.4fr);
+  gap: 20px;
+  align-items: start;
+}
+.report-machine-card {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding: 16px;
+  border: 1px solid rgba(101, 87, 210, 0.18);
+  background: linear-gradient(180deg, #f4f2ff 0%, #ecebfb 100%);
+}
+.machine-line {
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.machine-line strong {
+  font-size: 26px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #26215c;
+}
+.report-job {
+  display: grid;
+  gap: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(101, 87, 210, 0.28);
+}
+.report-job span { margin: 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.report-job strong { font-size: 16px; line-height: 1.4; }
+.report-job code { font-size: 13px; }
+
+/* 回報類型：三欄改二欄、加步驟號碼，讓「順序」看得出來。 */
+.report-type-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  counter-reset: report-step;
+}
+.report-type-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  border-radius: 12px;
+  font-size: 13px;
+  counter-increment: report-step;
+}
+.report-type-tab::before {
+  content: counter(report-step);
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: #52677f;
+  font-size: 11px;
+}
+.report-type-tab.active::before { background: rgba(255, 255, 255, 0.28); color: #ffffff; }
+.report-type-tab[data-report-type="abnormal"]::before { content: "!"; background: var(--red-soft); color: var(--red); }
+
+/* 區塊標題：說明文字放到標題下面、靠左，不再擠在右上角。 */
+.report-section { gap: 14px; padding: 16px; border-radius: 12px; }
+.report-section-head { display: grid; gap: 2px; padding-bottom: 10px; }
+.report-section-head strong { font-size: 16px; }
+.report-section-head span { max-width: none; text-align: left; }
+
+/* 欄位：標籤在上、輸入在下（132px 標籤欄讓「Cycle time 必填，不含上下料」擠成三行）。 */
+.report-form-grid { grid-template-columns: 1fr; gap: 14px; }
+.field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+.field-label small,
+.checklist-card small {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--red-soft);
+  color: #c81e1e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.field-label small.opt, .checklist-card small.opt { background: var(--gray-soft); color: #5b6b80; }
+.field-label em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+.report-input, .upload-input, .report-form select { min-height: 46px; font-size: 15px; }
+.cycle-inputs { grid-template-columns: 110px max-content 110px max-content; justify-content: start; }
+.cycle-inputs input { text-align: center; font-size: 18px; font-weight: 800; }
+.camera-capture-field { grid-template-columns: minmax(180px, 0.45fr) minmax(0, 0.55fr); }
+.camera-open-button { min-height: 48px; border-radius: 12px; font-size: 14px; }
+.camera-file-status { display: flex; align-items: center; min-height: 48px; border-radius: 12px; }
+
+/* 預估卡：數字放大成一眼看得到的重點。 */
+.report-estimate-card { padding: 14px 16px; border-left: 4px solid var(--purple); border-radius: 12px; }
+.report-estimate-card strong { font-size: 18px; }
+
+/* 操作人員：小勾選框改成大方塊，點整塊、選到變藍。 */
+#machtileOperatorSection .report-section-head { grid-template-columns: 1fr; }
+#machtileOperatorSection .report-section-head span { font-size: 12px; }
+#machtileOperatorList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+}
+#machtileOperatorList label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 8px 12px 8px 34px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+#machtileOperatorList label input {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  transform: translateY(-50%);
+}
+#machtileOperatorList label:has(input:checked) {
+  border-color: var(--brand-blue);
+  background: var(--brand-blue-soft);
+  color: #0b4fbf;
+  box-shadow: inset 0 0 0 1px var(--brand-blue);
+}
+
+/* 送出列 */
+.submit-report { min-height: 54px; border-radius: 14px; font-size: 16px; }
+
+@media (max-width: 760px) {
+  .report-layout { grid-template-columns: 1fr; gap: 12px; }
+  .report-machine-card { position: static; padding: 12px; }
+  .machine-line strong { font-size: 20px; }
+  .report-type-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cycle-inputs { grid-template-columns: 1fr auto 1fr auto; }
+  #machtileOperatorList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
