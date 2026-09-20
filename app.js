@@ -16686,56 +16686,58 @@ function renderDetail(order, detail) {
   const fullOrderUrl = workOrderDetailUrl(order.id);
   const reportable = isOrderReportable(order);
 
+  // Header (owner 2026-09-20 「工單明細 UI 優化」): one card instead of two stacked
+  // risk-coloured ones. Left = the order (what), right = machine + completion (where /
+  // how far). The report buttons sit right under it — that is what people open this
+  // sheet for — and the AI callout below keeps its text only.
   $("#detailContent").innerHTML = `
-    <section class="detail-machine-top ${status.className}">
-      <div>
-        <span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span>
-        <h3>${escapeHtml(order.machine || "未排機")}</h3>
-        <p>${escapeHtml(order.process)} · ${escapeHtml(order.lastReport || "尚未回報")}</p>
+    <section class="detail-head ${status.className}">
+      <div class="detail-head-order">
+        <div class="detail-head-pills">
+          <span class="status-pill">${escapeHtml(status.label)}</span>
+          <span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span>
+        </div>
+        <h3>${escapeHtml(order.part)}</h3>
+        <p><span class="detail-work-no">${escapeHtml(order.id)}</span> · ${escapeHtml(order.customer)} · 圖號 ${escapeHtml(order.drawing)}</p>
+      </div>
+      <div class="detail-head-machine">
+        <span>機台</span>
+        <strong>${escapeHtml(order.machine || "未排機")}</strong>
+        <small>${escapeHtml(order.process)}</small>
+        <small>${escapeHtml(order.lastReport || "尚未回報")}</small>
       </div>
       <div class="detail-machine-score">
         <span>完成率</span>
         <strong>${percent}%</strong>
+        <small>${order.done} / ${order.total} 件</small>
+      </div>
+      <div class="detail-progress">
+        <div class="progress-track" aria-label="工單完成進度 ${percent}%">
+          <div class="progress-fill" style="width:${percent}%"></div>
+        </div>
       </div>
     </section>
 
-    <section class="detail-hero ${status.className}">
-      <div>
-        <div class="detail-work-no">${escapeHtml(order.id)}</div>
-        <h3>${escapeHtml(order.part)}</h3>
-        <p>${escapeHtml(order.customer)} · 圖號 ${escapeHtml(order.drawing)}</p>
-      </div>
-      <div class="detail-hero-actions">
-        <span class="status-pill">${escapeHtml(status.label)}</span>
-        <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單</a>
-      </div>
-    </section>
-
-    <div class="detail-summary-grid detail-summary-grid-wide">
-      <div><span>交期</span><strong>${escapeHtml(due.label)}</strong><small>${escapeHtml(order.dueDate)}</small></div>
-      <div><span>目前製程</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || "未排機")}</small></div>
-      <div><span>完成數</span><strong>${order.done}/${order.total}</strong><small>${percent}%</small></div>
-      <div><span>優先級</span><strong>${escapeHtml(priorityLabel(order.priority))}</strong><small>${escapeHtml(order.lastReport)}</small></div>
-      <div><span>品檢</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${currentProcess?.inspection_required ? "需要品檢" : "未要求"}</small></div>
+    <div class="detail-action-row detail-action-row-primary">
+      ${reportable
+        ? `<button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="workStart">首次開工</button>
+           <button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="dailyStart">今日開工</button>
+           <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單 ↗</a>`
+        : `<button type="button" class="disabled-action" disabled>未指派機台</button>
+           <span class="detail-link-button disabled-action">無報工 QR</span>
+           <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單 ↗</a>`}
     </div>
 
-    <div class="detail-progress">
-      <div class="progress-track" aria-label="工單完成進度 ${percent}%">
-        <div class="progress-fill" style="width:${percent}%"></div>
-      </div>
+    <div class="detail-summary-grid">
+      <div><span>交期</span><strong>${escapeHtml(due.label)}</strong><small>${escapeHtml(order.dueDate)}</small></div>
+      <div><span>目前製程</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || "未排機")}</small></div>
+      <div><span>優先級</span><strong>${escapeHtml(priorityLabel(order.priority))}</strong><small>${escapeHtml(order.lastReport)}</small></div>
+      <div><span>品檢</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${currentProcess?.inspection_required ? "需要品檢" : "未要求"}</small></div>
     </div>
 
     <section class="detail-ai ${status.className}">
       <div class="advice-title"><span></span>MachTile AI 建議</div>
       <p>${escapeHtml(riskSuggestion(order))}</p>
-      <div class="detail-action-row">
-        ${reportable
-          ? `<button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="workStart">首次開工</button>
-             <button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="dailyStart">今日開工</button>
-             <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單</a>`
-          : `<button type="button" class="disabled-action" disabled>未指派機台</button>
-             <span class="detail-link-button disabled-action">無報工 QR</span>`}
-      </div>
     </section>
 
     <section class="detail-section program-section">
