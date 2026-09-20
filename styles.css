@@ -11107,3 +11107,43 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .inspection-card p { font-size: 13px; }
 .alert-ai-box { border-style: solid; border-color: var(--border-strong); border-left: 4px solid var(--risk, var(--amber)); background: var(--surface); color: var(--text); }
 .alert-ai-box strong { color: var(--risk-text, var(--text)); }
+
+/* ==== 排程／紀錄／分析頁：同原則（owner 2026-09-20）====
+   排程機台卡：整卡課別色 → 白底＋6px 課別色條＋課別色張數徽章（課別仍一眼可分）；
+   工時總覽小卡與「無法計算工時」提示：白底＋色條；小字 10–12px 提到 12–13px。 */
+.schedule-tile.machine-dept-lathe,
+.schedule-tile.machine-dept-mill { background: var(--surface); border-color: var(--border-strong); }
+.schedule-tile.machine-dept-lathe .schedule-tile-head strong { color: #9a3412; }
+.schedule-tile.machine-dept-mill .schedule-tile-head strong { color: var(--blue); }
+.schedule-tile { padding: 12px 14px; }
+.schedule-tile-head strong { font-size: 18px; }
+.schedule-tile > span,
+.schedule-tile > small,
+.schedule-tile-alias { font-size: 13px; }
+.schedule-overview { background: var(--surface); }
+.schedule-overview > div > span { border-left: 4px solid var(--border-strong); font-size: 12px; font-weight: 700; color: #475467; }
+.schedule-overview > div > span strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.schedule-overview > div > span.is-warning { background: var(--surface); border-color: var(--border-strong); border-left-color: #f59e0b; }
+.schedule-overview > div > span.is-danger { background: var(--surface); border-color: var(--border-strong); border-left-color: #ef4444; }
+.schedule-overview > div > span.is-warning strong { color: #b45309; }
+.schedule-overview > div > span.is-danger strong { color: #c81e1e; }
+.schedule-overview > p { font-size: 13px; }
+.schedule-hint { font-size: 13px; }
+.schedule-time-state { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--brand-blue); font-size: 13px; }
+.schedule-time-state.is-missing { background: var(--surface); border-left-color: #f59e0b; }
+.schedule-card-status { font-size: 12px; }
+.schedule-card { background: var(--surface); border-color: var(--border-strong); }
+.schedule-card small, .schedule-card span { font-size: 13px; }
+.schedule-zone-title { font-size: 13px; }
+
+/* 紀錄頁：標籤與說明字加大 */
+.history-kind { font-size: 12px; padding: 3px 8px; }
+.history-row strong { font-size: 15px; }
+.history-row small, .history-row time, .history-event-meta { font-size: 13px; color: #475467; }
+.history-tools p, .history-hint { font-size: 13px; }
+
+/* 分析頁：標籤字加大、長條圖右側說明不再折行 */
+.stat-label { font-size: 13px; color: #475467; }
+.load-row { grid-template-columns: 84px 1fr 96px; font-size: 14px; }
+.load-row > :last-child { color: #475467; font-size: 13px; text-align: right; }
+.panel-title > span { font-size: 13px; }
