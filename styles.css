@@ -11052,3 +11052,58 @@ body.report-work-route-mode .machtile-route-brand-bar {
   .detail-action-row-primary a.detail-link-button { margin-left: 0; }
   .detail-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ==== 機台卡牆／警報頁：去底色、字加大（owner 2026-09-20 拍板，同工單明細原則）====
+   風險色只留左側色條、狀態 pill 與關鍵數字；卡片一律白底；小字 10–11px 提到 12–13px。 */
+.machine-tile-card {
+  border: 1px solid var(--border-strong);
+  border-left: 6px solid var(--risk, var(--border-strong));
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.05), 0 8px 24px rgba(20, 20, 19, 0.06);
+}
+.machine-tile-card:hover { box-shadow: 0 1px 2px rgba(20, 20, 19, 0.05), 0 14px 32px rgba(20, 20, 19, 0.1); }
+.machine-tile-header strong,
+.machine-title-line strong { font-size: 20px; }
+.machine-type-pill,
+.machine-dept-pill { font-size: 12px; padding: 3px 9px; }
+.machine-job-strip span,
+.machine-metrics span,
+.program-strip span,
+.program-strip small,
+.cycle-mini-grid span { color: #475467; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; }
+.machine-job-strip strong { font-size: 16px; }
+.machine-job-strip strong.job-order-highlight { font-size: 18px; }
+.machine-job-strip small,
+.machine-job-strip small.job-order-subline { font-size: 13px; }
+.program-strip { border-color: var(--border); background: var(--surface-soft); }
+.program-strip strong { font-size: 14px; }
+.machine-metrics > div { border: 1px solid var(--border); background: var(--surface-soft); }
+.machine-metrics strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.machine-metrics small { color: #475467; font-size: 12px; }
+.cycle-mini-grid > div { border: 1px solid var(--border); background: var(--surface-soft); }
+.cycle-mini-grid strong { font-size: 15px; }
+.machine-advice { border-style: solid; border-color: var(--border-strong); border-left: 4px solid var(--risk, var(--amber)); background: var(--surface); color: var(--text); }
+.machine-advice p { font-size: 13px; }
+.machine-card-more summary { font-size: 13px; }
+.machine-tile-footer { color: #475467; font-size: 13px; }
+.machine-tile-actions button,
+.machine-tile-actions a { min-height: 36px; font-size: 13px; }
+.machine-qr-card small { font-size: 12px; }
+.stat-label { font-size: 13px; }
+.filter-chip { font-size: 13px; }
+.filter-chip-count { font-size: 12px; }
+
+/* 警報卡：已是白底色條，只把小字提上來 */
+.alert-meta-grid span { color: #475467; font-size: 12px; font-weight: 700; }
+.alert-meta-grid strong { font-size: 14px; }
+.alert-score small { font-size: 12px; }
+.alert-progress,
+.alert-more > summary,
+.alert-top-actions,
+.alert-ai-box { font-size: 13px; }
+.alert-actions button { font-size: 13px; }
+.inspection-card { border-color: var(--border-strong); border-left-width: 6px; background: var(--surface); }
+.inspection-card code { font-size: 13px; }
+.inspection-card p { font-size: 13px; }
+.alert-ai-box { border-style: solid; border-color: var(--border-strong); border-left: 4px solid var(--risk, var(--amber)); background: var(--surface); color: var(--text); }
+.alert-ai-box strong { color: var(--risk-text, var(--text)); }
