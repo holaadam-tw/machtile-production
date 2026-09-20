@@ -11109,12 +11109,8 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .alert-ai-box strong { color: var(--risk-text, var(--text)); }
 
 /* ==== 排程／紀錄／分析頁：同原則（owner 2026-09-20）====
-   排程機台卡：整卡課別色 → 白底＋6px 課別色條＋課別色張數徽章（課別仍一眼可分）；
+   排程機台卡整卡課別色**保留**（owner 2026-07-15 決定、2026-09-20 再確認），只把字加大；
    工時總覽小卡與「無法計算工時」提示：白底＋色條；小字 10–12px 提到 12–13px。 */
-.schedule-tile.machine-dept-lathe,
-.schedule-tile.machine-dept-mill { background: var(--surface); border-color: var(--border-strong); }
-.schedule-tile.machine-dept-lathe .schedule-tile-head strong { color: #9a3412; }
-.schedule-tile.machine-dept-mill .schedule-tile-head strong { color: var(--blue); }
 .schedule-tile { padding: 12px 14px; }
 .schedule-tile-head strong { font-size: 18px; }
 .schedule-tile > span,
