@@ -40,5 +40,11 @@ window.MACHTILE_CONFIG = {
   // Stage 2 central-access gate: this deployment's tag in the per-account
   // app_metadata.systems list managed at login.machtile.com/admin/users.
   // Accounts whose list exists but excludes "cloud" are refused here.
-  oauthSystemTag: "cloud"
+  oauthSystemTag: "cloud",
+  // Face login doorway (Login Center). Empty = no 刷臉登入 button, which is the right
+  // state until login.machtile.com has face login deployed and this product's OAuth start
+  // URL is registered there. Production value once it ships:
+  //   "https://login.machtile.com/login/face/app"
+  // Must be https, no credentials, no fragment.
+  faceLoginUrl: "",
 };

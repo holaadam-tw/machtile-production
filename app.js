@@ -8894,6 +8894,24 @@ function machtileOauthConfigured() {
   return Boolean(machtileOauthCore?.configured?.(config));
 }
 
+// Face login lives in the Login Center (login.machtile.com/login/face/app): the tablet
+// shows a face, the Login Center finishes this product's OAuth and sends the person back
+// here already signed in. This app only needs the doorway. Empty config = no button, so a
+// deployment where the Login Center has not shipped face login yet is unchanged.
+// Same URL discipline as the Login Center's own product config: https only, no credentials
+// in the URL, no fragment, bounded length.
+function machtileFaceLoginUrl() {
+  const raw = String(config.faceLoginUrl || "").trim();
+  if (!raw || raw.length > 2048) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function machtileLegacyLoginRequested() {
   return new URLSearchParams(window.location.search).get("legacyLogin") === "1";
 }
@@ -9237,6 +9255,13 @@ function machtileRenderLoginGate() {
   }
 
   const busy = machtileAuthState.status === "signingIn";
+  const faceLoginUrl = machtileFaceLoginUrl();
+  // On a shared shop-floor tablet the face path is the one people use every shift, so it
+  // leads; typing an account stays available underneath for everyone else.
+  const faceLoginButton = faceLoginUrl
+    ? `<a class="machtile-login-face" href="${escapeHtml(faceLoginUrl)}">刷臉登入</a>
+       <p class="machtile-login-face-note">在平板上刷臉最快；沒有登錄過臉、或臉刷不過時，請用下面的方式登入。</p>`
+    : "";
   const showOauthRetry = machtileOauthConfigured() && !machtileLegacyLoginRequested();
   if (showOauthRetry) {
     overlay.innerHTML = `
@@ -9245,6 +9270,7 @@ function machtileRenderLoginGate() {
         <strong>登入尚未完成</strong>
         <p>請重新回到統一登入中心；這次不會使用或保存另一組密碼。</p>
         ${machtileAuthState.error ? `<p class="machtile-login-error">${escapeHtml(machtileAuthState.error)}</p>` : ""}
+        ${faceLoginButton}
         <button type="button" data-machtile-oauth-login>使用 MachTile 統一登入</button>
         <a class="machtile-login-fallback" href="${escapeHtml(machtileLegacyLoginPath())}">改用原帳密備援</a>
       </section>
@@ -9266,6 +9292,7 @@ function machtileRenderLoginGate() {
       <strong>請先登入</strong>
       <p>此環境所有讀寫都需要帳號（排程 / 主管 / 站別共用帳號）。</p>
       ${machtileAuthState.error ? `<p class="machtile-login-error">${escapeHtml(machtileAuthState.error)}</p>` : ""}
+      ${faceLoginButton}
       <form class="machtile-login-form" data-machtile-login-form>
         <label>
           <span>帳號（工號或 Email）</span>

@@ -16,6 +16,12 @@ window.MACHTILE_CONFIG = {
   // Stage 2 central-access gate tag matched against app_metadata.systems
   // ("cloud" in production, "staging" on Cloud Staging).
   oauthSystemTag: "staging",
+  // Face login doorway (Login Center). Empty = no 刷臉登入 button, which is the right
+  // state until login.machtile.com has face login deployed and this product's OAuth start
+  // URL is registered there. Production value once it ships:
+  //   "https://login.machtile.com/login/face/app"
+  // Must be https, no credentials, no fragment.
+  faceLoginUrl: "",
   supabaseUrl: "https://YOUR_PROJECT_REF.supabase.co",
   supabaseAnonKey: "YOUR_SUPABASE_ANON_KEY",
   tenantId: "00000000-0000-0000-0000-000000000001",

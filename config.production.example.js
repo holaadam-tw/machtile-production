@@ -35,5 +35,11 @@ window.MACHTILE_CONFIG = {
   hmcScheduleProfiles: {
     B01: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true },
     B02: { palletCount: 6, spindleCapacity: 1, externalPrepAllowed: true }
-  }
+  },
+  // Face login doorway (Login Center). Empty = no 刷臉登入 button, which is the right
+  // state until login.machtile.com has face login deployed and this product's OAuth start
+  // URL is registered there. Production value once it ships:
+  //   "https://login.machtile.com/login/face/app"
+  // Must be https, no credentials, no fragment.
+  faceLoginUrl: "",
 };
