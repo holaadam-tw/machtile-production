@@ -11158,3 +11158,18 @@ body.report-work-route-mode .machtile-route-brand-bar {
   .load-list-progress .load-row { grid-template-columns: 72px 1fr 64px; }
   .load-list-progress .load-row small { grid-column: 2 / -1; text-align: left; }
 }
+
+/* AI 建議分流 chip（2026-09-24）：只顯示，不通知、不指派。 */
+.jev-chip {
+  display: inline-block;
+  margin-top: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--surface);
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+}
+.jev-chip.is-soon { border-color: #f59e0b; color: #b45309; }
+.jev-chip.is-urgent { border-color: var(--red); color: #c81e1e; }

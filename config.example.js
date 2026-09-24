@@ -79,5 +79,10 @@ window.MACHTILE_CONFIG = {
     //     z: { maxRateMmMin: 24000, accelerationMmSec2: 700 }
     //   }
     // }
-  }
+  },
+  // Jev triage (2026-09-24): after an 異常 report the tablet asks the jev-triage Edge Function
+  // for a SUGGESTION (who should look, how urgent) and shows it as a chip on the 紀錄 page.
+  // Never notifies or assigns. Turn on only after `supabase functions deploy jev-triage`,
+  // the AI_GATEWAY_API_KEY secret and migration 20260924143000 are in place.
+  enableJevTriage: false,
 };

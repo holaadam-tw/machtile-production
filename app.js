@@ -12471,9 +12471,10 @@ async function machtileRenderHistoryReal() {
   const holder = $("#historyContent");
   if (!holder) return;
   try {
-    const [reports, runs] = await Promise.all([
-      supabaseFetch("production_reports?select=report_date,report_type,completed_qty,defect_qty,cycle_time_seconds,remark,created_at,machine_id,work_orders(work_order_no,part_name)&order=created_at.desc&limit=20"),
+    const [reports, runs, jevByReport] = await Promise.all([
+      supabaseFetch("production_reports?select=report_uuid,report_date,report_type,completed_qty,defect_qty,cycle_time_seconds,remark,created_at,machine_id,work_orders(work_order_no,part_name)&order=created_at.desc&limit=20"),
       supabaseFetch("cnc_machining_runs?select=run_date,qty_good,qty_defect,pure_cutting_seconds,machine_id,created_at,work_orders(work_order_no,part_name,part_no),cnc_program_versions(version_no)&order=created_at.desc&limit=500"),
+      machtileJevSuggestionsByReport(),
     ]);
     const machineNames = new Map();
     try {
@@ -12558,6 +12559,7 @@ async function machtileRenderHistoryReal() {
             <div>
               <strong>${escapeHtml(machtileMachineDisplay(machineOf(row.machine_id)))} · ${escapeHtml(row.work_orders?.work_order_no || "-")}</strong>
               <small>${escapeHtml(row.remark || "未填異常說明")}</small>
+              ${machtileJevChip(jevByReport.get(String(row.report_uuid)))}
             </div>
             <time>${escapeHtml(machtileFormatAuditTime(row.created_at))}</time>
           </div>
@@ -17107,6 +17109,7 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     queuedOffline: !sentNow,
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
+    reportUuid: report_uuid || null,
   };
 }
 
@@ -17293,6 +17296,7 @@ async function submitReport(completed, defects, remark, reportType) {
   }
   // seam 待辦 B(a) (2026-07-11): fallback rows carry a report_uuid too, so
   // they still reach the writeback feed (it filters report_uuid IS NOT NULL).
+  // Also the key the Jev triage suggestion is stored under (2026-09-24).
   if (!basePayload.report_uuid && globalThis.crypto?.randomUUID) {
     basePayload.report_uuid = crypto.randomUUID();
   }
@@ -17323,6 +17327,7 @@ async function submitReport(completed, defects, remark, reportType) {
     wroteCloud: true,
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
+    reportUuid: basePayload.report_uuid || null,
   };
 }
 
@@ -17882,10 +17887,68 @@ function bindEvents() {
           : result.queuedOffline ? `已排入待送${meta.label}${qtyText}，連線後自動送出`
           : `已寫入 Supabase ${meta.label}${qtyText}${fileText}`
       );
+      // Suggestion only (owner 2026-09-24): who should look at this, how urgent. Runs after
+      // the report is safely written; a failure here changes nothing about the report.
+      if (activeReportType === "abnormal" && result.wroteCloud && result.reportUuid) {
+        machtileJevTriage({
+          reportUuid: result.reportUuid,
+          text: $("#reportNote")?.value?.trim() || "",
+          abnormalType: $("#abnormalType")?.value || "",
+          machineCode: selectedOrder?.machine || "",
+          workOrderNo: selectedOrder?.id || "",
+        }).then((label) => { if (label) showToast(`AI 建議：${label}`); });
+      }
     } catch (error) {
       showToast(`回報失敗：${error.message}`);
     }
   });
+}
+
+// ---- Jev triage (2026-09-24) -------------------------------------------------------------
+// The tablet never talks to the model: it calls our Edge Function (jev-triage), which holds
+// the gateway key, checks the session's tenant, asks Jev the three questions and stores the
+// answer under the report's uuid. Off unless config.enableJevTriage is true (the function
+// and its secret must be deployed first). Returns the label to show, or "" when unavailable.
+function machtileJevTriageEnabled() {
+  return config.enableJevTriage === true && machtileStrictMode() && machtileSessionActive();
+}
+
+async function machtileJevTriage(payload) {
+  if (!machtileJevTriageEnabled()) return "";
+  try {
+    const { ok, body } = await amCallFunction("jev-triage", payload);
+    if (!ok || !body?.label) {
+      console.warn("jev-triage unavailable", body?.code || "");
+      return "";
+    }
+    return String(body.label);
+  } catch (error) {
+    console.warn("jev-triage failed", error);
+    return "";
+  }
+}
+
+// Stored suggestions for the history page: report_uuid → { owner, ownerProb, urgency }.
+async function machtileJevSuggestionsByReport() {
+  if (!machtileJevTriageEnabled()) return new Map();
+  try {
+    const rows = await supabaseFetch("abnormal_triage_suggestions?select=report_uuid,owner,owner_prob,urgency,machine_down_prob&order=created_at.desc&limit=200");
+    return new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.report_uuid), row]));
+  } catch (error) {
+    console.warn("abnormal_triage_suggestions read failed", error);
+    return new Map();
+  }
+}
+
+const machtileJevOwnerLabels = { maintenance: "設備維修", planner: "生管排程", qc: "品管", none: "不用處理" };
+
+function machtileJevChip(row) {
+  if (!row) return "";
+  const owner = machtileJevOwnerLabels[row.owner] || row.owner || "-";
+  const pct = Math.round(Number(row.owner_prob || 0) * 100);
+  const urgency = Number(row.urgency || 0);
+  const tone = urgency >= 2.5 ? "is-urgent" : urgency >= 1.5 ? "is-soon" : "";
+  return `<span class="jev-chip ${tone}" title="AI 建議分流（只是建議，不會自動通知）">AI 建議：${escapeHtml(owner)} ${pct}%・緊急 ${urgency.toFixed(1)}/3</span>`;
 }
 
 function formatDuration(ms) {
