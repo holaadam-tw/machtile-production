@@ -8943,9 +8943,15 @@ function machtileRenderOauthProgress(message = "正在連線統一登入…") {
     <section class="machtile-login-card" aria-label="MachTile unified login progress" aria-live="polite">
       <p class="eyebrow">MachTile 統一登入</p>
       <strong>${escapeHtml(message)}</strong>
-      <p>驗證完成後會自動進入 Cloud Staging，請勿重複點擊或重新整理。</p>
+      <p>驗證完成後會自動回到 ${escapeHtml(machtileOauthProductLabel())}，請勿重複點擊或重新整理。</p>
     </section>
   `;
+}
+
+// What the person is coming back to, for the progress card (was a hard-coded "Cloud Staging",
+// which production showed too — owner 2026-09-25).
+function machtileOauthProductLabel() {
+  return config.oauthSystemTag === "staging" ? "Cloud Staging" : "MachTile App";
 }
 
 async function machtileBeginOauthSignIn() {
