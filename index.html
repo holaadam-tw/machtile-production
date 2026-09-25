@@ -30,7 +30,7 @@
     })();
   </script>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=20260924-jev-triage">
+  <link rel="stylesheet" href="./styles.css?v=20260926-jev-triage">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -73,6 +73,17 @@
   </script>
 </head>
 <body>
+  <!-- Pre-rendered login gate (2026-09-25): covers the shell from the first paint so an
+       unsigned-in visitor never sees the empty app flash before app.js decides to send them to
+       the unified login. app.js reuses this element (getElementById) and removes it once a
+       session is active. -->
+  <div id="machtileLoginGate" class="machtile-login-gate">
+    <section class="machtile-login-card" aria-label="MachTile unified login progress" aria-live="polite">
+      <p class="eyebrow">MachTile 統一登入</p>
+      <strong>正在檢查登入狀態…</strong>
+      <p>已登入會直接進入，未登入會前往統一登入。</p>
+    </section>
+  </div>
   <div class="app-shell">
     <div id="demoBanner" class="demo-banner" hidden>
       <span>自動展示中</span>
@@ -693,6 +704,6 @@
   <script src="./previews/hmc-fixed-slots/staging-session.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
   <script src="./previews/hmc-fixed-slots/app-host.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
   <script src="./mockData.js?v=20260514-p0-001"></script>
-  <script src="./app.js?v=20260924-jev-triage"></script>
+  <script src="./app.js?v=20260926-jev-triage"></script>
 </body>
 </html>
