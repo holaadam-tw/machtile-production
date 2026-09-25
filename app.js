@@ -8943,9 +8943,15 @@ function machtileRenderOauthProgress(message = "正在連線統一登入…") {
     <section class="machtile-login-card" aria-label="MachTile unified login progress" aria-live="polite">
       <p class="eyebrow">MachTile 統一登入</p>
       <strong>${escapeHtml(message)}</strong>
-      <p>驗證完成後會自動進入 Cloud Staging，請勿重複點擊或重新整理。</p>
+      <p>驗證完成後會自動回到 ${escapeHtml(machtileOauthProductLabel())}，請勿重複點擊或重新整理。</p>
     </section>
   `;
+}
+
+// What the person is coming back to, for the progress card (was a hard-coded "Cloud Staging",
+// which production showed too — owner 2026-09-25).
+function machtileOauthProductLabel() {
+  return config.oauthSystemTag === "staging" ? "Cloud Staging" : "MachTile App";
 }
 
 async function machtileBeginOauthSignIn() {
@@ -18068,12 +18074,19 @@ async function init() {
   // call fires) before a successful login; the gate resumes init afterwards.
   // Route changes are full page loads, so first try the per-tab persisted
   // session before showing the gate.
-  if (machtileStrictMode() && !machtileSessionActive()) {
-    await machtileRestoreSession();
-  }
-  if (machtileStrictMode() && !machtileSessionActive()) {
-    const oauthPendingOrComplete = await machtileTryOauthSignIn();
-    if (oauthPendingOrComplete && !machtileSessionActive()) return;
+  // The gate is pre-rendered in index.html (first paint), so every exit from this block must
+  // either hand it to the login/progress renderers or remove it below; an unexpected throw
+  // while restoring the session falls back to the login button instead of a stuck cover.
+  try {
+    if (machtileStrictMode() && !machtileSessionActive()) {
+      await machtileRestoreSession();
+    }
+    if (machtileStrictMode() && !machtileSessionActive()) {
+      const oauthPendingOrComplete = await machtileTryOauthSignIn();
+      if (oauthPendingOrComplete && !machtileSessionActive()) return;
+    }
+  } catch (error) {
+    console.warn("session restore failed", error);
   }
   if (machtileStrictMode() && !machtileSessionActive()) {
     machtileRenderLoginGate();
