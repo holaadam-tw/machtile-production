@@ -18074,12 +18074,19 @@ async function init() {
   // call fires) before a successful login; the gate resumes init afterwards.
   // Route changes are full page loads, so first try the per-tab persisted
   // session before showing the gate.
-  if (machtileStrictMode() && !machtileSessionActive()) {
-    await machtileRestoreSession();
-  }
-  if (machtileStrictMode() && !machtileSessionActive()) {
-    const oauthPendingOrComplete = await machtileTryOauthSignIn();
-    if (oauthPendingOrComplete && !machtileSessionActive()) return;
+  // The gate is pre-rendered in index.html (first paint), so every exit from this block must
+  // either hand it to the login/progress renderers or remove it below; an unexpected throw
+  // while restoring the session falls back to the login button instead of a stuck cover.
+  try {
+    if (machtileStrictMode() && !machtileSessionActive()) {
+      await machtileRestoreSession();
+    }
+    if (machtileStrictMode() && !machtileSessionActive()) {
+      const oauthPendingOrComplete = await machtileTryOauthSignIn();
+      if (oauthPendingOrComplete && !machtileSessionActive()) return;
+    }
+  } catch (error) {
+    console.warn("session restore failed", error);
   }
   if (machtileStrictMode() && !machtileSessionActive()) {
     machtileRenderLoginGate();
