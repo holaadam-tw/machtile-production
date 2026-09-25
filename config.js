@@ -40,5 +40,10 @@ window.MACHTILE_CONFIG = {
   // Stage 2 central-access gate: this deployment's tag in the per-account
   // app_metadata.systems list managed at login.machtile.com/admin/users.
   // Accounts whose list exists but excludes "cloud" are refused here.
-  oauthSystemTag: "cloud"
+  oauthSystemTag: "cloud",
+  // Jev triage (2026-09-24): after an 異常 report the tablet asks the jev-triage Edge Function
+  // for a SUGGESTION (who should look, how urgent) and shows it as a chip on the 紀錄 page.
+  // Never notifies or assigns. Turn on only after `supabase functions deploy jev-triage`,
+  // the AI_GATEWAY_API_KEY secret and migration 20260924143000 are in place.
+  enableJevTriage: false,
 };
