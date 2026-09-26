@@ -9448,6 +9448,9 @@ function normalizeOrder(row) {
     priority: row.priority || "normal",
     workStatus: row.work_order_status || "not_started",
     processStatus: row.current_process_status || "pending",
+    // 2026-09-26 work_order_station_sync: the old MES no longer has this step on the machine
+    // (moved to the next station or taken off). Not a completion; just not on this machine.
+    offStation: row.current_process_off_station === true,
     risk: row.open_risk_level || null,
     programName: row.program_name,
     programVersion: row.program_version,
@@ -9654,6 +9657,7 @@ function machineStatus(machine) {
 
 function machtileIsSchedulableOrder(order) {
   if (!order) return false;
+  if (order.offStation === true) return false;
   const workStatus = String(order.workStatus || "").toLowerCase();
   const processStatus = String(order.processStatus || "").toLowerCase();
   if (["completed", "shipped", "cancelled"].includes(workStatus)) return false;
