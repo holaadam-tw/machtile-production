@@ -16513,7 +16513,8 @@ function openReport(orderId, options = {}) {
     return;
   }
   const orderById = state.workOrders.find((item) => item.id === orderId);
-  const orderByMachine = machineName ? state.workOrders.find((item) => item.machine === machineName) : null;
+  // Off-station orders (old MES moved them off this machine) are not picked for a machine QR/report.
+  const orderByMachine = machineName ? state.workOrders.find((item) => item.machine === machineName && item.offStation !== true) : null;
   const order = orderById || orderByMachine || (!machineName ? selectedOrder || state.workOrders[0] : null);
   if (order && !isOrderReportable(order)) {
     showToast("這張工單尚未指派機台，不能開啟報工入口");
