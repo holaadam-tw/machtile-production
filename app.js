@@ -9448,6 +9448,9 @@ function normalizeOrder(row) {
     priority: row.priority || "normal",
     workStatus: row.work_order_status || "not_started",
     processStatus: row.current_process_status || "pending",
+    // 2026-09-26 work_order_station_sync: the old MES no longer has this step on the machine
+    // (moved to the next station or taken off). Not a completion; just not on this machine.
+    offStation: row.current_process_off_station === true,
     risk: row.open_risk_level || null,
     programName: row.program_name,
     programVersion: row.program_version,
@@ -9654,6 +9657,7 @@ function machineStatus(machine) {
 
 function machtileIsSchedulableOrder(order) {
   if (!order) return false;
+  if (order.offStation === true) return false;
   const workStatus = String(order.workStatus || "").toLowerCase();
   const processStatus = String(order.processStatus || "").toLowerCase();
   if (["completed", "shipped", "cancelled"].includes(workStatus)) return false;
@@ -16509,7 +16513,8 @@ function openReport(orderId, options = {}) {
     return;
   }
   const orderById = state.workOrders.find((item) => item.id === orderId);
-  const orderByMachine = machineName ? state.workOrders.find((item) => item.machine === machineName) : null;
+  // Off-station orders (old MES moved them off this machine) are not picked for a machine QR/report.
+  const orderByMachine = machineName ? state.workOrders.find((item) => item.machine === machineName && item.offStation !== true) : null;
   const order = orderById || orderByMachine || (!machineName ? selectedOrder || state.workOrders[0] : null);
   if (order && !isOrderReportable(order)) {
     showToast("這張工單尚未指派機台，不能開啟報工入口");
