@@ -17909,14 +17909,12 @@ function bindEvents() {
       );
       // Suggestion only (owner 2026-09-24): who should look at this, how urgent. Runs after
       // the report is safely written; a failure here changes nothing about the report.
-      if (activeReportType === "abnormal" && result.wroteCloud && result.reportUuid) {
-        machtileJevTriage({
-          reportUuid: result.reportUuid,
-          text: $("#reportNote")?.value?.trim() || "",
-          abnormalType: $("#abnormalType")?.value || "",
-          machineCode: selectedOrder?.machine || "",
-          workOrderNo: selectedOrder?.id || "",
-        }).then((label) => { if (label) showToast(`AI 建議：${label}`); });
+      // Only the uuid is sent: since mini-mes #72 the function reads the stored report itself
+      // (and ignores any text sent). A report still queued offline is not in the cloud yet, so
+      // asking would only get 404 — skip it.
+      if (activeReportType === "abnormal" && result.wroteCloud && !result.queuedOffline && result.reportUuid) {
+        machtileJevTriage({ reportUuid: result.reportUuid })
+          .then((label) => { if (label) showToast(`AI 建議：${label}`); });
       }
     } catch (error) {
       showToast(`回報失敗：${error.message}`);
