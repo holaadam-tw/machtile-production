@@ -79,6 +79,7 @@ eq("有報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPOR
 eq("站別優先於報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPORTS", "STATION"], reportCount: 18 }, "me").text, "🔒 站別帳號，機台綁定中");
 eq("系統帳號：不可刪、不叫人停用", c.deleteVerdict(U("b", "派工橋（系統帳號）", "planner", { account: "bridge.dispatch@machtile.local" }), { blockers: ["SIGNED_IN", "ACTIVE_ACCOUNT"] }, "me").text, "🔒 系統帳號，程式使用中");
 eq("停用的系統帳號即使伺服器說可刪也不給刪", c.deleteVerdict(U("b", "x", "planner", { account: "bridge.x", is_active: false }), clean, "me").canDelete, false);
+eq("伺服器原因碼 SYSTEM_ACCOUNT 也顯示系統帳號鎖頭（即使前端規則沒認出）", c.deleteVerdict(U("x", "某人", "operator", { is_active: false }), { blockers: ["SIGNED_IN", "SYSTEM_ACCOUNT"] }, "me").text, "🔒 系統帳號，程式使用中");
 eq("站別鎖頭說明不叫人停用", c.blockerText("STATION").title.includes("也請不要停用"), true);
 eq("曾登入", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["SIGNED_IN"] }, "me").text, "🔒 曾登入過，請改用停用");
 eq("其他使用紀錄＝總數−報工", c.deleteVerdict(U("a", "a", "manager"), { blockers: ["HAS_USAGE"], reportCount: 0, usageTotal: 5 }, "me").text, "🔒 不可刪除（有 5 筆使用紀錄）");
