@@ -15,7 +15,8 @@ console.log("== sortAccounts ==");
   const users = [
     U("op2", "陳柏叡", "operator"),
     U("st1", "HMC-01 站別", "operator", { account: "hola.adam+mt-hmc01@gmail.com" }),
-    U("pl1", "派工橋", "planner"),
+    U("pl1", "排程小陳", "planner"),
+    U("br1", "派工橋（系統帳號）", "planner", { account: "bridge.dispatch@machtile.local" }),
     U("me", "系統管理者", "admin", { account: "owner@example.com" }),
     U("mg2", "黃主管", "manager"),
     U("op1", "阮文英", "operator"),
@@ -28,16 +29,18 @@ console.log("== sortAccounts ==");
   ];
   const s = c.sortAccounts(users, "me", {});
   eq("自己固定最上", s.self && s.self.id, "me");
-  eq("啟用：管理者→主管→排程→品檢→站別→作業員，同角色依名稱",
-    s.active.map((u) => u.id), ["ad2", "mg1", "mg2", "pl1", "in1", "st1", "st2", "op1", "op2"]);
+  eq("啟用的人員：管理者→主管→排程→品檢→作業員，同角色依名稱（站別／系統不在這裡）",
+    s.active.map((u) => u.id), ["ad2", "mg1", "mg2", "pl1", "in1", "op1", "op2"]);
+  eq("系統與站別區：系統在前、站別在後", s.special.map((u) => u.id), ["br1", "st1", "st2"]);
   eq("停用的全部在後面、依名稱（中文依筆畫：現 11 畫 < 測 12 畫）", s.inactive.map((u) => u.id), ["off1", "off2"]);
-  eq("自己不重複出現", [...s.active, ...s.inactive].some((u) => u.id === "me"), false);
+  eq("自己不重複出現", [...s.active, ...s.special, ...s.inactive].some((u) => u.id === "me"), false);
+  eq("停用的系統帳號放已停用區", c.sortAccounts([U("b", "派工橋（系統帳號）", "planner", { account: "bridge.x@machtile.local", is_active: false })], "", {}).inactive.length, 1);
   const noSelf = c.sortAccounts(users, "", {});
   eq("沒有 selfId：沒有置頂", noSelf.self, null);
   eq("伺服器說不是站別就以伺服器為準", c.roleGroup(users[1], { station: false }), "operator");
   eq("伺服器說是站別", c.roleGroup(U("x", "某人", "operator"), { station: true }), "station");
   eq("停用中的自己也置頂、不進停用區", c.sortAccounts([U("me", "我", "admin", { is_active: false })], "me", {}).inactive.length, 0);
-  eq("null 安全", c.sortAccounts(null, "me", null), { self: null, active: [], inactive: [] });
+  eq("null 安全", c.sortAccounts(null, "me", null), { self: null, active: [], special: [], inactive: [] });
 }
 
 console.log("== isStationAccount ==");
@@ -46,6 +49,20 @@ eq("帳號 hmc-01", c.isStationAccount({ name: "x", account: "HMC-01" }), true);
 eq("帳號 mt-hmc02@gmail", c.isStationAccount({ name: "x", account: "hola.adam+mt-hmc02@gmail.com" }), true);
 eq("一般工號不是", c.isStationAccount({ name: "陳柏叡", account: "1080301" }), false);
 eq("hmc 在中間不算", c.isStationAccount({ name: "x", account: "hmc01x" }), false);
+
+console.log("== isSystemAccount / accountKind / accountImpact ==");
+eq("bridge.dispatch 是系統", c.isSystemAccount({ name: "x", account: "bridge.dispatch@machtile.local" }), true);
+eq("bridge.任何 是系統", c.isSystemAccount({ name: "x", account: "Bridge.Writeback" }), true);
+eq("名稱含系統帳號", c.isSystemAccount({ name: "I-Reporter（系統帳號）", account: "ireporter@machtile.local" }), true);
+eq("bridgeman 不是", c.isSystemAccount({ name: "x", account: "bridgeman@machtile.local" }), false);
+eq("一般人不是", c.isSystemAccount({ name: "黃主管", account: "pm1001@machtile.local" }), false);
+eq("系統優先於站別", c.accountKind({ name: "HMC-01 站別（系統帳號）", account: "x" }), "system");
+eq("站別", c.accountKind({ name: "HMC-01 站別", account: "x" }), "station");
+eq("人員", c.accountKind({ name: "王", account: "0990001" }), "person");
+eq("派工橋影響", c.accountImpact({ name: "派工橋（系統帳號）", account: "bridge.dispatch@machtile.local" }).impact, "停用後派工同步會中斷：新工單、工序變更都不會再進來。");
+eq("站別影響", c.accountImpact({ name: "HMC-02 站別", account: "x" }).impact, "停用後，這台機台的平板無法登入報工。");
+eq("其他系統帳號影響", c.accountImpact({ name: "某程式（系統帳號）", account: "svc" }).kind, "system");
+eq("人員沒有影響說明", c.accountImpact({ name: "王", account: "0990001" }), null);
 
 console.log("== deleteVerdict ==");
 const clean = { blockers: [], deletable: true, reportCount: 0, usageTotal: 0 };
@@ -60,6 +77,9 @@ eq("blockers 不是陣列→不顯示", c.deleteVerdict(U("a", "a", "operator"),
 eq("deletable 不是 true 就不給刪（防呆）", c.deleteVerdict(U("a", "a", "operator"), { blockers: [] }, "me").canDelete, false);
 eq("有報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPORTS", "SIGNED_IN"], reportCount: 18, usageTotal: 28 }, "me").text, "🔒 不可刪除（有 18 筆報工）");
 eq("站別優先於報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPORTS", "STATION"], reportCount: 18 }, "me").text, "🔒 站別帳號，機台綁定中");
+eq("系統帳號：不可刪、不叫人停用", c.deleteVerdict(U("b", "派工橋（系統帳號）", "planner", { account: "bridge.dispatch@machtile.local" }), { blockers: ["SIGNED_IN", "ACTIVE_ACCOUNT"] }, "me").text, "🔒 系統帳號，程式使用中");
+eq("停用的系統帳號即使伺服器說可刪也不給刪", c.deleteVerdict(U("b", "x", "planner", { account: "bridge.x", is_active: false }), clean, "me").canDelete, false);
+eq("站別鎖頭說明不叫人停用", c.blockerText("STATION").title.includes("也請不要停用"), true);
 eq("曾登入", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["SIGNED_IN"] }, "me").text, "🔒 曾登入過，請改用停用");
 eq("其他使用紀錄＝總數−報工", c.deleteVerdict(U("a", "a", "manager"), { blockers: ["HAS_USAGE"], reportCount: 0, usageTotal: 5 }, "me").text, "🔒 不可刪除（有 5 筆使用紀錄）");
 eq("未知代碼也是鎖", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["NEW_RULE"] }, "me").canDelete, false);
@@ -83,7 +103,11 @@ eq("作業員：連結帶入登入帳號", c.faceEntry(U("1080301", "陳柏叡",
 eq("已登記 N 張", c.faceEntry(U("adam", "Adam", "operator"), { faceActive: 2 }, URL).badge, "已登記 2 張");
 eq("使用紀錄沒載到→不顯示張數", c.faceEntry(U("adam", "Adam", "operator"), null, URL).badge, "");
 eq("用伺服器的真實登入帶入", c.faceEntry({ id: "f", name: "范文林", role: "operator", account: "fan.wenlin", is_active: true }, { loginLabel: "1100801", faceActive: 0 }, URL).href, URL + "?account=1100801");
-eq("主管不顯示", c.faceEntry(U("m", "主管", "manager"), null, URL).show, false);
+eq("主管顯示（owner 2026-09-29）", c.faceEntry(U("pm1001", "黃主管", "manager"), { faceActive: 0 }, URL).href, URL + "?account=pm1001");
+eq("排程顯示", c.faceEntry(U("pl9", "排程", "planner"), null, URL).show, true);
+eq("品檢不顯示", c.faceEntry(U("i", "品檢", "inspector"), null, URL).show, false);
+eq("系統帳號（派工橋，排程角色）不顯示", c.faceEntry(U("b", "派工橋（系統帳號）", "planner", { account: "bridge.dispatch@machtile.local" }), null, URL).show, false);
+eq("外部信箱主管：不給按鈕、講原因", c.faceEntry(U("m", "主管", "manager", { account: "boss@gmail.com" }), null, URL).eligible, false);
 eq("管理者不顯示", c.faceEntry(U("a", "管理者", "admin"), null, URL).show, false);
 eq("站別不顯示", c.faceEntry(U("s", "HMC-01 站別", "operator"), null, URL).show, false);
 eq("停用不顯示", c.faceEntry(U("o", "o", "operator", { is_active: false }), null, URL).show, false);

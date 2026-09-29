@@ -14073,6 +14073,7 @@ const amUsersState = {
   usageById: null,
   usageNote: "",
   inactiveOpen: false,
+  specialOpen: false,
   deleteOpenId: "",
 };
 
@@ -14214,22 +14215,41 @@ function amRenderUserRow(user, selfId) {
     faceHtml = `<small class="am-face-note">${escapeHtml(face.note)}</small>`;
   }
 
+  // 系統／站別帳號（owner 2026-09-29：不要停用）：列上寫用途與停用影響；停用要多確認一次。
+  const impact = amAccountCore ? amAccountCore.accountImpact(user, usage) : null;
+  const guardedStop = Boolean(impact) && active && canToggle;
+  const toggleButton = !canToggle ? "" : guardedStop
+    ? (confirmOpen
+      ? `<button type="button" data-am-toggle-cancel="${id}">取消停用</button>`
+      : `<button type="button" data-am-toggle="${id}" data-am-next="false">停用</button>`)
+    : `<button type="button" data-am-toggle="${id}" data-am-next="${active ? "false" : "true"}">${confirmOpen ? (active ? "確認停用？" : "確認啟用？") : (active ? "停用" : "啟用")}</button>`;
+
   return `
     <div class="${rowClass}" data-am-row="${id}">
       <div class="am-user-main">
         <strong>${escapeHtml(user.name || "-")}</strong>${isSelf ? `<span class="am-self-tag">👑 你</span>` : ""}
         <span class="am-user-account">${escapeHtml(display)}</span>
+        ${impact ? `<small class="am-impact">${escapeHtml(impact.purpose)}<span>⚠ ${escapeHtml(impact.impact)}</span></small>` : ""}
       </div>
       <span class="am-user-role">${escapeHtml(amRoleText(user, usage))}</span>
       <span class="am-status ${active ? "is-on" : "is-off"}">${active ? "● 啟用中" : "○ 已停用"}</span>
       <span class="am-user-actions">
         ${canEdit ? `<button type="button" data-am-edit-open="${id}">${editOpen ? "收合" : "編輯"}</button>` : ""}
         ${canReset ? `<button type="button" data-am-reset-open="${id}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
-        ${canToggle ? `<button type="button" data-am-toggle="${id}" data-am-next="${active ? "false" : "true"}">${confirmOpen ? (active ? "確認停用？" : "確認啟用？") : (active ? "停用" : "啟用")}</button>` : ""}
+        ${toggleButton}
         ${faceHtml}
         ${deleteHtml}
       </span>
     </div>
+    ${guardedStop && confirmOpen ? `
+      <div class="admin-data-row am-sub-row am-stop-row" data-am-stop-row="${id}">
+        <div class="am-sub-wide">
+          <p class="am-delete-warn">確定要停用「${escapeHtml(user.name || display)}」？${escapeHtml(impact.impact)}</p>
+          <p class="am-stop-note">${escapeHtml(impact.purpose)}一般不需要停用；真的不用了再停。</p>
+        </div>
+        <button type="button" class="am-delete-confirm" data-am-toggle="${id}" data-am-next="false" data-am-guard-confirmed="1">我了解影響，確認停用</button>
+      </div>
+    ` : ""}
     ${editOpen ? `
       <div class="admin-data-row am-sub-row" data-am-edit-row="${id}">
         <label class="admin-field">
@@ -14273,11 +14293,25 @@ function amRenderUsersModule() {
   const selfId = amSelfAppUserId();
   const sorted = amAccountCore
     ? amAccountCore.sortAccounts(amUsersState.users, selfId, amUsersState.usageById || {})
-    : { self: null, active: amUsersState.users, inactive: [] };
+    : { self: null, active: amUsersState.users, special: [], inactive: [] };
   const activeRows = [sorted.self, ...sorted.active]
     .filter(Boolean)
     .map((user) => amRenderUserRow(user, selfId))
     .join("");
+  const specialCount = sorted.special.length;
+  // Keep the section open while one of its rows is mid-confirmation / being edited.
+  const specialOpen = amUsersState.specialOpen || sorted.special.some((user) => [
+    amUsersState.confirmStateId, amUsersState.expandedEditId, amUsersState.expandedResetId,
+  ].includes(user.id));
+  const specialHtml = specialCount ? `
+    <button type="button" class="am-inactive-toggle am-special-toggle" data-am-special-toggle aria-expanded="${specialOpen ? "true" : "false"}">
+      系統與站別帳號（${specialCount}）${specialOpen ? "▾" : "▸"}
+    </button>
+    ${specialOpen ? `
+      <p class="am-special-note">程式與機台平板共用的登入，不是個人帳號。請不要停用：停用會讓派工同步或機台報工中斷。</p>
+      <div class="admin-data-table am-special-table">${sorted.special.map((user) => amRenderUserRow(user, selfId)).join("")}</div>
+    ` : ""}
+  ` : "";
   const inactiveCount = sorted.inactive.length;
   const inactiveOpen = amUsersState.inactiveOpen;
   const inactiveHtml = inactiveCount ? `
@@ -14299,6 +14333,7 @@ function amRenderUsersModule() {
       <div class="admin-data-table">
         ${activeRows || '<p class="empty-note">尚無帳號。</p>'}
       </div>
+      ${specialHtml}
       ${inactiveHtml}
     </section>
     <section class="admin-form-card">
@@ -14523,6 +14558,18 @@ function amBindUsersModuleEvents() {
     });
   });
 
+  root.querySelector("[data-am-special-toggle]")?.addEventListener("click", () => {
+    amUsersState.specialOpen = !amUsersState.specialOpen;
+    amRenderUsersModule();
+  });
+
+  root.querySelectorAll("[data-am-toggle-cancel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      amUsersState.confirmStateId = "";
+      amRenderUsersModule();
+    });
+  });
+
   root.querySelectorAll("[data-am-toggle]").forEach((button) => {
     button.addEventListener("click", async () => {
       const id = button.getAttribute("data-am-toggle");
@@ -14531,6 +14578,13 @@ function amBindUsersModuleEvents() {
         amUsersState.confirmStateId = id;
         amSetMessage("", "");
         amRenderUsersModule();
+        return;
+      }
+      // System / station accounts: only the button inside the impact box may actually disable.
+      const target = amUsersState.users.find((row) => row.id === id);
+      const targetUsage = amUsersState.usageById ? amUsersState.usageById[id] : undefined;
+      if (!nextActive && target && amAccountCore && amAccountCore.accountImpact(target, targetUsage)
+        && button.getAttribute("data-am-guard-confirmed") !== "1") {
         return;
       }
       button.disabled = true;

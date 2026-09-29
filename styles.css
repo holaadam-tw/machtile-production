@@ -11362,3 +11362,45 @@ body.report-work-route-mode .machtile-route-brand-bar {
     white-space: normal;
   }
 }
+
+/* ---- 系統與站別帳號區（2026-09-29 追加） ---- */
+.am-impact {
+  display: block;
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.am-impact span {
+  display: block;
+  color: #b54708;
+  font-weight: 700;
+}
+
+.am-special-toggle {
+  margin-right: 8px;
+  background: var(--amber-soft);
+  color: #b54708;
+}
+
+.am-special-note {
+  margin: 8px 0 0;
+  color: #b54708;
+  font-size: 12px;
+}
+
+.am-special-table {
+  margin-top: 8px;
+}
+
+.am-stop-row {
+  border-color: rgba(181, 71, 8, 0.35);
+  background: var(--amber-soft);
+}
+
+.am-stop-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}

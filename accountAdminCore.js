@@ -44,6 +44,46 @@
     return STATION_ACCOUNT_RE.test(local);
   }
 
+  // 系統帳號＝程式自動登入用的帳號（不是人）。規則（owner 2026-09-29）：
+  //   1. 登入帳號（@ 前面）以「bridge.」開頭，例如 bridge.dispatch（派工橋，每 5 分鐘寫入派工）；
+  //   2. 或名稱含「系統帳號」。
+  // 站別帳號另用 isStationAccount（名稱含「站別」或帳號結尾 hmc01／hmc-01）。
+  // 兩種都「不要停用」：畫面把它們移到人員帳號之後的「系統與站別帳號」區，停用前要多確認一次。
+  const SYSTEM_ACCOUNT_RE = /^bridge\./i;
+
+  function isSystemAccount(user) {
+    if (String(user?.name || "").includes("系統帳號")) return true;
+    const local = loginLabel(user?.account).split("@")[0];
+    return SYSTEM_ACCOUNT_RE.test(local);
+  }
+
+  // → "system" | "station" | "person"（系統優先於站別）
+  function accountKind(user, usage) {
+    if (isSystemAccount(user)) return "system";
+    if (isStationAccount(user, usage)) return "station";
+    return "person";
+  }
+
+  // 系統／站別帳號的用途與「停用會造成什麼影響」（列上小字＋停用前的確認框）。人員帳號回 null。
+  function accountImpact(user, usage) {
+    const kind = accountKind(user, usage);
+    if (kind === "system") {
+      const local = loginLabel(user?.account).split("@")[0];
+      if (local === "bridge.dispatch" || String(user?.name || "").includes("派工橋")) {
+        return {
+          kind,
+          purpose: "系統帳號：派工橋每 5 分鐘用它把 MES 派工寫進來。",
+          impact: "停用後派工同步會中斷：新工單、工序變更都不會再進來。",
+        };
+      }
+      return { kind, purpose: "系統帳號：程式自動登入用，不是人。", impact: "停用後，用這個帳號的程式會無法登入、寫入中斷。" };
+    }
+    if (kind === "station") {
+      return { kind, purpose: "站別帳號：機台平板登入報工用（整台機台共用）。", impact: "停用後，這台機台的平板無法登入報工。" };
+    }
+    return null;
+  }
+
   function roleGroup(user, usage) {
     if (isStationAccount(user, usage)) return "station";
     const role = String(user?.role || "");
@@ -63,20 +103,27 @@
     return String(a?.id || "").localeCompare(String(b?.id || ""));
   }
 
-  // → { self, active, inactive }
+  // → { self, active, special, inactive }
   //   self：目前登入的管理者（固定最上），不論啟用與否都只出現在這裡。
-  //   active：啟用中，依角色順序、同角色依名稱。
-  //   inactive：停用的全部，依名稱（畫面收在「已停用（N）」摺疊區）。
+  //   active：啟用中的「人員」帳號，依角色順序、同角色依名稱。
+  //   special：啟用中的系統與站別帳號（系統在前、站別在後，同類依名稱），畫面收在
+  //            「系統與站別帳號（N）」摺疊區，放在「已停用」之前。
+  //   inactive：停用的全部（含系統／站別），依名稱（畫面收在「已停用（N）」摺疊區）。
   function sortAccounts(users, selfId, usageById) {
     const list = Array.isArray(users) ? users.filter(Boolean) : [];
     const usageOf = (user) => (usageById && user ? usageById[user.id] : undefined);
     const self = selfId ? list.find((user) => user.id === selfId) || null : null;
     const others = list.filter((user) => user !== self);
-    const active = others
-      .filter((user) => user.is_active !== false)
+    const enabled = others.filter((user) => user.is_active !== false);
+    const active = enabled
+      .filter((user) => accountKind(user, usageOf(user)) === "person")
       .sort((a, b) => (roleRank(roleGroup(a, usageOf(a))) - roleRank(roleGroup(b, usageOf(b)))) || compareName(a, b));
+    const kindRank = (user) => (accountKind(user, usageOf(user)) === "system" ? 0 : 1);
+    const special = enabled
+      .filter((user) => accountKind(user, usageOf(user)) !== "person")
+      .sort((a, b) => (kindRank(a) - kindRank(b)) || compareName(a, b));
     const inactive = others.filter((user) => user.is_active === false).sort(compareName);
-    return { self, active, inactive };
+    return { self, active, special, inactive };
   }
 
   // 使用紀錄的欄位 → 白話名稱（滑鼠提示用）。沒列到的歸「其他紀錄」。
@@ -130,7 +177,7 @@
       case "STATION":
         return {
           text: "🔒 站別帳號，機台綁定中",
-          title: `這是機台共用的站別帳號，平板用它報工；刪掉會讓整台機台的報工對不到帳號（2026-09-23 發生過報工歸零）。${STOP_HINT}`,
+          title: "這是機台共用的站別帳號，平板用它報工；刪掉會讓整台機台的報工對不到帳號（2026-09-23 發生過報工歸零）。也請不要停用：停用後這台機台的平板無法登入報工。",
         };
       case "HAS_REPORTS":
         return {
@@ -159,6 +206,11 @@
         };
       case "SHARED_AUTH":
         return { text: "🔒 登入與其他帳號共用", title: `同一個登入身分被其他帳號列共用，刪掉會影響另一個帳號。${STOP_HINT}` };
+      case "SYSTEM":
+        return {
+          text: "🔒 系統帳號，程式使用中",
+          title: "這是程式自動登入用的系統帳號（例如派工橋），不能刪除，也請不要停用：停用會讓對應的同步中斷。",
+        };
       case "ACTIVE_ACCOUNT":
         return {
           text: "🔒 啟用中，請先停用",
@@ -182,6 +234,8 @@
     if (!usage || !Array.isArray(usage.blockers)) {
       return { show: false, canDelete: false, code: "UNKNOWN", text: "", title: "" };
     }
+    // 系統帳號一律不可刪（在任何伺服器原因之前）：它的鎖頭不該叫人「改用停用」。
+    if (isSystemAccount(user)) return { show: true, canDelete: false, code: "SYSTEM", ...blockerText("SYSTEM") };
     const blockers = usage.blockers.map(String);
     // 啟用中一律不給刪（伺服器也會擋）；舊版伺服器沒回這個原因時，前端自己補上。
     if (user && user.is_active !== false && !blockers.includes("ACTIVE_ACCOUNT")) blockers.push("ACTIVE_ACCOUNT");
@@ -207,12 +261,16 @@
     return accepted.has(value);
   }
 
-  // 人臉登記入口：只給啟用中的作業員（不含站別、主管、管理者…）。
+  // 人臉登記入口：啟用中的作業員、主管、排程（owner 2026-09-29 開放主管與排程）。
+  // 管理者、品檢、站別、系統帳號、已停用都不顯示；外部信箱只寫原因不給按鈕。
+  // 登入中心 /admin/face 本身不看角色（eligibility.ts：@machtile.local、有租戶、未停用、
+  // 有勾系統、非 HMC-nn），所以主管／排程的 @machtile.local 帳號登記得了。
+  const FACE_ROLES = Object.freeze(["operator", "manager", "planner"]);
   // → { show, eligible, href, badge, note }
   function faceEntry(user, usage, faceAdminUrl) {
     const base = String(faceAdminUrl || "").trim();
     if (!base || !user || user.is_active === false) return { show: false };
-    if (String(user.role) !== "operator" || isStationAccount(user, usage)) return { show: false };
+    if (!FACE_ROLES.includes(String(user.role)) || accountKind(user, usage) !== "person") return { show: false };
     const label = loginLabel((usage && usage.loginLabel) || user.account);
     const badge = usage && Number.isFinite(Number(usage.faceActive))
       ? (Number(usage.faceActive) > 0 ? `已登記 ${Number(usage.faceActive)} 張` : "未登記")
@@ -230,7 +288,11 @@
     ROLE_LABELS,
     BLOCKER_PRIORITY,
     loginLabel,
+    FACE_ROLES,
     isStationAccount,
+    isSystemAccount,
+    accountKind,
+    accountImpact,
     roleGroup,
     sortAccounts,
     usageSummary,
