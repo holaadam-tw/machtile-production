@@ -114,8 +114,11 @@
   const STOP_HINT = "不用的帳號請按「停用」：停用後無法登入，但歷史紀錄仍對得到人。";
 
   // 伺服器回的 blockers 依這個順序挑「最該讓管理者知道」的那一個顯示。
+  // 「永久」的原因排前面（停用了也刪不掉的：站別、有紀錄、登入過…）；ACTIVE_ACCOUNT 排最後，
+  // 只有在「停用後就真的可以刪」時才會看到「🔒 啟用中，請先停用」，不會叫人停用了還是刪不掉。
   const BLOCKER_PRIORITY = Object.freeze([
-    "STATION", "HAS_REPORTS", "HAS_USAGE", "SIGNED_IN", "FACE_ENROLLED", "OTHER_SYSTEMS", "SHARED_AUTH", "ADMIN_ACCOUNT", "REFERENCED",
+    "STATION", "HAS_REPORTS", "HAS_USAGE", "SIGNED_IN", "FACE_ENROLLED", "OTHER_SYSTEMS", "SHARED_AUTH", "ADMIN_ACCOUNT",
+    "ACTIVE_ACCOUNT", "REFERENCED",
   ]);
 
   function blockerText(code, usage) {
@@ -156,6 +159,11 @@
         };
       case "SHARED_AUTH":
         return { text: "🔒 登入與其他帳號共用", title: `同一個登入身分被其他帳號列共用，刪掉會影響另一個帳號。${STOP_HINT}` };
+      case "ACTIVE_ACCOUNT":
+        return {
+          text: "🔒 啟用中，請先停用",
+          title: "只有已停用的帳號才能刪除（owner 2026-09-29 決定）。先按「停用」，確認這個人真的不再使用後，再到「已停用」區刪除。",
+        };
       case "ADMIN_ACCOUNT":
         return { text: "🔒 管理者由平台管理", title: "管理者帳號由平台管理員（super admin）處理，不能在這裡刪除。" };
       case "REFERENCED":
@@ -175,13 +183,15 @@
       return { show: false, canDelete: false, code: "UNKNOWN", text: "", title: "" };
     }
     const blockers = usage.blockers.map(String);
+    // 啟用中一律不給刪（伺服器也會擋）；舊版伺服器沒回這個原因時，前端自己補上。
+    if (user && user.is_active !== false && !blockers.includes("ACTIVE_ACCOUNT")) blockers.push("ACTIVE_ACCOUNT");
     if (blockers.length === 0 && usage.deletable === true) {
       return {
         show: true,
         canDelete: true,
         code: "",
         text: "刪除",
-        title: "這個帳號從未登入、也沒有任何紀錄，可以刪除。刪除後無法復原。",
+        title: "這個帳號已停用、從未登入、也沒有任何紀錄，可以刪除。刪除後無法復原。",
       };
     }
     const code = BLOCKER_PRIORITY.find((c) => blockers.includes(c)) || blockers[0] || "UNKNOWN";

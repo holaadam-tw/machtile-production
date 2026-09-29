@@ -49,7 +49,11 @@ eq("hmc 在中間不算", c.isStationAccount({ name: "x", account: "hmc01x" }), 
 
 console.log("== deleteVerdict ==");
 const clean = { blockers: [], deletable: true, reportCount: 0, usageTotal: 0 };
-eq("可刪", c.deleteVerdict(U("a", "a", "operator"), clean, "me").canDelete, true);
+eq("停用＋乾淨→可刪", c.deleteVerdict(U("a", "a", "operator", { is_active: false }), clean, "me").canDelete, true);
+eq("啟用中＋乾淨→不可刪，請先停用", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["ACTIVE_ACCOUNT"], deletable: false }, "me").text, "🔒 啟用中，請先停用");
+eq("啟用中但舊伺服器說可刪→前端仍不給刪", c.deleteVerdict(U("a", "a", "operator"), clean, "me"), { show: true, canDelete: false, code: "ACTIVE_ACCOUNT", text: "🔒 啟用中，請先停用", title: c.blockerText("ACTIVE_ACCOUNT").title });
+eq("啟用中＋曾登入→顯示曾登入（停用了也刪不掉，不叫人先停用）", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["SIGNED_IN", "ACTIVE_ACCOUNT"] }, "me").text, "🔒 曾登入過，請改用停用");
+eq("啟用中＋有報工→顯示報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPORTS", "ACTIVE_ACCOUNT"], reportCount: 3 }, "me").text, "🔒 不可刪除（有 3 筆報工）");
 eq("自己永遠不能刪（即使伺服器沒回）", c.deleteVerdict(U("me", "me", "admin"), null, "me").text, "🔒 不能刪除自己");
 eq("沒載到使用紀錄→不顯示刪除相關", c.deleteVerdict(U("a", "a", "operator"), null, "me").show, false);
 eq("blockers 不是陣列→不顯示", c.deleteVerdict(U("a", "a", "operator"), { deletable: true }, "me").show, false);

@@ -14255,7 +14255,7 @@ function amRenderUserRow(user, selfId) {
     ${deleteOpen && verdict.canDelete ? `
       <div class="admin-data-row am-sub-row am-delete-row" data-am-delete-row="${id}">
         <div class="am-sub-wide">
-          <p class="am-delete-warn">確定要刪除「${escapeHtml(user.name || display)}」？刪除後無法復原。${active ? "這個帳號目前是<strong>啟用中</strong>。" : ""}</p>
+          <p class="am-delete-warn">確定要刪除「${escapeHtml(user.name || display)}」？刪除後無法復原。</p>
           <label class="admin-field">
             <span>請輸入帳號名稱「${escapeHtml(display)}」確認</span>
             <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" data-am-delete-input="${id}">
