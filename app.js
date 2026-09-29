@@ -14055,6 +14055,8 @@ const amErrorMessages = {
   USER_NOT_FOUND: "找不到這個使用者。",
   SELF_TARGET: "不能對自己的帳號執行這項操作。",
   TENANT_EXISTS: "已經有同名的租戶了。",
+  NOT_DELETABLE: "伺服器再次檢查後判定不能刪除，帳號沒有變動。",
+  CONFIRM_MISMATCH: "輸入的帳號名稱不對，沒有刪除。",
   INTERNAL: "伺服器處理失敗，請稍後再試。",
 };
 
@@ -14066,7 +14068,16 @@ const amUsersState = {
   expandedResetId: "",
   expandedEditId: "",
   confirmStateId: "",
+  // 2026-09-29 帳號管理 UI：伺服器使用紀錄（可不可以刪、人臉登記張數）。
+  // null＝沒載入（功能未開或查詢失敗）→ 畫面不出現刪除與張數。
+  usageById: null,
+  usageNote: "",
+  inactiveOpen: false,
+  deleteOpenId: "",
 };
+
+// Pure rules (sorting / delete verdict / face entry) live in accountAdminCore.js.
+const amAccountCore = typeof globalThis !== "undefined" ? globalThis.MachTileAccountAdminCore : null;
 
 function amErrorText(code, fallback) {
   return amErrorMessages[code] || fallback || "操作失敗，請稍後再試。";
@@ -14095,9 +14106,32 @@ async function amCallFunction(fnName, payload) {
 
 async function amFetchUsers() {
   const rows = await supabaseFetch("app_users?select=id,name,account,role,is_active&order=created_at.asc");
-  const users = Array.isArray(rows) ? rows : [];
-  // Admins pinned to the top; everyone else keeps created_at order.
-  return [...users.filter((user) => user.role === "admin"), ...users.filter((user) => user.role !== "admin")];
+  // Display order (self pinned, role order, disabled last) is decided at render time by
+  // accountAdminCore.sortAccounts.
+  return Array.isArray(rows) ? rows : [];
+}
+
+// Server facts per account (never signed in? any records? face enrolments?) from the
+// am-list-user-usage Edge Function. Gated by config.enableAccountDelete: until the migration
+// and both functions are deployed the page behaves exactly as before (no delete, no counts).
+async function amFetchUsage() {
+  amUsersState.usageNote = "";
+  if (config.enableAccountDelete !== true || !amAccountCore) return null;
+  try {
+    const result = await amCallFunction("am-list-user-usage", {});
+    if (!result.ok || !Array.isArray(result.body?.users)) {
+      amUsersState.usageNote = "使用紀錄暫時查不到，先不顯示刪除功能。";
+      return null;
+    }
+    const byId = {};
+    result.body.users.forEach((row) => {
+      if (row && row.appUserId) byId[row.appUserId] = row;
+    });
+    return byId;
+  } catch (error) {
+    amUsersState.usageNote = "使用紀錄暫時查不到，先不顯示刪除功能。";
+    return null;
+  }
 }
 
 async function amInitUsersModule() {
@@ -14114,7 +14148,9 @@ async function amInitUsersModule() {
   }
   amUsersState.status = "loading";
   try {
-    amUsersState.users = await amFetchUsers();
+    const [users, usageById] = await Promise.all([amFetchUsers(), amFetchUsage()]);
+    amUsersState.users = users;
+    amUsersState.usageById = usageById;
     amUsersState.status = "ready";
   } catch (error) {
     amUsersState.status = "error";
@@ -14130,67 +14166,140 @@ function amStatusLine() {
   return `<p class="empty-note" style="${tone}" data-am-status>${escapeHtml(amUsersState.message)}</p>`;
 }
 
+function amRoleText(user, usage) {
+  const group = amAccountCore ? amAccountCore.roleGroup(user, usage) : user.role;
+  if (group === "station") return "站別";
+  return amRoleLabels[user.role] || user.role;
+}
+
+function amRenderUserRow(user, selfId) {
+  const usage = amUsersState.usageById ? amUsersState.usageById[user.id] : undefined;
+  const isSelf = user.id === selfId;
+  const isAdmin = user.role === "admin";
+  const active = user.is_active !== false;
+  const resetOpen = amUsersState.expandedResetId === user.id;
+  const editOpen = amUsersState.expandedEditId === user.id;
+  const confirmOpen = amUsersState.confirmStateId === user.id;
+  const deleteOpen = amUsersState.deleteOpenId === user.id;
+  const canReset = !isAdmin || isSelf;
+  const canEdit = !isAdmin;
+  const canToggle = !isAdmin && !isSelf;
+  // No usage loaded (flag off / lookup failed) → no delete UI at all, not even the self lock.
+  const verdict = amAccountCore && amUsersState.usageById
+    ? amAccountCore.deleteVerdict(user, usage, selfId)
+    : { show: false };
+  const face = amAccountCore ? amAccountCore.faceEntry(user, usage, config.faceAdminUrl) : { show: false };
+  const id = escapeHtml(user.id);
+  const display = machtileAccountDisplay(user.account) || "-";
+  const rowClass = ["admin-data-row", "am-user-row", active ? "is-active" : "is-inactive", isSelf ? "is-self" : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  let deleteHtml = "";
+  if (verdict.show && verdict.canDelete) {
+    deleteHtml = `<button type="button" class="am-delete-button" data-am-delete-open="${id}" title="${escapeHtml(verdict.title)}">${deleteOpen ? "收合" : "🗑 刪除"}</button>`;
+  } else if (verdict.show) {
+    deleteHtml = `<span class="am-lock" tabindex="0" title="${escapeHtml(verdict.title)}">${escapeHtml(verdict.text)}</span>`;
+  } else if (isAdmin && !isSelf) {
+    deleteHtml = `<span class="empty-note">平台管理</span>`;
+  }
+
+  let faceHtml = "";
+  if (face.show && face.eligible) {
+    const badge = face.badge
+      ? `<small class="am-face-badge${face.badge === "未登記" ? " is-none" : ""}">${escapeHtml(face.badge)}</small>`
+      : "";
+    faceHtml = `<span class="am-face"><a class="am-face-link" href="${escapeHtml(face.href)}" target="_blank" rel="noopener" title="開啟登入中心的人臉登記頁並標出這位員工（登記時本人要在場輸入密碼）">📷 人臉登記</a>${badge}</span>`;
+  } else if (face.show) {
+    faceHtml = `<small class="am-face-note">${escapeHtml(face.note)}</small>`;
+  }
+
+  return `
+    <div class="${rowClass}" data-am-row="${id}">
+      <div class="am-user-main">
+        <strong>${escapeHtml(user.name || "-")}</strong>${isSelf ? `<span class="am-self-tag">👑 你</span>` : ""}
+        <span class="am-user-account">${escapeHtml(display)}</span>
+      </div>
+      <span class="am-user-role">${escapeHtml(amRoleText(user, usage))}</span>
+      <span class="am-status ${active ? "is-on" : "is-off"}">${active ? "● 啟用中" : "○ 已停用"}</span>
+      <span class="am-user-actions">
+        ${canEdit ? `<button type="button" data-am-edit-open="${id}">${editOpen ? "收合" : "編輯"}</button>` : ""}
+        ${canReset ? `<button type="button" data-am-reset-open="${id}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
+        ${canToggle ? `<button type="button" data-am-toggle="${id}" data-am-next="${active ? "false" : "true"}">${confirmOpen ? (active ? "確認停用？" : "確認啟用？") : (active ? "停用" : "啟用")}</button>` : ""}
+        ${faceHtml}
+        ${deleteHtml}
+      </span>
+    </div>
+    ${editOpen ? `
+      <div class="admin-data-row am-sub-row" data-am-edit-row="${id}">
+        <label class="admin-field">
+          <span>姓名</span>
+          <input type="text" value="${escapeHtml(user.name || "")}" data-am-edit-name="${id}">
+        </label>
+        <label class="admin-field am-sub-wide">
+          <span>登入帳號（工號或 Email）</span>
+          <input type="text" value="${escapeHtml(machtileAccountDisplay(user.account))}" data-am-edit-email="${id}">
+        </label>
+        <button type="button" data-am-edit-confirm="${id}">確認修改</button>
+      </div>
+    ` : ""}
+    ${resetOpen ? `
+      <div class="admin-data-row am-sub-row" data-am-reset-row="${id}">
+        <label class="admin-field am-sub-wide">
+          <span>新密碼（至少 8 碼）</span>
+          ${machtilePasswordField(`<input type="password" autocomplete="new-password" data-am-reset-input="${id}">`)}
+        </label>
+        <button type="button" data-am-reset-confirm="${id}">確認重設</button>
+      </div>
+    ` : ""}
+    ${deleteOpen && verdict.canDelete ? `
+      <div class="admin-data-row am-sub-row am-delete-row" data-am-delete-row="${id}">
+        <div class="am-sub-wide">
+          <p class="am-delete-warn">確定要刪除「${escapeHtml(user.name || display)}」？刪除後無法復原。${active ? "這個帳號目前是<strong>啟用中</strong>。" : ""}</p>
+          <label class="admin-field">
+            <span>請輸入帳號名稱「${escapeHtml(display)}」確認</span>
+            <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" data-am-delete-input="${id}">
+          </label>
+        </div>
+        <button type="button" class="am-delete-confirm" data-am-delete-confirm="${id}" disabled>確認刪除</button>
+      </div>
+    ` : ""}
+  `;
+}
+
 function amRenderUsersModule() {
   const root = document.querySelector("[data-am-users-root]");
   if (!root) return;
   const selfId = amSelfAppUserId();
-  const rows = amUsersState.users.map((user) => {
-    const isSelf = user.id === selfId;
-    const isAdmin = user.role === "admin";
-    const resetOpen = amUsersState.expandedResetId === user.id;
-    const editOpen = amUsersState.expandedEditId === user.id;
-    const confirmOpen = amUsersState.confirmStateId === user.id;
-    const canReset = !isAdmin || isSelf;
-    const canEdit = !isAdmin;
-    const canToggle = !isAdmin && !isSelf;
-    return `
-      <div class="admin-data-row" data-am-row="${escapeHtml(user.id)}">
-        <strong>${escapeHtml(user.name || "-")}</strong>
-        <span>${escapeHtml(machtileAccountDisplay(user.account) || "-")}</span>
-        <span>${escapeHtml(amRoleLabels[user.role] || user.role)}${isSelf ? "（自己）" : ""}</span>
-        <span>${user.is_active ? "啟用中" : "已停用"}</span>
-        <span>
-          ${canEdit ? `<button type="button" data-am-edit-open="${escapeHtml(user.id)}">${editOpen ? "收合" : "編輯"}</button>` : ""}
-          ${canReset ? `<button type="button" data-am-reset-open="${escapeHtml(user.id)}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
-          ${canToggle ? `<button type="button" data-am-toggle="${escapeHtml(user.id)}" data-am-next="${user.is_active ? "false" : "true"}">${confirmOpen ? (user.is_active ? "確認停用？" : "確認啟用？") : (user.is_active ? "停用" : "啟用")}</button>` : ""}
-          ${isAdmin && !isSelf ? `<span class="empty-note">平台管理</span>` : ""}
-        </span>
-      </div>
-      ${editOpen ? `
-        <div class="admin-data-row" data-am-edit-row="${escapeHtml(user.id)}">
-          <label class="admin-field">
-            <span>姓名</span>
-            <input type="text" value="${escapeHtml(user.name || "")}" data-am-edit-name="${escapeHtml(user.id)}">
-          </label>
-          <label class="admin-field" style="grid-column: 2 / -2;">
-            <span>登入帳號（工號或 Email）</span>
-            <input type="text" value="${escapeHtml(machtileAccountDisplay(user.account))}" data-am-edit-email="${escapeHtml(user.id)}">
-          </label>
-          <button type="button" data-am-edit-confirm="${escapeHtml(user.id)}">確認修改</button>
-        </div>
-      ` : ""}
-      ${resetOpen ? `
-        <div class="admin-data-row" data-am-reset-row="${escapeHtml(user.id)}">
-          <label class="admin-field" style="grid-column: 1 / -2;">
-            <span>新密碼（至少 8 碼）</span>
-            ${machtilePasswordField(`<input type="password" autocomplete="new-password" data-am-reset-input="${escapeHtml(user.id)}">`)}
-          </label>
-          <button type="button" data-am-reset-confirm="${escapeHtml(user.id)}">確認重設</button>
-        </div>
-      ` : ""}
-    `;
-  }).join("");
+  const sorted = amAccountCore
+    ? amAccountCore.sortAccounts(amUsersState.users, selfId, amUsersState.usageById || {})
+    : { self: null, active: amUsersState.users, inactive: [] };
+  const activeRows = [sorted.self, ...sorted.active]
+    .filter(Boolean)
+    .map((user) => amRenderUserRow(user, selfId))
+    .join("");
+  const inactiveCount = sorted.inactive.length;
+  const inactiveOpen = amUsersState.inactiveOpen;
+  const inactiveHtml = inactiveCount ? `
+    <button type="button" class="am-inactive-toggle" data-am-inactive-toggle aria-expanded="${inactiveOpen ? "true" : "false"}">
+      已停用（${inactiveCount}）${inactiveOpen ? "▾" : "▸"}
+    </button>
+    ${inactiveOpen ? `<div class="admin-data-table am-inactive-table">${sorted.inactive.map((user) => amRenderUserRow(user, selfId)).join("")}</div>` : ""}
+  ` : "";
+  const activeCount = amUsersState.users.filter((user) => user.is_active !== false).length;
 
   root.innerHTML = `
-    <section class="admin-table-card">
+    <section class="admin-table-card am-users-card">
       <div class="admin-table-head">
         <strong>員工帳號</strong>
-        <span>${amUsersState.users.length} 個帳號</span>
+        <span>${amUsersState.users.length} 個帳號・啟用 ${activeCount}</span>
       </div>
       ${amStatusLine()}
+      ${amUsersState.usageNote ? `<p class="empty-note">${escapeHtml(amUsersState.usageNote)}</p>` : ""}
       <div class="admin-data-table">
-        ${rows || '<p class="empty-note">尚無帳號。</p>'}
+        ${activeRows || '<p class="empty-note">尚無帳號。</p>'}
       </div>
+      ${inactiveHtml}
     </section>
     <section class="admin-form-card">
       <h3>新增員工帳號</h3>
@@ -14223,7 +14332,9 @@ function amSetMessage(message, kind) {
 
 async function amReloadUsers() {
   try {
-    amUsersState.users = await amFetchUsers();
+    const [users, usageById] = await Promise.all([amFetchUsers(), amFetchUsage()]);
+    amUsersState.users = users;
+    amUsersState.usageById = usageById;
   } catch (error) {
     amSetMessage(`重新載入失敗：${error.message}`, "error");
   }
@@ -14233,6 +14344,76 @@ async function amReloadUsers() {
 function amBindUsersModuleEvents() {
   const root = document.querySelector("[data-am-users-root]");
   if (!root) return;
+
+  root.querySelector("[data-am-inactive-toggle]")?.addEventListener("click", () => {
+    amUsersState.inactiveOpen = !amUsersState.inactiveOpen;
+    amRenderUsersModule();
+  });
+
+  root.querySelectorAll("[data-am-delete-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-am-delete-open");
+      amUsersState.deleteOpenId = amUsersState.deleteOpenId === id ? "" : id;
+      amUsersState.expandedEditId = "";
+      amUsersState.expandedResetId = "";
+      amUsersState.confirmStateId = "";
+      amSetMessage("", "");
+      amRenderUsersModule();
+      root.querySelector(`[data-am-delete-input="${id}"]`)?.focus();
+    });
+  });
+
+  root.querySelectorAll("[data-am-delete-input]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const id = input.getAttribute("data-am-delete-input");
+      const user = amUsersState.users.find((row) => row.id === id);
+      const usage = amUsersState.usageById ? amUsersState.usageById[id] : undefined;
+      const confirmButton = root.querySelector(`[data-am-delete-confirm="${id}"]`);
+      if (confirmButton) {
+        confirmButton.disabled = !(user && amAccountCore && amAccountCore.confirmMatches(user, input.value, usage));
+      }
+    });
+  });
+
+  root.querySelectorAll("[data-am-delete-confirm]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.getAttribute("data-am-delete-confirm");
+      const user = amUsersState.users.find((row) => row.id === id);
+      const typed = root.querySelector(`[data-am-delete-input="${id}"]`)?.value || "";
+      const usage = amUsersState.usageById ? amUsersState.usageById[id] : undefined;
+      if (!user || !amAccountCore || !amAccountCore.confirmMatches(user, typed, usage)) {
+        amSetMessage(amErrorText("CONFIRM_MISMATCH"), "error");
+        amRenderUsersModule();
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "刪除中…";
+      // The server re-checks every rule (never signed in, no records, not a station, …)
+      // before deleting; this page only hides the button.
+      const result = await amCallFunction("am-delete-user", { appUserId: id, confirmAccount: typed.trim() });
+      amUsersState.deleteOpenId = "";
+      const name = user.name || machtileAccountDisplay(user.account);
+      if (result.ok) {
+        amSetMessage(
+          result.body?.code === "USER_DELETED_AUTH_KEPT"
+            ? `已刪除帳號「${name}」；登入身分未能一併刪除，已改為永久停用，請通知平台管理員清理。`
+            : `已刪除帳號「${name}」。`,
+          "ok",
+        );
+      } else {
+        const blockers = Array.isArray(result.body?.blockers) ? result.body.blockers : [];
+        const why = blockers.length && amAccountCore
+          ? amAccountCore.deleteVerdict(
+            user,
+            { blockers, deletable: false, reportCount: result.body?.reportCount, usageTotal: result.body?.usageTotal },
+            "",
+          ).text.replace(/^🔒\s*/, "")
+          : "";
+        amSetMessage(`${amErrorText(result.code, result.body?.message)}${why ? `（${why}）` : ""}`, "error");
+      }
+      await amReloadUsers();
+    });
+  });
 
   root.querySelector("[data-am-create]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
