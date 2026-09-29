@@ -46,4 +46,14 @@ window.MACHTILE_CONFIG = {
   // Never notifies or assigns. Turn on only after `supabase functions deploy jev-triage`,
   // the AI_GATEWAY_API_KEY secret and migration 20260924143000 are in place.
   enableJevTriage: false,
+  // 員工帳號管理 (2026-09-29): true = ask the am-list-user-usage Edge Function which accounts
+  // may be deleted (never signed in + no records; the server re-checks in am-delete-user) and
+  // show the face-enrolment counts. Turn on only after machtile-mini-mes migration
+  // 20260929120000_account_usage_and_delete is applied and am-list-user-usage + am-delete-user
+  // are deployed. false = no delete button and no counts (sorting/colours still apply).
+  enableAccountDelete: false,
+  // 📷 人臉登記 button on active operator rows → the Login Center enrolment page (live since
+  // 2026-09-16; ?account= highlights the person once login-center carries that change).
+  // Empty string hides the button.
+  faceAdminUrl: "https://login.machtile.com/admin/face",
 };

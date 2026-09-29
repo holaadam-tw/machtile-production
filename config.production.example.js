@@ -41,4 +41,8 @@ window.MACHTILE_CONFIG = {
   // Never notifies or assigns. Turn on only after `supabase functions deploy jev-triage`,
   // the AI_GATEWAY_API_KEY secret and migration 20260924143000 are in place.
   enableJevTriage: false,
+  // 員工帳號管理 (2026-09-29): see config.js — delete + face counts need migration
+  // 20260929120000 and the am-list-user-usage / am-delete-user functions first.
+  enableAccountDelete: false,
+  faceAdminUrl: "",
 };
