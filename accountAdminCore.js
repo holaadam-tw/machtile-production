@@ -1,4 +1,4 @@
-// accountAdminCore.js — 「員工帳號管理」的純邏輯（排序、可不可以刪、人臉登記入口）。
+// accountAdminCore.js — 「員工帳號管理」的純邏輯（排序、可不可以刪、人臉登記入口、主管能動誰）。
 //
 // DOM 與 fetch 留在 app.js；這裡只做可測的決策。repo 根目錄執行
 //   node accountAdminCore.test.js
@@ -309,6 +309,93 @@
     return { show: true, eligible: true, href: `${base}${joiner}account=${encodeURIComponent(label)}`, badge, badgeKind, badgeTitle, note: "" };
   }
 
+  // ---- 誰能動誰（owner 2026-09-30「做主管帳號管理」）----
+  // 管理者（admin）：照舊。主管（manager）：只能管「作業員、一般人員帳號（非系統／站別）、不是自己」，
+  // 可以新增（角色固定作業員）、編輯名稱／登入帳號、重設密碼、停用／啟用、人臉登記；
+  // 不能刪除、不能改角色與可用系統、不能動主管／管理者／排程／品檢／系統與站別帳號、不能動自己。
+  // ⚠️ 這裡只決定畫面；真正的規則在伺服器（machtile-mini-mes supabase/functions/_shared/accountPolicy.ts），
+  // 目標帳號的角色是伺服器當場查的，不信任畫面。
+  const ACCOUNT_MANAGER_ROLES = Object.freeze(["admin", "manager"]);
+  const ADMIN_CREATABLE_ROLES = Object.freeze(["manager", "planner", "operator", "inspector"]);
+  const MANAGER_CREATABLE_ROLES = Object.freeze(["operator"]);
+  // 主管建立的作業員一律只開 MachTile Cloud（伺服器寫死；主管畫面不出現可用系統）。
+  const MANAGER_DEFAULT_SYSTEMS = Object.freeze(["cloud"]);
+
+  const MANAGER_LOCK = Object.freeze({
+    text: "🔒 只有管理者可以調整",
+    title: "主管只能管理作業員帳號（新增、編輯、重設密碼、停用／啟用、人臉登記）。主管、管理者、排程、品檢、系統與站別帳號，以及角色、可用系統、刪除，請找管理者。",
+  });
+  const MANAGER_SELF_LOCK = Object.freeze({
+    text: "🔒 自己的帳號由管理者調整",
+    title: "主管不能調整自己的帳號與權限。要改自己的密碼，請走一般的登入流程或請管理者重設。",
+  });
+
+  function canManageAccounts(role) {
+    return ACCOUNT_MANAGER_ROLES.includes(String(role || ""));
+  }
+
+  function creatableRoles(viewerRole) {
+    if (viewerRole === "admin") return ADMIN_CREATABLE_ROLES.slice();
+    if (viewerRole === "manager") return MANAGER_CREATABLE_ROLES.slice();
+    return [];
+  }
+
+  // 主管可不可以動這個帳號（與伺服器 managerTargetRefusal 同規則；伺服器另外還看登入身分的
+  // platform_role／auth 角色，畫面看不到，被擋時會回 403）。
+  function managerCanManage(user, usage, selfId) {
+    if (!user) return false;
+    if (selfId && user.id === selfId) return false;
+    if (String(user.role || "") !== "operator") return false;
+    return accountKind(user, usage) === "person";
+  }
+
+  // viewer = { role, selfId } → 這一列畫面上可以出現哪些按鈕。
+  //   { manageable, canEdit, canReset, canToggle, allowDelete, allowFace, lock }
+  //   lock：不能動時顯示的鎖頭（{ text, title }），可以動時為 null。
+  //   allowDelete：是否「允許」出現刪除區（實際能不能刪仍看 deleteVerdict）。
+  function accountPermissions(viewer, user, usage) {
+    const role = String(viewer?.role || "");
+    const selfId = viewer?.selfId || "";
+    const isSelf = Boolean(user && selfId && user.id === selfId);
+    const none = { manageable: false, canEdit: false, canReset: false, canToggle: false, allowDelete: false, allowFace: false, lock: null };
+    if (!user) return none;
+    if (role === "admin") {
+      const isAdmin = user.role === "admin";
+      return {
+        manageable: true,
+        canEdit: !isAdmin,
+        canReset: !isAdmin || isSelf,
+        canToggle: !isAdmin && !isSelf,
+        allowDelete: true,
+        allowFace: true,
+        lock: null,
+      };
+    }
+    if (role === "manager") {
+      if (isSelf) return { ...none, lock: MANAGER_SELF_LOCK };
+      if (!managerCanManage(user, usage, selfId)) return { ...none, lock: MANAGER_LOCK };
+      return { manageable: true, canEdit: true, canReset: true, canToggle: true, allowDelete: false, allowFace: true, lock: null };
+    }
+    return none;
+  }
+
+  // 伺服器 403 的 reason（supabase/functions/_shared/accountPolicy.ts）→ 白話。
+  const REFUSAL_TEXT = Object.freeze({
+    SELF: "主管不能調整自己的帳號，請找管理者。",
+    NOT_OPERATOR: "主管只能管理作業員帳號；這個帳號請找管理者調整。",
+    SYSTEM_ACCOUNT: "這是系統帳號（程式使用），只有管理者可以調整。",
+    STATION: "這是站別帳號（機台平板共用），只有管理者可以調整。",
+    PLATFORM_ADMIN: "這個帳號有平台管理權限，只有管理者可以調整。",
+    AUTH_ROLE_MISMATCH: "這個帳號的登入權限不是作業員，只有管理者可以調整。",
+    AUTH_TENANT_MISMATCH: "這個帳號的登入身分屬於別的工廠，只有管理者可以調整。",
+    PERMISSION_FIELD: "主管不能設定角色、可用系統或平台權限。",
+    RESERVED_IDENTITY: "名稱或帳號看起來像系統帳號（bridge.、系統帳號）或站別帳號（站別、HMC-nn），這類帳號請找管理者建立。",
+  });
+
+  function refusalText(reason) {
+    return REFUSAL_TEXT[String(reason || "")] || "";
+  }
+
   return {
     ROLE_ORDER,
     ROLE_LABELS,
@@ -328,5 +415,12 @@
     deleteVerdict,
     confirmMatches,
     faceEntry,
+    ACCOUNT_MANAGER_ROLES,
+    MANAGER_DEFAULT_SYSTEMS,
+    canManageAccounts,
+    creatableRoles,
+    managerCanManage,
+    accountPermissions,
+    refusalText,
   };
 });

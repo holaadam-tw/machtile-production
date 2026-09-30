@@ -138,5 +138,56 @@ eq("faceEntry：狀態開、讀不到 → 按鈕照常＋—", (() => { const f 
 eq("faceEntry：狀態關、有資料 → 不顯示張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: false }).badge, "");
 eq("faceEntry：狀態開、刪除關也有張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: true }).badge, "已登記 2 張");
 
+console.log("== 主管帳號管理：誰能動誰（owner 2026-09-30）==");
+{
+  const ME = U("mg1", "黃主管", "manager");
+  const V = { role: "manager", selfId: "mg1" };
+  const A = { role: "admin", selfId: "ad1" };
+  const op = U("op1", "阮文英", "operator");
+  const perm = (viewer, user, usage) => c.accountPermissions(viewer, user, usage);
+  const buttons = (p) => [p.canEdit, p.canReset, p.canToggle, p.allowDelete, p.allowFace];
+
+  eq("canManageAccounts：admin／manager 可進、其他不行",
+    ["admin", "manager", "planner", "operator", "inspector", "", undefined].map((r) => c.canManageAccounts(r)),
+    [true, true, false, false, false, false, false]);
+  eq("新增角色：admin 四種（不含 admin）", c.creatableRoles("admin"), ["manager", "planner", "operator", "inspector"]);
+  eq("新增角色：manager 只能作業員", c.creatableRoles("manager"), ["operator"]);
+  eq("新增角色：其他角色沒有", c.creatableRoles("planner"), []);
+  eq("主管建立的作業員可用系統固定 cloud", c.MANAGER_DEFAULT_SYSTEMS, ["cloud"]);
+
+  eq("主管→一般作業員：編輯／重設／停用／人臉可，刪除不行", buttons(perm(V, op)), [true, true, true, false, true]);
+  eq("主管→一般作業員：沒有鎖頭", perm(V, op).lock, null);
+  eq("主管→已停用作業員：可以啟用", perm(V, U("off", "離職", "operator", { is_active: false })).canToggle, true);
+  for (const [label, user] of [
+    ["另一位主管", U("mg2", "主管B", "manager")],
+    ["管理者", U("ad1", "管理者", "admin")],
+    ["排程", U("pl1", "排程", "planner")],
+    ["品檢", U("in1", "品檢", "inspector")],
+    ["系統帳號（bridge.）", U("br1", "派工橋", "operator", { account: "bridge.dispatch@machtile.local" })],
+    ["系統帳號（名稱）", U("sy1", "報表（系統帳號）", "operator")],
+    ["站別（名稱）", U("st1", "HMC-01 站別", "operator")],
+    ["站別（帳號 hmc-02）", U("st2", "二號機", "operator", { account: "hmc-02@machtile.local" })],
+  ]) {
+    const p = perm(V, user);
+    eq(`主管→${label}：全部按鈕不出現`, buttons(p), [false, false, false, false, false]);
+    eq(`主管→${label}：鎖頭「只有管理者可以調整」`, p.lock && p.lock.text, "🔒 只有管理者可以調整");
+  }
+  eq("主管→伺服器說是站別的作業員：鎖", perm(V, op, { station: true }).manageable, false);
+  eq("主管→自己：全部不行、鎖頭寫自己", [buttons(perm(V, ME)), perm(V, ME).lock.text],
+    [[false, false, false, false, false], "🔒 自己的帳號由管理者調整"]);
+  eq("managerCanManage 與 accountPermissions 一致", c.managerCanManage(op, undefined, "mg1"), true);
+
+  eq("管理者：照舊——作業員全開", buttons(perm(A, op)), [true, true, true, true, true]);
+  eq("管理者：照舊——主管可編輯、重設、停用", buttons(perm(A, U("mg2", "主管B", "manager"))), [true, true, true, true, true]);
+  eq("管理者：照舊——其他管理者只剩刪除區（由 deleteVerdict 顯示鎖頭）", buttons(perm(A, U("ad2", "另一位管理者", "admin"))), [false, false, false, true, true]);
+  eq("管理者：照舊——自己可重設密碼、不能停用", buttons(perm(A, U("ad1", "我", "admin"))), [false, true, false, true, true]);
+  eq("管理者：站別帳號可操作（有確認框）", perm(A, U("st1", "HMC-01 站別", "operator")).canToggle, true);
+  eq("排程／作業員看不到任何按鈕", [buttons(perm({ role: "planner" }, op)), buttons(perm({ role: "operator" }, op))],
+    [[false, false, false, false, false], [false, false, false, false, false]]);
+
+  eq("伺服器拒絕原因有白話", c.refusalText("STATION").includes("站別"), true);
+  eq("沒有的原因回空字串", c.refusalText("WHAT"), "");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

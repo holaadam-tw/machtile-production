@@ -14088,6 +14088,17 @@ function amErrorText(code, fallback) {
   return amErrorMessages[code] || fallback || "操作失敗，請稍後再試。";
 }
 
+// Function-call result → message. A 403 from the manager scope gate carries `reason`
+// (supabase/functions/_shared/accountPolicy.ts) which has its own plain-language text.
+function amResultErrorText(result) {
+  const reasonText = amAccountCore && result?.body?.reason ? amAccountCore.refusalText(result.body.reason) : "";
+  return reasonText || amErrorText(result?.code, result?.body?.message);
+}
+
+function amViewerRole() {
+  return String(machtileAuthState.role || "");
+}
+
 // options.quiet: a 401 is NOT treated as "session expired" (used by the read-only usage lookup,
 // which must never throw the admin out or pop anything up — the page just shows "—").
 async function amCallFunction(fnName, payload, options = {}) {
@@ -14148,11 +14159,16 @@ async function amFetchUsage() {
 async function amInitUsersModule() {
   const root = document.querySelector("[data-am-users-root]");
   if (!root) return;
-  if (machtileAuthState.role !== "admin") {
+  // owner 2026-09-30：主管（manager）也可以進來，但只能管作業員（accountAdminCore.accountPermissions；
+  // 伺服器 am-* 函式另外強制同一套規則）。
+  const canManage = amAccountCore
+    ? amAccountCore.canManageAccounts(machtileAuthState.role)
+    : machtileAuthState.role === "admin";
+  if (!canManage) {
     root.innerHTML = `
       <section class="admin-side-note">
-        <strong>需要管理者帳號</strong>
-        <p>員工帳號管理只開放給廠內管理者（admin）。請改用管理者帳號登入。</p>
+        <strong>需要管理者或主管帳號</strong>
+        <p>員工帳號管理開放給廠內管理者（admin）與主管（manager；只能管作業員）。請改用管理者或主管帳號登入。</p>
       </section>
     `;
     return;
@@ -14192,16 +14208,19 @@ function amRenderUserRow(user, selfId) {
   const editOpen = amUsersState.expandedEditId === user.id;
   const confirmOpen = amUsersState.confirmStateId === user.id;
   const deleteOpen = amUsersState.deleteOpenId === user.id;
-  const canReset = !isAdmin || isSelf;
-  const canEdit = !isAdmin;
-  const canToggle = !isAdmin && !isSelf;
+  // Who may touch this row (admin: unchanged rules; manager: plain operators only).
+  const perm = amAccountCore
+    ? amAccountCore.accountPermissions({ role: amViewerRole(), selfId }, user, usage)
+    : { canEdit: !isAdmin, canReset: !isAdmin || isSelf, canToggle: !isAdmin && !isSelf, allowDelete: true, allowFace: true, lock: null };
+  const { canReset, canEdit, canToggle } = perm;
+  const viewerIsAdmin = amViewerRole() === "admin";
   // Delete UI only with enableAccountDelete AND usage loaded (flag off / lookup failed → none, not
   // even the self lock). The face badge has its own switch (enableFaceStatus).
   const mode = amAccountCore ? amAccountCore.usageMode(config) : { deleteEnabled: false, faceStatusEnabled: false };
-  const verdict = amAccountCore && mode.deleteEnabled && amUsersState.usageById
+  const verdict = amAccountCore && perm.allowDelete && mode.deleteEnabled && amUsersState.usageById
     ? amAccountCore.deleteVerdict(user, usage, selfId)
     : { show: false };
-  const face = amAccountCore
+  const face = amAccountCore && perm.allowFace
     ? amAccountCore.faceEntry(user, usage, config.faceAdminUrl, { faceStatus: mode.faceStatusEnabled })
     : { show: false };
   const id = escapeHtml(user.id);
@@ -14215,7 +14234,9 @@ function amRenderUserRow(user, selfId) {
     deleteHtml = `<button type="button" class="am-delete-button" data-am-delete-open="${id}" title="${escapeHtml(verdict.title)}">${deleteOpen ? "收合" : "🗑 刪除"}</button>`;
   } else if (verdict.show) {
     deleteHtml = `<span class="am-lock" tabindex="0" title="${escapeHtml(verdict.title)}">${escapeHtml(verdict.text)}</span>`;
-  } else if (isAdmin && !isSelf) {
+  } else if (perm.lock) {
+    deleteHtml = `<span class="am-lock am-manager-lock" tabindex="0" title="${escapeHtml(perm.lock.title)}">${escapeHtml(perm.lock.text)}</span>`;
+  } else if (viewerIsAdmin && isAdmin && !isSelf) {
     deleteHtml = `<span class="empty-note">平台管理</span>`;
   }
 
@@ -14356,17 +14377,29 @@ function amRenderUsersModule() {
         <label class="admin-field"><span>姓名</span><input type="text" data-am-new-name></label>
         <label class="admin-field"><span>登入帳號（工號或 Email）</span><input type="text" data-am-new-email></label>
         <label class="admin-field"><span>初始密碼（至少 8 碼）</span>${machtilePasswordField('<input type="password" autocomplete="new-password" data-am-new-password>')}</label>
-        <label class="admin-field"><span>角色</span>
-          <select data-am-new-role>
-            ${amCreatableRoles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
-          </select>
-        </label>
+        ${amCreateRoleField()}
       </div>
       <button class="admin-save-button" type="button" data-am-create>建立帳號</button>
-      <p class="empty-note">管理者帳號由平台（super admin）建立，不能在此新增。</p>
+      ${amViewerRole() === "manager"
+        ? `<p class="empty-note" data-am-manager-note>主管只能新增作業員；新帳號可用系統為 MachTile Cloud（預設）。角色、可用系統、刪除帳號，以及主管／排程／品檢／系統與站別帳號，請找管理者。</p>`
+        : `<p class="empty-note">管理者帳號由平台（super admin）建立，不能在此新增。</p>`}
     </section>
   `;
   amBindUsersModuleEvents();
+}
+
+// Role field of the create form: admin picks from the four creatable roles (unchanged); a manager
+// sees a fixed 「作業員」 (the server forces role=operator + systems ["cloud"] anyway).
+function amCreateRoleField() {
+  const roles = amAccountCore ? amAccountCore.creatableRoles(amViewerRole()) : amCreatableRoles;
+  if (amViewerRole() === "manager") {
+    return `<label class="admin-field"><span>角色</span><input type="text" value="${escapeHtml(amRoleLabels.operator)}（固定）" disabled data-am-new-role-fixed></label>`;
+  }
+  return `<label class="admin-field"><span>角色</span>
+          <select data-am-new-role>
+            ${roles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
+          </select>
+        </label>`;
 }
 
 function amSelfAppUserId() {
@@ -14458,7 +14491,7 @@ function amBindUsersModuleEvents() {
             "",
           ).text.replace(/^🔒\s*/, "")
           : "";
-        amSetMessage(`${amErrorText(result.code, result.body?.message)}${why ? `（${why}）` : ""}`, "error");
+        amSetMessage(`${amResultErrorText(result)}${why ? `（${why}）` : ""}`, "error");
       }
       await amReloadUsers();
     });
@@ -14470,7 +14503,7 @@ function amBindUsersModuleEvents() {
     const email = machtileAccountToEmail(root.querySelector("[data-am-new-email]")?.value);
     const passwordInput = root.querySelector("[data-am-new-password]");
     const password = passwordInput?.value || "";
-    const role = root.querySelector("[data-am-new-role]")?.value || "";
+    const role = amViewerRole() === "manager" ? "operator" : (root.querySelector("[data-am-new-role]")?.value || "");
     if (!name || !email) {
       amSetMessage("請填姓名與登入帳號。", "error");
       amRenderUsersModule();
@@ -14491,7 +14524,7 @@ function amBindUsersModuleEvents() {
       amUsersState.confirmStateId = "";
       await amReloadUsers();
     } else {
-      amSetMessage(amErrorText(result.code, result.body?.message), "error");
+      amSetMessage(amResultErrorText(result), "error");
       amRenderUsersModule();
     }
   });
@@ -14542,7 +14575,7 @@ function amBindUsersModuleEvents() {
         amUsersState.expandedEditId = "";
         await amReloadUsers();
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
         amRenderUsersModule();
       }
     });
@@ -14566,7 +14599,7 @@ function amBindUsersModuleEvents() {
         amSetMessage("密碼已重設。", "ok");
         amUsersState.expandedResetId = "";
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
       }
       amRenderUsersModule();
     });
@@ -14608,7 +14641,7 @@ function amBindUsersModuleEvents() {
         amSetMessage(nextActive ? "帳號已重新啟用。" : "帳號已停用（無法再登入）。", "ok");
         await amReloadUsers();
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
         amRenderUsersModule();
       }
     });
