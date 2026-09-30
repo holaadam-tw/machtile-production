@@ -56,4 +56,8 @@ window.MACHTILE_CONFIG = {
   // 2026-09-16; ?account= highlights the person once login-center carries that change).
   // Empty string hides the button.
   faceAdminUrl: "https://login.machtile.com/admin/face",
+  // 人臉「已登記 N 張／未登記」(owner 2026-09-30): its own switch, independent of
+  // enableAccountDelete. true = ask the read-only am-list-user-usage Edge Function for the counts.
+  // Not deployed / fails → the badge shows 「—」 (tooltip: 狀態暫時讀不到); nothing else changes.
+  enableFaceStatus: true,
 };

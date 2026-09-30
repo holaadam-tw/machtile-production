@@ -79,6 +79,7 @@ eq("有報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPOR
 eq("站別優先於報工", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["HAS_REPORTS", "STATION"], reportCount: 18 }, "me").text, "🔒 站別帳號，機台綁定中");
 eq("系統帳號：不可刪、不叫人停用", c.deleteVerdict(U("b", "派工橋（系統帳號）", "planner", { account: "bridge.dispatch@machtile.local" }), { blockers: ["SIGNED_IN", "ACTIVE_ACCOUNT"] }, "me").text, "🔒 系統帳號，程式使用中");
 eq("停用的系統帳號即使伺服器說可刪也不給刪", c.deleteVerdict(U("b", "x", "planner", { account: "bridge.x", is_active: false }), clean, "me").canDelete, false);
+eq("伺服器原因碼 SYSTEM_ACCOUNT 也顯示系統帳號鎖頭（即使前端規則沒認出）", c.deleteVerdict(U("x", "某人", "operator", { is_active: false }), { blockers: ["SIGNED_IN", "SYSTEM_ACCOUNT"] }, "me").text, "🔒 系統帳號，程式使用中");
 eq("站別鎖頭說明不叫人停用", c.blockerText("STATION").title.includes("也請不要停用"), true);
 eq("曾登入", c.deleteVerdict(U("a", "a", "operator"), { blockers: ["SIGNED_IN"] }, "me").text, "🔒 曾登入過，請改用停用");
 eq("其他使用紀錄＝總數−報工", c.deleteVerdict(U("a", "a", "manager"), { blockers: ["HAS_USAGE"], reportCount: 0, usageTotal: 5 }, "me").text, "🔒 不可刪除（有 5 筆使用紀錄）");
@@ -99,7 +100,7 @@ eq("空白不行", c.confirmMatches(fan, "   "), false);
 console.log("== faceEntry ==");
 const URL = "https://login.machtile.com/admin/face";
 eq("作業員：連結帶入登入帳號", c.faceEntry(U("1080301", "陳柏叡", "operator"), { faceActive: 0 }, URL),
-  { show: true, eligible: true, href: URL + "?account=1080301", badge: "未登記", note: "" });
+  { show: true, eligible: true, href: URL + "?account=1080301", badge: "未登記", badgeKind: "none", badgeTitle: c.faceBadge({ faceActive: 0 }, true).badgeTitle, note: "" });
 eq("已登記 N 張", c.faceEntry(U("adam", "Adam", "operator"), { faceActive: 2 }, URL).badge, "已登記 2 張");
 eq("使用紀錄沒載到→不顯示張數", c.faceEntry(U("adam", "Adam", "operator"), null, URL).badge, "");
 eq("用伺服器的真實登入帶入", c.faceEntry({ id: "f", name: "范文林", role: "operator", account: "fan.wenlin", is_active: true }, { loginLabel: "1100801", faceActive: 0 }, URL).href, URL + "?account=1100801");
@@ -113,8 +114,29 @@ eq("站別不顯示", c.faceEntry(U("s", "HMC-01 站別", "operator"), null, URL
 eq("停用不顯示", c.faceEntry(U("o", "o", "operator", { is_active: false }), null, URL).show, false);
 eq("功能關（沒設網址）不顯示", c.faceEntry(U("o", "o", "operator"), null, "").show, false);
 eq("外部信箱：不給按鈕、講原因", c.faceEntry(U("o", "o", "operator", { account: "someone@gmail.com" }), null, URL),
-  { show: true, eligible: false, href: "", badge: "", note: "外部信箱帳號不能刷臉" });
+  { show: true, eligible: false, href: "", badge: "", badgeKind: "", badgeTitle: "", note: "外部信箱帳號不能刷臉" });
 eq("網址已有參數用 &", c.faceEntry(U("o1", "o", "operator"), null, URL + "?x=1").href, URL + "?x=1&account=o1");
+
+console.log("== usageMode（兩個開關組合）==");
+eq("刪除關＋人臉狀態開（預設）→ 呼叫、只顯示人臉", c.usageMode({ enableAccountDelete: false, enableFaceStatus: true }), { fetchUsage: true, deleteEnabled: false, faceStatusEnabled: true });
+eq("刪除開＋人臉狀態關 → 呼叫、只用於刪除", c.usageMode({ enableAccountDelete: true, enableFaceStatus: false }), { fetchUsage: true, deleteEnabled: true, faceStatusEnabled: false });
+eq("兩個都開", c.usageMode({ enableAccountDelete: true, enableFaceStatus: true }), { fetchUsage: true, deleteEnabled: true, faceStatusEnabled: true });
+eq("兩個都關 → 完全不呼叫", c.usageMode({ enableAccountDelete: false, enableFaceStatus: false }), { fetchUsage: false, deleteEnabled: false, faceStatusEnabled: false });
+eq("舊 config（沒有新開關）→ 不呼叫", c.usageMode({}), { fetchUsage: false, deleteEnabled: false, faceStatusEnabled: false });
+eq("字串 \"true\" 不算開", c.usageMode({ enableFaceStatus: "true" }).faceStatusEnabled, false);
+
+console.log("== faceBadge / faceEntry 狀態 ==");
+eq("已登記", c.faceBadge({ faceActive: 3 }, true).badge, "已登記 3 張");
+eq("已登記是綠（ok）", c.faceBadge({ faceActive: 1 }, true).badgeKind, "ok");
+eq("未登記是灰（none）", c.faceBadge({ faceActive: 0 }, true).badgeKind, "none");
+eq("讀不到（沒部署／失敗）→ —", c.faceBadge(null, true).badge, "—");
+eq("讀不到的 title", c.faceBadge(undefined, true).badgeTitle.startsWith("人臉登記狀態暫時讀不到"), true);
+eq("清單裡沒 faceActive → —", c.faceBadge({ blockers: [] }, true).badge, "—");
+eq("faceActive=null → —", c.faceBadge({ faceActive: null }, true).badge, "—");
+eq("關閉 → 不顯示", c.faceBadge({ faceActive: 3 }, false).badge, "");
+eq("faceEntry：狀態開、讀不到 → 按鈕照常＋—", (() => { const f = c.faceEntry(U("0990001", "王", "operator"), undefined, URL, { faceStatus: true }); return [f.eligible, f.href !== "", f.badge]; })(), [true, true, "—"]);
+eq("faceEntry：狀態關、有資料 → 不顯示張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: false }).badge, "");
+eq("faceEntry：狀態開、刪除關也有張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: true }).badge, "已登記 2 張");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

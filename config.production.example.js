@@ -45,4 +45,6 @@ window.MACHTILE_CONFIG = {
   // 20260929120000 and the am-list-user-usage / am-delete-user functions first.
   enableAccountDelete: false,
   faceAdminUrl: "",
+  // 人臉「已登記 N 張」獨立開關（不需 enableAccountDelete）；函式讀不到時顯示「—」。
+  enableFaceStatus: true,
 };

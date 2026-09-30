@@ -14088,7 +14088,9 @@ function amErrorText(code, fallback) {
   return amErrorMessages[code] || fallback || "操作失敗，請稍後再試。";
 }
 
-async function amCallFunction(fnName, payload) {
+// options.quiet: a 401 is NOT treated as "session expired" (used by the read-only usage lookup,
+// which must never throw the admin out or pop anything up — the page just shows "—").
+async function amCallFunction(fnName, payload, options = {}) {
   const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
   const response = await fetch(`${baseUrl}/functions/v1/${fnName}`, {
     method: "POST",
@@ -14099,7 +14101,7 @@ async function amCallFunction(fnName, payload) {
     },
     body: JSON.stringify(payload),
   });
-  if (response.status === 401) machtileHandleUnauthorized();
+  if (response.status === 401 && !options.quiet) machtileHandleUnauthorized();
   let body = {};
   try {
     body = await response.json();
@@ -14117,15 +14119,19 @@ async function amFetchUsers() {
 }
 
 // Server facts per account (never signed in? any records? face enrolments?) from the
-// am-list-user-usage Edge Function. Gated by config.enableAccountDelete: until the migration
-// and both functions are deployed the page behaves exactly as before (no delete, no counts).
+// am-list-user-usage Edge Function (read-only). Called when EITHER switch is on
+// (accountAdminCore.usageMode): enableAccountDelete → delete buttons/locks;
+// enableFaceStatus → 「已登記 N 張／未登記」. A missing/failed function never raises: the
+// delete UI stays hidden and the face badge shows 「—」.
 async function amFetchUsage() {
   amUsersState.usageNote = "";
-  if (config.enableAccountDelete !== true || !amAccountCore) return null;
+  const mode = amAccountCore ? amAccountCore.usageMode(config) : { fetchUsage: false, deleteEnabled: false };
+  if (!mode.fetchUsage) return null;
+  const failNote = mode.deleteEnabled ? "使用紀錄暫時查不到，先不顯示刪除功能。" : "";
   try {
-    const result = await amCallFunction("am-list-user-usage", {});
+    const result = await amCallFunction("am-list-user-usage", {}, { quiet: true });
     if (!result.ok || !Array.isArray(result.body?.users)) {
-      amUsersState.usageNote = "使用紀錄暫時查不到，先不顯示刪除功能。";
+      amUsersState.usageNote = failNote;
       return null;
     }
     const byId = {};
@@ -14134,7 +14140,7 @@ async function amFetchUsage() {
     });
     return byId;
   } catch (error) {
-    amUsersState.usageNote = "使用紀錄暫時查不到，先不顯示刪除功能。";
+    amUsersState.usageNote = failNote;
     return null;
   }
 }
@@ -14189,11 +14195,15 @@ function amRenderUserRow(user, selfId) {
   const canReset = !isAdmin || isSelf;
   const canEdit = !isAdmin;
   const canToggle = !isAdmin && !isSelf;
-  // No usage loaded (flag off / lookup failed) → no delete UI at all, not even the self lock.
-  const verdict = amAccountCore && amUsersState.usageById
+  // Delete UI only with enableAccountDelete AND usage loaded (flag off / lookup failed → none, not
+  // even the self lock). The face badge has its own switch (enableFaceStatus).
+  const mode = amAccountCore ? amAccountCore.usageMode(config) : { deleteEnabled: false, faceStatusEnabled: false };
+  const verdict = amAccountCore && mode.deleteEnabled && amUsersState.usageById
     ? amAccountCore.deleteVerdict(user, usage, selfId)
     : { show: false };
-  const face = amAccountCore ? amAccountCore.faceEntry(user, usage, config.faceAdminUrl) : { show: false };
+  const face = amAccountCore
+    ? amAccountCore.faceEntry(user, usage, config.faceAdminUrl, { faceStatus: mode.faceStatusEnabled })
+    : { show: false };
   const id = escapeHtml(user.id);
   const display = machtileAccountDisplay(user.account) || "-";
   const rowClass = ["admin-data-row", "am-user-row", active ? "is-active" : "is-inactive", isSelf ? "is-self" : ""]
@@ -14212,7 +14222,7 @@ function amRenderUserRow(user, selfId) {
   let faceHtml = "";
   if (face.show && face.eligible) {
     const badge = face.badge
-      ? `<small class="am-face-badge${face.badge === "未登記" ? " is-none" : ""}">${escapeHtml(face.badge)}</small>`
+      ? `<small class="am-face-badge${face.badgeKind === "none" ? " is-none" : face.badgeKind === "unknown" ? " is-unknown" : ""}" title="${escapeHtml(face.badgeTitle || "")}">${escapeHtml(face.badge)}</small>`
       : "";
     faceHtml = `<span class="am-face"><a class="am-face-link" href="${escapeHtml(face.href)}" target="_blank" rel="noopener" title="開啟登入中心的人臉登記頁並標出這位員工（登記時本人要在場輸入密碼）">📷 人臉登記</a>${badge}</span>`;
   } else if (face.show) {

@@ -11404,3 +11404,10 @@ body.report-work-route-mode .machtile-route-brand-bar {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* 人臉狀態讀不到（am-list-user-usage 未部署或失敗）：顯示「—」，滑鼠提示說明 */
+.am-face-badge.is-unknown {
+  background: var(--gray-soft);
+  color: var(--subtle);
+  cursor: help;
+}
