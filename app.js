@@ -14079,6 +14079,9 @@ const amUsersState = {
   inactiveOpen: false,
   specialOpen: false,
   deleteOpenId: "",
+  // 修改紀錄（am-list-user-audit）：展開中的帳號，與每個帳號最近 20 筆的載入結果。
+  auditOpenId: "",
+  auditById: {},
 };
 
 // Pure rules (sorting / delete verdict / face entry) live in accountAdminCore.js.
@@ -14086,6 +14089,17 @@ const amAccountCore = typeof globalThis !== "undefined" ? globalThis.MachTileAcc
 
 function amErrorText(code, fallback) {
   return amErrorMessages[code] || fallback || "操作失敗，請稍後再試。";
+}
+
+// Function-call result → message. A 403 from the manager scope gate carries `reason`
+// (supabase/functions/_shared/accountPolicy.ts) which has its own plain-language text.
+function amResultErrorText(result) {
+  const reasonText = amAccountCore && result?.body?.reason ? amAccountCore.refusalText(result.body.reason) : "";
+  return reasonText || amErrorText(result?.code, result?.body?.message);
+}
+
+function amViewerRole() {
+  return String(machtileAuthState.role || "");
 }
 
 // options.quiet: a 401 is NOT treated as "session expired" (used by the read-only usage lookup,
@@ -14148,11 +14162,16 @@ async function amFetchUsage() {
 async function amInitUsersModule() {
   const root = document.querySelector("[data-am-users-root]");
   if (!root) return;
-  if (machtileAuthState.role !== "admin") {
+  // owner 2026-09-30：主管（manager）也可以進來，但只能管作業員（accountAdminCore.accountPermissions；
+  // 伺服器 am-* 函式另外強制同一套規則）。
+  const canManage = amAccountCore
+    ? amAccountCore.canManageAccounts(machtileAuthState.role)
+    : machtileAuthState.role === "admin";
+  if (!canManage) {
     root.innerHTML = `
       <section class="admin-side-note">
-        <strong>需要管理者帳號</strong>
-        <p>員工帳號管理只開放給廠內管理者（admin）。請改用管理者帳號登入。</p>
+        <strong>需要管理者或主管帳號</strong>
+        <p>員工帳號管理開放給廠內管理者（admin）與主管（manager；只能管作業員）。請改用管理者或主管帳號登入。</p>
       </section>
     `;
     return;
@@ -14192,16 +14211,20 @@ function amRenderUserRow(user, selfId) {
   const editOpen = amUsersState.expandedEditId === user.id;
   const confirmOpen = amUsersState.confirmStateId === user.id;
   const deleteOpen = amUsersState.deleteOpenId === user.id;
-  const canReset = !isAdmin || isSelf;
-  const canEdit = !isAdmin;
-  const canToggle = !isAdmin && !isSelf;
+  const auditOpen = amUsersState.auditOpenId === user.id;
+  // Who may touch this row (admin: unchanged rules; manager: plain operators only).
+  const perm = amAccountCore
+    ? amAccountCore.accountPermissions({ role: amViewerRole(), selfId }, user, usage)
+    : { canEdit: !isAdmin, canReset: !isAdmin || isSelf, canToggle: !isAdmin && !isSelf, allowDelete: true, allowFace: true, lock: null };
+  const { canReset, canEdit, canToggle } = perm;
+  const viewerIsAdmin = amViewerRole() === "admin";
   // Delete UI only with enableAccountDelete AND usage loaded (flag off / lookup failed → none, not
   // even the self lock). The face badge has its own switch (enableFaceStatus).
   const mode = amAccountCore ? amAccountCore.usageMode(config) : { deleteEnabled: false, faceStatusEnabled: false };
-  const verdict = amAccountCore && mode.deleteEnabled && amUsersState.usageById
+  const verdict = amAccountCore && perm.allowDelete && mode.deleteEnabled && amUsersState.usageById
     ? amAccountCore.deleteVerdict(user, usage, selfId)
     : { show: false };
-  const face = amAccountCore
+  const face = amAccountCore && perm.allowFace
     ? amAccountCore.faceEntry(user, usage, config.faceAdminUrl, { faceStatus: mode.faceStatusEnabled })
     : { show: false };
   const id = escapeHtml(user.id);
@@ -14215,7 +14238,9 @@ function amRenderUserRow(user, selfId) {
     deleteHtml = `<button type="button" class="am-delete-button" data-am-delete-open="${id}" title="${escapeHtml(verdict.title)}">${deleteOpen ? "收合" : "🗑 刪除"}</button>`;
   } else if (verdict.show) {
     deleteHtml = `<span class="am-lock" tabindex="0" title="${escapeHtml(verdict.title)}">${escapeHtml(verdict.text)}</span>`;
-  } else if (isAdmin && !isSelf) {
+  } else if (perm.lock) {
+    deleteHtml = `<span class="am-lock am-manager-lock" tabindex="0" title="${escapeHtml(perm.lock.title)}">${escapeHtml(perm.lock.text)}</span>`;
+  } else if (viewerIsAdmin && isAdmin && !isSelf) {
     deleteHtml = `<span class="empty-note">平台管理</span>`;
   }
 
@@ -14251,10 +14276,12 @@ function amRenderUserRow(user, selfId) {
         ${canEdit ? `<button type="button" data-am-edit-open="${id}">${editOpen ? "收合" : "編輯"}</button>` : ""}
         ${canReset ? `<button type="button" data-am-reset-open="${id}">${resetOpen ? "收合" : "重設密碼"}</button>` : ""}
         ${toggleButton}
+        ${perm.manageable ? `<button type="button" class="am-audit-button" data-am-audit-open="${id}">${auditOpen ? "收合紀錄" : "🕘 修改紀錄"}</button>` : ""}
         ${faceHtml}
         ${deleteHtml}
       </span>
     </div>
+    ${auditOpen ? amRenderAuditPanel(user.id) : ""}
     ${guardedStop && confirmOpen ? `
       <div class="admin-data-row am-sub-row am-stop-row" data-am-stop-row="${id}">
         <div class="am-sub-wide">
@@ -14356,17 +14383,75 @@ function amRenderUsersModule() {
         <label class="admin-field"><span>姓名</span><input type="text" data-am-new-name></label>
         <label class="admin-field"><span>登入帳號（工號或 Email）</span><input type="text" data-am-new-email></label>
         <label class="admin-field"><span>初始密碼（至少 8 碼）</span>${machtilePasswordField('<input type="password" autocomplete="new-password" data-am-new-password>')}</label>
-        <label class="admin-field"><span>角色</span>
-          <select data-am-new-role>
-            ${amCreatableRoles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
-          </select>
-        </label>
+        ${amCreateRoleField()}
       </div>
       <button class="admin-save-button" type="button" data-am-create>建立帳號</button>
-      <p class="empty-note">管理者帳號由平台（super admin）建立，不能在此新增。</p>
+      ${amViewerRole() === "manager"
+        ? `<p class="empty-note" data-am-manager-note>主管只能新增作業員；新帳號可用系統為 MachTile Cloud（預設）。角色、可用系統、刪除帳號，以及主管／排程／品檢／系統與站別帳號，請找管理者。</p>`
+        : `<p class="empty-note">管理者帳號由平台（super admin）建立，不能在此新增。</p>`}
     </section>
   `;
   amBindUsersModuleEvents();
+}
+
+// 修改紀錄 panel under a row (最近 20 筆). Manager: the server only returns rows the manager wrote.
+function amRenderAuditPanel(appUserId) {
+  const slot = amUsersState.auditById[appUserId] || { status: "loading" };
+  const scopeNote = amViewerRole() === "manager" ? "只顯示你做過的修改。" : "最近 20 筆，新的在上面。";
+  let body;
+  if (slot.status === "loading") {
+    body = `<p class="empty-note">載入修改紀錄中…</p>`;
+  } else if (slot.status === "error") {
+    body = `<p class="empty-note" style="color:#b42318">修改紀錄暫時讀不到（${escapeHtml(slot.message || "請稍後再試")}）。</p>`;
+  } else if (!slot.entries.length) {
+    body = `<p class="empty-note">還沒有修改紀錄。</p>`;
+  } else {
+    body = `<ol class="am-audit-list">${slot.entries.map((entry) => {
+      const v = amAccountCore ? amAccountCore.auditEntryView(entry) : { when: entry.at, who: "", what: entry.action, fields: [], warn: false };
+      return `<li class="am-audit-item${v.warn ? " is-warn" : ""}">
+        <span class="am-audit-when">${escapeHtml(v.when)}</span>
+        <span class="am-audit-who">${escapeHtml(v.who)}</span>
+        <strong class="am-audit-what">${escapeHtml(v.what)}</strong>
+        ${v.fields.length ? `<span class="am-audit-fields">${v.fields.map((f) => escapeHtml(f)).join("<br>")}</span>` : ""}
+      </li>`;
+    }).join("")}</ol>`;
+  }
+  return `
+    <div class="admin-data-row am-sub-row am-audit-row" data-am-audit-row="${escapeHtml(appUserId)}">
+      <div class="am-sub-wide">
+        <p class="am-audit-head">🕘 修改紀錄・${escapeHtml(scopeNote)}密碼內容不會被記錄。</p>
+        ${body}
+      </div>
+    </div>
+  `;
+}
+
+async function amLoadAudit(appUserId) {
+  amUsersState.auditById[appUserId] = { status: "loading", entries: [] };
+  amRenderUsersModule();
+  try {
+    const result = await amCallFunction("am-list-user-audit", { appUserId, limit: 20 }, { quiet: true });
+    amUsersState.auditById[appUserId] = result.ok && Array.isArray(result.body?.entries)
+      ? { status: "ready", entries: result.body.entries }
+      : { status: "error", entries: [], message: amResultErrorText(result) };
+  } catch (error) {
+    amUsersState.auditById[appUserId] = { status: "error", entries: [], message: String(error?.message || error) };
+  }
+  if (amUsersState.auditOpenId === appUserId) amRenderUsersModule();
+}
+
+// Role field of the create form: admin picks from the four creatable roles (unchanged); a manager
+// sees a fixed 「作業員」 (the server forces role=operator + systems ["cloud"] anyway).
+function amCreateRoleField() {
+  const roles = amAccountCore ? amAccountCore.creatableRoles(amViewerRole()) : amCreatableRoles;
+  if (amViewerRole() === "manager") {
+    return `<label class="admin-field"><span>角色</span><input type="text" value="${escapeHtml(amRoleLabels.operator)}（固定）" disabled data-am-new-role-fixed></label>`;
+  }
+  return `<label class="admin-field"><span>角色</span>
+          <select data-am-new-role>
+            ${roles.map((role) => `<option value="${role}">${escapeHtml(amRoleLabels[role])}</option>`).join("")}
+          </select>
+        </label>`;
 }
 
 function amSelfAppUserId() {
@@ -14380,6 +14465,8 @@ function amSetMessage(message, kind) {
 }
 
 async function amReloadUsers() {
+  // Any change may have added a history row: reload the open panel with the list.
+  if (amUsersState.auditOpenId) amLoadAudit(amUsersState.auditOpenId);
   try {
     const [users, usageById] = await Promise.all([amFetchUsers(), amFetchUsage()]);
     amUsersState.users = users;
@@ -14458,7 +14545,7 @@ function amBindUsersModuleEvents() {
             "",
           ).text.replace(/^🔒\s*/, "")
           : "";
-        amSetMessage(`${amErrorText(result.code, result.body?.message)}${why ? `（${why}）` : ""}`, "error");
+        amSetMessage(`${amResultErrorText(result)}${why ? `（${why}）` : ""}`, "error");
       }
       await amReloadUsers();
     });
@@ -14470,7 +14557,7 @@ function amBindUsersModuleEvents() {
     const email = machtileAccountToEmail(root.querySelector("[data-am-new-email]")?.value);
     const passwordInput = root.querySelector("[data-am-new-password]");
     const password = passwordInput?.value || "";
-    const role = root.querySelector("[data-am-new-role]")?.value || "";
+    const role = amViewerRole() === "manager" ? "operator" : (root.querySelector("[data-am-new-role]")?.value || "");
     if (!name || !email) {
       amSetMessage("請填姓名與登入帳號。", "error");
       amRenderUsersModule();
@@ -14491,7 +14578,7 @@ function amBindUsersModuleEvents() {
       amUsersState.confirmStateId = "";
       await amReloadUsers();
     } else {
-      amSetMessage(amErrorText(result.code, result.body?.message), "error");
+      amSetMessage(amResultErrorText(result), "error");
       amRenderUsersModule();
     }
   });
@@ -14542,7 +14629,7 @@ function amBindUsersModuleEvents() {
         amUsersState.expandedEditId = "";
         await amReloadUsers();
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
         amRenderUsersModule();
       }
     });
@@ -14563,12 +14650,22 @@ function amBindUsersModuleEvents() {
       const result = await amCallFunction("am-reset-password", { appUserId: id, newPassword });
       if (input) input.value = "";
       if (result.ok) {
-        amSetMessage("密碼已重設。", "ok");
+        amSetMessage(amAccountCore ? amAccountCore.resetDoneMessage(result.body) : "密碼已重設。", "ok");
         amUsersState.expandedResetId = "";
+        if (amUsersState.auditOpenId === id) amLoadAudit(id);
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
       }
       amRenderUsersModule();
+    });
+  });
+
+  root.querySelectorAll("[data-am-audit-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-am-audit-open");
+      amUsersState.auditOpenId = amUsersState.auditOpenId === id ? "" : id;
+      if (amUsersState.auditOpenId) amLoadAudit(id);
+      else amRenderUsersModule();
     });
   });
 
@@ -14608,7 +14705,7 @@ function amBindUsersModuleEvents() {
         amSetMessage(nextActive ? "帳號已重新啟用。" : "帳號已停用（無法再登入）。", "ok");
         await amReloadUsers();
       } else {
-        amSetMessage(amErrorText(result.code, result.body?.message), "error");
+        amSetMessage(amResultErrorText(result), "error");
         amRenderUsersModule();
       }
     });

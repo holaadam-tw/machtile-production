@@ -138,5 +138,83 @@ eq("faceEntry：狀態開、讀不到 → 按鈕照常＋—", (() => { const f 
 eq("faceEntry：狀態關、有資料 → 不顯示張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: false }).badge, "");
 eq("faceEntry：狀態開、刪除關也有張數", c.faceEntry(U("0990001", "王", "operator"), { faceActive: 2 }, URL, { faceStatus: true }).badge, "已登記 2 張");
 
+console.log("== 主管帳號管理：誰能動誰（owner 2026-09-30）==");
+{
+  const ME = U("mg1", "黃主管", "manager");
+  const V = { role: "manager", selfId: "mg1" };
+  const A = { role: "admin", selfId: "ad1" };
+  const op = U("op1", "阮文英", "operator");
+  const perm = (viewer, user, usage) => c.accountPermissions(viewer, user, usage);
+  const buttons = (p) => [p.canEdit, p.canReset, p.canToggle, p.allowDelete, p.allowFace];
+
+  eq("canManageAccounts：admin／manager 可進、其他不行",
+    ["admin", "manager", "planner", "operator", "inspector", "", undefined].map((r) => c.canManageAccounts(r)),
+    [true, true, false, false, false, false, false]);
+  eq("新增角色：admin 四種（不含 admin）", c.creatableRoles("admin"), ["manager", "planner", "operator", "inspector"]);
+  eq("新增角色：manager 只能作業員", c.creatableRoles("manager"), ["operator"]);
+  eq("新增角色：其他角色沒有", c.creatableRoles("planner"), []);
+  eq("主管建立的作業員可用系統固定 cloud", c.MANAGER_DEFAULT_SYSTEMS, ["cloud"]);
+
+  eq("主管→一般作業員：編輯／重設／停用／人臉可，刪除不行", buttons(perm(V, op)), [true, true, true, false, true]);
+  eq("主管→一般作業員：沒有鎖頭", perm(V, op).lock, null);
+  eq("主管→已停用作業員：可以啟用", perm(V, U("off", "離職", "operator", { is_active: false })).canToggle, true);
+  for (const [label, user] of [
+    ["另一位主管", U("mg2", "主管B", "manager")],
+    ["管理者", U("ad1", "管理者", "admin")],
+    ["排程", U("pl1", "排程", "planner")],
+    ["品檢", U("in1", "品檢", "inspector")],
+    ["系統帳號（bridge.）", U("br1", "派工橋", "operator", { account: "bridge.dispatch@machtile.local" })],
+    ["系統帳號（名稱）", U("sy1", "報表（系統帳號）", "operator")],
+    ["站別（名稱）", U("st1", "HMC-01 站別", "operator")],
+    ["站別（帳號 hmc-02）", U("st2", "二號機", "operator", { account: "hmc-02@machtile.local" })],
+  ]) {
+    const p = perm(V, user);
+    eq(`主管→${label}：全部按鈕不出現`, buttons(p), [false, false, false, false, false]);
+    eq(`主管→${label}：鎖頭「只有管理者可以調整」`, p.lock && p.lock.text, "🔒 只有管理者可以調整");
+  }
+  eq("主管→伺服器說是站別的作業員：鎖", perm(V, op, { station: true }).manageable, false);
+  eq("主管→自己：全部不行、鎖頭寫自己", [buttons(perm(V, ME)), perm(V, ME).lock.text],
+    [[false, false, false, false, false], "🔒 自己的帳號由管理者調整"]);
+  eq("managerCanManage 與 accountPermissions 一致", c.managerCanManage(op, undefined, "mg1"), true);
+
+  eq("管理者：照舊——作業員全開", buttons(perm(A, op)), [true, true, true, true, true]);
+  eq("管理者：照舊——主管可編輯、重設、停用", buttons(perm(A, U("mg2", "主管B", "manager"))), [true, true, true, true, true]);
+  eq("管理者：照舊——其他管理者只剩刪除區（由 deleteVerdict 顯示鎖頭）", buttons(perm(A, U("ad2", "另一位管理者", "admin"))), [false, false, false, true, true]);
+  eq("管理者：照舊——自己可重設密碼、不能停用", buttons(perm(A, U("ad1", "我", "admin"))), [false, true, false, true, true]);
+  eq("管理者：站別帳號可操作（有確認框）", perm(A, U("st1", "HMC-01 站別", "operator")).canToggle, true);
+  eq("排程／作業員看不到任何按鈕", [buttons(perm({ role: "planner" }, op)), buttons(perm({ role: "operator" }, op))],
+    [[false, false, false, false, false], [false, false, false, false, false]]);
+
+  eq("伺服器拒絕原因有白話", c.refusalText("STATION").includes("站別"), true);
+  eq("沒有的原因回空字串", c.refusalText("WHAT"), "");
+}
+
+console.log("== 修改紀錄排版（owner 2026-09-30）==");
+{
+  const mgr = { appUserId: "mg1", name: "黃主管", account: "mgr01@machtile.local" };
+  const reset = { id: "1", at: "2026-09-30T07:04:00Z", action: "account.reset_password", actorRole: "manager", actor: mgr,
+    target: { appUserId: "op1", name: "阮文英", account: "1100801@machtile.local" }, changes: {},
+    targetSystems: ["cloud", "factory"], otherSystems: ["factory"], affectsOtherSystems: true };
+  eq("時間固定台灣時間", c.auditTime("2026-09-30T07:04:00Z"), "2026-09-30 15:04");
+  eq("壞時間→空字串", c.auditTime("nope"), "");
+  eq("重設密碼（也能登入工廠站）", c.auditEntryView(reset),
+    { when: "2026-09-30 15:04", who: "黃主管（主管）", what: "重設密碼（此帳號也能登入：工廠站）", fields: [], warn: true });
+  eq("只開 cloud 的重設密碼：不標", c.auditEntryView({ ...reset, targetSystems: ["cloud"], otherSystems: [], affectsOtherSystems: false }).what, "重設密碼");
+  eq("沒有系統清單：未限定系統", c.auditEntryView({ ...reset, targetSystems: null, otherSystems: [], affectsOtherSystems: true }).what, "重設密碼（此帳號也能登入：未限定系統）");
+  eq("編輯：欄位新舊值、登入帳號去尾碼", c.auditEntryView({ ...reset, action: "account.update", affectsOtherSystems: null,
+    changes: { name: { old: "阮文英", new: "阮文英A" }, account: { old: "1100801@machtile.local", new: "1100811@machtile.local" } } }).fields,
+    ["姓名：阮文英 → 阮文英A", "登入帳號：1100801 → 1100811"]);
+  eq("建立：只列新值（角色、狀態、可用系統白話）", c.auditEntryView({ ...reset, action: "account.create", actorRole: "admin", actor: { name: "系統管理者" },
+    changes: { role: { old: null, new: "operator" }, is_active: { old: null, new: true }, systems: { old: null, new: ["cloud"] } } }),
+    { when: "2026-09-30 15:04", who: "系統管理者（管理者）", what: "建立帳號", fields: ["角色：作業員", "狀態：啟用", "可用系統：MachTile Cloud"], warn: false });
+  eq("停用", c.auditEntryView({ ...reset, action: "account.disable", changes: { is_active: { old: true, new: false } } }).fields, ["狀態：啟用 → 停用"]);
+  eq("含 password 的欄位一律不顯示", c.auditEntryView({ ...reset, changes: { password: { old: "a", new: "b" } } }).fields, []);
+  eq("舊紀錄沒有角色、名稱：用帳號", c.auditEntryView({ at: "2026-09-01T00:00:00Z", action: "account.enable", actor: { account: "owner@example.com" } }).who, "owner@example.com");
+  eq("重設成功訊息：會影響工廠站", c.resetDoneMessage({ affectsOtherSystems: true, otherSystems: ["factory"] }),
+    "密碼已重設。這個帳號也能登入工廠站，那邊的密碼也一起變了；已留下修改紀錄。");
+  eq("重設成功訊息：只有 cloud", c.resetDoneMessage({ affectsOtherSystems: false, otherSystems: [] }), "密碼已重設。");
+  eq("重設成功訊息：舊伺服器沒回欄位", c.resetDoneMessage({ status: "ok" }), "密碼已重設。");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
