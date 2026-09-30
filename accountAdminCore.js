@@ -268,20 +268,45 @@
   // 有勾系統、非 HMC-nn），所以主管／排程的 @machtile.local 帳號登記得了。
   const FACE_ROLES = Object.freeze(["operator", "manager", "planner"]);
   // → { show, eligible, href, badge, note }
-  function faceEntry(user, usage, faceAdminUrl) {
+  // 兩個開關（config.js）決定要不要呼叫 am-list-user-usage、以及它的結果拿來做什麼：
+  //   enableAccountDelete：刪除鈕／鎖頭（預設 false，後端部署後才開）
+  //   enableFaceStatus：人臉「已登記 N 張／未登記」（預設 true；owner 2026-09-30 拆開，不再綁刪除）
+  // 只要任一個是 true 就呼叫；兩個都不是 true 就完全不呼叫。
+  function usageMode(cfg) {
+    const deleteEnabled = cfg?.enableAccountDelete === true;
+    const faceStatusEnabled = cfg?.enableFaceStatus === true;
+    return { fetchUsage: deleteEnabled || faceStatusEnabled, deleteEnabled, faceStatusEnabled };
+  }
+
+  // 人臉狀態徽章。
+  //   statusEnabled=false → 不顯示。
+  //   有 usage 且 faceActive 是數字 → 「已登記 N 張」（ok，綠）／「未登記」（none，灰）。
+  //   否則（函式未部署、呼叫失敗、清單裡沒有這個人）→ 「—」（unknown），title 說明讀不到。
+  function faceBadge(usage, statusEnabled) {
+    if (!statusEnabled) return { badge: "", badgeKind: "", badgeTitle: "" };
+    const n = usage ? Number(usage.faceActive) : NaN;
+    if (usage && usage.faceActive !== null && usage.faceActive !== undefined && Number.isFinite(n)) {
+      return n > 0
+        ? { badge: `已登記 ${n} 張`, badgeKind: "ok", badgeTitle: `已登記 ${n} 張臉部樣板，可以在共用平板刷臉登入。` }
+        : { badge: "未登記", badgeKind: "none", badgeTitle: "還沒有登記人臉，按「📷 人臉登記」開始（本人要在場）。" };
+    }
+    return { badge: "—", badgeKind: "unknown", badgeTitle: "人臉登記狀態暫時讀不到（稍後重新整理再看）；不影響其他按鈕。" };
+  }
+
+  // options.faceStatus：true/false 明確指定要不要顯示徽章；沒給時沿用舊行為（有 usage 才顯示）。
+  function faceEntry(user, usage, faceAdminUrl, options) {
     const base = String(faceAdminUrl || "").trim();
     if (!base || !user || user.is_active === false) return { show: false };
     if (!FACE_ROLES.includes(String(user.role)) || accountKind(user, usage) !== "person") return { show: false };
     const label = loginLabel((usage && usage.loginLabel) || user.account);
-    const badge = usage && Number.isFinite(Number(usage.faceActive))
-      ? (Number(usage.faceActive) > 0 ? `已登記 ${Number(usage.faceActive)} 張` : "未登記")
-      : "";
+    const statusEnabled = options && typeof options.faceStatus === "boolean" ? options.faceStatus : Boolean(usage);
+    const { badge, badgeKind, badgeTitle } = faceBadge(usage, statusEnabled);
     // 刷臉只給 @machtile.local 的員工帳號（登入中心 eligibility.ts 同規則）；外部信箱不給按鈕。
     if (!label || label.includes("@")) {
-      return { show: true, eligible: false, href: "", badge: "", note: "外部信箱帳號不能刷臉" };
+      return { show: true, eligible: false, href: "", badge: "", badgeKind: "", badgeTitle: "", note: "外部信箱帳號不能刷臉" };
     }
     const joiner = base.includes("?") ? "&" : "?";
-    return { show: true, eligible: true, href: `${base}${joiner}account=${encodeURIComponent(label)}`, badge, note: "" };
+    return { show: true, eligible: true, href: `${base}${joiner}account=${encodeURIComponent(label)}`, badge, badgeKind, badgeTitle, note: "" };
   }
 
   return {
@@ -290,6 +315,8 @@
     BLOCKER_PRIORITY,
     loginLabel,
     FACE_ROLES,
+    usageMode,
+    faceBadge,
     isStationAccount,
     isSystemAccount,
     accountKind,
