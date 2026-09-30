@@ -164,7 +164,7 @@
   // 「永久」的原因排前面（停用了也刪不掉的：站別、有紀錄、登入過…）；ACTIVE_ACCOUNT 排最後，
   // 只有在「停用後就真的可以刪」時才會看到「🔒 啟用中，請先停用」，不會叫人停用了還是刪不掉。
   const BLOCKER_PRIORITY = Object.freeze([
-    "STATION", "HAS_REPORTS", "HAS_USAGE", "SIGNED_IN", "FACE_ENROLLED", "OTHER_SYSTEMS", "SHARED_AUTH", "ADMIN_ACCOUNT",
+    "SYSTEM_ACCOUNT", "STATION", "HAS_REPORTS", "HAS_USAGE", "SIGNED_IN", "FACE_ENROLLED", "OTHER_SYSTEMS", "SHARED_AUTH", "ADMIN_ACCOUNT",
     "ACTIVE_ACCOUNT", "REFERENCED",
   ]);
 
@@ -207,6 +207,7 @@
       case "SHARED_AUTH":
         return { text: "🔒 登入與其他帳號共用", title: `同一個登入身分被其他帳號列共用，刪掉會影響另一個帳號。${STOP_HINT}` };
       case "SYSTEM":
+      case "SYSTEM_ACCOUNT": // 伺服器（machtile-mini-mes#80 am_user_usage）同一條規則的原因碼
         return {
           text: "🔒 系統帳號，程式使用中",
           title: "這是程式自動登入用的系統帳號（例如派工橋），不能刪除，也請不要停用：停用會讓對應的同步中斷。",
