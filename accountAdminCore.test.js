@@ -189,5 +189,32 @@ console.log("== 主管帳號管理：誰能動誰（owner 2026-09-30）==");
   eq("沒有的原因回空字串", c.refusalText("WHAT"), "");
 }
 
+console.log("== 修改紀錄排版（owner 2026-09-30）==");
+{
+  const mgr = { appUserId: "mg1", name: "黃主管", account: "mgr01@machtile.local" };
+  const reset = { id: "1", at: "2026-09-30T07:04:00Z", action: "account.reset_password", actorRole: "manager", actor: mgr,
+    target: { appUserId: "op1", name: "阮文英", account: "1100801@machtile.local" }, changes: {},
+    targetSystems: ["cloud", "factory"], otherSystems: ["factory"], affectsOtherSystems: true };
+  eq("時間固定台灣時間", c.auditTime("2026-09-30T07:04:00Z"), "2026-09-30 15:04");
+  eq("壞時間→空字串", c.auditTime("nope"), "");
+  eq("重設密碼（也能登入工廠站）", c.auditEntryView(reset),
+    { when: "2026-09-30 15:04", who: "黃主管（主管）", what: "重設密碼（此帳號也能登入：工廠站）", fields: [], warn: true });
+  eq("只開 cloud 的重設密碼：不標", c.auditEntryView({ ...reset, targetSystems: ["cloud"], otherSystems: [], affectsOtherSystems: false }).what, "重設密碼");
+  eq("沒有系統清單：未限定系統", c.auditEntryView({ ...reset, targetSystems: null, otherSystems: [], affectsOtherSystems: true }).what, "重設密碼（此帳號也能登入：未限定系統）");
+  eq("編輯：欄位新舊值、登入帳號去尾碼", c.auditEntryView({ ...reset, action: "account.update", affectsOtherSystems: null,
+    changes: { name: { old: "阮文英", new: "阮文英A" }, account: { old: "1100801@machtile.local", new: "1100811@machtile.local" } } }).fields,
+    ["姓名：阮文英 → 阮文英A", "登入帳號：1100801 → 1100811"]);
+  eq("建立：只列新值（角色、狀態、可用系統白話）", c.auditEntryView({ ...reset, action: "account.create", actorRole: "admin", actor: { name: "系統管理者" },
+    changes: { role: { old: null, new: "operator" }, is_active: { old: null, new: true }, systems: { old: null, new: ["cloud"] } } }),
+    { when: "2026-09-30 15:04", who: "系統管理者（管理者）", what: "建立帳號", fields: ["角色：作業員", "狀態：啟用", "可用系統：MachTile Cloud"], warn: false });
+  eq("停用", c.auditEntryView({ ...reset, action: "account.disable", changes: { is_active: { old: true, new: false } } }).fields, ["狀態：啟用 → 停用"]);
+  eq("含 password 的欄位一律不顯示", c.auditEntryView({ ...reset, changes: { password: { old: "a", new: "b" } } }).fields, []);
+  eq("舊紀錄沒有角色、名稱：用帳號", c.auditEntryView({ at: "2026-09-01T00:00:00Z", action: "account.enable", actor: { account: "owner@example.com" } }).who, "owner@example.com");
+  eq("重設成功訊息：會影響工廠站", c.resetDoneMessage({ affectsOtherSystems: true, otherSystems: ["factory"] }),
+    "密碼已重設。這個帳號也能登入工廠站，那邊的密碼也一起變了；已留下修改紀錄。");
+  eq("重設成功訊息：只有 cloud", c.resetDoneMessage({ affectsOtherSystems: false, otherSystems: [] }), "密碼已重設。");
+  eq("重設成功訊息：舊伺服器沒回欄位", c.resetDoneMessage({ status: "ok" }), "密碼已重設。");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

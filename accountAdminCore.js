@@ -396,6 +396,92 @@
     return REFUSAL_TEXT[String(reason || "")] || "";
   }
 
+  // ---- 修改紀錄（owner 2026-09-30：主管的每個修改都要留紀錄、看得出是哪位主管改的）----
+  // 資料來自 Edge Function am-list-user-audit（admin 看全部；主管只看自己做過的）。這裡只負責排版。
+  const SYSTEM_LABELS = Object.freeze({ cloud: "MachTile Cloud", factory: "工廠站", staging: "測試站" });
+  const FIELD_LABELS = Object.freeze({ name: "姓名", account: "登入帳號", role: "角色", is_active: "狀態", systems: "可用系統" });
+
+  function systemLabel(code) {
+    return SYSTEM_LABELS[String(code)] || String(code);
+  }
+
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  // ISO → 台灣時間「2026-09-30 15:04」（固定 Asia/Taipei，跟機器時區無關）。
+  function auditTime(iso) {
+    const d = new Date(String(iso || ""));
+    if (Number.isNaN(d.getTime())) return "";
+    const t = new Date(d.getTime() + 8 * 3600 * 1000);
+    return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())} ${pad2(t.getUTCHours())}:${pad2(t.getUTCMinutes())}`;
+  }
+
+  function auditValue(field, value) {
+    if (value === null || value === undefined || value === "") return "（空）";
+    if (field === "account") return loginLabel(value);
+    if (field === "role") return ROLE_LABELS[String(value)] || String(value);
+    if (field === "is_active") return value ? "啟用" : "停用";
+    if (field === "systems") return Array.isArray(value) ? value.map(systemLabel).join("、") : String(value);
+    return String(value);
+  }
+
+  function auditAction(entry) {
+    switch (entry?.action) {
+      case "account.create": return "建立帳號";
+      case "account.update": return "編輯帳號資料";
+      case "account.reset_password": {
+        if (entry.affectsOtherSystems === true) {
+          const others = Array.isArray(entry.otherSystems) && entry.otherSystems.length
+            ? entry.otherSystems.map(systemLabel).join("、")
+            : "未限定系統";
+          return `重設密碼（此帳號也能登入：${others}）`;
+        }
+        return "重設密碼";
+      }
+      case "account.disable": return "停用";
+      case "account.enable": return "啟用";
+      case "account.delete": return "刪除帳號";
+      case "account.delete.auth_kept": return "刪除帳號（登入身分改為永久停用）";
+      default: return String(entry?.action || "其他");
+    }
+  }
+
+  // → { when, who, what, fields: ["姓名：阮文英 → 阮文英A", …], warn }
+  //   warn=true：重設密碼且會影響其他系統（畫面標橘色）。密碼本身伺服器從來不記。
+  function auditEntryView(entry) {
+    const actor = entry?.actor || {};
+    const role = entry?.actorRole ? (ROLE_LABELS[entry.actorRole] || entry.actorRole) : "";
+    const whoName = actor.name || loginLabel(actor.account) || "（不明）";
+    const fields = [];
+    const changes = entry && entry.changes && typeof entry.changes === "object" ? entry.changes : {};
+    for (const [field, change] of Object.entries(changes)) {
+      if (/pass/i.test(field) || !change || typeof change !== "object") continue;
+      const label = FIELD_LABELS[field] || field;
+      fields.push(change.old === null || change.old === undefined
+        ? `${label}：${auditValue(field, change.new)}`
+        : `${label}：${auditValue(field, change.old)} → ${auditValue(field, change.new)}`);
+    }
+    return {
+      when: auditTime(entry?.at),
+      who: role ? `${whoName}（${role}）` : whoName,
+      what: auditAction(entry),
+      fields,
+      warn: entry?.action === "account.reset_password" && entry.affectsOtherSystems === true,
+    };
+  }
+
+  // 重設密碼成功後的訊息（伺服器回 affectsOtherSystems / otherSystems）。
+  function resetDoneMessage(body) {
+    if (body && body.affectsOtherSystems === true) {
+      const others = Array.isArray(body.otherSystems) && body.otherSystems.length
+        ? body.otherSystems.map(systemLabel).join("、")
+        : "其他系統（未限定）";
+      return `密碼已重設。這個帳號也能登入${others}，那邊的密碼也一起變了；已留下修改紀錄。`;
+    }
+    return "密碼已重設。";
+  }
+
   return {
     ROLE_ORDER,
     ROLE_LABELS,
@@ -422,5 +508,10 @@
     managerCanManage,
     accountPermissions,
     refusalText,
+    SYSTEM_LABELS,
+    systemLabel,
+    auditTime,
+    auditEntryView,
+    resetDoneMessage,
   };
 });
