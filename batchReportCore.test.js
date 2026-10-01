@@ -57,7 +57,7 @@ eq("started_at 可以等於 ended_at（回寫橋只拒 ended<started）", c.reso
 
 console.log("== validateRow ==");
 const okRow = { machineCode: "A01", order: { processId: "p", workOrderId: "w" }, good: "12", bad: "1", operatorId: "u1", operatorMapped: true, startedAt: "2026-10-01T04:00:00.000Z" };
-eq("正常列", c.validateRow(okRow), { send: true, empty: false, error: "", good: 12, bad: 1 });
+eq("正常列（沒帶 mode＝中午報工）", c.validateRow(okRow), { send: true, empty: false, error: "", good: 12, bad: 1, machineSeconds: null, timeOnly: false });
 eq("空白列不送、不算錯", c.validateRow({ ...okRow, good: "", bad: "" }), { send: false, empty: true, error: "" });
 eq("0／0 也是空白列（回寫橋會拒 zero quantity）", c.validateRow({ ...okRow, good: "0", bad: "0" }).empty, true);
 eq("只有不良也可以送", c.validateRow({ ...okRow, good: "", bad: "2" }).send, true);
@@ -88,14 +88,130 @@ eq("payload 欄位", {
   report_uuid: built.payload.report_uuid, work_order_id: built.payload.work_order_id, process_id: built.payload.process_id,
   completed_qty: built.payload.completed_qty, defect_qty: built.payload.defect_qty, started_at: built.payload.started_at,
   ended_at: built.payload.ended_at, user_id: built.payload.user_id, report_type: built.payload.report_type,
-}, { report_uuid: "uuid-x", work_order_id: "w", process_id: "p", completed_qty: 12, defect_qty: 1, started_at: "2026-10-01T04:00:00.000Z", ended_at: "2026-09-30T17:30:00.000Z", user_id: "actor", report_type: "batch" });
+}, { report_uuid: "uuid-x", work_order_id: "w", process_id: "p", completed_qty: 12, defect_qty: 1, started_at: "2026-10-01T04:00:00.000Z", ended_at: "2026-09-30T17:30:00.000Z", user_id: "actor", report_type: "noon" });
 eq("report_date＝台灣日期（UTC 17:30＝台灣隔天 01:30）", built.payload.report_date, "2026-10-01");
 eq("operators＝這列的報工人（剛好一位）", built.operators, ["u1"]);
-eq("不帶 cycle_time_seconds（不汙染純切削工時基準）", "cycle_time_seconds" in built.payload, false);
+eq("機台加工時間沒填 → cycle_time_seconds＝null（不寫時間）", [built.payload.cycle_time_seconds, built.payload.report_payload.cycle_time_seconds], [null, null]);
 eq("登入者不是報工人時 user_id 仍記登入者（誰按的）", built.payload.user_id, "actor");
 let threw = false;
 try { c.buildPayload({ row: { ...okRow, good: "" , bad: ""}, groupKey: "lathe", endedAt: "2026-10-01T00:00:00Z", reportUuid: "u" }); } catch { threw = true; }
 eq("不能送的列 buildPayload 會丟錯（雙重保險）", threw, true);
+
+console.log("== 報工類型（今日開工／中午報工／收工）==");
+eq("三種類型、順序固定", c.MODE_ORDER, ["dailyStart", "noon", "finish"]);
+eq("名稱照單台 reportTypeMeta", c.MODE_ORDER.map((k) => [c.MODES[k].label, c.MODES[k].submitLabel]), [["今日開工", "送出今日開工"], ["中午報工", "送出中午報工"], ["收工 / 完工", "送出收工回報"]]);
+
+// 單台報工（app.js submitReport＋buildReportPayload＋buildReportRemark＋machtileSubmitReportViaOutbox）實際送出的形狀，
+// 照抄成參考：表單用預設值（今日開工的「目前機台已加工數量」預設＝order.done、這次良品／不良預設 0、沒有備註）。
+// cycle_time_seconds 例外：單台每次都送隱藏欄位的值（沒基準時是 HTML 預設 550），批次只在機台加工時間有改時才送，
+// 所以參考值用 null（＝批次的規則），差異寫在 PR 對照表。
+function singleScreenPayload(type, order, { completed = 0, defects = 0, cycle = null, overtime = "", startedAt = null, endedAt, uuid, actor }) {
+  const label = { dailyStart: "今日開工", noon: "中午報工", finish: "收工 / 完工" }[type];
+  const parts = [`[${label}]`];
+  if (type === "dailyStart") { parts.push(`機台已加工數量 ${order.done || 0}`); parts.push("首件檢查完成"); }
+  if (type === "finish") parts.push(overtime === "2030" ? "加班收工 20:30" : "一般下班 17:00");
+  const reportPayload = {
+    report_type: type, work_total_qty: Number(order.total || 0) || null, cycle_time_seconds: cycle,
+    machine_qty: Number(order.done || 0), completed_qty: completed, defect_qty: defects, has_program_upload: false,
+    overtime_plan: overtime, pm_abnormal: "", abnormal_type: "",
+  };
+  const p = {
+    report_uuid: uuid, tenant_id: order.tenantId, work_order_id: order.workOrderId, process_id: order.processId,
+    report_date: "(date)", completed_qty: completed, defect_qty: defects, status_after_report: order.processStatus || "running",
+    remark: parts.join("；"), user_id: actor, report_type: type, report_payload: reportPayload,
+    work_total_qty: reportPayload.work_total_qty, cycle_time_seconds: reportPayload.cycle_time_seconds, ended_at: endedAt,
+  };
+  if (startedAt) p.started_at = startedAt;
+  return p;
+}
+const sortKeys = (o) => (o && typeof o === "object" && !Array.isArray(o) ? Object.keys(o).sort().reduce((a, k) => { a[k] = sortKeys(o[k]); return a; }, {}) : o);
+const ord = { processId: "p", workOrderId: "w", processStatus: "running", tenantId: "t", done: 3440, total: 5000 };
+const END = "2026-10-02T00:10:00.000Z";
+const base = { machineCode: "A01", order: ord, operatorId: "u1", operatorMapped: true };
+const cmp = (name, built, ref) => {
+  const b = { ...built.payload, report_date: "(date)" };
+  eq(name, JSON.stringify(sortKeys(b)), JSON.stringify(sortKeys(ref)));
+};
+
+const ds = c.buildReportPayload({ row: { ...base, mode: "dailyStart", selected: true, startedAt: null }, actorAppUserId: "actor", endedAt: END, reportUuid: "u-ds", tenantId: "t" });
+cmp("今日開工（第一次、沒有上一筆）＝單台今日開工逐欄相同（不帶 started_at）", ds, singleScreenPayload("dailyStart", ord, { endedAt: END, uuid: "u-ds", actor: "actor" }));
+eq("今日開工：0／0、remark 帶機台已加工數量", [ds.payload.completed_qty, ds.payload.defect_qty, ds.payload.remark], [0, 0, "[今日開工]；機台已加工數量 3440；首件檢查完成"]);
+const ds2 = c.buildReportPayload({ row: { ...base, mode: "dailyStart", selected: true, startedAt: "2026-10-01T09:00:00.000Z" }, actorAppUserId: "actor", endedAt: END, reportUuid: "u-ds2", tenantId: "t" });
+cmp("今日開工（有昨天收工）＝單台：started_at＝上一筆", ds2, singleScreenPayload("dailyStart", ord, { startedAt: "2026-10-01T09:00:00.000Z", endedAt: END, uuid: "u-ds2", actor: "actor" }));
+eq("今日開工 operators＝這列報工人", ds.operators, ["u1"]);
+
+const nn = c.buildReportPayload({ row: { ...base, mode: "noon", good: "12", bad: "1", startedAt: "2026-10-02T00:10:00.000Z" }, actorAppUserId: "actor", endedAt: "2026-10-02T04:00:00.000Z", reportUuid: "u-n", tenantId: "t" });
+cmp("中午報工＝單台中午報工逐欄相同", nn, singleScreenPayload("noon", ord, { completed: 12, defects: 1, startedAt: "2026-10-02T00:10:00.000Z", endedAt: "2026-10-02T04:00:00.000Z", uuid: "u-n", actor: "actor" }));
+const fin = c.buildReportPayload({ row: { ...base, mode: "finish", good: "20", bad: "0", overtime: "2030", startedAt: "2026-10-02T04:00:00.000Z" }, actorAppUserId: "actor", endedAt: "2026-10-02T12:30:00.000Z", reportUuid: "u-f", tenantId: "t" });
+cmp("收工（加班 20:30）＝單台收工逐欄相同", fin, singleScreenPayload("finish", ord, { completed: 20, overtime: "2030", startedAt: "2026-10-02T04:00:00.000Z", endedAt: "2026-10-02T12:30:00.000Z", uuid: "u-f", actor: "actor" }));
+const fin2 = c.buildReportPayload({ row: { ...base, mode: "finish", good: "5", overtime: "none", startedAt: "2026-10-02T04:00:00.000Z" }, actorAppUserId: "actor", endedAt: "2026-10-02T09:00:00.000Z", reportUuid: "u-f2", tenantId: "t" });
+eq("收工（一般下班）remark／overtime_plan 同單台", [fin2.payload.remark, fin2.payload.report_payload.overtime_plan], ["[收工 / 完工]；一般下班 17:00", "none"]);
+
+console.log("== 今日開工 validate ==");
+eq("沒勾＝不送、不算錯", c.validateRow({ ...base, mode: "dailyStart", selected: false }), { send: false, empty: true, error: "" });
+eq("勾了、沒有上一筆也能送（解 A01/A04 痛點）", c.validateRow({ ...base, mode: "dailyStart", selected: true, startedAt: null }).send, true);
+eq("勾了但沒派工 → 擋", c.validateRow({ ...base, mode: "dailyStart", selected: true, order: null }).error, "這台目前沒有派工，不能報工");
+eq("勾了但報工人沒對照 → 擋", c.validateRow({ ...base, mode: "dailyStart", selected: true, operatorMapped: false }).send, false);
+eq("今日開工的 started_at 規則＝單台（不看工序開工時間）", c.resolveStartedAt({ serverLastReportAt: null, localLedgerAt: null, actualStartAt: "2026-10-01T00:00:00Z", endedAt: END, includeProcessStart: false }).startedAt, null);
+eq("今日開工：有上一筆就接上一筆", c.resolveStartedAt({ serverLastReportAt: "2026-10-01T09:00:00Z", localLedgerAt: null, actualStartAt: null, endedAt: END, includeProcessStart: false }).source, "lastReport");
+const dsFp1 = c.rowFingerprint({ ...base, mode: "dailyStart", selected: true });
+eq("類型不同 → 指紋不同（換分頁不會沿用別類型的 uuid）", dsFp1 === c.rowFingerprint({ ...base, mode: "noon", selected: true }), false);
+eq("今日開工指紋不受殘留數量影響", dsFp1 === c.rowFingerprint({ ...base, mode: "dailyStart", selected: true, good: "9" }), true);
+
+console.log("== 機台加工時間 ==");
+eq("分＋秒 → 秒", c.parseMachineTime("1", "35"), { seconds: 95, error: "" });
+eq("兩格空白＝沒填", c.parseMachineTime("", ""), { seconds: null, error: "" });
+eq("只填秒", c.parseMachineTime("", "45").seconds, 45);
+eq("秒數 60 擋", c.parseMachineTime("1", "60").error, "機台加工時間的秒數要在 0–59");
+eq("0 擋", c.parseMachineTime("0", "0").error, "機台加工時間不能是 0");
+eq("負數擋", c.parseMachineTime("-1", "0").error, "機台加工時間不能是負的");
+eq("小數擋", c.parseMachineTime("1.5", "").error, "機台加工時間要填整數");
+eq("超過 24 小時擋", c.parseMachineTime("1441", "").error, "機台加工時間超過 24 小時，請確認");
+eq("splitSeconds", [c.splitSeconds(95), c.splitSeconds(null)], [{ minutes: "1", seconds: "35" }, { minutes: "", seconds: "" }]);
+const tRow = { ...base, mode: "noon", startedAt: "2026-10-02T04:00:00.000Z", ctDefault: 95 };
+eq("預設值沒動 → 不寫時間", c.machineTimeToSend({ ...tRow, ctMinutes: "1", ctSeconds: "35" }), { seconds: null, changed: false, error: "" });
+eq("改了 → 寫新值", c.machineTimeToSend({ ...tRow, ctMinutes: "1", ctSeconds: "40" }), { seconds: 100, changed: true, error: "" });
+eq("清空 → 不寫（不會把時間清掉）", c.machineTimeToSend({ ...tRow, ctMinutes: "", ctSeconds: "" }).changed, false);
+eq("沒有上一次的值、第一次填 → 寫", c.machineTimeToSend({ ...tRow, ctDefault: null, ctMinutes: "2", ctSeconds: "0" }).seconds, 120);
+eq("只填數量、時間沒動 → 送，cycle_time_seconds＝null", (() => { const b = c.buildReportPayload({ row: { ...tRow, good: "5", ctMinutes: "1", ctSeconds: "35" }, endedAt: "2026-10-02T05:00:00.000Z", reportUuid: "x" }); return [b.payload.completed_qty, b.payload.cycle_time_seconds, b.payload.report_payload.cycle_time_seconds]; })(), [5, null, null]);
+eq("數量＋改時間 → 同一筆一起帶", (() => { const b = c.buildReportPayload({ row: { ...tRow, good: "5", ctMinutes: "1", ctSeconds: "40" }, endedAt: "2026-10-02T05:00:00.000Z", reportUuid: "x" }); return [b.payload.completed_qty, b.payload.cycle_time_seconds, b.payload.report_payload.cycle_time_seconds, b.payload.ended_at]; })(), [5, 100, 100, "2026-10-02T05:00:00.000Z"]);
+const to = c.validateRow({ ...tRow, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" });
+eq("只改時間、不填數量 → 也能送（timeOnly）", [to.send, to.timeOnly, to.machineSeconds], [true, true, 100]);
+const toB = c.buildReportPayload({ row: { ...tRow, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" }, endedAt: "2026-10-02T05:00:00.000Z", reportUuid: "x" });
+eq("只改時間：0／0、started_at＝ended_at＝上一筆時間（不推進起算點、不吃工時）", [toB.payload.completed_qty, toB.payload.defect_qty, toB.payload.started_at, toB.payload.ended_at, toB.timeOnly], [0, 0, "2026-10-02T04:00:00.000Z", "2026-10-02T04:00:00.000Z", true]);
+eq("只改時間但沒有任何開工紀錄 → 擋（請先今日開工）", c.validateRow({ ...tRow, startedAt: null, startedAtReason: "請先按上方「今日開工」", good: "", ctMinutes: "2", ctSeconds: "0" }).error, "請先按上方「今日開工」");
+eq("時間沒改、數量空白 → 空白列", c.validateRow({ ...tRow, ctMinutes: "1", ctSeconds: "35" }).empty, true);
+eq("時間填錯 → 紅字", c.validateRow({ ...tRow, good: "3", ctMinutes: "1", ctSeconds: "75" }).error, "機台加工時間的秒數要在 0–59");
+eq("改時間 → 新 uuid（指紋含時間）", c.rowFingerprint({ ...tRow, good: "5", ctMinutes: "1", ctSeconds: "40" }) === c.rowFingerprint({ ...tRow, good: "5", ctMinutes: "1", ctSeconds: "35" }), false);
+eq("收工改加班選項 → 新 uuid", c.rowFingerprint({ ...tRow, mode: "finish", good: "5", overtime: "none" }) === c.rowFingerprint({ ...tRow, mode: "finish", good: "5", overtime: "2030" }), false);
+const lm = c.latestMachineTimeByProcess([
+  { process_id: "p1", cycle_time_seconds: 90, created_at: "2026-10-01T01:00:00Z" },
+  { process_id: "p1", cycle_time_seconds: 95, created_at: "2026-10-01T03:00:00Z" },
+  { process_id: "p2", cycle_time_seconds: null, created_at: "2026-10-01T03:00:00Z" },
+  { process_id: "p3", cycle_time_seconds: 0, created_at: "2026-10-01T03:00:00Z" },
+]);
+eq("每道工序取最新一次填的值；null／0 不算", [lm.get("p1")?.seconds, lm.has("p2"), lm.has("p3")], [95, false, false]);
+eq("審查 N2：只有兩筆（90 舊、95 最新）→ 最新以前只有 1 筆，沒有基準", [lm.get("p1")?.count, lm.get("p1")?.seconds, lm.get("p1")?.baselineSeconds], [2, 95, null]);
+const lm3 = c.latestMachineTimeByProcess([
+  { process_id: "r", cycle_time_seconds: 80, created_at: "2026-10-01T01:00:00Z" },
+  { process_id: "r", cycle_time_seconds: 90, created_at: "2026-10-01T02:00:00Z" },
+  { process_id: "r", cycle_time_seconds: 120, created_at: "2026-10-01T03:00:00Z" },
+]).get("r");
+eq("審查 N2：三筆（80、90、最新 120）→ 基準＝(80+90)/2＝85，不含最新那筆", [lm3.count, lm3.seconds, lm3.baselineSeconds], [3, 120, 85]);
+eq("審查 N2：三筆時差異＝(120−85)/85≈+41%（含最新一起平均會變成 (120−97)/97≈+24%）", Math.round(((lm3.seconds - lm3.baselineSeconds) / lm3.baselineSeconds) * 100), 41);
+const lm3b = c.latestMachineTimeByProcess([
+  { process_id: "s", cycle_time_seconds: 100, created_at: "2026-10-01T03:00:00Z" },
+  { process_id: "s", cycle_time_seconds: 60, created_at: "2026-10-01T01:00:00Z" },
+  { process_id: "s", cycle_time_seconds: 81, created_at: "2026-10-01T02:00:00Z" },
+]).get("s");
+eq("審查 N2：資料順序亂也一樣（最新＝100，基準＝(60+81)/2＝70.5→71）", [lm3b.seconds, lm3b.baselineSeconds], [100, 71]);
+const lm550 = c.latestMachineTimeByProcess([
+  { process_id: "q1", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
+  { process_id: "q2", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
+  { process_id: "q2", cycle_time_seconds: 120, created_at: "2026-10-01T01:00:00Z" },
+]);
+eq("審查 H1：550（舊單台 HTML 預設值）不當成機台加工時間，也不算樣本", [lm550.has("q1"), lm550.get("q2")?.seconds, lm550.get("q2")?.count, lm550.get("q2")?.baselineSeconds], [false, 120, 1, null]);
+eq("只有一筆 → 沒有基準", lm.get("p1") && c.latestMachineTimeByProcess([{ process_id: "z", cycle_time_seconds: 80, created_at: "x" }]).get("z").baselineSeconds, null);
 
 console.log("== operatorChoices ==");
 const users = [{ id: "s", name: "B03站別", legacy_user_id: "" }, { id: "u2", name: "王小明", legacy_user_id: " 1080301 " }, { id: "u1", name: "李大華", legacy_user_id: "1080302" }];

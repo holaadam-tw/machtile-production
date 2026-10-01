@@ -160,7 +160,7 @@ try {
     await root.locator("[data-batch-submit]").click();
     await phone.page.waitForFunction(() => document.querySelector('[data-batch-root="lathe"] [data-batch-row="A01"] .batch-result.is-sent'), null, { timeout: 15000 });
     const batch = calls[calls.length - 1].p_payload;
-    ok(batch.report_type === "batch" && batch.started_at === ago(240), "手機批次報工 A01：started_at＝伺服器上次報工", batch.started_at);
+    ok(batch.report_type === "noon" && batch.started_at === ago(240), "手機批次報工 A01：started_at＝伺服器上次報工", batch.started_at);
     await phone.context.close();
 
     // the machine's tablet last reported A01 four hours ago (its own ledger)

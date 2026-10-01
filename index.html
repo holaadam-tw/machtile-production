@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261002-monitor-batch-entry">
+  <link rel="stylesheet" href="./styles.css?v=20261002-batch-modes-r3">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -372,9 +372,9 @@
 
               <label class="field-label" for="cycleMinutes">Cycle time <small>必填</small><em>不含上下料</em></label>
               <div class="cycle-inputs">
-                <input id="cycleMinutes" class="report-input" type="number" min="0" value="9" aria-label="Cycle time 分">
+                <input id="cycleMinutes" class="report-input" type="number" min="0" value="" placeholder="分" aria-label="Cycle time 分">
                 <span>分</span>
-                <input id="cycleSeconds" class="report-input" type="number" min="0" max="59" value="10" aria-label="Cycle time 秒">
+                <input id="cycleSeconds" class="report-input" type="number" min="0" max="59" value="" placeholder="秒" aria-label="Cycle time 秒">
                 <span>秒 / 件</span>
               </div>
 
@@ -724,7 +724,7 @@
   <script src="./authSessionPersistenceCore.js?v=20260728-unified-login-v1"></script>
   <script src="./oauthPkceCore.js?v=20261001-pwa-oauth-handoff"></script>
   <script src="./workOrderPrefillCore.js?v=20260904-recent-enter-v1"></script>
-  <script src="./batchReportCore.js?v=20261002-monitor-card-progress"></script>
+  <script src="./batchReportCore.js?v=20261002-batch-modes-r3"></script>
   <script src="./previews/hmc-fixed-slots/project-target.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20260913-catalog-timeout-v1"></script>
   <script src="./previews/hmc-fixed-slots/transport.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
@@ -738,6 +738,6 @@
   <script src="./mockData.js?v=20260514-p0-001"></script>
   <script src="./accountAdminCore.js?v=20260930-am-audit"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
-  <script src="./app.js?v=20261002-monitor-batch-entry"></script>
+  <script src="./app.js?v=20261002-batch-modes-r3"></script>
 </body>
 </html>
