@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261002-review-fix">
+  <link rel="stylesheet" href="./styles.css?v=20261002-monitor-batch-entry">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -130,8 +130,6 @@
       <button class="nav-item" data-view="alerts" type="button">待處理</button>
       <button class="nav-item" data-view="history" type="button">紀錄</button>
       <button class="nav-item" data-view="reports" type="button">分析</button>
-      <button class="nav-item" data-view="batchLathe" type="button">車床報工</button>
-      <button class="nav-item" data-view="batchMill" type="button">銑床報工</button>
     </nav>
 
     <nav class="desktop-tool-nav" aria-label="工具導覽">
@@ -163,7 +161,12 @@
             <p class="eyebrow">Monitor</p>
             <h1 id="dashboardTitle">機台卡片牆與今日狀態總覽</h1>
           </div>
-          <button class="primary-action" type="button" data-open-report>+ 現場回報</button>
+          <div class="dashboard-heading-actions monitor-heading-actions">
+            <!-- 車床／銑床批次報工入口（owner 2026-10-02：從上方導覽列移到這裡，放在「+ 現場回報」前面） -->
+            <button class="primary-action monitor-batch-entry" type="button" data-view="batchLathe" data-monitor-batch-entry="lathe">車床報工（A01–A05）</button>
+            <button class="primary-action monitor-batch-entry" type="button" data-view="batchMill" data-monitor-batch-entry="mill">銑床報工（B03–B06）</button>
+            <button class="primary-action" type="button" data-open-report>+ 現場回報</button>
+          </div>
         </div>
 
         <div id="statsGrid" class="stats-grid" aria-label="今日狀態總覽"></div>
@@ -721,7 +724,7 @@
   <script src="./authSessionPersistenceCore.js?v=20260728-unified-login-v1"></script>
   <script src="./oauthPkceCore.js?v=20261001-pwa-oauth-handoff"></script>
   <script src="./workOrderPrefillCore.js?v=20260904-recent-enter-v1"></script>
-  <script src="./batchReportCore.js?v=20261001-batch-report"></script>
+  <script src="./batchReportCore.js?v=20261002-monitor-card-progress"></script>
   <script src="./previews/hmc-fixed-slots/project-target.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20260913-catalog-timeout-v1"></script>
   <script src="./previews/hmc-fixed-slots/transport.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
@@ -735,6 +738,6 @@
   <script src="./mockData.js?v=20260514-p0-001"></script>
   <script src="./accountAdminCore.js?v=20260930-am-audit"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
-  <script src="./app.js?v=20261002-review-fix"></script>
+  <script src="./app.js?v=20261002-monitor-batch-entry"></script>
 </body>
 </html>

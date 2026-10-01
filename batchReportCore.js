@@ -106,6 +106,33 @@
     };
   }
 
+  // Monitor 機台卡片「完成進度」（owner 2026-10-02）：跟批次報工同一套口徑。
+  //   有舊 MES 結算列（legacy_output 不是 null）→ 完成數＝舊 MES 已報＋待回寫（displayProgress，同一個 SQL
+  //   快照，已寫回的 App 報工只算在舊 MES 那邊，不會重複）。App 自己的累計（appDone）此時不再加進來，
+  //   因為已寫回的那部分已經在舊 MES 數字裡、沒寫回的那部分就是待回寫。
+  //   沒有結算列／讀不到（row 為 null，例如 RPC 失敗）→ 照原本算法（App 累計），並標「舊 MES 尚無資料」。
+  function cardProgress(appDone, row, nowMs = Date.now()) {
+    const app = Math.max(0, Number(appDone) || 0);
+    const p = displayProgress(row, nowMs);
+    if (!p.available || !p.legacyKnown) {
+      return { done: app, appDone: app, source: "app", legacyKnown: false, legacyOutput: 0, legacyFail: 0,
+        pendingOutput: 0, pendingFail: 0, pendingCount: 0, totalFail: null, label: "舊 MES 尚無資料" };
+    }
+    return {
+      done: p.totalOutput,
+      appDone: app,
+      source: "legacy",
+      legacyKnown: true,
+      legacyOutput: p.legacyOutput,
+      legacyFail: p.legacyFail,
+      pendingOutput: p.pendingOutput,
+      pendingFail: p.pendingFail,
+      pendingCount: p.pendingCount,
+      totalFail: p.totalFail,
+      label: p.pendingOutput > 0 ? `含舊 MES・待回寫 ${p.pendingOutput}` : "含舊 MES",
+    };
+  }
+
   function isoOrNull(value) {
     if (!value) return null;
     const t = Date.parse(value);
@@ -237,7 +264,7 @@
 
   return {
     GROUPS, EXCLUDED_MACHINES, REPORT_TYPE, MAX_QTY_PER_REPORT, STALE_PENDING_MS,
-    groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress,
+    groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
     operatorChoices, defaultOperatorId, summarizeResults,
   };

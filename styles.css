@@ -245,7 +245,7 @@ textarea:focus-visible {
 
 .desktop-nav {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -362,6 +362,30 @@ main {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Monitor 頁標題列的車床／銑床報工入口（owner 2026-10-02：從上方導覽列移過來）。
+   跟「+ 現場回報」同一種按鈕，整排加高到 44px，平板手指好按。 */
+.monitor-heading-actions .primary-action {
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+/* 卡片完成數的來源小字（含舊 MES／待回寫 N／舊 MES 尚無資料） */
+.machine-progress-source {
+  display: block;
+  margin-top: 2px;
+  color: var(--brand-blue);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.machine-progress-source.is-missing {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .eyebrow {
@@ -9225,6 +9249,23 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 
 @media (max-width: 1100px) {
+  /* 平板：Monitor 標題一行、下面一整排三顆大按鈕（車床、銑床、+ 現場回報），不擠在標題旁邊換行 */
+  #dashboardView .view-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .monitor-heading-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .monitor-heading-actions .primary-action {
+    min-height: 52px;
+  }
+
   .operational-kpi-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -9326,6 +9367,29 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
   .view-heading .primary-action {
     display: none;
+  }
+
+  /* 手機：Monitor 標題下面一整排兩顆大按鈕（「+ 現場回報」在手機改用右下角浮動鈕，照舊隱藏） */
+  #dashboardView .view-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .monitor-heading-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .view-heading .monitor-heading-actions .monitor-batch-entry {
+    display: inline-flex;
+    min-height: 52px;
+    padding: 10px 8px;
+    font-size: 15px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
   }
 
   .stats-grid,

@@ -9842,12 +9842,63 @@ async function loadFromSupabase() {
   }
   await machtileLoadScheduleQueue();
   state.source = "supabase";
+  // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
+  await machtileLoadCardLegacyProgress();
   await Promise.all([
     machtileLoadScheduleContracts(),
     machtileLoadCapacityCalendar(),
     machtileLoadAttentionCenter(),
     machtileLoadHmcRuntime(),
   ]);
+}
+
+// Monitor 機台卡片的完成數（owner 2026-10-02）：原本只算 App 自己的報工（v_work_order_cards.qty_completed），
+// 舊 MES 已報的看不到（例：A01 舊 MES 良品 3440，卡片卻 0/5000）。改成跟批次報工同一套口徑：
+// 完成數＝舊 MES 已報＋待回寫，資料用同一支 batch_report_progress（一次查畫面上所有工序，每批最多 200 道）。
+// 防重複計數的規則在後端（同一個 SQL 快照）＋ batchReportCore.cardProgress。
+// 沒有同步資料或 RPC 失敗 → 照原本算法，卡片標「舊 MES 尚無資料」；絕不讓整頁壞掉。
+const MACHTILE_CARD_PROGRESS_CHUNK = 200;
+
+async function machtileLoadCardLegacyProgress() {
+  const orders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  orders.forEach((order) => {
+    order.appDone = Number(order.done || 0);
+    delete order.progressSource;
+  });
+  const core = machtileBatchCore();
+  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") return;
+  const ids = [...new Set(orders.map((order) => String(order.processId || "")).filter(isUuid))];
+  const byProcess = new Map();
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += MACHTILE_CARD_PROGRESS_CHUNK) chunks.push(ids.slice(i, i + MACHTILE_CARD_PROGRESS_CHUNK));
+  await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const rows = await supabaseFetch("rpc/batch_report_progress", {
+        method: "POST",
+        body: JSON.stringify({ p_process_ids: chunk, p_pending_since: config.batchReportPendingSince || null }),
+      });
+      (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.process_id) byProcess.set(String(row.process_id), row); });
+    } catch (error) {
+      console.warn("batch_report_progress unavailable for monitor cards; keeping App-only completion", error);
+    }
+  }));
+  const nowMs = Date.now();
+  orders.forEach((order) => {
+    try {
+      const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
+      const progress = core.cardProgress(order.appDone, row, nowMs);
+      order.done = progress.done;
+      order.progressSource = progress;
+    } catch (error) {
+      console.warn("card progress failed; keeping App-only completion", error);
+    }
+  });
+}
+
+function machtileCardProgressNote(order) {
+  const source = order?.progressSource;
+  if (!source || !source.label) return "";
+  return `<em class="machine-progress-source${source.legacyKnown ? "" : " is-missing"}" data-progress-source="${escapeHtml(source.source)}">${escapeHtml(source.label)}</em>`;
 }
 
 function loadMockData() {
@@ -12109,6 +12160,7 @@ function renderMachineCard(machine) {
           <span>完成進度</span>
           <strong>${order ? `${order.done}/${order.total}` : "-"}</strong>
           <small>${order ? `${percent}%` : "未派工"}</small>
+          ${order ? machtileCardProgressNote(order) : ""}
         </div>
         <div>
           <span>交期</span>
@@ -17432,6 +17484,7 @@ function renderDetail(order, detail) {
         <span>完成率</span>
         <strong>${percent}%</strong>
         <small>${order.done} / ${order.total} 件</small>
+        ${machtileCardProgressNote(order)}
       </div>
       <div class="detail-progress">
         <div class="progress-track" aria-label="工單完成進度 ${percent}%">

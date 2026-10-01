@@ -37,6 +37,15 @@ eq("待回寫超過 2 小時 → 提醒", c.displayProgress({ legacy_output: 0, 
 eq("沒有待回寫 → 不提醒", c.displayProgress({ legacy_output: 5, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null }, now).stalePending, false);
 eq("讀不到進度 → available=false、全 0", (({ available, totalOutput }) => ({ available, totalOutput }))(c.displayProgress(null, now)), { available: false, totalOutput: 0 });
 
+console.log("== cardProgress（Monitor 卡片完成數＝舊 MES＋待回寫）==");
+const pick = (o) => ({ done: o.done, source: o.source, label: o.label });
+eq("有舊 MES：3440（App 自己 0）→ 3440、標含舊 MES", pick(c.cardProgress(0, { legacy_output: 3440, legacy_fail: 3, pending_output: 0, pending_fail: 0, pending_count: 0 }, now)), { done: 3440, source: "legacy", label: "含舊 MES" });
+eq("舊 MES＋待回寫：110＋10 → 120、標待回寫 10（不再加 App 累計，避免重複）", pick(c.cardProgress(95, { legacy_output: 110, legacy_fail: 1, pending_output: 10, pending_fail: 0, pending_count: 2 }, now)), { done: 120, source: "legacy", label: "含舊 MES・待回寫 10" });
+eq("舊 MES 還沒有結算列 → 照 App 累計、標尚無資料", pick(c.cardProgress(7, { legacy_output: null, legacy_fail: null, pending_output: 4, pending_fail: 0, pending_count: 1 }, now)), { done: 7, source: "app", label: "舊 MES 尚無資料" });
+eq("讀不到（RPC 失敗／沒這道工序）→ 照 App 累計、標尚無資料", pick(c.cardProgress(12, null, now)), { done: 12, source: "app", label: "舊 MES 尚無資料" });
+eq("舊 MES 結算 0（有列）→ 0、仍標含舊 MES", pick(c.cardProgress(0, { legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }, now)), { done: 0, source: "legacy", label: "含舊 MES" });
+eq("不良＝舊 MES 不良＋待回寫不良", c.cardProgress(0, { legacy_output: 10, legacy_fail: 2, pending_output: 1, pending_fail: 1, pending_count: 1 }, now).totalFail, 3);
+
 console.log("== resolveStartedAt ==");
 const end = "2026-10-01T06:00:00.000Z";
 eq("取最晚：上一次報工", c.resolveStartedAt({ serverLastReportAt: "2026-10-01T04:00:00Z", localLedgerAt: "2026-10-01T03:00:00Z", actualStartAt: "2026-10-01T00:30:00Z", endedAt: end }), { startedAt: "2026-10-01T04:00:00.000Z", source: "lastReport", reason: "" });
