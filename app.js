@@ -8954,18 +8954,259 @@ function machtileOauthProductLabel() {
   return config.oauthSystemTag === "staging" ? "Cloud Staging" : "MachTile App";
 }
 
-async function machtileBeginOauthSignIn() {
-  if (!machtileOauthConfigured()) throw new Error("OAUTH_NOT_CONFIGURED");
-  machtileRenderOauthProgress("正在前往統一登入…");
-  const authorization = await machtileOauthCore.createAuthorization(config, window.crypto);
-  sessionStorage.setItem(
-    MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY,
-    JSON.stringify(authorization.transaction),
-  );
-  window.location.assign(authorization.url);
+// ---- Installed App (Android PWA) cross-tab handoff, 2026-10-01 ----
+// From the installed App the login center opens in a Chrome Custom Tab and the
+// redirect back lands there too, so the Custom Tab cannot read the verifier in
+// the App window's sessionStorage ("找不到登入驗證資料"). The verifier is also
+// shared through localStorage (per state, 10 min, deleted on first read); the
+// Custom Tab exchanges the code and leaves an encrypted one-time handoff
+// (2 min) that only the window which started that login can open. The signed-in
+// session itself still lives in sessionStorage exactly as before (shared
+// tablets: face login + end-of-shift sign-out must keep working).
+const MACHTILE_OAUTH_PENDING_STORAGE_KEY = "machtileOauthPendingTransactions";
+let machtileOauthHandoffListenersInstalled = false;
+let machtileOauthHandoffBusy = false;
+let machtileOauthHandoffResume = null;
+
+function machtileOauthPendingRaw() {
+  return machtileReadStorageValue(sessionStorage, MACHTILE_OAUTH_PENDING_STORAGE_KEY);
 }
 
-async function machtileExchangeOauthCode(code, transaction) {
+function machtileRememberOauthTransaction(transaction) {
+  try {
+    sessionStorage.setItem(
+      MACHTILE_OAUTH_PENDING_STORAGE_KEY,
+      JSON.stringify(machtileOauthCore.addPendingTransaction(machtileOauthPendingRaw(), transaction)),
+    );
+  } catch (error) {
+    // sessionStorage unavailable: the same-tab flow already failed above.
+  }
+  try {
+    localStorage.setItem(
+      machtileOauthCore.sharedTransactionKey(transaction.state),
+      JSON.stringify(transaction),
+    );
+  } catch (error) {
+    // localStorage unavailable: only the same-tab flow can complete.
+  }
+}
+
+// Removes this window's pending logins and every shared copy that belongs to them.
+function machtileForgetOauthPending() {
+  const pending = machtileOauthCore?.parsePendingTransactions?.(machtileOauthPendingRaw()) || [];
+  pending.forEach((transaction) => {
+    machtileRemoveStorageValue(localStorage, machtileOauthCore.sharedTransactionKey(transaction.state));
+    machtileRemoveStorageValue(localStorage, machtileOauthCore.handoffKey(transaction.state));
+  });
+  machtileRemoveStorageValue(sessionStorage, MACHTILE_OAUTH_PENDING_STORAGE_KEY);
+}
+
+// Deletes shared verifier copies / handoffs that are past their TTL or unreadable.
+function machtileSweepOauthShared() {
+  if (!machtileOauthCore?.staleSharedEntry) return;
+  try {
+    const stale = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && machtileOauthCore.staleSharedEntry(key, localStorage.getItem(key))) stale.push(key);
+    }
+    stale.forEach((key) => machtileRemoveStorageValue(localStorage, key));
+  } catch (error) {
+    // localStorage unavailable — nothing shared to clean.
+  }
+}
+
+function machtileTakeSharedOauthTransaction(state) {
+  const key = machtileOauthCore.sharedTransactionKey(state);
+  const raw = machtileReadStorageValue(localStorage, key);
+  machtileRemoveStorageValue(localStorage, key); // one-time use
+  return raw ? machtileOauthCore.parseTransaction(raw) : { transaction: null, reason: "missing" };
+}
+
+// App window side: accept a handoff only for a login this window started.
+// Returns true when a session was taken over.
+async function machtileConsumeOauthHandoff() {
+  if (!machtileOauthConfigured() || !machtileOauthCore?.openHandoff) return false;
+  if (machtileOauthHandoffBusy || machtileSessionActive()) return false;
+  const pending = machtileOauthCore.parsePendingTransactions(machtileOauthPendingRaw());
+  if (!pending.length) return false;
+  machtileOauthHandoffBusy = true;
+  try {
+    for (const transaction of pending.slice().reverse()) {
+      const key = machtileOauthCore.handoffKey(transaction.state);
+      const raw = machtileReadStorageValue(localStorage, key);
+      if (!raw) continue;
+      machtileRemoveStorageValue(localStorage, key); // one-time: delete before use
+      const opened = await machtileOauthCore.openHandoff(raw, transaction, window.crypto);
+      if (!opened.payload) {
+        console.warn("MachTile OAuth handoff rejected", opened.reason);
+        continue;
+      }
+      machtileSetSession(opened.payload, "", {
+        mode: machtileAuthSessionCore?.SESSION_MODE || "session",
+        createdAt: Date.now(),
+        rememberUntil: 0,
+        authMethod: machtileAuthSessionCore?.OAUTH_AUTH_METHOD || "oauth",
+      });
+      machtileForgetOauthPending();
+      machtileDropOauthTransaction();
+      return machtileSessionActive();
+    }
+    return false;
+  } finally {
+    machtileOauthHandoffBusy = false;
+  }
+}
+
+async function machtileCheckOauthHandoff() {
+  if (!machtileStrictMode() || machtileSessionActive()) return;
+  let tookOver = false;
+  try {
+    tookOver = await machtileConsumeOauthHandoff();
+  } catch (error) {
+    console.warn("MachTile OAuth handoff failed", error);
+  }
+  if (tookOver && typeof machtileOauthHandoffResume === "function") {
+    await machtileOauthHandoffResume();
+  }
+}
+
+// The App window may stay alive (and frozen) while the Custom Tab finishes, so
+// check on storage events and whenever it comes back to the foreground.
+function machtileInstallOauthHandoffListeners() {
+  if (machtileOauthHandoffListenersInstalled) return;
+  machtileOauthHandoffListenersInstalled = true;
+  window.addEventListener("storage", (event) => {
+    if (event.key && event.newValue && event.key.startsWith(machtileOauthCore.HANDOFF_PREFIX)) {
+      machtileCheckOauthHandoff();
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) machtileCheckOauthHandoff();
+  });
+  window.addEventListener("focus", () => machtileCheckOauthHandoff());
+  window.addEventListener("pageshow", () => machtileCheckOauthHandoff());
+}
+
+function machtileOauthHasPending() {
+  return Boolean(machtileOauthCore?.parsePendingTransactions?.(machtileOauthPendingRaw()).length);
+}
+
+function machtileRunningAsInstalledApp() {
+  try {
+    return Boolean(globalThis.MachTilePwaInstall?.isStandalone?.());
+  } catch (error) {
+    return false;
+  }
+}
+
+// Custom Tab side, after the code exchange: hand the tokens to the App window.
+async function machtileHandOffOauthTokens(payload, transaction) {
+  const sealed = await machtileOauthCore.sealHandoff(payload, transaction, window.crypto);
+  localStorage.setItem(sealed.key, sealed.value);
+  // Do not leave even the encrypted copy behind if the App never picks it up.
+  window.setTimeout(
+    () => machtileRemoveStorageValue(localStorage, sealed.key),
+    machtileOauthCore.HANDOFF_TTL_MS,
+  );
+  return sealed.key;
+}
+
+function machtileRenderOauthHandedOff(handoffStorageKey, payload) {
+  let overlay = document.getElementById("machtileLoginGate");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "machtileLoginGate";
+    overlay.className = "machtile-login-gate";
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <section class="machtile-login-card" aria-label="MachTile unified login handed off" aria-live="polite">
+      <p class="eyebrow">MachTile 統一登入</p>
+      <strong data-machtile-oauth-handoff-status>登入完成，請回到 MachTile App</strong>
+      <p>可以關閉這個視窗（左上角 ✕），回到桌面上的 MachTile App 繼續使用。</p>
+      <button type="button" data-machtile-oauth-stay>在這個視窗繼續使用</button>
+    </section>
+  `;
+  const onStorage = (event) => {
+    if (event.key !== handoffStorageKey || event.newValue) return;
+    const status = overlay.querySelector("[data-machtile-oauth-handoff-status]");
+    if (status) status.textContent = "已交給 MachTile App，可以關閉這個視窗";
+    try { window.close(); } catch (error) { /* Custom Tabs may refuse; the text says what to do */ }
+  };
+  window.addEventListener("storage", onStorage);
+  overlay.querySelector("[data-machtile-oauth-stay]")?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    window.removeEventListener("storage", onStorage);
+    // Take the handoff back so the App window can no longer use the same tokens.
+    const stillThere = machtileReadStorageValue(localStorage, handoffStorageKey);
+    machtileRemoveStorageValue(localStorage, handoffStorageKey);
+    if (!stillThere) {
+      machtileAuthState.error = "這次登入已交給 MachTile App；如需在此使用請重新登入。";
+      machtileRenderLoginGate();
+      return;
+    }
+    machtileSetSession(payload, "", {
+      mode: machtileAuthSessionCore?.SESSION_MODE || "session",
+      createdAt: Date.now(),
+      rememberUntil: 0,
+      authMethod: machtileAuthSessionCore?.OAUTH_AUTH_METHOD || "oauth",
+    });
+    if (typeof machtileOauthHandoffResume === "function") await machtileOauthHandoffResume();
+  });
+  try { window.close(); } catch (error) { /* see above */ }
+}
+
+function machtileRenderOauthWaiting() {
+  let overlay = document.getElementById("machtileLoginGate");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "machtileLoginGate";
+    overlay.className = "machtile-login-gate";
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <section class="machtile-login-card" aria-label="MachTile unified login waiting" aria-live="polite">
+      <p class="eyebrow">MachTile 統一登入</p>
+      <strong>等待登入完成…</strong>
+      <p>在登入頁完成後，關閉登入視窗回到這裡就會自動登入。</p>
+      <button type="button" data-machtile-oauth-login>重新前往統一登入</button>
+    </section>
+  `;
+  overlay.querySelector("[data-machtile-oauth-login]")?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      await machtileBeginOauthSignIn();
+    } catch (error) {
+      machtileAuthState.error = machtileOauthFriendlyError("exchange_failed");
+      machtileRenderLoginGate();
+    }
+  });
+}
+
+let machtileOauthBeginInFlight = false;
+
+async function machtileBeginOauthSignIn() {
+  if (!machtileOauthConfigured()) throw new Error("OAUTH_NOT_CONFIGURED");
+  if (machtileOauthBeginInFlight) return; // double tap / auto-start racing the button
+  machtileOauthBeginInFlight = true;
+  try {
+    machtileRenderOauthProgress("正在前往統一登入…");
+    const authorization = await machtileOauthCore.createAuthorization(config, window.crypto);
+    sessionStorage.setItem(
+      MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY,
+      JSON.stringify(authorization.transaction),
+    );
+    machtileRememberOauthTransaction(authorization.transaction);
+    machtileInstallOauthHandoffListeners();
+    window.location.assign(authorization.url);
+  } finally {
+    // A Custom Tab leaves this page alive; allow a later deliberate retry.
+    window.setTimeout(() => { machtileOauthBeginInFlight = false; }, 1500);
+  }
+}
+
+async function machtileRequestOauthTokens(code, transaction) {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),
@@ -8998,6 +9239,11 @@ async function machtileExchangeOauthCode(code, transaction) {
   if (!response.ok || !payload.access_token) {
     throw new Error("OAUTH_EXCHANGE_FAILED");
   }
+  return payload;
+}
+
+async function machtileExchangeOauthCode(code, transaction) {
+  const payload = await machtileRequestOauthTokens(code, transaction);
   const createdAt = Date.now();
   machtileSetSession(payload, "", {
     mode: machtileAuthSessionCore?.SESSION_MODE || "session",
@@ -9013,6 +9259,9 @@ async function machtileTryOauthSignIn() {
   const callback = machtileOauthCore.parseCallback(window.location.href);
   if (callback.kind === "error") {
     machtileDropOauthTransaction();
+    if (callback.state) {
+      machtileRemoveStorageValue(localStorage, machtileOauthCore.sharedTransactionKey(callback.state));
+    }
     machtileScrubOauthCallback();
     machtileAuthState.error = machtileOauthFriendlyError(callback.error);
     return false;
@@ -9022,21 +9271,65 @@ async function machtileTryOauthSignIn() {
     const parsed = machtileOauthCore.parseTransaction(
       machtileReadStorageValue(sessionStorage, MACHTILE_OAUTH_TRANSACTION_STORAGE_KEY),
     );
+    // 1) Started in this tab (unchanged browser flow; an earlier retry of this
+    //    tab also counts). 2) Otherwise, started in another window — the
+    //    installed App — whose verifier was shared under this exact state.
+    let transaction = parsed.transaction && parsed.transaction.state === callback.state
+      ? parsed.transaction
+      : machtileOauthCore.findPendingTransaction(machtileOauthPendingRaw(), callback.state);
+    let crossTab = false;
+    let failureReason = parsed.reason;
+    if (transaction) {
+      machtileRemoveStorageValue(localStorage, machtileOauthCore.sharedTransactionKey(callback.state));
+    } else if (callback.state) {
+      const shared = machtileTakeSharedOauthTransaction(callback.state);
+      if (shared.transaction) {
+        transaction = shared.transaction;
+        crossTab = true;
+      } else if (shared.reason !== "missing") {
+        failureReason = shared.reason;
+      }
+    }
     machtileDropOauthTransaction();
     machtileScrubOauthCallback();
-    if (!parsed.transaction) {
-      machtileAuthState.error = machtileOauthFriendlyError(parsed.reason);
+    if (!transaction && parsed.transaction) {
+      // Same as before: this tab has a login in progress but for another state.
+      transaction = parsed.transaction;
+    }
+    if (!transaction) {
+      machtileAuthState.error = machtileOauthFriendlyError(failureReason);
       return false;
     }
-    const validation = machtileOauthCore.validateCallback(callback, parsed.transaction);
+    const validation = machtileOauthCore.validateCallback(callback, transaction);
     if (!validation.ok) {
       machtileAuthState.error = machtileOauthFriendlyError(validation.reason);
       return false;
     }
     try {
       machtileRenderOauthProgress("正在驗證登入身分…");
-      await machtileExchangeOauthCode(callback.code, parsed.transaction);
-      return machtileSessionActive();
+      if (!crossTab) {
+        await machtileExchangeOauthCode(callback.code, transaction);
+        if (machtileSessionActive()) machtileForgetOauthPending();
+        return machtileSessionActive();
+      }
+      const payload = await machtileRequestOauthTokens(callback.code, transaction);
+      let handoffStorageKey = "";
+      try {
+        handoffStorageKey = await machtileHandOffOauthTokens(payload, transaction);
+      } catch (error) {
+        console.warn("MachTile OAuth handoff unavailable; signing in this tab", error);
+      }
+      if (!handoffStorageKey) {
+        machtileSetSession(payload, "", {
+          mode: machtileAuthSessionCore?.SESSION_MODE || "session",
+          createdAt: Date.now(),
+          rememberUntil: 0,
+          authMethod: machtileAuthSessionCore?.OAUTH_AUTH_METHOD || "oauth",
+        });
+        return machtileSessionActive();
+      }
+      machtileRenderOauthHandedOff(handoffStorageKey, payload);
+      return true; // handed off — this tab stays on the "回到 App" card
     } catch (error) {
       const reason = error?.message === "OAUTH_EXCHANGE_TIMEOUT"
         ? "exchange_timeout"
@@ -9044,6 +9337,19 @@ async function machtileTryOauthSignIn() {
       machtileAuthState.error = machtileOauthFriendlyError(reason);
       return false;
     }
+  }
+
+  // Returning to the installed App after the Custom Tab finished.
+  try {
+    if (await machtileConsumeOauthHandoff()) return true;
+  } catch (error) {
+    console.warn("MachTile OAuth handoff failed", error);
+  }
+  // Installed App with a login still in progress elsewhere: wait for it
+  // instead of opening yet another login window over the top.
+  if (machtileRunningAsInstalledApp() && machtileOauthHasPending()) {
+    machtileRenderOauthWaiting();
+    return true;
   }
 
   try {
@@ -18503,6 +18809,11 @@ async function init() {
   // The gate is pre-rendered in index.html (first paint), so every exit from this block must
   // either hand it to the login/progress renderers or remove it below; an unexpected throw
   // while restoring the session falls back to the login button instead of a stuck cover.
+  machtileOauthHandoffResume = machtileFinishSignedInBoot;
+  if (machtileStrictMode() && machtileOauthConfigured()) {
+    machtileSweepOauthShared();
+    machtileInstallOauthHandoffListeners();
+  }
   try {
     if (machtileStrictMode() && !machtileSessionActive()) {
       await machtileRestoreSession();
@@ -18518,7 +18829,17 @@ async function init() {
     machtileRenderLoginGate();
     return;
   }
+  await machtileFinishSignedInBoot();
+}
+
+// Everything init() does once a session exists. Also the resume point when the
+// installed App takes over a login finished in a Custom Tab (runs at most once).
+let machtileSignedInBootDone = false;
+
+async function machtileFinishSignedInBoot() {
+  if (machtileSignedInBootDone) return;
   if (!machtileEnforceCentralAccess()) return;
+  machtileSignedInBootDone = true;
 
   machtileRemoveLoginGate();
   machtileEnsureSessionBadge();
