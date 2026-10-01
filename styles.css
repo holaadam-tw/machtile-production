@@ -9450,12 +9450,43 @@ body.report-work-route-mode .machtile-route-brand-bar {
     font-weight: 900;
   }
 
-  /* 登入徽章抬到底部分頁列上方，別壓住 tabs（owner 手機截圖回報） */
-  .machtile-session-badge {
-    right: 8px;
-    bottom: 68px;
+  /* 手機：登入徽章收成右上角（鈴鐺左邊）一顆小按鈕，點開才展開成面板（2026-10-01 owner：
+     原本壓在底部分頁列與「＋回報」上）。加 body 是為了蓋過檔案後面同權重的基本規則。 */
+  body .machtile-session-badge {
+    top: 20px;
+    right: 112px;
+    bottom: auto;
     max-width: calc(100vw - 16px);
-    padding: 6px 8px 6px 12px;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  body .machtile-session-badge > :not(.machtile-session-toggle) {
+    display: none;
+  }
+
+  body .machtile-session-badge .machtile-session-toggle {
+    display: inline-flex;
+  }
+
+  body .machtile-session-badge.is-expanded {
+    top: 68px;
+    right: 8px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: #0f172a;
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.35);
+  }
+
+  body .machtile-session-badge.is-expanded > :not(.machtile-session-toggle):not([hidden]) {
+    display: inline-flex;
+  }
+
+  /* 報工單（全螢幕）開著時不顯示，免得疊在單子上 */
+  body:has(#reportSheet.is-open) .machtile-session-badge {
+    display: none;
   }
 
   .machtile-session-badge span {
@@ -11485,3 +11516,25 @@ body.report-work-route-mode .machtile-route-brand-bar {
   .batch-apply-all { flex: 1; }
   .batch-submit-bar { bottom: 56px; }
 }
+
+/* 登入徽章的手機版收合按鈕：平板／電腦不顯示（版面維持不變） */
+.machtile-session-toggle { display: none; }
+body .machtile-session-badge .machtile-session-toggle {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 900;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.3);
+}
+@media (min-width: 721px) {
+  body .machtile-session-badge .machtile-session-toggle { display: none; }
+}
+/* 單台報工：數量欄說明 */
+.report-qty-help { margin: -4px 0 6px; color: var(--muted); font-size: 12px; }

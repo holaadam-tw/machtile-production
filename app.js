@@ -8061,7 +8061,10 @@ function updateReportEstimate() {
 function updateNoonAdvice() {
   const advice = $("#noonAdvice");
   if (!advice || !selectedOrder) return;
-  const completed = Number($("#completedQty")?.value || 0);
+  // 2026-10-01：欄位改成「這次良品」（回寫橋一直是把它當增量累加）。中午判斷用
+  // 「已完成＋這次」比目標；已完成＝這道工序目前的完成數（卡片上的 done）。
+  const thisTime = Number($("#completedQty")?.value || 0);
+  const completed = Number(selectedOrder.done || 0) + thisTime;
   const profile = getProgramProfile(selectedOrder);
   const noonTarget = reportDailyCapacity(profile?.pureCycleSec, 210);
   if (!noonTarget) {
@@ -8070,8 +8073,8 @@ function updateNoonAdvice() {
   }
   const delta = completed - noonTarget;
   advice.textContent = delta >= 0
-    ? `中午累計 ${completed} 件，高於目標 ${noonTarget} 件，暫不需要加班。`
-    : `中午累計 ${completed} 件，低於目標 ${noonTarget} 件，建議下午確認是否加班或拆單。`;
+    ? `已完成＋這次共 ${completed} 件，高於目標 ${noonTarget} 件，暫不需要加班。`
+    : `已完成＋這次共 ${completed} 件，低於目標 ${noonTarget} 件，建議下午確認是否加班或拆單。`;
 }
 
 function setReportDefaults(order) {
@@ -8084,7 +8087,9 @@ function setReportDefaults(order) {
   const defectInput = $("#defectQty");
   if (workTotalInput) workTotalInput.value = totalQty || 0;
   if (machineQtyInput) machineQtyInput.value = doneQty || 0;
-  if (completedInput) completedInput.value = doneQty || 0;
+  // 2026-10-01：「這次良品」預設 0。舊版預設帶「已完成數」，欄位又寫「累計」，照預設送出時
+  // 回寫橋會把整個累計當成這次的量再加一次。
+  if (completedInput) completedInput.value = 0;
   if (defectInput) defectInput.value = 0;
   if (profile?.pureCycleSec) setReportCycleSeconds(profile.pureCycleSec);
   updateReportEstimate();
@@ -8143,7 +8148,7 @@ function validateReportForm(type) {
     if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成當日首件檢查表。";
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
-    if (completed < 0 || defects < 0) return "良品累計與不良數不可小於 0。";
+    if (completed < 0 || defects < 0) return "這次良品與這次不良不可小於 0。";
   }
   if (type === "afternoonCheck") {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -9340,7 +9345,11 @@ function machtileEnsureSessionBadge() {
     badge.className = "machtile-session-badge";
     document.body.appendChild(badge);
   }
+  // 手機（≤720px）只顯示右上角一顆小按鈕，點開才看到帳號／切換系統／登出（2026-10-01：
+  // 原本整條徽章壓在底部分頁列上，「報工」等分頁點不到）。平板／電腦版面不變。
+  badge.classList.remove("is-expanded");
   badge.innerHTML = `
+    <button type="button" class="machtile-session-toggle" data-machtile-session-toggle aria-expanded="false" aria-label="帳號選單"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 4-6 8-6s8 2 8 6"></path></svg></button>
     <span>${escapeHtml(machtileAuthState.email || "已登入")}</span>
     <small>${escapeHtml(machtileAuthState.role || "member")}</small>
     <button type="button" class="machtile-install-app" data-machtile-install-app hidden>安裝 App</button>
@@ -9350,6 +9359,10 @@ function machtileEnsureSessionBadge() {
   // 「安裝 App」(PWA, 2026-10-01): pwaInstall.js 只在 Chrome 確定可以安裝時才把按鈕顯示出來；
   // 已安裝或不支援的瀏覽器（iOS 等）維持隱藏。
   window.MachTilePwaInstall?.bindButton(badge.querySelector("[data-machtile-install-app]"));
+  badge.querySelector("[data-machtile-session-toggle]")?.addEventListener("click", (event) => {
+    const expanded = badge.classList.toggle("is-expanded");
+    event.currentTarget.setAttribute("aria-expanded", expanded ? "true" : "false");
+  });
   badge.querySelector("[data-machtile-logout]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -14002,9 +14015,9 @@ function renderReportRulesModule() {
   const rules = [
     ["首次開工", "工件總數、cycle time 必填", "程式選填、開工照片必填", "產生預估完工與中午目標"],
     ["今日開工", "當日第一筆", "機台已加工數量、相機照片與首件檢查必填", "建立當日加工基準"],
-    ["中午報工", "中午休息前", "良品累計 / 不良數必填", "判斷是否加班或拆單"],
+    ["中午報工", "中午休息前", "這次良品 / 這次不良必填（不是累計）", "判斷是否加班或拆單"],
     ["下午 4:30 檢查", "固定提醒", "下午檢查表必填、不填數量", "主管下班前確認風險"],
-    ["收工 / 完工", "17:00 或 20:30", "良品累計 / 不良數 / 完工照片必填", "結算當日進度"],
+    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）/ 完工照片必填", "結算當日進度"],
     ["異常回報", "事件式", "異常類型與照片必填", "異常備註與主管處理"],
   ];
   return renderRuleTable("報工規則", rules, "儲存報工規則");
@@ -17293,7 +17306,7 @@ function aiSupportAnswer(question) {
     return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。正常中午休息不要用暫停，請用「中午報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片。\n2. 今日開工：目前機台已加工數量、機台照片、首件檢查。\n3. 中午報工：良品累計 / 不良數，這筆用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：良品累計 / 不良數、完工照片、是否加班。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片。\n2. 今日開工：目前機台已加工數量、機台照片、首件檢查。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";
@@ -18204,9 +18217,8 @@ async function handlePauseReport() {
 
 function handleLocalReport(completed, defects, options = {}) {
   if (!selectedOrder) return;
-  if (options.quantityMode === "cumulative") {
-    selectedOrder.done = Math.min(Number(selectedOrder.total || 0), Number(completed || 0));
-  } else if (Number(completed || 0) > 0) {
+  // 示範模式（不寫雲端）：2026-10-01 起欄位是「這次良品」，一律當增量加上去（與回寫橋一致）。
+  if (Number(completed || 0) > 0) {
     selectedOrder.done = Math.min(Number(selectedOrder.total || 0), Number(selectedOrder.done || 0) + completed);
   }
   selectedOrder.lastReport = "剛剛";

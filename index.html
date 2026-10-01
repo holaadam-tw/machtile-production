@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261001-batch-report">
+  <link rel="stylesheet" href="./styles.css?v=20261001-batch-report-2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -490,14 +490,15 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
-            <label class="field-label" for="completedQty">良品累計 / 完成數 <small>必填</small></label>
+            <label class="field-label" for="completedQty">這次良品 <small>必填</small></label>
+            <p class="report-qty-help">填這次新做的數量，不是累計</p>
             <div class="stepper">
               <button type="button" data-step="completedQty" data-delta="-1">−</button>
               <input id="completedQty" type="number" min="0" value="5">
               <button type="button" data-step="completedQty" data-delta="1">+</button>
             </div>
 
-            <label class="field-label" for="defectQty">不良數 <small>必填</small></label>
+            <label class="field-label" for="defectQty">這次不良 <small>必填</small></label>
             <div class="stepper">
               <button type="button" data-step="defectQty" data-delta="-1">−</button>
               <input id="defectQty" type="number" min="0" value="0">
@@ -734,6 +735,6 @@
   <script src="./mockData.js?v=20260514-p0-001"></script>
   <script src="./accountAdminCore.js?v=20260930-am-audit"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
-  <script src="./app.js?v=20261001-batch-report"></script>
+  <script src="./app.js?v=20261001-batch-report-2"></script>
 </body>
 </html>
