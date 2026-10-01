@@ -11427,3 +11427,12 @@ body.report-work-route-mode .machtile-route-brand-bar {
   .am-audit-item { grid-template-columns: 1fr; }
   .am-audit-fields { grid-column: 1; }
 }
+
+/* 「安裝 App」(PWA, 2026-10-01) — 只有 Chrome 可以安裝時才會出現在右下登入徽章裡 */
+.machtile-session-badge button.machtile-install-app {
+  background: #0067ff;
+}
+
+.machtile-session-badge button.machtile-install-app[hidden] {
+  display: none;
+}
