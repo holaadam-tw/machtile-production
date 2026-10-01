@@ -191,7 +191,20 @@ const lm = c.latestMachineTimeByProcess([
   { process_id: "p3", cycle_time_seconds: 0, created_at: "2026-10-01T03:00:00Z" },
 ]);
 eq("每道工序取最新一次填的值；null／0 不算", [lm.get("p1")?.seconds, lm.has("p2"), lm.has("p3")], [95, false, false]);
-eq("兩次以上才有基準＝歷次平均", [lm.get("p1")?.count, lm.get("p1")?.baselineSeconds], [2, 93]);
+eq("審查 N2：只有兩筆（90 舊、95 最新）→ 最新以前只有 1 筆，沒有基準", [lm.get("p1")?.count, lm.get("p1")?.seconds, lm.get("p1")?.baselineSeconds], [2, 95, null]);
+const lm3 = c.latestMachineTimeByProcess([
+  { process_id: "r", cycle_time_seconds: 80, created_at: "2026-10-01T01:00:00Z" },
+  { process_id: "r", cycle_time_seconds: 90, created_at: "2026-10-01T02:00:00Z" },
+  { process_id: "r", cycle_time_seconds: 120, created_at: "2026-10-01T03:00:00Z" },
+]).get("r");
+eq("審查 N2：三筆（80、90、最新 120）→ 基準＝(80+90)/2＝85，不含最新那筆", [lm3.count, lm3.seconds, lm3.baselineSeconds], [3, 120, 85]);
+eq("審查 N2：三筆時差異＝(120−85)/85≈+41%（含最新一起平均會變成 (120−97)/97≈+24%）", Math.round(((lm3.seconds - lm3.baselineSeconds) / lm3.baselineSeconds) * 100), 41);
+const lm3b = c.latestMachineTimeByProcess([
+  { process_id: "s", cycle_time_seconds: 100, created_at: "2026-10-01T03:00:00Z" },
+  { process_id: "s", cycle_time_seconds: 60, created_at: "2026-10-01T01:00:00Z" },
+  { process_id: "s", cycle_time_seconds: 81, created_at: "2026-10-01T02:00:00Z" },
+]).get("s");
+eq("審查 N2：資料順序亂也一樣（最新＝100，基準＝(60+81)/2＝70.5→71）", [lm3b.seconds, lm3b.baselineSeconds], [100, 71]);
 const lm550 = c.latestMachineTimeByProcess([
   { process_id: "q1", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
   { process_id: "q2", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },

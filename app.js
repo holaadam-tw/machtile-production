@@ -9929,7 +9929,7 @@ async function machtileLoadCardMachineTimes() {
     if (!t) return;
     order.pureCycleSec = t.seconds;
     order.machineTimeSource = "report";
-    // 基準＝這道工序歷次真的填過的值的平均，至少 2 次才算（審查 L3：不再用 part_process_time_baselines，
+    // 基準＝這道工序最新這筆以前、歷次真的填過的值的平均，之前至少 2 筆才算（審查 N2／L3：不再用 part_process_time_baselines，
     // 它的 key 是 trigger 自己組的圖號／製程名，卡片對不準，而且裡面混了舊的 550 預設值樣本）
     if (!order.baselineCycleSec && t.baselineSeconds) order.baselineCycleSec = t.baselineSeconds;
   });

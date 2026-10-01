@@ -217,13 +217,15 @@
     return { seconds: parsed.seconds, changed: true, error: "" };
   }
 
-  // 單台報工 Cycle time 欄位以前的 HTML 預設值（9 分 10 秒）。2026-10-02 前單台每一種報工都會把它當成
-  // cycle_time_seconds 送出（正式庫 9 筆都是這個值），分不出是不是真的有人填，所以一律不採用。
-  // owner 清掉那批資料、且單台修正上線後，可以拿掉這條。
+  // ⚠️ 暫時規則（審查 N3，2026-10-02）：單台報工 Cycle time 欄位以前的 HTML 預設值（9 分 10 秒）。
+  // 修正前單台每一種報工都會把它當成 cycle_time_seconds 送出（正式庫 9 筆都是這個值，全是 B02 測試單
+  // WO-GATE-P3-001），分不出是不是真的有人填，所以暫時一律不採用（真的就是 9 分 10 秒的也會被忽略）。
+  // owner 照 PR #42 的 SQL 清完那 9 筆、且單台修正已上線後，**就要拿掉這條**（連同 latestMachineTimeByProcess 裡的判斷）。
   const LEGACY_DEFAULT_CYCLE_SECONDS = 550;
 
   // production_reports（cycle_time_seconds 不是 null）→ 每道工序：最新一次填的機台加工時間（秒／件）、
-  // 樣本數、歷次平均（至少 2 次才當基準）。550（舊預設值）不算。
+  // 樣本數、基準。基準＝**最新這筆以前**歷次填過的值的平均，之前至少要有 2 筆才算（審查 N2：最新那筆
+  // 一起平均會把差異拉向 0，例如只有兩筆時差異只剩實際的一半）。550（舊預設值，暫時規則）不算。
   function latestMachineTimeByProcess(rows) {
     const map = new Map();
     (Array.isArray(rows) ? rows : []).forEach((r) => {
@@ -237,7 +239,10 @@
       if (!prev.at || at > prev.at) { next.seconds = Math.round(sec); next.at = at; }
       map.set(key, next);
     });
-    map.forEach((v) => { v.baselineSeconds = v.count >= 2 ? Math.round(v.sum / v.count) : null; });
+    map.forEach((v) => {
+      const before = v.count - 1;   // 最新這筆以前的筆數
+      v.baselineSeconds = before >= 2 ? Math.round((v.sum - v.seconds) / before) : null;
+    });
     return map;
   }
 
