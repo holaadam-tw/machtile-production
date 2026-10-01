@@ -80,14 +80,18 @@ const baseProgress = {
   [id(306)]: { legacy_output: 172, legacy_fail: 0, last_report_at: ago(60), actual_start_at: null },
 };
 // 機台加工時間：A02 這張單上一次填 1 分 35 秒；其他還沒填過
-const machineTimeRows = [{ process_id: id(302), cycle_time_seconds: 95, created_at: ago(90) }];
+// A01 有一筆 550（＝單台舊版 HTML 預設值漏送的假值，正式庫實際有 9 筆）→ 不可以當成機台加工時間（審查 H1）
+const machineTimeRows = [
+  { process_id: id(302), cycle_time_seconds: 95, created_at: ago(90) },
+  { process_id: id(301), cycle_time_seconds: 550, created_at: ago(200) },
+];
 const procToMachine = Object.fromEntries(cards.map((c) => [c.current_process_id, c.machine_name]));
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const jwt = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: users[0].auth, email: "op@test.invalid", exp: Math.floor(now / 1000) + 3600, role: "authenticated", app_metadata: { tenant_id: T, role: "operator" } })}.sig`;
-const testConfig = `window.MACHTILE_CONFIG = {
+const testConfigFor = ({ outbox = true } = {}) => `window.MACHTILE_CONFIG = {
   authMode: "strict", supabaseUrl: "${FAKE}", supabaseAnonKey: "anon-test-key-for-e2e-only", tenantId: "${T}",
-  useSupabase: true, useTenantHeaderAuth: true, enableOutboxSubmit: true, enableFileUpload: false,
+  useSupabase: true, useTenantHeaderAuth: true, enableOutboxSubmit: ${outbox}, enableFileUpload: false,
   enableScheduleContracts: false, enableCalibrationGovernance: false, enableManufacturingQuoteTracking: false,
   useHmcWorklistSupabase: false, oauthEnabled: false, enableJevTriage: false, enableAccountDelete: false,
   enableFaceStatus: false, faceAdminUrl: "", disableServiceWorker: true, hmcFixedStagingEnabled: false,
@@ -98,6 +102,8 @@ const calls = [];
 const inserted = new Map();   // report_uuid -> payload
 const blocked = [];
 let failNextFor = null;
+let dropResponseFor = null;
+let switchAnswer = true;   // 「上一次送出還沒確認成功，仍要切換？」要按確定還是取消
 function progressRow(pid) {
   const b = baseProgress[pid];
   if (!b) return null;
@@ -144,6 +150,12 @@ async function handleFake(route) {
     calls.push(body);
     const machine = procToMachine[body.p_payload?.process_id];
     if (failNextFor && machine === failNextFor) { failNextFor = null; return json(400, { message: "simulated permanent rejection" }); }
+    // 審查 L1：伺服器其實寫進去了，但回應在路上掉了（瀏覽器只看到網路錯誤）
+    if (dropResponseFor && machine === dropResponseFor) {
+      dropResponseFor = null;
+      if (!inserted.has(body.p_report_uuid)) inserted.set(body.p_report_uuid, { ...body.p_payload, __created: new Date().toISOString() });
+      return route.abort("connectionreset");
+    }
     if (inserted.has(body.p_report_uuid)) return json(200, { report_id: id(7000), inserted: false });
     inserted.set(body.p_report_uuid, { ...body.p_payload, __created: new Date().toISOString() });
     return json(200, { report_id: id(7000 + inserted.size), inserted: true });
@@ -153,7 +165,8 @@ async function handleFake(route) {
   return json(200, {});
 }
 
-async function newPage(browser, device) {
+async function newPage(browser, device, { outbox = true } = {}) {
+  const testConfig = testConfigFor({ outbox });
   const context = await browser.newContext({ ...device, serviceWorkers: "block" });
   await context.addInitScript(([token]) => {
     try { sessionStorage.setItem("machtileAuthSession", JSON.stringify({ version: 1, accessToken: token, refreshToken: "", email: "op@test.invalid", authMethod: "password", mode: "session", createdAt: Date.now(), rememberUntil: 0 })); } catch {}
@@ -169,7 +182,7 @@ async function newPage(browser, device) {
     return route.abort();
   });
   const page = await context.newPage();
-  page.on("dialog", (d) => d.accept());
+  page.on("dialog", (d) => (d.message().includes("還沒確認成功") && !switchAnswer ? d.dismiss() : d.accept()));
   const errors = [];
   page.on("pageerror", (e) => { errors.push(String(e)); if (process.env.DBG) console.log("PAGEERROR", String(e)); });
   page.on("console", (m) => { if (process.env.DBG && m.type() !== "log") console.log("CONSOLE", m.type(), m.text().slice(0, 300)); });
@@ -374,12 +387,76 @@ try {
   await waitBatchDone(page);
   parity("收工 / 完工", sFinish, byMachine("A02", "finish").at(-1));
   const bNoon = byMachine("A02", "noon").at(-1)?.p_payload;
-  ok(sNoon.p_payload.cycle_time_seconds === 95 && bNoon?.cycle_time_seconds === null, "已知差異：單台每次都送隱藏的 cycle time（這裡＝上次的 95），批次只在有改時送", `${sNoon.p_payload.cycle_time_seconds} / ${bNoon?.cycle_time_seconds}`);
+  ok([sDaily, sNoon, sFinish].every((c) => c.p_payload.cycle_time_seconds === null && c.p_payload.report_payload.cycle_time_seconds === null) && bNoon?.cycle_time_seconds === null,
+    "審查 H1/M1：單台今日開工／中午／收工沒動 Cycle time → cycle_time_seconds=null（不再送隱藏的 95／550），跟批次一致",
+    [sDaily, sNoon, sFinish].map((c) => c.p_payload.cycle_time_seconds).join(","));
+
+  console.log("== 審查 H1/M1：單台首次開工的 Cycle time ==");
+  // 先開有時間的 A02（欄位帶 1 分 35 秒），再開沒填過時間的 A01：不可以沿用 A02 的值，也不可以是 9 分 10 秒
+  await page.evaluate(() => openReport("XX01202609160002", { reportType: "workStart" }));
+  const a02Cycle = [await page.locator("#cycleMinutes").inputValue(), await page.locator("#cycleSeconds").inputValue()];
+  await page.evaluate(() => openReport("XX01202609020008", { reportType: "workStart" }));
+  const a01Cycle = [await page.locator("#cycleMinutes").inputValue(), await page.locator("#cycleSeconds").inputValue()];
+  ok(a02Cycle.join(":") === "1:35" && a01Cycle.join(":") === ":", "先開 A02（1:35）再開沒填過的 A01 → Cycle time 留白（不沿用、不是 9:10）", `${a02Cycle} → ${a01Cycle}`);
+  const sWork = await singleReport(page, "XX01202609020008", "workStart", async (pg) => {
+    await pg.locator("#workTotalQty").fill("5000");
+    await pg.locator("#cycleMinutes").fill("2");
+    await pg.locator("#cycleSeconds").fill("5");
+    await pg.locator("#startPhoto").setInputFiles(png);
+  });
+  ok(sWork?.p_payload?.report_type === "workStart" && sWork.p_payload.cycle_time_seconds === 125, "單台首次開工：使用者填的 2 分 5 秒照送（125）", JSON.stringify(sWork?.p_payload?.cycle_time_seconds));
+  const sNoon2 = await singleReport(page, "XX01202609020008", "noon", async (pg) => {
+    await pg.locator('.report-type-tab[data-report-type="workStart"]').click();
+    await pg.locator("#cycleMinutes").fill("2");
+    await pg.locator("#cycleSeconds").fill("20");
+    await pg.locator('.report-type-tab[data-report-type="noon"]').click();
+    await pg.locator("#completedQty").fill("3");
+  });
+  ok(sNoon2?.p_payload?.cycle_time_seconds === 140, "單台中午報工：使用者這次真的改過 Cycle time 才送（140）", JSON.stringify(sNoon2?.p_payload?.cycle_time_seconds));
   ok(inserted.size === new Set(calls.map((c) => c.p_report_uuid)).size, `後端沒有重複的報工（${inserted.size} 筆）`);
 
   const realErrors = errors.filter((e) => !e.includes("CATALOG_ENDPOINT_INVALID"));
   ok(realErrors.length === 0, "頁面沒有 JS 錯誤（排除假網域觸發的 CATALOG_ENDPOINT_INVALID）", realErrors.join(" | "));
   await context.close();
+
+  // ================= L1：直送模式回應掉了 → 不可以換分頁再算一次 =================
+  console.log("== 審查 L1：直送模式（enableOutboxSubmit:false），寫入成功但回應掉了 ==");
+  {
+    const d = await newPage(browser, devices["Pixel 7"], { outbox: false });
+    await waitLoaded(d.page);
+    const r = await openBatch(d.page);
+    await r.locator('[data-batch-good="A05"]').fill("5");
+    dropResponseFor = "A05";
+    await r.locator("[data-batch-submit]").click();
+    await waitBatchDone(d.page);
+    const sumA05 = () => [...inserted.values()].filter((x) => procToMachine[x.process_id] === "A05" && x.report_type !== "dailyStart").reduce((s, x) => s + (x.completed_qty || 0), 0);
+    const before = sumA05();
+    ok((await r.locator('[data-batch-row="A05"] .batch-result').innerText()).includes("送出失敗"), "回應掉了 → 畫面顯示失敗（其實後端已寫入）");
+    switchAnswer = false;
+    await r.locator('[data-batch-mode="finish"]').click();
+    await d.page.waitForTimeout(200);
+    ok(await r.locator('[data-batch-mode="noon"]').getAttribute("aria-selected") === "true" && await r.locator('[data-batch-good="A05"]').inputValue() === "5", "有沒確認的 draft → 按取消就留在中午報工、數量保留");
+    await d.page.screenshot({ path: path.join(outDir, "l1-phone-blocked-switch.png"), fullPage: true });
+    const lastUuid = calls.filter((c) => procToMachine[c.p_payload.process_id] === "A05").at(-1).p_report_uuid;
+    await r.locator("[data-batch-submit]").click();
+    await waitBatchDone(d.page);
+    const again = calls.filter((c) => procToMachine[c.p_payload.process_id] === "A05").at(-1);
+    ok(again.p_report_uuid === lastUuid && (await r.locator('[data-batch-row="A05"] .batch-result').innerText()).includes("先前已收到"), "重按送出：同一個 report_uuid，後端回「先前已收到」");
+    ok(sumA05() === before, `A05 這次 5 件只算一次（後端合計沒變：${before} → ${sumA05()}）`);
+    // 確定切換：清空數量與待送紀錄，不會帶著 3 件去收工
+    await r.locator('[data-batch-good="A04"]').fill("3");
+    dropResponseFor = "A04";
+    await r.locator("[data-batch-submit]").click();
+    await waitBatchDone(d.page);
+    switchAnswer = true;
+    await r.locator('[data-batch-mode="finish"]').click();
+    await d.page.waitForTimeout(200);
+    const draftsLeft = await d.page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("machtile-batch-report-drafts") || "{}")));
+    ok(await r.locator('[data-batch-mode="finish"]').getAttribute("aria-selected") === "true" && await r.locator('[data-batch-good="A04"]').inputValue() === "" && !draftsLeft.includes("A04"), "按確定切換 → A04 數量和待送紀錄清空（不會換新 uuid 再送一次）", JSON.stringify(draftsLeft));
+    const dErr = d.errors.filter((e) => !e.includes("CATALOG_ENDPOINT_INVALID"));
+    ok(dErr.length === 0, "直送模式沒有 JS 錯誤", dErr.join(" | "));
+    await d.context.close();
+  }
 
   // ================= tablet =================
   console.log("== 平板（810×1080）：三個分頁 ==");

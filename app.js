@@ -8029,8 +8029,19 @@ function setReportCycleSeconds(seconds) {
   const minuteInput = $("#cycleMinutes");
   const secondInput = $("#cycleSeconds");
   if (!minuteInput || !secondInput) return;
-  minuteInput.value = Math.floor(total / 60);
-  secondInput.value = total % 60;
+  // 0／沒有值＝留白（2026-10-02 審查 H1：以前留著 HTML 預設 9 分 10 秒或上一張單的值）
+  minuteInput.value = total ? Math.floor(total / 60) : "";
+  secondInput.value = total ? total % 60 : "";
+}
+
+// 2026-10-02 審查 H1／M1：Cycle time 欄位只在「首次開工」看得到。以前每一種報工都把這個隱藏欄位的值
+// 送成 cycle_time_seconds（沒基準時＝HTML 預設 550 秒），後端 trigger 每筆都記一次加工履歷、基準被同一個值湊滿。
+// 現在只有「首次開工」或「使用者這次真的改過 Cycle time」才送，其他一律 null。
+let reportCycleTouched = false;
+
+function reportCycleSecondsToSend(type) {
+  if (type !== "workStart" && !reportCycleTouched) return null;
+  return getReportCycleSeconds() || null;
 }
 
 function reportDailyCapacity(cycleSeconds, minutesPerDay = 430) {
@@ -8091,7 +8102,9 @@ function setReportDefaults(order) {
   // 回寫橋會把整個累計當成這次的量再加一次。
   if (completedInput) completedInput.value = 0;
   if (defectInput) defectInput.value = 0;
-  if (profile?.pureCycleSec) setReportCycleSeconds(profile.pureCycleSec);
+  // 沒有這張單的時間就留白，不可以沿用上一張單（審查 M1）
+  setReportCycleSeconds(profile?.pureCycleSec || 0);
+  reportCycleTouched = false;
   updateReportEstimate();
   updateNoonAdvice();
 }
@@ -8197,7 +8210,7 @@ function buildReportPayload(type) {
   return {
     report_type: type,
     work_total_qty: Number($("#workTotalQty")?.value || 0) || null,
-    cycle_time_seconds: getReportCycleSeconds() || null,
+    cycle_time_seconds: reportCycleSecondsToSend(type),
     machine_qty: Number($("#machineQty")?.value || 0),
     completed_qty: Number($("#completedQty")?.value || 0),
     defect_qty: Number($("#defectQty")?.value || 0),
@@ -9910,28 +9923,16 @@ async function machtileLoadCardMachineTimes() {
   if (state.source !== "supabase" || !orders.length) return;
   const need = orders.filter((o) => o.machineTimeSource !== "view" && isUuid(String(o.processId || "")));
   const times = await machtileFetchMachineTimes(need.map((o) => o.processId));
-  times.forEach((sec, pid) => machtileBatchState.machineTimeByProcess.set(pid, sec));
+  times.forEach((v, pid) => machtileBatchState.machineTimeByProcess.set(pid, v.seconds));
   need.forEach((order) => {
-    const sec = times.get(String(order.processId));
-    if (sec) { order.pureCycleSec = sec; order.machineTimeSource = "report"; }
+    const t = times.get(String(order.processId));
+    if (!t) return;
+    order.pureCycleSec = t.seconds;
+    order.machineTimeSource = "report";
+    // 基準＝這道工序歷次真的填過的值的平均，至少 2 次才算（審查 L3：不再用 part_process_time_baselines，
+    // 它的 key 是 trigger 自己組的圖號／製程名，卡片對不準，而且裡面混了舊的 550 預設值樣本）
+    if (!order.baselineCycleSec && t.baselineSeconds) order.baselineCycleSec = t.baselineSeconds;
   });
-  if (!orders.some((o) => !o.baselineCycleSec && o.pureCycleSec)) return;
-  try {
-    const rows = await supabaseFetch("part_process_time_baselines?select=drawing_no,process_name,machine_id,avg_pure_cutting_seconds,sample_count&limit=2000");
-    const idByName = new Map((state.machineMasters || []).map((m) => [String(m.code || m.name || "").toUpperCase(), String(m.id || "")]));
-    (Array.isArray(rows) ? rows : []).forEach((b) => {
-      if (!(Number(b.sample_count) >= 2) || !(Number(b.avg_pure_cutting_seconds) > 0)) return;
-      orders.forEach((order) => {
-        if (order.baselineCycleSec || !order.pureCycleSec) return;
-        const machineId = idByName.get(String(order.machine || "").toUpperCase());
-        if (String(b.drawing_no) === String(order.drawing) && String(b.process_name) === String(order.process) && machineId && String(b.machine_id) === machineId) {
-          order.baselineCycleSec = Math.round(Number(b.avg_pure_cutting_seconds));
-        }
-      });
-    });
-  } catch (error) {
-    console.warn("part_process_time_baselines unavailable; 基準差異 stays empty", error);
-  }
 }
 
 function machtileCardProgressNote(order) {
@@ -18212,15 +18213,19 @@ async function machtileFetchMachineTimes(processIds) {
   const rows = [];
   for (let i = 0; i < ids.length; i += 80) {
     const chunk = ids.slice(i, i + 80).map(encodeURIComponent).join(",");
+    // 審查 L2：最多等 4 秒，讀不到就當沒填（卡片顯示「未填」），不卡住整頁
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
     try {
-      const got = await supabaseFetch(`production_reports?select=process_id,cycle_time_seconds,created_at&process_id=in.(${chunk})&cycle_time_seconds=not.is.null&order=created_at.desc&limit=1000`);
+      const got = await supabaseFetch(`production_reports?select=process_id,cycle_time_seconds,created_at&process_id=in.(${chunk})&cycle_time_seconds=not.is.null&order=created_at.desc&limit=1000`, controller ? { signal: controller.signal } : {});
       if (Array.isArray(got)) rows.push(...got);
     } catch (error) {
       console.warn("machine time lookup failed", error);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
-  const latest = core.latestMachineTimeByProcess(rows);
-  return new Map([...latest].map(([k, v]) => [k, v.seconds]));
+  return core.latestMachineTimeByProcess(rows);
 }
 
 function machtileBatchCandidates(code) {
@@ -18255,7 +18260,7 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.users = core.operatorChoices(users);
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.progressError = progress.error;
-    machineTimes.forEach((sec, pid) => machtileBatchState.machineTimeByProcess.set(pid, sec));
+    machineTimes.forEach((v, pid) => machtileBatchState.machineTimeByProcess.set(pid, v.seconds));
     machtileBatchState.error = "";
     machtileBatchState.lastLoadedAt = Date.now();
   } catch (error) {
@@ -18620,6 +18625,23 @@ function machtileHandleBatchClick(event) {
     const core = machtileBatchCore();
     const next = modeBtn.dataset.batchMode;
     if (core?.MODES[next] && next !== machtileBatchState.mode) {
+      // 審查 L1：上一次送出沒確認成功的機台（draft 還在）＝伺服器可能其實已經收到。換分頁再送會是新的
+      // report_uuid → 同樣的數量算兩次。所以先擋：預設留在原分頁、請人重按送出（同一筆不會重複）；
+      // 真的要換，就把這幾台的數量和待送紀錄一起清掉，不會帶著舊數字去另一個類型。
+      const group = core.groupFor(machtileBatchState.group);
+      const drafts = machtileBatchReadDrafts();
+      const pending = (group?.machines || []).filter((c) => drafts[c]);
+      if (pending.length) {
+        const ok = window.confirm(`${pending.join("、")} 上一次送出還沒確認成功（伺服器可能已經收到）。\n建議先按「取消」留在這頁、再按一次送出（同一筆不會重複）。\n\n仍要切換？切換會清空這幾台填的數量和待送紀錄。`);
+        if (!ok) return true;
+        pending.forEach((c) => {
+          const row = machtileBatchRow(c);
+          row.good = ""; row.bad = ""; row.ctMinutes = null; row.ctSeconds = null;
+          delete drafts[c];
+        });
+        machtileBatchWriteDrafts(drafts);
+        showToast(`已清空 ${pending.join("、")} 的數量；如果剛才那筆其實已送到，請到報工紀錄確認，不要再補一次。`);
+      }
       machtileBatchState.mode = next;
       machtileBatchState.formError = "";
       machtileBatchState.rows.forEach((row) => { row.error = ""; row.result = null; });
@@ -19279,6 +19301,7 @@ function bindEvents() {
     const input = $(`#${id}`);
     if (!input) return;
     input.addEventListener("input", () => {
+      if (id === "cycleMinutes" || id === "cycleSeconds") reportCycleTouched = true;
       updateReportEstimate();
       updateNoonAdvice();
     });

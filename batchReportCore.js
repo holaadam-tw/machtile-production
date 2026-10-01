@@ -217,17 +217,27 @@
     return { seconds: parsed.seconds, changed: true, error: "" };
   }
 
-  // production_reports（cycle_time_seconds 不是 null）→ 每道工序最新一次填的機台加工時間（秒／件）。
+  // 單台報工 Cycle time 欄位以前的 HTML 預設值（9 分 10 秒）。2026-10-02 前單台每一種報工都會把它當成
+  // cycle_time_seconds 送出（正式庫 9 筆都是這個值），分不出是不是真的有人填，所以一律不採用。
+  // owner 清掉那批資料、且單台修正上線後，可以拿掉這條。
+  const LEGACY_DEFAULT_CYCLE_SECONDS = 550;
+
+  // production_reports（cycle_time_seconds 不是 null）→ 每道工序：最新一次填的機台加工時間（秒／件）、
+  // 樣本數、歷次平均（至少 2 次才當基準）。550（舊預設值）不算。
   function latestMachineTimeByProcess(rows) {
     const map = new Map();
     (Array.isArray(rows) ? rows : []).forEach((r) => {
       const sec = Number(r?.cycle_time_seconds);
       if (!r?.process_id || !Number.isFinite(sec) || sec <= 0) return;
+      if (Math.round(sec) === LEGACY_DEFAULT_CYCLE_SECONDS) return;
       const at = String(r.created_at || "");
       const key = String(r.process_id);
-      const prev = map.get(key);
-      if (!prev || at > prev.at) map.set(key, { seconds: Math.round(sec), at });
+      const prev = map.get(key) || { seconds: 0, at: "", count: 0, sum: 0 };
+      const next = { ...prev, count: prev.count + 1, sum: prev.sum + Math.round(sec) };
+      if (!prev.at || at > prev.at) { next.seconds = Math.round(sec); next.at = at; }
+      map.set(key, next);
     });
+    map.forEach((v) => { v.baselineSeconds = v.count >= 2 ? Math.round(v.sum / v.count) : null; });
     return map;
   }
 
@@ -390,7 +400,7 @@
   return {
     GROUPS, EXCLUDED_MACHINES, REPORT_TYPE, MODES, MODE_ORDER, FINISH_OVERTIME, MAX_QTY_PER_REPORT, STALE_PENDING_MS,
     MAX_MACHINE_SECONDS, parseMachineTime, splitSeconds, machineTimeToSend, buildRemark, buildReportPayload,
-    latestMachineTimeByProcess,
+    latestMachineTimeByProcess, LEGACY_DEFAULT_CYCLE_SECONDS,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
     operatorChoices, defaultOperatorId, summarizeResults,

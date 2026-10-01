@@ -191,6 +191,14 @@ const lm = c.latestMachineTimeByProcess([
   { process_id: "p3", cycle_time_seconds: 0, created_at: "2026-10-01T03:00:00Z" },
 ]);
 eq("每道工序取最新一次填的值；null／0 不算", [lm.get("p1")?.seconds, lm.has("p2"), lm.has("p3")], [95, false, false]);
+eq("兩次以上才有基準＝歷次平均", [lm.get("p1")?.count, lm.get("p1")?.baselineSeconds], [2, 93]);
+const lm550 = c.latestMachineTimeByProcess([
+  { process_id: "q1", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
+  { process_id: "q2", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
+  { process_id: "q2", cycle_time_seconds: 120, created_at: "2026-10-01T01:00:00Z" },
+]);
+eq("審查 H1：550（舊單台 HTML 預設值）不當成機台加工時間，也不算樣本", [lm550.has("q1"), lm550.get("q2")?.seconds, lm550.get("q2")?.count, lm550.get("q2")?.baselineSeconds], [false, 120, 1, null]);
+eq("只有一筆 → 沒有基準", lm.get("p1") && c.latestMachineTimeByProcess([{ process_id: "z", cycle_time_seconds: 80, created_at: "x" }]).get("z").baselineSeconds, null);
 
 console.log("== operatorChoices ==");
 const users = [{ id: "s", name: "B03站別", legacy_user_id: "" }, { id: "u2", name: "王小明", legacy_user_id: " 1080301 " }, { id: "u1", name: "李大華", legacy_user_id: "1080302" }];
