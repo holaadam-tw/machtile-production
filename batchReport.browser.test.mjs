@@ -329,11 +329,12 @@ console.log("== 平板（iPad 尺寸 810×1080，桌面版導覽）==");
 {
   const { context, page, errors } = await newPage(browser, { ...devices["iPad (gen 7)"], defaultBrowserType: undefined });
   await waitLoaded(page);
-  await page.locator('.nav-item[data-view="batchLathe"]').click();
+  // 2026-10-02：入口從上方導覽列移到 Monitor 頁標題列（「+ 現場回報」前面）
+  await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').click();
   const root = page.locator('[data-batch-root="lathe"]');
   await root.locator('[data-batch-row="A01"]').waitFor();
   await page.waitForFunction(() => !document.querySelector('[data-batch-root="lathe"] [data-batch-refresh]')?.disabled);
-  ok(await page.locator('.nav-item[data-view="batchLathe"]').isVisible() && await page.locator('.nav-item[data-view="batchMill"]').isVisible(), "平板上方導覽有「車床報工」「銑床報工」");
+  ok(await page.locator('.nav-item[data-view="batchLathe"], .nav-item[data-view="batchMill"]').count() === 0, "平板上方導覽不再有「車床報工」「銑床報工」（已移到 Monitor 頁）");
   const tb = await page.evaluate(() => { const b = document.getElementById("machtileSessionBadge"); const r = b.getBoundingClientRect(); return { bottomGap: innerHeight - r.bottom, toggle: getComputedStyle(b.querySelector("[data-machtile-session-toggle]")).display, logout: getComputedStyle(b.querySelector("[data-machtile-logout]")).display }; });
   ok(tb.bottomGap >= 10 && tb.bottomGap <= 14 && tb.toggle === "none" && tb.logout !== "none", "平板：登入徽章維持原樣（右下角整條、沒有收合按鈕）", JSON.stringify(tb));
   const sb = await root.locator("[data-batch-submit]").boundingBox();
