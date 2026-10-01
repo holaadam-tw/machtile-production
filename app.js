@@ -9340,9 +9340,13 @@ function machtileEnsureSessionBadge() {
   badge.innerHTML = `
     <span>${escapeHtml(machtileAuthState.email || "已登入")}</span>
     <small>${escapeHtml(machtileAuthState.role || "member")}</small>
+    <button type="button" class="machtile-install-app" data-machtile-install-app hidden>安裝 App</button>
     <a href="https://login.machtile.com/" data-machtile-system-switch>切換系統</a>
     <button type="button" data-machtile-logout>登出</button>
   `;
+  // 「安裝 App」(PWA, 2026-10-01): pwaInstall.js 只在 Chrome 確定可以安裝時才把按鈕顯示出來；
+  // 已安裝或不支援的瀏覽器（iOS 等）維持隱藏。
+  window.MachTilePwaInstall?.bindButton(badge.querySelector("[data-machtile-install-app]"));
   badge.querySelector("[data-machtile-logout]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
