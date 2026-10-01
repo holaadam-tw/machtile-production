@@ -23,6 +23,9 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
+  // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
+  batchReportPendingSince: null,
   // Schedule foundation RPCs/tables are additive and must be rolled out per
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
@@ -8058,7 +8061,10 @@ function updateReportEstimate() {
 function updateNoonAdvice() {
   const advice = $("#noonAdvice");
   if (!advice || !selectedOrder) return;
-  const completed = Number($("#completedQty")?.value || 0);
+  // 2026-10-01：欄位改成「這次良品」（回寫橋一直是把它當增量累加）。中午判斷用
+  // 「已完成＋這次」比目標；已完成＝這道工序目前的完成數（卡片上的 done）。
+  const thisTime = Number($("#completedQty")?.value || 0);
+  const completed = Number(selectedOrder.done || 0) + thisTime;
   const profile = getProgramProfile(selectedOrder);
   const noonTarget = reportDailyCapacity(profile?.pureCycleSec, 210);
   if (!noonTarget) {
@@ -8067,8 +8073,8 @@ function updateNoonAdvice() {
   }
   const delta = completed - noonTarget;
   advice.textContent = delta >= 0
-    ? `中午累計 ${completed} 件，高於目標 ${noonTarget} 件，暫不需要加班。`
-    : `中午累計 ${completed} 件，低於目標 ${noonTarget} 件，建議下午確認是否加班或拆單。`;
+    ? `已完成＋這次共 ${completed} 件，高於目標 ${noonTarget} 件，暫不需要加班。`
+    : `已完成＋這次共 ${completed} 件，低於目標 ${noonTarget} 件，建議下午確認是否加班或拆單。`;
 }
 
 function setReportDefaults(order) {
@@ -8081,7 +8087,9 @@ function setReportDefaults(order) {
   const defectInput = $("#defectQty");
   if (workTotalInput) workTotalInput.value = totalQty || 0;
   if (machineQtyInput) machineQtyInput.value = doneQty || 0;
-  if (completedInput) completedInput.value = doneQty || 0;
+  // 2026-10-01：「這次良品」預設 0。舊版預設帶「已完成數」，欄位又寫「累計」，照預設送出時
+  // 回寫橋會把整個累計當成這次的量再加一次。
+  if (completedInput) completedInput.value = 0;
   if (defectInput) defectInput.value = 0;
   if (profile?.pureCycleSec) setReportCycleSeconds(profile.pureCycleSec);
   updateReportEstimate();
@@ -8140,7 +8148,7 @@ function validateReportForm(type) {
     if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成當日首件檢查表。";
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
-    if (completed < 0 || defects < 0) return "良品累計與不良數不可小於 0。";
+    if (completed < 0 || defects < 0) return "這次良品與這次不良不可小於 0。";
   }
   if (type === "afternoonCheck") {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -9643,7 +9651,11 @@ function machtileEnsureSessionBadge() {
     badge.className = "machtile-session-badge";
     document.body.appendChild(badge);
   }
+  // 手機（≤720px）只顯示右上角一顆小按鈕，點開才看到帳號／切換系統／登出（2026-10-01：
+  // 原本整條徽章壓在底部分頁列上，「報工」等分頁點不到）。平板／電腦版面不變。
+  badge.classList.remove("is-expanded");
   badge.innerHTML = `
+    <button type="button" class="machtile-session-toggle" data-machtile-session-toggle aria-expanded="false" aria-label="帳號選單"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 4-6 8-6s8 2 8 6"></path></svg></button>
     <span>${escapeHtml(machtileAuthState.email || "已登入")}</span>
     <small>${escapeHtml(machtileAuthState.role || "member")}</small>
     <button type="button" class="machtile-install-app" data-machtile-install-app hidden>安裝 App</button>
@@ -9653,6 +9665,10 @@ function machtileEnsureSessionBadge() {
   // 「安裝 App」(PWA, 2026-10-01): pwaInstall.js 只在 Chrome 確定可以安裝時才把按鈕顯示出來；
   // 已安裝或不支援的瀏覽器（iOS 等）維持隱藏。
   window.MachTilePwaInstall?.bindButton(badge.querySelector("[data-machtile-install-app]"));
+  badge.querySelector("[data-machtile-session-toggle]")?.addEventListener("click", (event) => {
+    const expanded = badge.classList.toggle("is-expanded");
+    event.currentTarget.setAttribute("aria-expanded", expanded ? "true" : "false");
+  });
   badge.querySelector("[data-machtile-logout]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -11601,6 +11617,8 @@ function machtileAdminDrawerGroups() {
     ]});
   }
   groups.push({ title: "更多功能", items: [
+    { key: "__batchLathe", icon: "🧮", label: "車床報工（批次）" },
+    { key: "__batchMill", icon: "🧮", label: "銑床報工（批次）" },
     { key: "__history", icon: "🕘", label: "紀錄查詢" },
     { key: "__reports", icon: "📊", label: "營運分析" },
   ]});
@@ -12820,7 +12838,7 @@ async function machtileRenderHistoryReal() {
     try {
       irRecords = await machtileInspectionFetch("op=records");
     } catch (error) { /* 橋未部署時安靜略過 */ }
-    const typeLabel = { workStart: "開工", dailyStart: "今日開工", noon: "中午盤點", afternoonCheck: "下午盤點", finish: "完工", abnormal: "異常", pause: "暫停" };
+    const typeLabel = { workStart: "開工", dailyStart: "今日開工", noon: "中午盤點", afternoonCheck: "下午盤點", finish: "完工", abnormal: "異常", pause: "暫停", batch: "批次報工" };
 
     const abnormalRows = (Array.isArray(reports) ? reports : []).filter((row) => row.report_type === "abnormal");
 
@@ -14303,9 +14321,9 @@ function renderReportRulesModule() {
   const rules = [
     ["首次開工", "工件總數、cycle time 必填", "程式選填、開工照片必填", "產生預估完工與中午目標"],
     ["今日開工", "當日第一筆", "機台已加工數量、相機照片與首件檢查必填", "建立當日加工基準"],
-    ["中午報工", "中午休息前", "良品累計 / 不良數必填", "判斷是否加班或拆單"],
+    ["中午報工", "中午休息前", "這次良品 / 這次不良必填（不是累計）", "判斷是否加班或拆單"],
     ["下午 4:30 檢查", "固定提醒", "下午檢查表必填、不填數量", "主管下班前確認風險"],
-    ["收工 / 完工", "17:00 或 20:30", "良品累計 / 不良數 / 完工照片必填", "結算當日進度"],
+    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）/ 完工照片必填", "結算當日進度"],
     ["異常回報", "事件式", "異常類型與照片必填", "異常備註與主管處理"],
   ];
   return renderRuleTable("報工規則", rules, "儲存報工規則");
@@ -17141,11 +17159,15 @@ function switchView(view) {
   $$(".view").forEach((item) => item.classList.remove("is-active"));
   panel.classList.add("is-active");
   $$(".nav-item, .mobile-tab").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
+    const also = String(button.dataset.viewAlso || "").split(",");
+    button.classList.toggle("active", button.dataset.view === view || also.includes(view));
   });
   // 課別籤全域列：監控與排程共用（DrCoolant 式），其他頁籤收起
   const departmentBar = $("#departmentBar");
   if (departmentBar) departmentBar.hidden = !(view === "dashboard" || view === "schedule");
+  // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
+  const batchGroup = machtileBatchCore()?.groupForView(view);
+  if (batchGroup) machtileLoadBatchReport(batchGroup.key);
 }
 
 function setSelectedOrder(order) {
@@ -17590,7 +17612,7 @@ function aiSupportAnswer(question) {
     return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。正常中午休息不要用暫停，請用「中午報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片。\n2. 今日開工：目前機台已加工數量、機台照片、首件檢查。\n3. 中午報工：良品累計 / 不良數，這筆用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：良品累計 / 不良數、完工照片、是否加班。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片。\n2. 今日開工：目前機台已加工數量、機台照片、首件檢查。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";
@@ -17731,7 +17753,9 @@ async function machtileUpdateOutboxBadge() {
   }
   let badge = document.getElementById("machtileOutboxBadge");
   if (pendingCount === 0 && failedCount === 0) {
-    if (badge) badge.hidden = true;
+    // 2026-10-01：cssText 寫死 display:flex，光設 hidden 藏不起來（待送 0 筆後徽章還一直掛著、
+    // 壓住手機底部分頁列）。改用 style.display。
+    if (badge) { badge.hidden = true; badge.style.display = "none"; }
     return;
   }
   if (!badge) {
@@ -17744,6 +17768,9 @@ async function machtileUpdateOutboxBadge() {
     document.body.appendChild(badge);
   }
   badge.hidden = false;
+  badge.style.display = "flex";
+  // 手機版底部有分頁列（56px）：徽章放在它上面，別擋住「監控」等分頁
+  badge.style.bottom = window.matchMedia?.("(max-width: 720px)").matches ? "72px" : "16px";
   const failedText = failedCount
     ? `<button type="button" data-outbox-retry style="border:0;border-radius:8px;padding:4px 8px;background:#dc2626;color:#fff;cursor:pointer;">送失敗 ${failedCount} 筆，點擊重試</button>`
     : "";
@@ -17926,6 +17953,421 @@ function machtileValidateOperatorSelection() {
   return null;
 }
 
+// ---- 車床／銑床批次報工（owner 2026-10-01「做批次報工」）----
+// 一台一列、只填這次的良品／不良，一次送出＝每台各建一筆報工。決策邏輯在 batchReportCore.js；
+// 這裡只有 DOM、讀資料、送出。送出沿用單台報工的 offline outbox（field_report_upsert，report_uuid 冪等）；
+// outbox 載不起來時直接呼叫同一支 RPC（同一個 report_uuid，重送也不會變兩筆）。
+// 已報＝舊 MES 累計＋待回寫：machtile-mini-mes migration 20261001120000 的 batch_report_progress
+// （同一個 SQL 快照判斷哪些 App 報工已經寫進舊 MES，絕不重複計數）。讀不到時顯示「—」，照樣可以報工。
+const machtileBatchCore = () => (typeof window === "undefined" ? null : window.MachTileBatchReportCore);
+const MACHTILE_BATCH_DRAFT_KEY = "machtile-batch-report-drafts";
+const machtileBatchState = {
+  group: "lathe",
+  loading: false,
+  submitting: false,
+  error: "",
+  progressError: "",
+  progressByProcess: new Map(),
+  users: [],
+  actorId: "",
+  rows: new Map(),       // machineCode → { processId, good, bad, operatorId, error, result }
+  lastLoadedAt: 0,
+};
+
+function machtileBatchReadDrafts() {
+  try { return JSON.parse(localStorage.getItem(MACHTILE_BATCH_DRAFT_KEY) || "{}") || {}; } catch { return {}; }
+}
+
+function machtileBatchWriteDrafts(drafts) {
+  try { localStorage.setItem(MACHTILE_BATCH_DRAFT_KEY, JSON.stringify(drafts || {})); } catch { /* storage unavailable */ }
+}
+
+function machtileBatchLedgerAt(processId) {
+  try {
+    const ledger = JSON.parse(localStorage.getItem(MACHTILE_STARTED_AT_LEDGER_KEY) || "{}") || {};
+    return typeof ledger[processId] === "string" ? ledger[processId] : null;
+  } catch { return null; }
+}
+
+// 送出後把這道工序的開工時間 ledger 往前推（跟單台報工同一份），之後單台報工的 started_at 從這次接續。
+function machtileBatchRollLedger(processId, endedAtIso) {
+  try {
+    let ledger;
+    try { ledger = JSON.parse(localStorage.getItem(MACHTILE_STARTED_AT_LEDGER_KEY) || "{}") || {}; } catch { ledger = {}; }
+    const prev = ledger[processId];
+    if (typeof prev !== "string" || prev < endedAtIso) ledger[processId] = endedAtIso;
+    localStorage.setItem(MACHTILE_STARTED_AT_LEDGER_KEY, JSON.stringify(ledger));
+  } catch { /* storage unavailable */ }
+}
+
+function machtileBatchRow(machineCode) {
+  let row = machtileBatchState.rows.get(machineCode);
+  if (!row) {
+    row = { processId: "", good: "", bad: "", operatorId: null, error: "", result: null };
+    machtileBatchState.rows.set(machineCode, row);
+  }
+  return row;
+}
+
+function machtileBatchMachineLabel(code) {
+  const master = state.machineMasters.find((m) => String(m.code || "").toUpperCase() === code);
+  return master?.location ? `${code} ${master.location}` : code;
+}
+
+async function machtileBatchFetchUsers() {
+  if (state.source !== "supabase") return [];
+  try {
+    const rows = await supabaseFetch("app_users?select=id,name,legacy_user_id&is_active=eq.true&order=name");
+    return Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    console.warn("batch report: app_users lookup failed", error);
+    return [];
+  }
+}
+
+// 進度＋開工時間來源。batch_report_progress 還沒上線（migration 未套）時，退回只讀
+// work_order_processes.actual_start_at＋production_reports 最後一筆時間（開工時間規則照舊，已報顯示「—」）。
+async function machtileBatchFetchProgress(processIds) {
+  const map = new Map();
+  if (state.source !== "supabase" || !processIds.length) return { map, error: "" };
+  try {
+    const rows = await supabaseFetch("rpc/batch_report_progress", {
+      method: "POST",
+      body: JSON.stringify({ p_process_ids: processIds, p_pending_since: config.batchReportPendingSince || null }),
+    });
+    (Array.isArray(rows) ? rows : []).forEach((row) => map.set(String(row.process_id), row));
+    return { map, error: "" };
+  } catch (error) {
+    console.warn("batch_report_progress unavailable; falling back to start-time sources only", error);
+  }
+  try {
+    const ids = processIds.map(encodeURIComponent).join(",");
+    const [procs, reports] = await Promise.all([
+      supabaseFetch(`work_order_processes?select=id,actual_start_at&id=in.(${ids})`),
+      supabaseFetch(`production_reports?select=process_id,ended_at,created_at&process_id=in.(${ids})&order=created_at.desc&limit=1000`),
+    ]);
+    (Array.isArray(procs) ? procs : []).forEach((p) => map.set(String(p.id), { process_id: p.id, actual_start_at: p.actual_start_at, last_report_at: null, fallback: true }));
+    (Array.isArray(reports) ? reports : []).forEach((r) => {
+      const entry = map.get(String(r.process_id));
+      const at = r.ended_at || r.created_at;
+      if (entry && at && (!entry.last_report_at || at > entry.last_report_at)) entry.last_report_at = at;
+    });
+  } catch (error) {
+    console.warn("batch report fallback start-time lookup failed", error);
+  }
+  return { map, error: "舊 MES 進度暫時讀不到（已報顯示「—」），仍可報工。" };
+}
+
+function machtileBatchCandidates(code) {
+  const core = machtileBatchCore();
+  return core ? core.candidateOrdersForMachine(state.workOrders, code) : [];
+}
+
+function machtileBatchSelectedOrder(code) {
+  const candidates = machtileBatchCandidates(code);
+  const row = machtileBatchRow(code);
+  return candidates.find((o) => o.processId === row.processId) || candidates[0] || null;
+}
+
+async function machtileLoadBatchReport(groupKey) {
+  const core = machtileBatchCore();
+  const group = core?.groupFor(groupKey);
+  if (!group) return;
+  machtileBatchState.group = group.key;
+  machtileBatchState.loading = true;
+  machtileRenderBatchReport();
+  try {
+    const processIds = [];
+    group.machines.forEach((code) => machtileBatchCandidates(code).forEach((o) => processIds.push(o.processId)));
+    const [actorId, users, progress] = await Promise.all([
+      machtileResolveAppUserId(),
+      machtileBatchFetchUsers(),
+      machtileBatchFetchProgress([...new Set(processIds.filter(isUuid))]),
+    ]);
+    machtileBatchState.actorId = actorId || "";
+    machtileBatchState.users = core.operatorChoices(users);
+    machtileBatchState.progressByProcess = progress.map;
+    machtileBatchState.progressError = progress.error;
+    machtileBatchState.error = "";
+    machtileBatchState.lastLoadedAt = Date.now();
+  } catch (error) {
+    machtileBatchState.error = `讀取失敗：${error.message}`;
+  } finally {
+    machtileBatchState.loading = false;
+    machtileRenderBatchReport();
+  }
+}
+
+function machtileBatchStartInfo(order, endedAtIso) {
+  const core = machtileBatchCore();
+  const progress = order ? machtileBatchState.progressByProcess.get(String(order.processId)) : null;
+  return core.resolveStartedAt({
+    serverLastReportAt: progress?.last_report_at || null,
+    localLedgerAt: order ? machtileBatchLedgerAt(order.processId) : null,
+    actualStartAt: progress?.actual_start_at || null,
+    endedAt: endedAtIso,
+  });
+}
+
+function machtileBatchRowModel(code, endedAtIso) {
+  const row = machtileBatchRow(code);
+  const order = machtileBatchSelectedOrder(code);
+  const operatorId = row.operatorId === null
+    ? machtileBatchCore().defaultOperatorId(machtileBatchState.users, machtileBatchState.actorId)
+    : row.operatorId;
+  const start = machtileBatchStartInfo(order, endedAtIso);
+  return {
+    machineCode: code,
+    order,
+    good: row.good,
+    bad: row.bad,
+    operatorId,
+    operatorMapped: machtileBatchState.users.some((u) => u.id === operatorId),
+    startedAt: start.startedAt,
+    startedAtSource: start.source,
+    startedAtReason: start.reason,
+  };
+}
+
+const MACHTILE_BATCH_START_SOURCE_LABEL = { lastReport: "上次報工", deviceLedger: "本機上次報工", processStart: "開工" };
+
+function machtileRenderBatchReport() {
+  const core = machtileBatchCore();
+  const group = core?.groupFor(machtileBatchState.group);
+  const holder = document.querySelector(`[data-batch-root="${machtileBatchState.group}"]`);
+  if (!core || !group || !holder) return;
+  const nowIso = new Date().toISOString();
+  const demo = state.source !== "supabase";
+  const userOptions = (selected) => [
+    `<option value="">— 選報工人 —</option>`,
+    ...machtileBatchState.users.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? " selected" : ""}>${escapeHtml(u.name)}</option>`),
+  ].join("");
+  const rowsHtml = group.machines.map((code) => {
+    const model = machtileBatchRowModel(code, nowIso);
+    const row = machtileBatchRow(code);
+    const candidates = machtileBatchCandidates(code);
+    const order = model.order;
+    const rawProgress = order ? machtileBatchState.progressByProcess.get(String(order.processId)) || null : null;
+    const progress = rawProgress && !rawProgress.fallback ? core.displayProgress(rawProgress) : null;
+    const orderCell = !order
+      ? `<span class="batch-muted">目前沒有派工</span>`
+      : candidates.length > 1
+        ? `<select class="batch-order-select" data-batch-order="${code}" aria-label="${code} 工單"${machtileBatchState.submitting ? " disabled" : ""}>${candidates.map((o) => `<option value="${escapeHtml(o.processId)}"${o.processId === order.processId ? " selected" : ""}>${escapeHtml(o.id)}・${escapeHtml(o.process)}</option>`).join("")}</select>`
+        : `<strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(order.process)}・${escapeHtml(order.part)}</span>`;
+    let doneHtml = `<span class="batch-muted">—</span>`;
+    if (order && progress) {
+      const pendingText = progress.pendingCount
+        ? `<span class="batch-pending${progress.stalePending ? " is-stale" : ""}" title="${progress.stalePending ? "超過 2 小時還沒寫回舊 MES，請通知管理者確認" : "App 已送出、回寫橋還沒寫回舊 MES"}">含待回寫 ${progress.pendingOutput}／${progress.pendingFail}${progress.stalePending ? "（逾 2 小時，請通知管理者）" : ""}</span>`
+        : "";
+      const legacyText = progress.legacyKnown ? `舊 MES ${progress.legacyOutput}／${progress.legacyFail}` : "舊 MES 尚無結算";
+      doneHtml = `<strong>良 ${progress.totalOutput}・不良 ${progress.totalFail}</strong><span class="batch-muted">${legacyText}${order.total ? `・訂 ${order.total}` : ""}</span>${pendingText}`;
+    }
+    const startText = !order ? "" : model.startedAt
+      ? `工時從 ${escapeHtml(formatDateTime(model.startedAt))} 起算（${MACHTILE_BATCH_START_SOURCE_LABEL[model.startedAtSource] || ""}）`
+      : `<span class="batch-warn">${escapeHtml(model.startedAtReason)}</span>`;
+    const result = row.result;
+    const resultHtml = result
+      ? `<p class="batch-result is-${result.status}">${escapeHtml(result.message)}</p>`
+      : row.error ? `<p class="batch-result is-failed">${escapeHtml(row.error)}</p>` : "";
+    const disabled = !order || machtileBatchState.submitting ? " disabled" : "";
+    return `
+      <article class="batch-row${row.error ? " has-error" : ""}" data-batch-row="${code}">
+        <header class="batch-row-head">
+          <span class="batch-machine">${escapeHtml(machtileBatchMachineLabel(code))}</span>
+          <div class="batch-order">${orderCell}</div>
+        </header>
+        <div class="batch-done"><span class="batch-label">已報</span>${doneHtml}</div>
+        <div class="batch-inputs">
+          <label class="batch-qty"><span>這次良品</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-good="${code}" value="${escapeHtml(row.good)}"${disabled}></label>
+          <label class="batch-qty"><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
+          <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
+        </div>
+        <p class="batch-start">${startText}</p>
+        ${resultHtml}
+      </article>`;
+  }).join("");
+  // 有填數字的台數（能不能送，按下去才逐列檢查並用紅字說明；按鈕不因為某一列有問題就變灰、讓人不知道為什麼）
+  const sendable = group.machines.filter((code) => !core.validateRow(machtileBatchRowModel(code, nowIso)).empty).length;
+  holder.innerHTML = `
+    <div class="batch-toolbar">
+      <div class="batch-switch" role="tablist" aria-label="切換報工組">
+        ${Object.values(core.GROUPS).map((g) => `<button type="button" class="batch-switch-btn${g.key === group.key ? " is-active" : ""}" data-view="${g.view}">${escapeHtml(g.title)}</button>`).join("")}
+      </div>
+      <label class="batch-apply-all"><span>報工人全部套用</span><select data-batch-operator-all${machtileBatchState.submitting ? " disabled" : ""}>${userOptions("")}</select></label>
+      <button type="button" class="secondary-action batch-refresh" data-batch-refresh${machtileBatchState.loading || machtileBatchState.submitting ? " disabled" : ""}>${machtileBatchState.loading ? "讀取中…" : "重新整理"}</button>
+    </div>
+    ${demo ? `<p class="batch-notice">示範模式：不會寫入任何資料。</p>` : ""}
+    ${machtileBatchState.error ? `<p class="batch-notice is-error">${escapeHtml(machtileBatchState.error)}</p>` : ""}
+    ${machtileBatchState.progressError ? `<p class="batch-notice">${escapeHtml(machtileBatchState.progressError)}</p>` : ""}
+    ${!demo && !machtileBatchState.loading && !machtileBatchState.users.length ? `<p class="batch-notice is-error">還沒有任何人員對照到舊 MES 工號，請管理者先補上工號對照。</p>` : ""}
+    <p class="batch-hint">只填<strong>這次做的數量</strong>（不是累計）。空白的機台不會送。已報＝舊 MES 累計＋App 已送出、還沒寫回舊 MES 的「待回寫」。</p>
+    <div class="batch-rows">${rowsHtml}</div>
+    <div class="batch-submit-bar">
+      <button type="button" class="primary-action batch-submit" data-batch-submit${machtileBatchState.submitting || !sendable ? " disabled" : ""}>${machtileBatchState.submitting ? "送出中…" : `一次送出（${sendable} 台）`}</button>
+    </div>`;
+}
+
+async function machtileBatchSendOne(box, payload, operators) {
+  const uuid = payload.report_uuid;
+  if (box) {
+    const existing = await box.outbox.get(uuid).catch(() => null);
+    if (existing?.status === box.outbox.OUTBOX_STATUS.FAILED) await box.outbox.requeue(uuid);
+    if (!existing) await box.submitter.submit(payload, { operators });
+    return { direct: false };
+  }
+  // outbox 不可用：直接打同一支 RPC（同一個 report_uuid → 第二次回 inserted=false，不會變兩筆）
+  const { report_uuid: _ignored, ...rest } = payload;
+  const res = await supabaseFetch("rpc/field_report_upsert", {
+    method: "POST",
+    body: JSON.stringify({ p_report_uuid: uuid, p_payload: { ...rest, operators } }),
+  });
+  return { direct: true, inserted: res?.inserted };
+}
+
+async function machtileSubmitBatchReport() {
+  const core = machtileBatchCore();
+  const group = core?.groupFor(machtileBatchState.group);
+  if (!core || !group || machtileBatchState.submitting) return;
+  const endedAt = new Date().toISOString();
+  const models = group.machines.map((code) => machtileBatchRowModel(code, endedAt));
+  const checks = models.map((m) => ({ model: m, v: core.validateRow(m) }));
+  checks.forEach(({ model, v }) => {
+    const row = machtileBatchRow(model.machineCode);
+    row.error = v.error;
+    if (v.error) row.result = null;
+  });
+  const toSend = checks.filter(({ v }) => v.send);
+  const bad = checks.filter(({ v }) => v.error);
+  if (bad.length) {
+    machtileRenderBatchReport();
+    showToast(`有 ${bad.length} 台要先修正（紅字），全部都還沒送出。`);
+    return;
+  }
+  if (!toSend.length) { showToast("沒有要送的機台（良品、不良都空白）。"); return; }
+  const summary = toSend.map(({ model, v }) => `${model.machineCode} 良 ${v.good}／不良 ${v.bad}`).join("\n");
+  if (!window.confirm(`送出 ${toSend.length} 台報工？\n${summary}`)) return;
+  if (state.source !== "supabase") {
+    toSend.forEach(({ model }) => { const row = machtileBatchRow(model.machineCode); row.result = { status: "sent", message: "示範模式：沒有寫入" }; row.good = ""; row.bad = ""; });
+    machtileRenderBatchReport();
+    return;
+  }
+
+  machtileBatchState.submitting = true;
+  machtileRenderBatchReport();
+  const drafts = machtileBatchReadDrafts();
+  const actorId = machtileBatchState.actorId || await machtileResolveAppUserId();
+  const prepared = toSend.map(({ model }) => {
+    const prev = drafts[model.machineCode];
+    const id = core.ensureReportUuid(prev, model, () => crypto.randomUUID());
+    // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致
+    const startedAt = id.reused && prev?.startedAt ? prev.startedAt : model.startedAt;
+    const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
+    drafts[model.machineCode] = { reportUuid: id.reportUuid, fingerprint: id.fingerprint, startedAt, endedAt: end };
+    const built = core.buildPayload({ row: { ...model, startedAt }, groupKey: group.key, actorAppUserId: actorId, endedAt: end, reportUuid: id.reportUuid, tenantId: model.order.tenantId });
+    return { model, built };
+  });
+  machtileBatchWriteDrafts(drafts);   // 先記下 uuid 再送：送到一半當機／斷線，再按一次還是同一筆
+
+  const box = machtileOutboxEnabled() ? await machtileGetOutbox() : null;
+  const results = [];
+  for (const item of prepared) {
+    const row = machtileBatchRow(item.model.machineCode);
+    try {
+      const sent = await machtileBatchSendOne(box, item.built.payload, item.built.operators);
+      results.push({ item, uuid: item.built.payload.report_uuid, direct: sent.direct, inserted: sent.inserted });
+    } catch (error) {
+      row.result = { status: "failed", message: `送出失敗：${error.message}（再按一次會重送同一筆，不會變兩筆）` };
+      results.push({ item, failed: true });
+    }
+  }
+  if (box) {
+    // submit() 每次都會觸發 flush，但進行中的 flush 只掃它開始那一刻的佇列；後面排進去的要再掃一次。
+    // 最多掃 3 輪：還沒送掉的（離線、暫時錯誤退避中）留在 outbox，背景會自動重送，畫面標「待送」。
+    const ours = new Set(results.filter((r) => !r.failed).map((r) => r.uuid));
+    for (let i = 0; i < 3; i += 1) {
+      await box.outbox.flush().catch(() => {});
+      const left = (await box.outbox.pending().catch(() => [])).filter((x) => ours.has(x.report_uuid) && (x.next_attempt_at == null || x.next_attempt_at <= Date.now()));
+      if (!left.length) break;
+    }
+  }
+  for (const r of results) {
+    if (r.failed) continue;
+    const code = r.item.model.machineCode;
+    const row = machtileBatchRow(code);
+    let status = "sent";
+    let message = r.direct && r.inserted === false ? "已送出（先前已收到，沒有重複）" : "已送出";
+    if (box) {
+      const record = await box.outbox.get(r.uuid).catch(() => null);
+      if (record?.status === box.outbox.OUTBOX_STATUS.FAILED) {
+        status = "failed";
+        message = `伺服器拒收：${record.last_error || ""}（修正後再按一次）`;
+      } else if (record?.status !== box.outbox.OUTBOX_STATUS.SENT) {
+        status = "queued";
+        message = "已排入待送，連線後自動送出";
+      }
+    }
+    row.result = { status, message: status === "failed" ? message : `${message}：良 ${r.item.built.payload.completed_qty}／不良 ${r.item.built.payload.defect_qty}` };
+    if (status !== "failed") {
+      machtileBatchRollLedger(r.item.model.order.processId, r.item.built.payload.ended_at);
+      delete drafts[code];
+      row.good = "";
+      row.bad = "";
+      row.error = "";
+    }
+  }
+  machtileBatchWriteDrafts(drafts);
+  machtileUpdateOutboxBadge();
+  machtileBatchState.submitting = false;
+  const tally = core.summarizeResults(results.map((r) => ({ status: r.failed ? "failed" : machtileBatchRow(r.item.model.machineCode).result?.status })));
+  showToast(`批次報工：已送出 ${tally.sent}、待送 ${tally.queued}、失敗 ${tally.failed}`);
+  await machtileLoadBatchReport(group.key);
+}
+
+function machtileHandleBatchClick(event) {
+  if (event.target.closest("[data-batch-submit]")) { machtileSubmitBatchReport(); return true; }
+  if (event.target.closest("[data-batch-refresh]")) { machtileLoadBatchReport(machtileBatchState.group); return true; }
+  return false;
+}
+
+function machtileHandleBatchInput(event) {
+  const t = event.target;
+  if (!(t instanceof HTMLElement) || !t.closest("[data-batch-root]")) return false;
+  if (t.hasAttribute("data-batch-operator-all")) {
+    if (event.type !== "change" || !t.value) return true;
+    const core = machtileBatchCore();
+    core?.groupFor(machtileBatchState.group)?.machines.forEach((c) => { machtileBatchRow(c).operatorId = t.value; });
+    machtileRenderBatchReport();
+    return true;
+  }
+  const code = t.dataset.batchGood || t.dataset.batchBad || t.dataset.batchOperator || t.dataset.batchOrder;
+  if (!code) return false;
+  const row = machtileBatchRow(code);
+  if (t.dataset.batchGood) row.good = t.value;
+  if (t.dataset.batchBad) row.bad = t.value;
+  if (t.dataset.batchOperator) row.operatorId = t.value;
+  if (t.dataset.batchOrder) row.processId = t.value;
+  row.error = "";
+  row.result = null;
+  if (event.type === "change" && (t.dataset.batchOperator || t.dataset.batchOrder)) {
+    machtileRenderBatchReport();
+    return true;
+  }
+  // 打數字時不重畫整頁（游標不會跳走），只更新送出按鈕的台數
+  const core = machtileBatchCore();
+  const group = core?.groupFor(machtileBatchState.group);
+  const nowIso = new Date().toISOString();
+  const n = group ? group.machines.filter((c) => !core.validateRow(machtileBatchRowModel(c, nowIso)).empty).length : 0;
+  const button = document.querySelector(`[data-batch-root="${machtileBatchState.group}"] [data-batch-submit]`);
+  if (button && !machtileBatchState.submitting) { button.textContent = `一次送出（${n} 台）`; button.disabled = !n; }
+  const article = t.closest(".batch-row");
+  article?.classList.remove("has-error");
+  article?.querySelector(".batch-result")?.remove();
+  return true;
+}
+
+document.addEventListener("input", (event) => { machtileHandleBatchInput(event); });
+document.addEventListener("change", (event) => { machtileHandleBatchInput(event); });
+
 // Eager driver start (flag on only): resend leftovers from a previous
 // session without waiting for the first new submit of this one.
 if (machtileOutboxEnabled()) {
@@ -18081,9 +18523,8 @@ async function handlePauseReport() {
 
 function handleLocalReport(completed, defects, options = {}) {
   if (!selectedOrder) return;
-  if (options.quantityMode === "cumulative") {
-    selectedOrder.done = Math.min(Number(selectedOrder.total || 0), Number(completed || 0));
-  } else if (Number(completed || 0) > 0) {
+  // 示範模式（不寫雲端）：2026-10-01 起欄位是「這次良品」，一律當增量加上去（與回寫橋一致）。
+  if (Number(completed || 0) > 0) {
     selectedOrder.done = Math.min(Number(selectedOrder.total || 0), Number(selectedOrder.done || 0) + completed);
   }
   selectedOrder.lastReport = "剛剛";
@@ -18096,6 +18537,7 @@ function handleLocalReport(completed, defects, options = {}) {
 
 function bindEvents() {
   document.addEventListener("click", (event) => {
+    if (machtileHandleBatchClick(event)) return;
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       switchView(viewButton.dataset.view);
@@ -18344,6 +18786,10 @@ function bindEvents() {
       machtileToggleAdminDrawer(false);
       if (key === "__guide") {
         window.location.href = hmcGuideRouteUrl("B01", "day");
+        return;
+      }
+      if (key === "__batchLathe" || key === "__batchMill") {
+        switchView(key === "__batchLathe" ? "batchLathe" : "batchMill");
         return;
       }
       if (key === "__history") {

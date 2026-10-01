@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261001-pwa-install">
+  <link rel="stylesheet" href="./styles.css?v=20261001-batch-report-2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -130,6 +130,8 @@
       <button class="nav-item" data-view="alerts" type="button">待處理</button>
       <button class="nav-item" data-view="history" type="button">紀錄</button>
       <button class="nav-item" data-view="reports" type="button">分析</button>
+      <button class="nav-item" data-view="batchLathe" type="button">車床報工</button>
+      <button class="nav-item" data-view="batchMill" type="button">銑床報工</button>
     </nav>
 
     <nav class="desktop-tool-nav" aria-label="工具導覽">
@@ -276,6 +278,27 @@
         <div id="reportsContent" class="report-dashboard"></div>
       </section>
 
+      <section id="batchLatheView" class="view" aria-labelledby="batchLatheTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Batch Report</p>
+            <h1 id="batchLatheTitle">車床報工（A01–A05）</h1>
+          </div>
+        </div>
+        <div class="batch-report" data-batch-root="lathe"></div>
+      </section>
+
+      <section id="batchMillView" class="view" aria-labelledby="batchMillTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Batch Report</p>
+            <h1 id="batchMillTitle">銑床報工（B03–B06）</h1>
+          </div>
+        </div>
+        <p class="batch-hint">B01、B02 臥式多盤請用原本的多盤報工畫面。</p>
+        <div class="batch-report" data-batch-root="mill"></div>
+      </section>
+
       <section id="settingsView" class="view" aria-labelledby="settingsTitle">
         <div class="view-heading">
           <div>
@@ -295,6 +318,7 @@
     <button class="mobile-tab active" data-view="dashboard" type="button">監控</button>
     <button class="mobile-tab" data-view="schedule" type="button">排程</button>
     <button class="mobile-tab" data-view="alerts" type="button">待處理</button>
+    <button class="mobile-tab" data-view="batchLathe" data-view-also="batchMill" type="button">報工</button>
     <button class="mobile-tab" data-admin-module="program" type="button">估價</button>
     <button class="mobile-tab" data-open-admin-drawer type="button">更多</button>
   </nav>
@@ -466,14 +490,15 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
-            <label class="field-label" for="completedQty">良品累計 / 完成數 <small>必填</small></label>
+            <label class="field-label" for="completedQty">這次良品 <small>必填</small></label>
+            <p class="report-qty-help">填這次新做的數量，不是累計</p>
             <div class="stepper">
               <button type="button" data-step="completedQty" data-delta="-1">−</button>
               <input id="completedQty" type="number" min="0" value="5">
               <button type="button" data-step="completedQty" data-delta="1">+</button>
             </div>
 
-            <label class="field-label" for="defectQty">不良數 <small>必填</small></label>
+            <label class="field-label" for="defectQty">這次不良 <small>必填</small></label>
             <div class="stepper">
               <button type="button" data-step="defectQty" data-delta="-1">−</button>
               <input id="defectQty" type="number" min="0" value="0">
@@ -696,6 +721,7 @@
   <script src="./authSessionPersistenceCore.js?v=20260728-unified-login-v1"></script>
   <script src="./oauthPkceCore.js?v=20261001-pwa-oauth-handoff"></script>
   <script src="./workOrderPrefillCore.js?v=20260904-recent-enter-v1"></script>
+  <script src="./batchReportCore.js?v=20261001-batch-report"></script>
   <script src="./previews/hmc-fixed-slots/project-target.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20260913-catalog-timeout-v1"></script>
   <script src="./previews/hmc-fixed-slots/transport.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
@@ -709,6 +735,6 @@
   <script src="./mockData.js?v=20260514-p0-001"></script>
   <script src="./accountAdminCore.js?v=20260930-am-audit"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
-  <script src="./app.js?v=20261001-pwa-oauth-handoff"></script>
+  <script src="./app.js?v=20261001-batch-report-oauth"></script>
 </body>
 </html>
