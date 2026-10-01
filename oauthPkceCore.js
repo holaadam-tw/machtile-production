@@ -181,6 +181,186 @@
     });
   }
 
+  // ---- Cross-tab handoff (Android installed App / PWA, 2026-10-01) ----
+  // In a standalone PWA the login center opens in a Chrome Custom Tab, and the
+  // OAuth redirect back to the App lands in that Custom Tab, not in the App
+  // window. sessionStorage is per tab, so the Custom Tab cannot see the PKCE
+  // verifier the App window stored. The verifier therefore also goes to
+  // localStorage (keyed by state, 10-minute TTL, deleted on first read), and
+  // the Custom Tab hands the exchanged tokens back through a one-time,
+  // 2-minute localStorage entry encrypted with a key derived from the
+  // verifier. Once the Custom Tab has consumed the shared copy, only the
+  // initiating window (sessionStorage) still holds the verifier, so a
+  // leftover handoff entry is unreadable by anyone else.
+  const HANDOFF_VERSION = 1;
+  const HANDOFF_TTL_MS = 2 * 60 * 1000;
+  const PENDING_MAX = 3;
+  const SHARED_TRANSACTION_PREFIX = "machtileOauthPkceTx:";
+  const HANDOFF_PREFIX = "machtileOauthHandoff:";
+  const HANDOFF_KEY_LABEL = "machtile-oauth-handoff-v1:";
+
+  function sharedTransactionKey(state) {
+    return `${SHARED_TRANSACTION_PREFIX}${text(state)}`;
+  }
+
+  function handoffKey(state) {
+    return `${HANDOFF_PREFIX}${text(state)}`;
+  }
+
+  function freshTimestamp(createdAt, ttlMs, now) {
+    const value = Number(createdAt);
+    return Number.isFinite(value) && value > 0 && now - value <= ttlMs && value <= now + 60_000;
+  }
+
+  // Per-tab list of logins this window started (newest last). A retry adds a
+  // new entry instead of replacing the old one, so a Custom Tab that finishes
+  // an earlier attempt can still hand its result back.
+  function parsePendingTransactions(rawValue, now = Date.now()) {
+    let list;
+    try {
+      list = typeof rawValue === "string" ? JSON.parse(rawValue || "[]") : rawValue;
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((item) => parseTransaction(item, now).transaction)
+      .filter(Boolean)
+      .slice(-PENDING_MAX);
+  }
+
+  function addPendingTransaction(rawValue, transaction, now = Date.now()) {
+    const list = parsePendingTransactions(rawValue, now)
+      .filter((item) => item.state !== transaction?.state);
+    const parsed = parseTransaction(transaction, now).transaction;
+    if (parsed) list.push(parsed);
+    return list.slice(-PENDING_MAX);
+  }
+
+  function findPendingTransaction(rawValue, state, now = Date.now()) {
+    const wanted = text(state);
+    if (!wanted) return null;
+    return parsePendingTransactions(rawValue, now).find((item) => item.state === wanted) || null;
+  }
+
+  // Only the fields the App already keeps from a token response.
+  function minimalTokenPayload(payload = {}) {
+    const result = {
+      access_token: text(payload?.access_token),
+      refresh_token: text(payload?.refresh_token),
+      expires_in: Number(payload?.expires_in) || 0
+    };
+    const userId = text(payload?.user?.id);
+    const userEmail = text(payload?.user?.email);
+    if (userId || userEmail) result.user = { id: userId, email: userEmail };
+    return result;
+  }
+
+  function bytesFromBase64Url(value) {
+    const normalized = text(value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "===".slice((normalized.length + 3) % 4);
+    const binary = typeof atob === "function"
+      ? atob(padded)
+      : Buffer.from(padded, "base64").toString("binary");
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  async function handoffCryptoKey(verifier, cryptoApi) {
+    if (!cryptoApi?.subtle?.digest || !cryptoApi?.subtle?.importKey) {
+      throw new Error("OAUTH_CRYPTO_UNAVAILABLE");
+    }
+    const material = await cryptoApi.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${HANDOFF_KEY_LABEL}${text(verifier)}`)
+    );
+    return cryptoApi.subtle.importKey("raw", material, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  }
+
+  function handoffAad(state, createdAt) {
+    return new TextEncoder().encode(`${text(state)}|${Number(createdAt)}`);
+  }
+
+  async function sealHandoff(tokenPayload, transaction, cryptoApi = globalThis.crypto, now = Date.now()) {
+    const minimal = minimalTokenPayload(tokenPayload);
+    if (!minimal.access_token) throw new Error("OAUTH_HANDOFF_EMPTY");
+    if (!transaction?.state || !transaction?.verifier) throw new Error("OAUTH_HANDOFF_NO_TRANSACTION");
+    const key = await handoffCryptoKey(transaction.verifier, cryptoApi);
+    const iv = new Uint8Array(12);
+    cryptoApi.getRandomValues(iv);
+    const ciphertext = await cryptoApi.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: handoffAad(transaction.state, now) },
+      key,
+      new TextEncoder().encode(JSON.stringify(minimal))
+    );
+    return {
+      key: handoffKey(transaction.state),
+      value: JSON.stringify({
+        version: HANDOFF_VERSION,
+        state: transaction.state,
+        createdAt: now,
+        iv: base64Url(iv),
+        data: base64Url(new Uint8Array(ciphertext))
+      })
+    };
+  }
+
+  // Returns { payload, reason }. reason: ok | missing | malformed |
+  // unsupported-version | state-mismatch | expired | undecryptable | invalid.
+  async function openHandoff(rawValue, transaction, cryptoApi = globalThis.crypto, now = Date.now()) {
+    if (!rawValue) return { payload: null, reason: "missing" };
+    let value;
+    try {
+      value = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue;
+    } catch {
+      return { payload: null, reason: "malformed" };
+    }
+    if (!value || typeof value !== "object") return { payload: null, reason: "malformed" };
+    if (Number(value.version) !== HANDOFF_VERSION) return { payload: null, reason: "unsupported-version" };
+    if (!transaction?.state || text(value.state) !== transaction.state) {
+      return { payload: null, reason: "state-mismatch" };
+    }
+    if (!freshTimestamp(value.createdAt, HANDOFF_TTL_MS, now)) return { payload: null, reason: "expired" };
+    let plain;
+    try {
+      const key = await handoffCryptoKey(transaction.verifier, cryptoApi);
+      const decrypted = await cryptoApi.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: bytesFromBase64Url(value.iv),
+          additionalData: handoffAad(value.state, value.createdAt)
+        },
+        key,
+        bytesFromBase64Url(value.data)
+      );
+      plain = JSON.parse(new TextDecoder().decode(decrypted));
+    } catch {
+      return { payload: null, reason: "undecryptable" };
+    }
+    const payload = minimalTokenPayload(plain);
+    if (!payload.access_token) return { payload: null, reason: "invalid" };
+    return { payload, reason: "ok" };
+  }
+
+  // Shared localStorage entries (verifier copies and handoffs) that are past
+  // their TTL or unreadable; callers delete these on every App start.
+  function staleSharedEntry(key, rawValue, now = Date.now()) {
+    const name = text(key);
+    if (name.startsWith(SHARED_TRANSACTION_PREFIX)) {
+      return !parseTransaction(rawValue, now).transaction;
+    }
+    if (name.startsWith(HANDOFF_PREFIX)) {
+      try {
+        const value = JSON.parse(rawValue);
+        return !freshTimestamp(value?.createdAt, HANDOFF_TTL_MS, now);
+      } catch {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function scrubCallbackUrl(urlValue) {
     const url = new URL(String(urlValue));
     ["code", "state", "error", "error_description"].forEach((name) => url.searchParams.delete(name));
@@ -198,6 +378,20 @@
     validateCallback,
     tokenRequestBody,
     refreshRequestBody,
-    scrubCallbackUrl
+    scrubCallbackUrl,
+    HANDOFF_VERSION,
+    HANDOFF_TTL_MS,
+    PENDING_MAX,
+    SHARED_TRANSACTION_PREFIX,
+    HANDOFF_PREFIX,
+    sharedTransactionKey,
+    handoffKey,
+    parsePendingTransactions,
+    addPendingTransaction,
+    findPendingTransaction,
+    minimalTokenPayload,
+    sealHandoff,
+    openHandoff,
+    staleSharedEntry
   });
 });
