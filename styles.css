@@ -9453,6 +9453,9 @@ body.report-work-route-mode .machtile-route-brand-bar {
   /* 手機：登入徽章收成右上角（鈴鐺左邊）一顆小按鈕，點開才展開成面板（2026-10-01 owner：
      原本壓在底部分頁列與「＋回報」上）。加 body 是為了蓋過檔案後面同權重的基本規則。 */
   body .machtile-session-badge {
+    /* absolute (2026-10-02 review): scrolls away with the header instead of floating over
+       report inputs further down the page (it sat on top of 批次報工 fields when scrolled). */
+    position: absolute;
     top: 20px;
     right: 112px;
     bottom: auto;

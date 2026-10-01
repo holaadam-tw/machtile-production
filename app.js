@@ -17788,7 +17788,11 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
   // sent hours later); started_at from the rolling ledger (W2=EndedAtOnly
   // superseded 2026-07-11 — the writeback bridge requires both).
   const endedAt = new Date().toISOString();
-  const startedAt = machtileTakeStartedAt(basePayload.process_id, endedAt);
+  // 2026-10-02 review fix: also floor started_at at this process's last report on the SERVER
+  // (any device, e.g. a phone batch report). Without it a tablet whose own ledger is older
+  // re-claims the batch report's period → the same hours land twice in SFC (CT／每人產值).
+  const serverLastAt = await machtileServerLastReportAt(basePayload.process_id);
+  const startedAt = machtileTakeStartedAt(basePayload.process_id, endedAt, serverLastAt);
   const payload = {
     ...basePayload,
     ...structuredPayload,
@@ -17827,9 +17831,17 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
 // bridge reject instead of fabricated hours.
 const MACHTILE_STARTED_AT_LEDGER_KEY = "machtile-outbox-started-at";
 
-function machtileTakeStartedAt(processId, endedAtIso) {
+// serverFloorIso (optional, 2026-10-02): the process's last report end on the server. The
+// started_at is the LATEST of {device ledger, server floor} that is not after ended_at — the
+// same rule as the batch screen (batchReportCore.resolveStartedAt), so periods reported from
+// different devices tile instead of overlapping. Neither known → null, as before.
+function machtileTakeStartedAt(processId, endedAtIso, serverFloorIso = null) {
   if (!processId) return null;
   let startedAt = null;
+  const floor = (() => {
+    const t = serverFloorIso ? Date.parse(serverFloorIso) : NaN;
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  })();
   try {
     let ledger;
     try { ledger = JSON.parse(localStorage.getItem(MACHTILE_STARTED_AT_LEDGER_KEY) || "{}") || {}; }
@@ -17838,10 +17850,40 @@ function machtileTakeStartedAt(processId, endedAtIso) {
     // ISO-8601 UTC strings compare lexicographically; guard ended>=started
     // (the RPC raises otherwise, e.g. after a device clock change).
     if (typeof prev === "string" && prev && prev <= endedAtIso) startedAt = prev;
+    if (floor && floor <= endedAtIso && (!startedAt || floor > startedAt)) startedAt = floor;
     ledger[processId] = endedAtIso;   // roll forward
     localStorage.setItem(MACHTILE_STARTED_AT_LEDGER_KEY, JSON.stringify(ledger));
-  } catch { /* storage unavailable → started_at stays null */ }
+  } catch {
+    // storage unavailable → only the server floor is known
+    if (floor && floor <= endedAtIso) startedAt = floor;
+  }
   return startedAt;
+}
+
+// Latest report end (ended_at, else created_at) of this process on the server, any device/type.
+// Best effort with a short timeout: offline / slow / error → null and the device ledger alone
+// decides (the report still queues offline exactly as before).
+async function machtileServerLastReportAt(processId, timeoutMs = 2500) {
+  if (state.source !== "supabase" || !isUuid(processId)) return null;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const rows = await supabaseFetch(
+      `production_reports?select=ended_at,created_at&process_id=eq.${encodeURIComponent(processId)}&order=created_at.desc&limit=50`,
+      controller ? { signal: controller.signal } : {},
+    );
+    let latest = null;
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const at = row?.ended_at || row?.created_at;
+      const t = at ? Date.parse(at) : NaN;
+      if (Number.isFinite(t) && (latest === null || t > latest)) latest = t;
+    });
+    return latest === null ? null : new Date(latest).toISOString();
+  } catch (error) {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ---- operator multi-select (backlog C, 2026-07-11; T2=all active users) ----
