@@ -245,7 +245,7 @@ textarea:focus-visible {
 
 .desktop-nav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -9431,7 +9431,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
     bottom: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     border-top: 1px solid var(--border);
     background: rgba(255, 255, 255, 0.96);
     backdrop-filter: blur(10px);
@@ -11435,4 +11435,53 @@ body.report-work-route-mode .machtile-route-brand-bar {
 
 .machtile-session-badge button.machtile-install-app[hidden] {
   display: none;
+}
+
+/* ---- 車床／銑床批次報工（2026-10-01）：手機／平板一台一張卡，數字框與按鈕夠大 ---- */
+.batch-report { display: grid; gap: 12px; padding-bottom: 96px; }
+.batch-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.batch-switch { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; overflow: hidden; }
+.batch-switch-btn { min-height: 48px; padding: 0 18px; border: 0; background: var(--surface); color: var(--text); font-size: 16px; font-weight: 700; cursor: pointer; }
+.batch-switch-btn.is-active { background: var(--brand-blue); color: #fff; }
+.batch-apply-all { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.batch-apply-all select { min-height: 48px; font-size: 16px; padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface); }
+.batch-refresh { min-height: 48px; }
+.batch-hint { margin: 0; color: var(--muted); font-size: 14px; }
+.batch-notice { margin: 0; padding: 10px 12px; border-radius: var(--radius); background: var(--amber-soft); font-size: 14px; }
+.batch-notice.is-error { background: var(--red-soft); color: #9f1d1d; }
+.batch-rows { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.batch-row { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
+.batch-row.has-error { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
+.batch-row-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+.batch-machine { font-size: 20px; font-weight: 900; }
+.batch-order { display: grid; gap: 2px; min-width: 0; font-size: 14px; }
+.batch-order span { color: var(--muted); overflow-wrap: anywhere; }
+.batch-order-select { min-height: 44px; max-width: 100%; font-size: 15px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface); }
+.batch-done { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-soft); font-size: 14px; }
+.batch-label { color: var(--muted); font-size: 13px; }
+.batch-muted { color: var(--muted); }
+.batch-pending { padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 13px; }
+.batch-pending.is-stale { background: var(--red-soft); color: #9f1d1d; }
+.batch-inputs { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+.batch-qty, .batch-operator { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.batch-operator { grid-column: 1 / -1; }
+.batch-qty input { min-height: 56px; width: 100%; box-sizing: border-box; padding: 0 12px; font-size: 24px; font-weight: 800; border-radius: var(--radius); border: 1px solid var(--border-strong); }
+.batch-operator select { min-height: 52px; width: 100%; font-size: 17px; padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface); }
+.batch-qty input:disabled, .batch-operator select:disabled { background: var(--gray-soft); }
+.batch-start { margin: 0; font-size: 13px; color: var(--muted); }
+.batch-warn { color: #9f1d1d; }
+.batch-result { margin: 0; padding: 8px 10px; border-radius: var(--radius); font-size: 14px; font-weight: 700; }
+.batch-result.is-sent { background: var(--green-soft); color: var(--green-strong); }
+.batch-result.is-queued { background: var(--amber-soft); color: #8a5a00; }
+.batch-result.is-failed { background: var(--red-soft); color: #9f1d1d; }
+.batch-submit-bar { position: sticky; bottom: 0; z-index: 5; padding: 10px 0; background: linear-gradient(to top, var(--bg) 70%, transparent); }
+.batch-submit { width: 100%; min-height: 60px; font-size: 20px; }
+.batch-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .batch-rows { grid-template-columns: 1fr; }
+  .batch-toolbar { align-items: stretch; }
+  .batch-switch { width: 100%; }
+  .batch-switch-btn { flex: 1; }
+  .batch-apply-all { flex: 1; }
+  .batch-submit-bar { bottom: 56px; }
 }
