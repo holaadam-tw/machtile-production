@@ -245,7 +245,8 @@ textarea:focus-visible {
 
 .desktop-nav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* 欄數＝項目數（2026-10-02 拿掉「紀錄」後 4 項），平均分配不留空洞 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -292,7 +293,8 @@ textarea:focus-visible {
 
 .desktop-tool-nav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* 欄數＝項目數（2026-10-02 拿掉「機台管理」後 4 項），平均分配不留空洞 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   padding: 0 20px;
   border-bottom: 1px solid var(--border);

@@ -1,18 +1,20 @@
-// Monitor 頁的車床／銑床報工入口＋機台卡片完成數（owner 2026-10-02）的瀏覽器端到端測試。
-// Playwright，手機（Pixel 7）＋平板（810×1080）。不會碰任何真的後端：config.js 換成指向假網域
+// 導覽列精簡（owner 2026-10-02）的瀏覽器端到端測試：
+//   上方主選單拿掉「紀錄」、第二排子選單拿掉「機台管理」，入口改由「管理」抽屜（更多功能→紀錄查詢、機台管理群組）進。
+// Playwright，手機（Pixel 7、360px）＋平板（810×1080）。不會碰任何真的後端：config.js 換成指向
 // 一個不存在的 *.supabase.co 子網域（見 FAKE）的測試設定，Supabase 請求由這支腳本用假資料回應，其他對外請求一律擋掉。
 //
 // 跑法（playwright 不是這個 repo 的相依）：
 //   npm i --no-save playwright@1.63.0 && npx playwright install chromium
-//   node monitorEntry.browser.test.mjs            （截圖寫到 ./.e2e-out/monitor/，不進版控）
-//   或 MACHTILE_PLAYWRIGHT_MODULE=<已安裝的 playwright/index.js 路徑> node monitorEntry.browser.test.mjs
+//   node navTrim.browser.test.mjs            （截圖寫到 ./.e2e-out/nav-trim/，不進版控）
+//   或 MACHTILE_PLAYWRIGHT_MODULE=<已安裝的 playwright/index.js 路徑> node navTrim.browser.test.mjs
+//   NAV_SHOT_TAG=before|after 可替截圖檔名加前綴（改前／改後對照用）。
 import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MONITOR_E2E_OUT || path.join(root, ".e2e-out", "monitor");
+const outDir = process.env.NAV_E2E_OUT || path.join(root, ".e2e-out", "nav-trim");
 const modSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const pw = await import(modSpec);
 const { chromium, devices } = pw.default || pw;
@@ -156,125 +158,149 @@ const metric = async (page, code) => {
 };
 const realErrors = (errors) => errors.filter((e) => !e.includes("CATALOG_ENDPOINT_INVALID"));
 
-async function checkEntryGeometry(page, label) {
-  const geo = await page.evaluate(() => {
-    const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, height: b.height, width: b.width, visible: b.width > 0 && b.height > 0 }; };
-    const title = r(document.getElementById("dashboardTitle"));
-    const lathe = r(document.querySelector('#dashboardView [data-monitor-batch-entry="lathe"]'));
-    const mill = r(document.querySelector('#dashboardView [data-monitor-batch-entry="mill"]'));
-    const report = r(document.querySelector("#dashboardView .view-heading [data-open-report]"));
-    const stats = r(document.getElementById("statsGrid"));
-    const order = [...document.querySelectorAll("#dashboardView .view-heading button")].map((b) => b.dataset.monitorBatchEntry || (b.hasAttribute("data-open-report") ? "report" : "?"));
-    return { title, lathe, mill, report, stats, order, overflow: document.documentElement.scrollWidth - innerWidth };
-  });
-  ok(JSON.stringify(geo.order) === JSON.stringify(["lathe", "mill", "report"]), `${label}：DOM 順序＝車床、銑床、＋現場回報`, JSON.stringify(geo.order));
-  ok(geo.lathe.visible && geo.mill.visible, `${label}：兩顆按鈕看得到`);
-  ok(geo.lathe.height >= 44 && geo.mill.height >= 44, `${label}：按鈕夠大（${Math.round(geo.lathe.height)}px）`);
-  ok(geo.lathe.bottom <= geo.stats.top + 1, `${label}：按鈕在標題列（統計卡上方）`, JSON.stringify(geo));
-  ok(geo.overflow <= 1, `${label}：沒有橫向捲動（${geo.overflow}px）`);
-  return geo;
+const tag = process.env.NAV_SHOT_TAG ? `${process.env.NAV_SHOT_TAG}-` : "";
+const shot = (name) => path.join(outDir, `${tag}${name}.png`);
+
+// 一排導覽的幾何：項目數、欄數、每格寬度是否平均、有沒有空洞（最後一格右緣要貼齊容器內緣）、有沒有橫向捲動
+async function navGeometry(page, navSel, itemSel) {
+  return page.evaluate(([navSel, itemSel]) => {
+    const nav = document.querySelector(navSel);
+    const cs = getComputedStyle(nav);
+    const box = nav.getBoundingClientRect();
+    const items = [...nav.querySelectorAll(itemSel)].filter((el) => el.getBoundingClientRect().width > 0);
+    const widths = items.map((el) => el.getBoundingClientRect().width);
+    const last = items[items.length - 1]?.getBoundingClientRect();
+    const innerRight = box.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth);
+    return {
+      count: items.length,
+      cols: cs.gridTemplateColumns.split(" ").filter(Boolean).length,
+      spread: widths.length ? Math.max(...widths) - Math.min(...widths) : 0,
+      gapRight: last ? innerRight - last.right : 0,
+      labels: items.map((el) => (el.querySelector("span")?.textContent || el.textContent).trim()),
+      overflow: document.documentElement.scrollWidth - innerWidth,
+      navOverflow: nav.scrollWidth - nav.clientWidth,
+    };
+  }, [navSel, itemSel]);
+}
+
+function checkEven(geo, label, expected) {
+  ok(geo.count === expected && geo.cols === expected, `${label}：${expected} 個項目、${expected} 欄（${geo.count} 個／${geo.cols} 欄：${geo.labels.join("、")}）`);
+  ok(geo.spread <= 1, `${label}：每格一樣寬（差 ${geo.spread.toFixed(2)}px）`);
+  ok(Math.abs(geo.gapRight) <= 1, `${label}：最後一格貼齊右邊、沒有空洞（${geo.gapRight.toFixed(2)}px）`);
+  ok(geo.overflow <= 1 && geo.navOverflow <= 1, `${label}：沒有橫向捲動（頁 ${geo.overflow}px／列 ${geo.navOverflow}px）`);
+}
+
+async function openDrawer(page) {
+  if (!(await page.locator("#adminDrawer").isVisible())) await page.locator("#adminDrawerBtn").click();
+  await page.locator("#adminDrawer").waitFor({ state: "visible" });
+}
+
+const machineModules = [
+  ["add", "新增機台"], ["list", "機台列表管理"], ["calendar", "產能日曆與保養"], ["alarm", "警報參數設定"],
+];
+
+// 從「管理」抽屜逐一打開：紀錄查詢＋機台管理四頁
+async function checkDrawerEntries(page, label) {
+  await openDrawer(page);
+  ok(await page.locator('[data-drawer-module="__history"]').isVisible(), `${label}：管理抽屜看得到「紀錄查詢」`);
+  await page.locator('[data-drawer-module="__history"]').click();
+  ok(await page.locator("#historyView").evaluate((el) => el.classList.contains("is-active")), `${label}：管理 → 紀錄查詢 打開紀錄頁`);
+  for (const [key, text] of machineModules) {
+    await openDrawer(page);
+    const item = page.locator(`[data-drawer-module="${key}"]`);
+    ok(await item.isVisible() && (await item.innerText()).includes(text), `${label}：管理抽屜看得到「${text}」`);
+    await item.click();
+    await page.waitForFunction(() => document.getElementById("adminModuleSheet")?.classList.contains("is-open"));
+    const content = (await page.locator("#adminModuleContent").innerText()).trim();
+    ok(content.length > 0, `${label}：管理 → ${text} 打開管理頁（${(await page.locator("#adminModuleTitle").innerText()).trim()}）`);
+    await page.evaluate(() => closeAdminModule());
+  }
 }
 
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch();
 const tabletDevice = { ...devices["iPad (gen 7)"], viewport: { width: 810, height: 1080 } };
 
-// ================= phone =================
-console.log("== 手機（Pixel 7）：Monitor 頁報工入口＋卡片完成數 ==");
-{
-  const { context, page, errors, backend } = await newPage(browser, devices["Pixel 7"]);
-  await waitLoaded(page);
-  const geo = await checkEntryGeometry(page, "手機");
-  ok(geo.lathe.top >= geo.title.bottom - 1, "手機：按鈕排在標題下面（一整排）", JSON.stringify({ title: geo.title, lathe: geo.lathe }));
-  ok(!geo.report.visible && await page.locator(".fab[data-open-report]").isVisible(), "手機：「+ 現場回報」照舊用右下角浮動鈕");
-  ok(await page.locator('.mobile-tab[data-view="batchLathe"]').isVisible(), "手機底部「報工」分頁照舊在");
-  await page.screenshot({ path: path.join(outDir, "01-phone-monitor-entries.png") });
-
-  // 卡片完成數
-  ok(backend.progressCalls.length === 1, `進度只查一次（${backend.progressCalls.length} 次）`);
-  const asked = backend.progressCalls[0]?.p_process_ids || [];
-  ok(cards.every((c) => asked.includes(c.current_process_id)), "一次帶齊畫面上所有卡片的工序", JSON.stringify(asked));
-  const a01 = await metric(page, "A01");
-  ok(a01.value === "3440/5000" && a01.note === "含舊 MES", "A01 有舊 MES：3440/5000、標「含舊 MES」", JSON.stringify(a01));
-  const a05 = await metric(page, "A05");
-  ok(a05.value === "120/400" && a05.note === "含舊 MES・待回寫 10", "A05 舊 MES＋待回寫：110＋10＝120（App 自己的 95 不重複加）", JSON.stringify(a05));
-  const a02 = await metric(page, "A02");
-  ok(a02.value === "7/400" && a02.note === "舊 MES 尚無資料", "A02 舊 MES 尚無結算：照原本 App 7、標「舊 MES 尚無資料」", JSON.stringify(a02));
-  const b03 = await metric(page, "B03");
-  ok(b03.value === "3/400" && b03.note === "舊 MES 尚無資料", "B03 RPC 沒回這道工序：照原本 App 3、標尚無資料", JSON.stringify(b03));
-  const pctA01 = (await cardFor(page, "A01").locator(".machine-metrics > div").first().locator("small").first().innerText()).trim();
-  ok(pctA01 === "69%", `A01 百分比跟著新完成數（${pctA01}）`);
-  await cardFor(page, "A01").scrollIntoViewIfNeeded();
-  await cardFor(page, "A01").screenshot({ path: path.join(outDir, "02-phone-card-a01-3440.png") });
-  await cardFor(page, "A05").screenshot({ path: path.join(outDir, "03-phone-card-a05-pending.png") });
-  await cardFor(page, "A02").screenshot({ path: path.join(outDir, "04-phone-card-a02-no-legacy.png") });
-
-  // 點車床 → 批次畫面
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').click();
-  await page.locator('[data-batch-root="lathe"] [data-batch-row="A01"]').waitFor();
-  ok(await page.locator("#batchLatheView").evaluate((el) => el.classList.contains("is-active")), "手機：點「車床報工」打開車床批次畫面");
-  ok(await page.locator('[data-batch-root="lathe"] .batch-row').count() === 5, "車床批次畫面五台 A01–A05（行為不變）");
-  await page.waitForFunction(() => !document.querySelector('[data-batch-root="lathe"] [data-batch-refresh]')?.disabled);
-  ok((await page.locator('[data-batch-root="lathe"] [data-batch-row="A01"] .batch-done').innerText()).includes("3440"), "批次畫面 A01 已報也是 3440（同一套口徑）");
-  await page.screenshot({ path: path.join(outDir, "05-phone-after-click-lathe.png") });
-  await page.locator('.mobile-tab[data-view="dashboard"]').click();
-  await page.locator('#dashboardView [data-monitor-batch-entry="mill"]').click();
-  await page.locator('[data-batch-root="mill"] [data-batch-row="B03"]').waitFor();
-  ok(await page.locator("#batchMillView").evaluate((el) => el.classList.contains("is-active")), "手機：點「銑床報工」打開銑床批次畫面");
-  await page.locator("#adminDrawerBtn").click();
-  ok(await page.locator('[data-drawer-module="__batchLathe"]').isVisible() && await page.locator('[data-drawer-module="__batchMill"]').isVisible(), "「更多」抽屜照舊有車床／銑床報工入口");
-  ok(realErrors(errors).length === 0, "手機沒有 JS 錯誤", realErrors(errors).join(" | "));
-  await context.close();
-}
-
 // ================= tablet =================
-console.log("== 平板（810×1080）：Monitor 頁報工入口 ==");
+console.log("== 平板（810×1080）：上方主選單＋第二排子選單 ==");
 {
   const { context, page, errors } = await newPage(browser, tabletDevice);
   await waitLoaded(page);
-  const geo = await checkEntryGeometry(page, "平板");
-  ok(geo.report.visible && geo.lathe.top >= geo.title.bottom - 1 && Math.abs(geo.lathe.top - geo.report.top) < 2 && geo.lathe.right <= geo.mill.left + 1 && geo.mill.right <= geo.report.left + 1, "平板：標題下面一排：車床 → 銑床 → ＋現場回報", JSON.stringify(geo));
-  ok(await page.locator('.nav-item[data-view="batchLathe"], .nav-item[data-view="batchMill"]').count() === 0, "上方導覽列不再有車床／銑床報工");
-  const navCols = await page.evaluate(() => getComputedStyle(document.querySelector(".desktop-nav")).gridTemplateColumns.split(" ").length);
-  ok(navCols === 4 && await page.locator(".desktop-nav .nav-item").count() === 4, `上方導覽 4 欄（2026-10-02 拿掉「紀錄」後；${navCols}）`);
-  ok((await metric(page, "A01")).value === "3440/5000", "平板卡片 A01 也是 3440/5000");
-  await page.screenshot({ path: path.join(outDir, "06-tablet-monitor-entries.png") });
-  await page.locator('#dashboardView [data-monitor-batch-entry="mill"]').click();
-  await page.locator('[data-batch-root="mill"] [data-batch-row="B03"]').waitFor();
-  await page.waitForFunction(() => !document.querySelector('[data-batch-root="mill"] [data-batch-refresh]')?.disabled);
-  ok(await page.locator('[data-batch-root="mill"] .batch-row').count() === 4, "平板：點「銑床報工」打開銑床批次畫面（B03–B06）");
-  await page.screenshot({ path: path.join(outDir, "07-tablet-after-click-mill.png") });
-  await page.locator('.nav-item[data-view="dashboard"]').click();
-  await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').click();
-  await page.locator('[data-batch-root="lathe"] [data-batch-row="A01"]').waitFor();
-  ok(await page.locator("#batchLatheView").evaluate((el) => el.classList.contains("is-active")), "平板：點「車床報工」打開車床批次畫面");
+  const navBottom = await page.evaluate(() => document.querySelector(".desktop-tool-nav").getBoundingClientRect().bottom);
+  await page.screenshot({ path: shot("tablet-nav"), clip: { x: 0, y: 0, width: 810, height: Math.ceil(navBottom) + 8 } });
+  await page.screenshot({ path: shot("tablet-full") });
+
+  ok(await page.locator('.desktop-nav [data-view="history"]').count() === 0, "主選單沒有「紀錄」");
+  ok(await page.locator('.desktop-nav [data-view="reports"]').isVisible(), "主選單「分析」保留");
+  checkEven(await navGeometry(page, ".desktop-nav", ".nav-item"), "平板主選單", 4);
+  ok(await page.locator('.desktop-tool-nav [data-admin-module="list"]').count() === 0, "子選單沒有「機台管理」");
+  ok(await page.locator(".desktop-tool-nav [data-open-admin-drawer]").isVisible(), "子選單「管理」保留");
+  checkEven(await navGeometry(page, ".desktop-tool-nav", ".tool-nav-item"), "平板子選單", 4);
+
+  // 子選單「管理」→ 抽屜
+  await page.locator(".desktop-tool-nav [data-open-admin-drawer]").click();
+  ok(await page.locator("#adminDrawer").isVisible(), "子選單「管理」打開管理抽屜");
+  await checkDrawerEntries(page, "平板");
+
+  // 程式內切換照常
+  await page.evaluate(() => switchView("dashboard"));
+  await page.evaluate(() => switchView("history"));
+  ok(await page.locator("#historyView").evaluate((el) => el.classList.contains("is-active")), "程式 switchView(\"history\") 照常打開紀錄頁");
+  ok(await page.locator(".desktop-nav .nav-item.active").count() === 0, "紀錄頁時主選單沒有亮錯項目");
+  await page.evaluate(() => openAdminModule("list"));
+  ok(await page.locator("#adminModuleSheet").evaluate((el) => el.classList.contains("is-open")), "程式 openAdminModule(\"list\") 照常打開機台列表管理");
+  await page.evaluate(() => closeAdminModule());
+  await page.locator('.desktop-nav [data-view="reports"]').click();
+  ok(await page.locator("#reportsView").evaluate((el) => el.classList.contains("is-active")), "主選單「分析」照常");
   ok(realErrors(errors).length === 0, "平板沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
-// ================= roles =================
-console.log("== 角色：原本批次報工不分角色，入口一樣都看得到 ==");
-for (const role of ["admin", "manager", "planner"]) {
-  const { context, page } = await newPage(browser, tabletDevice, { role });
-  await waitLoaded(page);
-  ok(await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').isVisible() && await page.locator('#dashboardView [data-monitor-batch-entry="mill"]').isVisible(), `${role}：Monitor 頁看得到兩顆入口`);
+// ================= old URL =================
+console.log("== 舊網址 ?view=history 照常 ==");
+{
+  const { context, page, errors } = await newPage(browser, tabletDevice);
+  await page.goto(`${base}?view=history`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.getElementById("historyView")?.classList.contains("is-active"), null, { timeout: 10000 }).catch(() => {});
+  ok(await page.locator("#historyView").evaluate((el) => el.classList.contains("is-active")), "直接開 ?view=history 進到紀錄頁");
+  ok(realErrors(errors).length === 0, "舊網址沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
-// ================= RPC failure =================
-console.log("== batch_report_progress 失敗：照原本算法、標尚無資料、整頁不壞 ==");
-{
-  const { context, page, errors, backend } = await newPage(browser, devices["Pixel 7"], { progressFails: true });
+// ================= phone =================
+for (const [label, device, name] of [
+  ["手機（Pixel 7）", devices["Pixel 7"], "phone"],
+  ["手機（360px）", { ...devices["Pixel 7"], viewport: { width: 360, height: 780 } }, "phone360"],
+]) {
+  console.log(`== ${label}：底部分頁＋管理抽屜 ==`);
+  const { context, page, errors } = await newPage(browser, device);
   await waitLoaded(page);
-  ok(backend.progressCalls.length >= 1, "有嘗試查進度");
-  const a01 = await metric(page, "A01");
-  ok(a01.value === "0/5000" && a01.note === "舊 MES 尚無資料", "A01 讀不到 → 照 App 0/5000、標「舊 MES 尚無資料」（不顯示假數字）", JSON.stringify(a01));
-  const a05 = await metric(page, "A05");
-  ok(a05.value === "95/400" && a05.note === "舊 MES 尚無資料", "A05 讀不到 → 照 App 95", JSON.stringify(a05));
-  ok(await page.locator("#workOrderGrid .machine-tile-card").count() >= 5, "卡片牆照常顯示");
-  await cardFor(page, "A01").screenshot({ path: path.join(outDir, "08-phone-card-rpc-failed.png") });
-  ok(realErrors(errors).length === 0, "RPC 失敗時沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await page.screenshot({ path: shot(`${name}-full`) });
+  await page.locator(".mobile-tabs").screenshot({ path: shot(`${name}-tabs`) });
+  ok(!(await page.locator(".desktop-nav").isVisible()) && !(await page.locator(".desktop-tool-nav").isVisible()), `${label}：上方兩排在手機本來就收起`);
+  ok(await page.locator('.mobile-tabs [data-view="history"], .mobile-tabs [data-admin-module="list"]').count() === 0, `${label}：底部分頁沒有「紀錄」「機台管理」`);
+  checkEven(await navGeometry(page, ".mobile-tabs", ".mobile-tab"), `${label}底部分頁`, 6);
+  await page.locator(".mobile-tab[data-open-admin-drawer]").click();
+  ok(await page.locator("#adminDrawer").isVisible(), `${label}：「更多」打開管理抽屜`);
+  await page.locator("#adminDrawer").screenshot({ path: shot(`${name}-drawer`) });
+  await checkDrawerEntries(page, label);
+  ok(realErrors(errors).length === 0, `${label}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ================= roles =================
+console.log("== 角色：作業員也能從管理抽屜進紀錄查詢與機台管理 ==");
+for (const role of ["operator", "planner", "manager", "admin"]) {
+  const { context, page } = await newPage(browser, tabletDevice, { role });
+  await waitLoaded(page);
+  ok(await page.locator(".desktop-tool-nav [data-open-admin-drawer]").isVisible() && await page.locator("#adminDrawerBtn").isVisible(), `${role}：看得到「管理」與右上角選單鈕`);
+  await openDrawer(page);
+  const visible = async (k) => page.locator(`[data-drawer-module="${k}"]`).isVisible();
+  ok(await visible("__history") && await visible("list") && await visible("add") && await visible("calendar") && await visible("alarm"), `${role}：抽屜有紀錄查詢＋機台管理四項`);
+  if (role === "operator") await page.locator("#adminDrawer").screenshot({ path: shot("tablet-operator-drawer") });
+  await page.locator('[data-drawer-module="__history"]').click();
+  ok(await page.locator("#historyView").evaluate((el) => el.classList.contains("is-active")), `${role}：從抽屜進得了紀錄頁`);
   await context.close();
 }
 
