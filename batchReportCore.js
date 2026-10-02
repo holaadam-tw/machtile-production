@@ -266,9 +266,14 @@
     if (time.error) return { send: false, empty: false, error: time.error };
     if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
     if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
-    if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
+    const timeOnly = goodN === 0 && badN === 0;
+    // 只改機台加工時間（0／0）不會寫回舊 MES（回寫橋 SKIP_ZERO），所以呼叫端明確允許時（卡片小框：
+    // allowUnmappedTimeOnly）不必有舊 MES 工號對照；有數量的報工一律要對照。
+    if (row?.operatorMapped !== true && !(timeOnly && row?.allowUnmappedTimeOnly === true)) {
+      return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
+    }
     if (!row?.startedAt) return { send: false, empty: false, error: row?.startedAtReason || "沒有開工時間" };
-    return { send: true, empty: false, error: "", good: goodN, bad: badN, machineSeconds: time.seconds, timeOnly: goodN === 0 && badN === 0 };
+    return { send: true, empty: false, error: "", good: goodN, bad: badN, machineSeconds: time.seconds, timeOnly };
   }
 
   // 冪等：同一列、同樣的輸入 → 同一個 report_uuid（重複按、送到一半斷線再按都一樣）；

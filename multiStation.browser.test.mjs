@@ -58,7 +58,8 @@ const machines = CODES.map((code, i) => ({
 }));
 const AR = "XX01202609160002";
 const PROC = "AR16-R01-01_加工製程";
-const P = { arStep1: id(351), arStep2: id(352), arStep3: id(353), a01: id(301) };
+const P = { arStep1: id(351), arStep2: id(352), arStep3: id(353), a01: id(301), a02old: id(361) };
+const OLD = "XX01202604010001"; // A02 上另一張很久沒動的在站單（#49「還掛 N 張」）
 const card = (woId, wo, machine, procId, status, extra = {}) => ({
   id: woId, tenant_id: T, work_order_no: wo, customer_name: "測試客戶", part_name: wo === AR ? "AR16/AR22泵浦本體" : "零件", drawing_no: "AR16-R01-01",
   quantity: 210, due_date: "2026-10-31", priority: "normal", work_order_status: "in_progress",
@@ -69,6 +70,7 @@ const card = (woId, wo, machine, procId, status, extra = {}) => ({
 const cards = [
   card(id(101), AR, "B01", P.arStep3, "pending", { last_report_at: ago(5), open_risk_level: "high" }),
   card(id(102), "XX01202609020008", "A01", P.a01, "running", { quantity: 5000 }),
+  card(id(103), OLD, "A02", P.a02old, "pending", { due_date: "2026-10-20", last_report_at: ago(60 * 24 * 30) }),
 ];
 // work_order_processes as the per-step station sync leaves them: A02#2 and B01#3 on station, A03#1 off station.
 const procs = [
@@ -76,13 +78,17 @@ const procs = [
   { id: P.arStep2, work_order_id: id(101), process_order: 2, process_name: PROC, status: "pending", machine_id: machineId("A02"), qty_completed: 0, off_station_at: null },
   { id: P.arStep3, work_order_id: id(101), process_order: 3, process_name: PROC, status: "pending", machine_id: machineId("B01"), qty_completed: 0, off_station_at: null },
   { id: P.a01, work_order_id: id(102), process_order: 3, process_name: "車削", status: "running", machine_id: machineId("A01"), qty_completed: 0, off_station_at: null },
+  { id: P.a02old, work_order_id: id(103), process_order: 1, process_name: "車削", status: "pending", machine_id: machineId("A02"), qty_completed: 0, off_station_at: null },
 ];
 const progress = {
-  [P.arStep2]: { legacy_output: null, legacy_fail: null, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: null, actual_start_at: ago(120), legacy_synced_at: null },
+  [P.arStep2]: { legacy_output: 230, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: null, actual_start_at: ago(120), legacy_synced_at: ago(3) },
+  [P.a02old]: { legacy_output: 10, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: ago(60 * 24 * 30), actual_start_at: ago(60 * 24 * 40), legacy_synced_at: ago(3) },
   [P.arStep3]: { legacy_output: 4, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: ago(60), actual_start_at: ago(300), legacy_synced_at: ago(3) },
   [P.a01]: { legacy_output: 3440, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: ago(30), actual_start_at: ago(400), legacy_synced_at: ago(3) },
 };
-const procToMachine = { [P.arStep1]: "A03", [P.arStep2]: "A02", [P.arStep3]: "B01", [P.a01]: "A01" };
+const procToMachine = { [P.arStep1]: "A03", [P.arStep2]: "A02", [P.arStep3]: "B01", [P.a01]: "A01", [P.a02old]: "A02" };
+// 今天的報工（#53 卡片底部＝今日報工狀態）：只有 B01 第 3 道今天開工；A02 第 2 道今天沒有
+const todayRows = [{ process_id: P.arStep3, report_type: "dailyStart", created_at: ago(1), ended_at: ago(1), started_at: ago(1), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }];
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const jwt = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: users[0].auth, email: "op@test.invalid", exp: Math.floor(now / 1000) + 3600, role: "authenticated", app_metadata: { tenant_id: T, role: "operator" } })}.sig`;
@@ -114,6 +120,7 @@ async function handleFake(route) {
     return json(200, procs.filter((r) => !r.off_station_at));
   }
   if (p === "/rest/v1/work_order_processes") return json(200, []);
+  if (p === "/rest/v1/production_reports" && String(url.searchParams.get("report_type") || "").includes("dailyStart")) return json(200, todayRows);
   if (p === "/rest/v1/app_users") {
     if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: users[0].name }]);
     return json(200, users.map(({ auth, ...u }) => u));
@@ -182,9 +189,46 @@ console.log("== 平板：Monitor 卡片（同一張單在 A02 第 2 道＋B01 �
   ok(b01.includes(AR) && b01.includes("第 3 道"), "B01 卡片照常顯示 XX01202609160002（第 3 道）", b01.slice(0, 200));
   ok(!a03.includes(AR), "A03（舊 MES 已移走的第 1 道）不顯示這張單");
   ok(a01.includes("XX01202609020008") && !a01.includes("第 3 道"), "只在一台的單：卡片跟原本一樣（不加「第 N 道」）");
+  // #53 之後卡片底部是「今日報工狀態」（依工序 id）：A02 看第 2 道、B01 看第 3 道，不互相沿用
+  await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid [data-today-status]").length > 0, null, { timeout: 10000 });
   const a02Footer = (await tile(page, "A02").locator(".machine-tile-footer").innerText()).trim();
   const b01Footer = (await tile(page, "B01").locator(".machine-tile-footer").innerText()).trim();
-  ok(a02Footer.includes("尚未回報") && !b01Footer.includes("尚未回報"), "審查 #45：A02 的「最後回報」是第 2 道自己的（尚未回報），不是 B01 那道的時間", `A02=${a02Footer} | B01=${b01Footer}`);
+  ok(a02Footer.includes("今日尚未開工") && b01Footer.includes("今日已開工"), "#53 今日報工狀態分道：A02（第 2 道今天沒開工）＝今日尚未開工；B01（第 3 道今天開工）＝今日已開工", `A02=${a02Footer} | B01=${b01Footer}`);
+  const a02Title = await tile(page, "A02").locator("[data-today-status]").getAttribute("title");
+  ok(!a02Title || a02Title.includes("尚未回報"), "審查 #45：A02 的「最後回報」（滑過提示）是第 2 道自己的（尚未回報），不是 B01 那道的時間", String(a02Title));
+  // #51 超量：A02 第 2 道已報 230／210 → A02 標「超量 +20」；B01 第 3 道 4／210 不標
+  ok(a02.includes("超量 +20") && !b01.includes("超量"), "#51 超量分道：A02 第 2 道 230/210 標超量 +20、B01 第 3 道 4/210 不標", `${a02.slice(0, 260)} || ${b01.slice(0, 120)}`);
+  ok(a02.includes("230/210") && b01.includes("4/210"), "完成進度各算各的（A02 230/210、B01 4/210），不是整張單加總");
+  // #49 挑單＋還掛 N 張：A02 上 AR 第 2 道（2 小時前開工）比舊單（30 天前）新 → 目前工單＝AR，還掛 1 張
+  ok(a02.includes("這台還掛 1 張"), "#49 A02 還掛 1 張（另一張舊單）", a02.slice(0, 300));
+  ok(!b01.includes("這台還掛"), "#49 B01 只有第 3 道 → 不顯示還掛 N 張（A02 那道不會算到 B01）");
+  const a02Keys = await tile(page, "A02").locator("[data-card-order-key]").evaluateAll((els) => els.map((e) => e.dataset.cardOrderKey));
+  ok(a02Keys.length === 2 && a02Keys[0] === P.arStep2 && a02Keys.includes(P.a02old) && !a02Keys.includes(P.arStep3), "#49/#52 A02 清單＝第 2 道（目前顯示）＋舊單，沒有 B01 的第 3 道", JSON.stringify(a02Keys));
+  // #53 總覽三格：每台用自己那幾道工序判斷（A02 不會因為 B01 第 3 道開工就算已開工）
+  const todayInputs = await page.evaluate(() => managedMachineList().filter((m) => ["A02", "B01"].includes(m.name)).map((m) => [m.name, [m.order, ...(m.cardOrders || []).map((x) => x.order)].filter(Boolean).map((o) => o.processId)]));
+  const ids = Object.fromEntries(todayInputs.map(([n, list]) => [n, [...new Set(list)].sort()]));
+  ok(JSON.stringify(ids.A02) === JSON.stringify([P.arStep2, P.a02old].sort()) && JSON.stringify(ids.B01) === JSON.stringify([P.arStep3]), "#53 今日三格的輸入：A02＝第 2 道＋舊單、B01＝第 3 道", JSON.stringify(ids));
+  const summary = await page.evaluate(() => { const s = machtileTodaySummary(); return s ? { notStarted: s.notStarted, unreported: s.unreported } : null; });
+  if (summary && summary.notStarted && summary.notStarted.active) {
+    ok(summary.notStarted.keys.includes("A02") && !summary.notStarted.keys.includes("B01"), "#53 今日未開工：A02 在、B01 不在", JSON.stringify(summary.notStarted.keys));
+  } else {
+    ok(Boolean(summary), "#53 今日三格有算出來（現在時段「今日未開工」不計算，略過名單檢查）", JSON.stringify(summary));
+  }
+  // #55 交期風險：同一張單兩道只算一張（AR 兩道＋A01＋A02 舊單＝3 張，不是 4 張）
+  const risk = await page.evaluate(() => {
+    machtileAnalyticsState.reports = [];
+    const html = machtileAnalyticsRiskHtml(machtileAnalyticsCore(), Date.now());
+    const box = document.createElement("div");
+    box.innerHTML = html;
+    const ar = "XX01202609160002";
+    const rows = [...box.querySelectorAll("[data-risk-wo]")].filter((el) => el.dataset.riskWo === ar);
+    const insuff = [...box.querySelectorAll(".analytics-insufficient li")].filter((li) => li.textContent.includes(ar));
+    const arText = [...rows, ...insuff].map((el) => el.textContent.replace(/\s+/g, " ")).join(" | ");
+    return { title: box.querySelector(".panel-title span")?.textContent || "", summary: box.querySelector("[data-risk-summary]")?.textContent || "", rows: rows.length, insuff: insuff.length, arText };
+  });
+  ok(risk.title.includes("在站未完工 3 張"), "#55 交期風險：在站未完工 3 張（AR 在兩台只算 1 張）", risk.title);
+  ok(risk.rows + risk.insuff === 1, "#55 AR 在風險／資料不足清單裡只出現一次", JSON.stringify(risk));
+  ok(/另 1 道/.test(risk.arText), "#55 合成那一筆寫出另一道的機台", risk.arText);
   ok(a02.includes("整單 ·") && !b01.includes("整單 ·"), "審查 #45：A02 卡片上工單風險標「整單」（風險掛在整張單）", a02.slice(0, 240));
   await page.screenshot({ path: path.join(outDir, "01-tablet-monitor.png"), fullPage: true });
 
@@ -253,6 +297,25 @@ console.log("== 手機：車床批次報工 A02 報這張單 ==");
   ok(pl.completed_qty === 10 && pl.started_at === progress[P.arStep2].actual_start_at, "數量 10、started_at＝第 2 道的開工時間");
   await page.screenshot({ path: path.join(outDir, "04-phone-batch-a02.png"), fullPage: true });
   ok(realErrors(errors).length === 0, "批次沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("== 電視頁（#57）：A02、B01 兩格各顯示自己那一道 ==");
+{
+  const { context, page, errors } = await newPage(browser, { viewport: { width: 1920, height: 1080 } });
+  await page.goto(base + "?view=tv", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.getElementById("tvWall")?.dataset.tvState === "ok" && document.querySelectorAll("#tvWall .tv-cell").length >= 11, null, { timeout: 30000 });
+  const cell = (code) => page.locator(`#tvWall [data-tv-machine="${code}"]`).innerText();
+  const a02 = await cell("A02");
+  const b01 = await cell("B01");
+  ok(a02.includes(AR) && a02.includes("第 2 道") && b01.includes(AR) && b01.includes("第 3 道"), "電視頁 A02＝第 2 道、B01＝第 3 道（同一張單兩格都有）", `${a02.slice(0, 160)} || ${b01.slice(0, 160)}`);
+  const qty = await page.evaluate(() => ["A02", "B01"].map((c) => document.querySelector(`#tvWall [data-tv-machine="${c}"] [data-tv-qty]`)?.dataset.tvQty));
+  ok(qty[0] === "230/210" && qty[1] === "4/210", "電視頁數量各算各的（A02 230/210、B01 4/210）", JSON.stringify(qty));
+  ok(a02.includes("超量 +20") && !b01.includes("超量"), "電視頁超量只標 A02", `${a02} || ${b01}`);
+  const today = await page.evaluate(() => ["A02", "B01"].map((c) => document.querySelector(`#tvWall [data-tv-machine="${c}"] [data-tv-today]`)?.dataset.tvToday));
+  ok(today[1] === "started" && today[0] !== "started", "電視頁今日狀態分道：B01 已開工、A02 沒有", JSON.stringify(today));
+  await page.screenshot({ path: path.join(outDir, "05-tv.png") });
+  ok(realErrors(errors).length === 0, "電視頁沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
