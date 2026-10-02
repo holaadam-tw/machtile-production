@@ -129,5 +129,39 @@ eq("工序 id 對不上（同單另一道）不會用單號硬配到別道", c.d
 eq("卡片那道不在候選、同單別道在 → 不硬配，用候選第一張", c.defaultCandidate([{ id: "A", processId: "a1" }, { id: "W", processId: "x2" }], { id: "W", processId: "x9" }).processId, "a1");
 eq("示範資料沒有工序 id → 用單號對", c.defaultCandidate([{ id: "A" }, { id: "W" }], { id: "W" }).id, "W");
 
+console.log("== 超量仍在站（owner 2026-10-02：B05 HCG-06 已報 689／訂單 536）==");
+const hcg = { id: "XX01202606050003", processId: "p-hcg", machine: "B05", total: 536, done: 689, workStatus: "not_started", processStatus: "pending", offStation: false };
+eq("超量、在站、工序 pending → 卡片候選", c.isCardCandidate(hcg), true);
+eq("剛好報滿（194/194）→ 卡片候選", c.isCardCandidate({ ...hcg, done: 536 }), true);
+eq("未報滿 → 卡片候選", c.isCardCandidate({ ...hcg, done: 10 }), true);
+eq("已離站（off_station_at 有值）→ 不顯示", c.isCardCandidate({ ...hcg, offStation: true }), false);
+eq("工單 completed → 不顯示", c.isCardCandidate({ ...hcg, workStatus: "completed" }), false);
+eq("工單 shipped → 不顯示", c.isCardCandidate({ ...hcg, workStatus: "shipped" }), false);
+eq("工單 cancelled → 不顯示", c.isCardCandidate({ ...hcg, workStatus: "cancelled" }), false);
+eq("工序 completed → 不顯示", c.isCardCandidate({ ...hcg, processStatus: "completed" }), false);
+eq("工序 skipped → 不顯示（原規則）", c.isCardCandidate({ ...hcg, processStatus: "skipped" }), false);
+eq("工序 waiting_inspection → 不顯示（原規則）", c.isCardCandidate({ ...hcg, processStatus: "waiting_inspection" }), false);
+eq("未排機＋超量 → 維持原規則不顯示", c.isCardCandidate({ ...hcg, machine: "" }, { assigned: false }), false);
+eq("未排機＋未滿 → 顯示（原規則）", c.isCardCandidate({ ...hcg, machine: "", done: 1 }, { assigned: false }), true);
+eq("null → false", c.isCardCandidate(null), false);
+const info = c.overQtyInfo(hcg);
+eq("超量資訊 689/536 → +153、128%、進度條 100", [info.full, info.over, info.percent, info.bar], [true, 153, 128, 100]);
+eq("超量標籤", c.overQtyLabel(info), "超量 +153");
+eq("剛好報滿 → 標「已報滿」", c.overQtyLabel(c.overQtyInfo({ total: 194, done: 194 })), "已報滿");
+eq("未滿 → 沒有標籤", c.overQtyLabel(c.overQtyInfo({ total: 536, done: 500 })), "");
+eq("訂單數量 0 → 不算超量", c.overQtyInfo({ total: 0, done: 5 }).full, false);
+eq("doneOverride（批次用後端進度）", c.overQtyInfo({ total: 100, done: 0 }, 120).over, 20);
+eq("報工提醒（超量）", c.overQtyReportWarning(info), "這張單已報良品 689，超過訂單數量 536（超量 +153）。仍可以報工，請確認單號和數量沒有報錯。");
+eq("報工提醒（剛好報滿）", c.overQtyReportWarning(c.overQtyInfo({ total: 194, done: 194 })), "這張單已報良品 194，已達訂單數量 194。仍可以報工，請確認單號和數量沒有報錯。");
+eq("未滿 → 沒有提醒", c.overQtyReportWarning(c.overQtyInfo({ total: 536, done: 1 })), "");
+// 「最近活動」挑單規則不變，超量單照樣參與：B05 只有 HCG-06 在候選（另兩張工單 completed）
+const b05 = [hcg, { ...hcg, id: "XX01202605220021", processId: "p-ar16", total: 317, done: 0, workStatus: "completed" }, { ...hcg, id: "XX01202601210013", processId: "p-a37", total: 111, done: 0, workStatus: "completed" }].filter((o) => c.isCardCandidate(o));
+const b05pick = c.pickActiveOrder(b05, { activityOf: (o) => (o.processId === "p-hcg" ? { legacyUpdatedAt: "2026-10-02T08:15:16Z" } : null), fallbackCompare: fallback });
+eq("B05 卡片＝HCG-06（依舊 MES 活動）", [b05pick.order && b05pick.order.id, b05pick.basis, b05pick.others], ["XX01202606050003", "activity", 0]);
+const mixed = c.pickActiveOrder([{ ...hcg, processId: "p-old", id: "OLD", done: 1 }, hcg], { activityOf: (o) => ({ legacyUpdatedAt: o.processId === "p-hcg" ? "2026-10-02T08:15:16Z" : "2026-09-01T00:00:00Z" }), fallbackCompare: fallback });
+eq("超量單活動較新 → 挑超量單", mixed.order.processId, "p-hcg");
+const mixed2 = c.pickActiveOrder([{ ...hcg, processId: "p-new", id: "NEW", done: 1 }, hcg], { activityOf: (o) => ({ legacyUpdatedAt: o.processId === "p-hcg" ? "2026-09-01T00:00:00Z" : "2026-10-02T09:00:00Z" }), fallbackCompare: fallback });
+eq("另一張活動較新 → 挑另一張，超量單排在「這台還掛」", [mixed2.order.processId, mixed2.others], ["p-new", 1]);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

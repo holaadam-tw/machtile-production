@@ -8118,12 +8118,23 @@ function setReportDefaults(order) {
   // 回寫橋會把整個累計當成這次的量再加一次。
   if (completedInput) completedInput.value = 0;
   if (defectInput) defectInput.value = 0;
+  machtileRenderReportOverQty(order);
   // 沒有這張單的時間就留白，不可以沿用上一張單（審查 M1）
   setReportCycleSeconds(profile?.pureCycleSec || 0);
   reportCyclePrefilledSeconds = Number(profile?.pureCycleSec) > 0 ? Math.round(Number(profile.pureCycleSec)) : null;
   reportCycleTouched = false;
   updateReportEstimate();
   updateNoonAdvice();
+}
+
+// 單台報工選到「已報良品 ≥ 訂單數量」的單：只提醒，不擋報工（owner 2026-10-02）
+function machtileRenderReportOverQty(order) {
+  const box = $("#reportOverQty");
+  if (!box) return;
+  const info = order ? machtileOverQtyInfo(order) : null;
+  const text = info && machtileCardActiveCore?.overQtyReportWarning ? machtileCardActiveCore.overQtyReportWarning(info) : "";
+  box.textContent = text;
+  box.hidden = !text;
 }
 
 function setReportType(type) {
@@ -10106,6 +10117,28 @@ function machtileIsSchedulableOrder(order) {
   return true;
 }
 
+// 監控卡片的候選（owner 2026-10-02）：跟排程板一樣，只差「已報 ≥ 數量」不再排除——
+// 在站、工序未完工、工單沒有完工／出貨／取消的單，就算超量也照樣顯示（卡片標「超量 +N」）。
+// 未排機的單維持原規則。排程板、提醒中心仍用 machtileIsSchedulableOrder。
+function machtileIsCardCandidateOrder(order) {
+  const assigned = isReportableMachineName(order?.machine);
+  if (machtileCardActiveCore && typeof machtileCardActiveCore.isCardCandidate === "function") {
+    return machtileCardActiveCore.isCardCandidate(order, { assigned });
+  }
+  return machtileIsSchedulableOrder(order);
+}
+
+function machtileOverQtyInfo(order, doneOverride) {
+  if (machtileCardActiveCore && typeof machtileCardActiveCore.overQtyInfo === "function") return machtileCardActiveCore.overQtyInfo(order, doneOverride);
+  return { total: Number(order?.total || 0), done: Number(order?.done || 0), full: false, over: 0, percent: pct(order), bar: pct(order) };
+}
+
+function machtileOverQtyTag(order) {
+  const info = machtileOverQtyInfo(order);
+  const label = machtileCardActiveCore?.overQtyLabel ? machtileCardActiveCore.overQtyLabel(info) : "";
+  return label ? `<span class="card-overqty-tag" data-card-overqty="${info.over}" title="已報良品 ${info.done}，訂單數量 ${info.total}">${escapeHtml(label)}</span>` : "";
+}
+
 function machtileScheduleStatusRank(order) {
   const processStatus = String(order?.processStatus || "").toLowerCase();
   return ({ running: 0, paused: 1, abnormal: 2, pending: 3 })[processStatus] ?? 4;
@@ -10147,7 +10180,7 @@ function deriveMachines() {
   });
 
   const ordersByMachine = new Map();
-  state.workOrders.filter(machtileIsSchedulableOrder).forEach((order) => {
+  state.workOrders.filter(machtileIsCardCandidateOrder).forEach((order) => {
     const hasAssignedMachine = isReportableMachineName(order.machine);
     const name = hasAssignedMachine ? order.machine : UNASSIGNED_MACHINE;
     if (!machines.has(name)) {
@@ -10385,7 +10418,7 @@ function machtileCardOrdersMarkup(machine) {
       <li class="card-order-item${isShown ? " is-shown" : ""}" data-card-order-key="${escapeHtml(key)}">
         <div class="card-order-main">
           <strong>${escapeHtml(order.id)}</strong>
-          <span>${escapeHtml(order.part)}</span>
+          <span>${escapeHtml(order.part)}</span>${machtileOverQtyTag(order)}
         </div>
         <div class="card-order-meta">
           <span data-card-order-progress>進度 ${escapeHtml(String(order.done ?? 0))}/${escapeHtml(String(order.total ?? 0))}</span>
@@ -12438,6 +12471,11 @@ function renderMachineCard(machine) {
   const orderRisk = order ? (statusMeta[orderRiskKey] || statusMeta.normal) : null;
   const due = order ? dueInfo(order) : { label: machine.status === "maintenance" ? "維修中" : "空閒", date: "-", diffDays: 999 };
   const percent = order ? pct(order) : 0;
+  // 超量（已報良品 ≥ 訂單數量）仍在站：百分比照實（例 128%）、進度條滿格改紅色、加「超量 +N」標籤
+  const overInfo = order ? machtileOverQtyInfo(order) : null;
+  const isOver = Boolean(overInfo?.full);
+  const percentText = isOver ? overInfo.percent : percent;
+  const barPercent = isOver ? 100 : percent;
   const profile = order ? getProgramProfile(order) : null;
   const delta = profile ? cycleDelta(profile) : null;
   const dailyQty = profile ? dailyPureCapacity(profile) : null;
@@ -12478,7 +12516,7 @@ function renderMachineCard(machine) {
       <div class="machine-job-strip">
         <span>目前工單</span>
         ${order ? `
-          <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>
+          <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>${isOver ? machtileOverQtyTag(order) : ""}
           <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
         ` : `
           <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
@@ -12501,11 +12539,11 @@ function renderMachineCard(machine) {
       <div class="machine-metrics">
         <div>
           <span>完成進度</span>
-          <strong>${order ? `${order.done}/${order.total}` : "-"}</strong>
+          <strong${isOver ? ` class="card-progress-over"` : ""}>${order ? `${order.done}/${order.total}` : "-"}</strong>
           ${order ? `
-            <small class="card-progress-pct">${percent}%</small>
-            <div class="progress-track card-progress-track" aria-label="完成進度 ${percent}%">
-              <div class="progress-fill" style="width:${percent}%"></div>
+            <small class="card-progress-pct${isOver ? " is-over" : ""}">${percentText}%</small>
+            <div class="progress-track card-progress-track${isOver ? " is-over" : ""}" aria-label="完成進度 ${percentText}%">
+              <div class="progress-fill" style="width:${barPercent}%"></div>
             </div>
           ` : "<small>未派工</small>"}
           ${order ? machtileCardProgressNote(order) : ""}
@@ -18675,6 +18713,10 @@ function machtileRenderBatchReport() {
         ${order.total ? `<div class="batch-stat"><span class="batch-label">訂</span><strong>${order.total}</strong></div>` : ""}
         <p class="batch-done-meta"><span class="batch-muted">${legacyText}</span>${pendingText}</p>`;
     }
+    // 選到「已報良品 ≥ 訂單數量」的單：提醒，不擋報工（owner 2026-10-02）
+    const overInfo = order ? machtileOverQtyInfo(order, progress ? progress.totalOutput : undefined) : null;
+    const overText = overInfo && machtileCardActiveCore?.overQtyReportWarning ? machtileCardActiveCore.overQtyReportWarning(overInfo) : "";
+    const overHtml = overText ? `<p class="batch-overqty" role="note" data-batch-overqty="${code}">${escapeHtml(overText)}</p>` : "";
     let startText = "";
     if (order && isStart) {
       startText = model.startedAt
@@ -18717,6 +18759,7 @@ function machtileRenderBatchReport() {
           <div class="batch-order">${orderCell}</div>
         </header>
         <div class="batch-done">${doneHtml}</div>
+        ${overHtml}
         ${inputsHtml}
         ${startText ? `<p class="batch-start">${startText}</p>` : ""}
         ${resultHtml}

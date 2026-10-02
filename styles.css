@@ -11877,3 +11877,15 @@ body .machtile-session-badge .machtile-session-toggle {
   white-space: nowrap;
 }
 .card-order-note { margin: 0; padding: 4px 10px 8px; font-size: 11px; color: var(--muted); }
+
+/* 超量（已報良品 ≥ 訂單數量）仍在站的單：卡片照樣顯示、標紅（2026-10-02 owner） */
+.card-overqty-tag,
+.machine-tile-card .card-overqty-tag { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: #d92d20; color: #ffffff; font-size: 12px; font-weight: 800; line-height: 1.6; white-space: nowrap; vertical-align: middle; }
+.machine-tile-card .machine-job-strip .card-overqty-tag { margin: 2px 0 0; justify-self: start; width: max-content; }
+.machine-metrics strong.card-progress-over { color: #d92d20; }
+.machine-metrics small.card-progress-pct.is-over { color: #d92d20; }
+.card-progress-track.is-over { background: var(--red-soft); }
+.card-progress-track.is-over .progress-fill { background: #d92d20; }
+.report-overqty-warn,
+.batch-overqty { margin: 8px 0 0; border-left: 4px solid #d92d20; border-radius: var(--radius); padding: 8px 10px; background: var(--red-soft); color: #9f1d1d; font-size: 13px; font-weight: 700; line-height: 1.45; }
+.report-overqty-warn[hidden] { display: none; }

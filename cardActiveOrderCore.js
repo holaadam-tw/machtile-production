@@ -13,6 +13,8 @@
 //   沒有任何活動時間 → 退回原本的規則（呼叫端傳進來的 fallbackCompare）。同一個時間 → 也用原本的規則排。
 //   畫面上可以手動切換卡片顯示哪一張（只改畫面，不寫資料庫）；那張單不在這台了就自動回到依活動挑選。
 //
+// 已報 ≥ 訂單數量但仍在站的單照樣是卡片候選，卡片標「超量 +N」（見檔尾 isCardCandidate／overQtyInfo）。
+//
 // DOM 與 fetch 留在 app.js；這裡只做可測的決策。卡片、單台報工（QR 只帶機台）、批次報工的預設工單都用這裡挑出來的同一張。
 (function attachMachTileCardActiveOrderCore(root, factory) {
   const api = factory();
@@ -122,8 +124,54 @@
     return byKey || byNo || list[0];
   }
 
+  // ---- 超量（已報良品 ≥ 訂單數量）仍在站的單（owner 2026-10-02）----
+  // 原本卡片候選＝app.js machtileIsSchedulableOrder（跟排程板共用），裡面有一條「已報 ≥ 數量 → 視為做完」。
+  // 派工橋改讀 SFC 後，B05 XX01202606050003 已報 689／訂單 536，被這條排除 → 卡片變「無工單指派中」，
+  // 但這張單在舊 MES 還在報、App 裡也還在站。改成：卡片候選不再看「已報 ≥ 數量」，其他條件不變
+  // （在站、工序沒有完工／略過／待品檢、工單不是完工／出貨／取消）。排程板仍用原本的規則。
+  const CLOSED_WORK_STATUS = Object.freeze(["completed", "shipped", "cancelled"]);
+  const CLOSED_PROCESS_STATUS = Object.freeze(["completed", "skipped", "waiting_inspection"]);
+
+  // assigned＝這張單有指派實際機台（未排機的單維持原規則：報滿就不放進「未排機」那一格）。
+  function isCardCandidate(order, { assigned = true } = {}) {
+    if (!order) return false;
+    if (order.offStation === true) return false;
+    const workStatus = String(order.workStatus || "").toLowerCase();
+    const processStatus = String(order.processStatus || "").toLowerCase();
+    if (CLOSED_WORK_STATUS.includes(workStatus)) return false;
+    if (CLOSED_PROCESS_STATUS.includes(processStatus)) return false;
+    if (!assigned && overQtyInfo(order).full) return false;
+    return true;
+  }
+
+  // 已報良品（done）與訂單數量（total）的比較。percent 照實（可以超過 100），bar 給進度條用（最多 100）。
+  function overQtyInfo(order, doneOverride) {
+    const total = Math.max(0, Number(order?.total) || 0);
+    const doneRaw = doneOverride === undefined || doneOverride === null ? order?.done : doneOverride;
+    const done = Math.max(0, Number(doneRaw) || 0);
+    if (!total) return { total, done, full: false, over: 0, percent: 0, bar: 0 };
+    // 無條件捨去（owner 例：689/536＝128%）；不會把 99.6% 顯示成 100% 讓人以為報滿
+    const percent = Math.floor((done / total) * 100);
+    return { total, done, full: done >= total, over: Math.max(0, done - total), percent, bar: Math.min(100, percent) };
+  }
+
+  function overQtyLabel(info) {
+    if (!info || !info.full) return "";
+    return info.over > 0 ? `超量 +${info.over}` : "已報滿";
+  }
+
+  // 報工畫面（單台、批次）選到報滿／超量的單：提醒，不擋報工。
+  function overQtyReportWarning(info) {
+    if (!info || !info.full) return "";
+    const head = info.over > 0
+      ? `這張單已報良品 ${info.done}，超過訂單數量 ${info.total}（超量 +${info.over}）。`
+      : `這張單已報良品 ${info.done}，已達訂單數量 ${info.total}。`;
+    return `${head}仍可以報工，請確認單號和數量沒有報錯。`;
+  }
+
   return {
     SOURCES, SOURCE_LABEL,
     orderKey, latestActivity, legacyUpdatedAtFor, rankOrders, pickActiveOrder, moreOrdersLabel, defaultCandidate,
+    isCardCandidate, overQtyInfo, overQtyLabel, overQtyReportWarning,
   };
 });
