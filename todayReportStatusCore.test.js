@@ -117,5 +117,31 @@ eq("08:29:30 → 30 秒後到 08:30", c.msUntilNextBoundary(at("08:29") + 30000)
 eq("13:00 整 → 下一個是 17:15", c.msUntilNextBoundary(at("13:00")), (17 * 60 + 15 - 13 * 60) * 60000);
 eq("21:00 → 下一個是午夜", c.msUntilNextBoundary(at("21:00")), 3 * 60 * 60000);
 
+console.log("== 只改機台加工時間的 0／0 noon 不算中午報工（owner 2026-10-02）==");
+// 用批次／卡片小框實際送出的 payload（batchReportCore.buildReportPayload）確認特徵
+const b = require("./batchReportCore.js");
+const order = { workOrderId: "wo3", processId: "p3", tenantId: "t", processStatus: "running", done: 0, total: 400 };
+const baseRow = { mode: "noon", machineCode: "A03", order, ctDefault: 95, overtime: "", operatorId: "u1", operatorMapped: true, startedAt: iso("08:10") };
+const timeOnly = b.buildReportPayload({ row: { ...baseRow, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" }, actorAppUserId: "u1", endedAt: iso("12:30"), reportUuid: "r1", tenantId: "t" });
+const realQty = b.buildReportPayload({ row: { ...baseRow, good: "5", bad: "", ctMinutes: "", ctSeconds: "" }, actorAppUserId: "u1", endedAt: iso("12:30"), reportUuid: "r2", tenantId: "t" });
+eq("實際 payload：只改時間＝noon、0／0、started_at＝ended_at", [timeOnly.timeOnly, timeOnly.payload.report_type, timeOnly.payload.completed_qty, timeOnly.payload.defect_qty, timeOnly.payload.started_at === timeOnly.payload.ended_at], [true, "noon", 0, 0, true]);
+eq("isTimeOnlyReport(只改時間的 payload) → true", c.isTimeOnlyReport(timeOnly.payload), true);
+eq("isTimeOnlyReport(有數量的中午報工 payload) → false", c.isTimeOnlyReport(realQty.payload), false);
+// 單台報工的中午報工（0／0 也可以送）：ended_at＝按送出的時間、started_at＝上一筆 → 不相等
+const realZero = { process_id: "p3", report_type: "noon", completed_qty: 0, defect_qty: 0, started_at: iso("08:10"), ended_at: iso("12:30"), created_at: iso("12:30") };
+eq("真正的中午報工 0／0（started≠ended）→ 不是只改時間", c.isTimeOnlyReport(realZero), false);
+eq("0／0 但沒有 started_at → 算有報", c.isTimeOnlyReport({ ...realZero, started_at: null }), false);
+eq("沒帶數量欄位 → 算有報（不猜）", c.isTimeOnlyReport({ process_id: "p3", report_type: "noon", started_at: iso("12:30"), ended_at: iso("12:30") }), false);
+eq("dailyStart／finish 不受影響", [c.isTimeOnlyReport({ ...timeOnly.payload, report_type: "dailyStart" }), c.isTimeOnlyReport({ ...timeOnly.payload, report_type: "finish" })], [false, false]);
+const a03 = [{ key: "A03", hasOrder: true, processIds: ["p3"] }];
+const startRow = rep("p3", "dailyStart", "08:10");
+// 只改時間那一筆：ended_at＝started_at＝上一筆時間（今天 08:10），created_at＝實際按儲存的 12:30
+const timeOnlyRow = { ...timeOnly.payload, created_at: iso("12:30") };
+eq("A03 只填了機台加工時間 → 13:01 仍是今日未報工", c.summarize({ machines: a03, reports: [startRow, timeOnlyRow], nowMs: at("13:01") }).unreported.keys, ["A03"]);
+eq("A03 送了真正的 0／0 中午報工 → 不算未報工", c.summarize({ machines: a03, reports: [startRow, realZero], nowMs: at("13:01") }).unreported.count, 0);
+eq("A03 有數量的中午報工 → 不算未報工", c.summarize({ machines: a03, reports: [startRow, { ...realQty.payload, created_at: iso("12:30") }], nowMs: at("13:01") }).unreported.count, 0);
+eq("只改時間＋真正中午報工都有 → 算有報", c.summarize({ machines: a03, reports: [startRow, timeOnlyRow, realZero], nowMs: at("13:01") }).unreported.count, 0);
+eq("20:46 只改時間、沒收工 → 未報工原因含缺中午", c.summarize({ machines: a03, reports: [startRow, timeOnlyRow], nowMs: at("20:46") }).unreported.reasons.A03, ["noon", "finish"]);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

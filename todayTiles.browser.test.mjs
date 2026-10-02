@@ -76,15 +76,16 @@ const machines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04",
 const r = (n, type, hhmm, day = DAY) => ({ process_id: id(300 + n), report_type: type, ended_at: twIso(hhmm, day), created_at: twIso(hhmm, day), user_id: users[1].id, operator_ids: [users[1].id] });
 // A01：開工、中午、17:05 收工（全部有報）
 // A02：今天沒開工（昨天有）→ 今日未開工
-// A03：只有開工 → 13:00 後未報工（20:45 後也缺收工，仍只算 1 台）
-// A04、B03：開工＋中午、沒收工 → 17:15–20:45 可能加班、20:45 後未報工
+// A03：開工＋12:40 在卡片上「只填機台加工時間」（noon、0／0、started_at＝ended_at）→ 不算中午報工 → 13:00 後未報工（20:45 後也缺收工，仍只算 1 台）
+// A04、B03：開工＋中午、沒收工 → 17:15–20:45 可能加班、20:45 後未報工（B03 的中午報工是 0／0 的真正報工：started 08:20、ended 12:30 → 算有報）
 // B01：開工、中午、16:30 收工
 const todayRowsAll = [
   r(1, "dailyStart", "08:05"), r(1, "noon", "12:00"), r(1, "finish", "17:05"),
   r(2, "dailyStart", "08:00", "2026-10-01"),
   r(3, "dailyStart", "08:10"),
+  { ...r(3, "noon", "08:10"), started_at: twIso("08:10"), completed_qty: 0, defect_qty: 0, cycle_time_seconds: 100, created_at: twIso("12:40") },
   r(4, "dailyStart", "08:00"), r(4, "noon", "12:05"),
-  r(6, "dailyStart", "08:20"), r(6, "noon", "12:30"),
+  r(6, "dailyStart", "08:20"), { ...r(6, "noon", "12:30"), started_at: twIso("08:20"), completed_qty: 0, defect_qty: 0 },
   r(10, "dailyStart", "08:00"), r(10, "noon", "12:00"), r(10, "finish", "16:30"),
 ];
 // 全部都有報（0 台＝綠）：A02 今天開工＋中午、A03 補中午（A02、A03、A04、B03 都還沒收工 → 18:00 可能加班 4 台）
@@ -102,8 +103,9 @@ const testConfig = `window.MACHTILE_CONFIG = {
 
 // ---------- fake backend ----------
 // 只回傳「現在」（假時鐘）以前的報工；clockNow 由測試在每個情境設定，並在快轉時跟著改
-function makeBackend({ rows = todayRowsAll } = {}) {
-  const b = { todayReads: [], writes: [], clockNow: 0 };
+function makeBackend({ rows: initialRows = todayRowsAll } = {}) {
+  const rows = [...initialRows];
+  const b = { todayReads: [], writes: [], upserts: [], clockNow: 0, rows };
   b.handle = async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -125,6 +127,23 @@ function makeBackend({ rows = todayRowsAll } = {}) {
         return json(200, rows.filter((row) => Date.parse(row.created_at) <= b.clockNow && (!Number.isFinite(since) || Date.parse(row.created_at) >= since)));
       }
       return json(200, []);
+    }
+    if (p === "/rest/v1/rpc/batch_report_progress") {
+      // 卡片小框要「上一筆報工時間」當起算點
+      const body = JSON.parse(req.postData() || "{}");
+      return json(200, (body.p_process_ids || []).map((pid) => {
+        const mine = rows.filter((row) => row.process_id === pid && Date.parse(row.created_at) <= b.clockNow);
+        const last = mine.map((row) => row.ended_at).sort().pop() || null;
+        return { process_id: pid, legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, oldest_pending_at: null, last_report_at: last, actual_start_at: last, legacy_synced_at: null };
+      }));
+    }
+    if (p === "/rest/v1/rpc/field_report_upsert") {
+      // 假後端：收到的報工照實存成一列 production_reports（created_at＝假時鐘的現在），之後重讀就讀得到
+      const body = JSON.parse(req.postData() || "{}");
+      b.upserts.push(body);
+      const pl = body.p_payload || {};
+      rows.push({ process_id: pl.process_id, report_type: pl.report_type, started_at: pl.started_at ?? null, ended_at: pl.ended_at, completed_qty: pl.completed_qty, defect_qty: pl.defect_qty, cycle_time_seconds: pl.cycle_time_seconds, created_at: new Date(b.clockNow).toISOString(), user_id: pl.user_id, operator_ids: body.p_operators || [] });
+      return json(200, { report_id: id(7000 + b.upserts.length), inserted: true });
     }
     if (p.startsWith("/rest/v1/rpc/")) return json(200, []);
     if (p.startsWith("/rest/v1/")) return json(200, []);
@@ -154,7 +173,7 @@ async function newPage(browser, device, backend, { atMs, storage = {} } = {}) {
   });
   const page = await context.newPage();
   backend.clockNow = atMs;
-  await page.clock.install({ time: atMs });
+  await page.clock.install({ time: atMs - 2000 });   // 先裝在 2 秒前，再暫停在 atMs（直接裝在 atMs 偶爾會「不能快轉到過去」）
   await page.clock.pauseAt(atMs);
   page.on("dialog", (d) => d.accept());
   const errors = [];
@@ -220,6 +239,7 @@ console.log("== 08:29 → 08:31（手機，瀏覽器時區＝美西）==");
   ok(tz === "America/Los_Angeles", `瀏覽器時區是美西（${tz}）`);
   ok(be.todayReads.length === 1, `載入只讀一次今天的報工（卡片底部與三格共用，${be.todayReads.length} 次）`);
   ok(be.todayReads[0]?.includes(`created_at=gte.${twIso("00:00")}`), "查詢下限＝台灣今天 00:00", be.todayReads[0]);
+  ok(/select=[^&]*started_at[^&]*completed_qty[^&]*defect_qty/.test(be.todayReads[0] || ""), "查詢帶 started_at、completed_qty、defect_qty（認出只改時間的報工）", be.todayReads[0]);
   const ns = await tileInfo(page, "notStarted");
   ok(ns?.value === "—" && ns.tone === "na" && ns.color === GRAY, "08:29 今日未開工＝「—」（灰）", JSON.stringify(ns));
   ok((await tileInfo(page, "unreported")).value === "—" && (await tileInfo(page, "overtime")).value === "—", "08:29 未報工、可能加班也是「—」");
@@ -241,7 +261,7 @@ for (const [devName, device, tag] of [["手機（Pixel 7）", phone, "phone"], [
   const un = await tileInfo(page, "unreported");
   const ot = await tileInfo(page, "overtime");
   ok(ns.value === "1台" && ns.color === ORANGE, "今日未開工 1 台（橘）", JSON.stringify(ns));
-  ok(un.value === "1台" && un.tone === "unreported" && un.color === RED, "今日未報工 1 台（A03 沒有中午報工，紅）", JSON.stringify(un));
+  ok(un.value === "1台" && un.tone === "unreported" && un.color === RED, "今日未報工 1 台（A03 只填了機台加工時間＝不算中午報工；B03 0／0 真正中午報工算有報，紅）", JSON.stringify(un));
   ok(ot.value === "—" && ot.hint.includes("17:15"), "可能加班：這個時段「—」並說明 17:15–20:45 才計算", JSON.stringify(ot));
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok(overflow <= 1, `沒有橫向捲動（${overflow}px）`);
@@ -380,6 +400,36 @@ console.log("== 時段切換（假時鐘快轉）==");
   await tile(page, "unreported").click();
   await page.waitForTimeout(100);
   ok(JSON.stringify(await shownMachines(page)) === JSON.stringify(["A03", "A04", "B03"]), "20:46 點未報工 → A03、A04、B03", JSON.stringify(await shownMachines(page)));
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ================= 端到端：在卡片上只填機台加工時間 → 不會被當成已報工 =================
+console.log("== 卡片上只填機台加工時間（只改時間的 0／0 noon）→ 仍是今日未報工 ==");
+{
+  // A04 這次故意沒有中午報工（只有開工）
+  const be = makeBackend({ rows: todayRowsAll.filter((row) => !(row.process_id === id(304) && row.report_type === "noon")) });
+  const { context, page, errors } = await newPage(browser, phone, be, { atMs: tw("13:30") });
+  await waitLoaded(page);
+  ok((await tileInfo(page, "unreported")).value === "2台", "13:30 未報工 2 台（A03、A04）", JSON.stringify(await tileInfo(page, "unreported")));
+  const card = page.locator("#workOrderGrid .machine-tile-card").filter({ has: page.locator("h2", { hasText: "A04" }) }).first();
+  await card.locator("[data-card-ct-edit]").click();
+  const sheet = page.locator("#cardMachineTimeSheet");
+  for (let i = 0; i < 60 && !(await sheet.locator("[data-card-ct-save]:not([disabled])").count()); i++) { await page.clock.runFor(100); await page.waitForTimeout(50); }
+  await page.locator("#cardCtMinutes").fill("2");
+  await page.locator("#cardCtSeconds").fill("5");
+  await sheet.locator("[data-card-ct-save]").click();
+  for (let i = 0; i < 80 && await sheet.evaluate((e) => e.classList.contains("is-open")); i++) { await page.clock.runFor(100); await page.waitForTimeout(50); }
+  const sent = be.upserts[0]?.p_payload || {};
+  ok(be.upserts.length === 1 && sent.report_type === "noon" && sent.completed_qty === 0 && sent.defect_qty === 0 && sent.cycle_time_seconds === 125 && sent.started_at === sent.ended_at,
+    "卡片送出 1 筆只改時間的報工：noon、0／0、125 秒、started_at＝ended_at", JSON.stringify(sent));
+  await advance(page, be, 3);   // 跨過重讀間隔，讀回剛剛那一筆
+  ok(be.todayReads.length >= 2 && be.rows.length === todayRowsAll.length, `已重讀今天的報工（${be.todayReads.length} 次），剛剛那筆在資料裡`);
+  const un = await tileInfo(page, "unreported");
+  ok(un.value === "2台" && un.color === RED, "只填機台加工時間後 A04 仍算今日未報工（2 台）", JSON.stringify(un));
+  await tile(page, "unreported").click();
+  await page.waitForTimeout(100);
+  ok(JSON.stringify(await shownMachines(page)) === JSON.stringify(["A03", "A04"]), "篩選未報工 → A03、A04", JSON.stringify(await shownMachines(page)));
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

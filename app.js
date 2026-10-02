@@ -20166,9 +20166,10 @@ async function machtileLoadCardTodayAndLoadUnload(orders) {
 
 // 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已收工」與總覽「今日報工狀態」三格共用這一次查詢。
 // 下限＝台灣今天 00:00（created_at）；卡片底部只看 dailyStart／finish（todayStatusByProcess 會略過 noon）。
+// started_at／completed_qty／defect_qty：認出「只改機台加工時間」的 0／0 noon（不算中午報工，見 todayReportStatusCore）。
 function machtileCardTodayPath(core) {
   const since = core.todayStartIso();
-  return `production_reports?select=process_id,report_type,created_at,ended_at,user_id,operator_ids&report_type=in.(dailyStart,noon,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`;
+  return `production_reports?select=process_id,report_type,created_at,started_at,ended_at,completed_qty,defect_qty,user_id,operator_ids&report_type=in.(dailyStart,noon,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`;
 }
 
 function machtileApplyCardTodayRows(core, rows) {

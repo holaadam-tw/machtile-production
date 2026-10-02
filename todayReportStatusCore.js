@@ -10,6 +10,10 @@
 //   3. 未收工（可能加班）N 台（黃）：17:15～20:45（含 17:15、不含 20:45）已開工、還沒有 finish 的機台；
 //      已經算進「今日未報工」（缺中午報工）的那台不重複算在這格（一台只出現在一格）。其他時段顯示「—」。
 //   已經收工（finish）的機台不會因為沒有中午報工被算成未報工（提早收工＝今天結束了）。
+//   「只改機台加工時間」的報工不算中午報工（owner 2026-10-02）：卡片小框／批次報工只改時間時送的是 report_type=noon、
+//   0／0、started_at＝ended_at（batchReportCore.buildReportPayload 的 timeOnly：ended_at 設成 started_at，不推進起算點）。
+//   payload 沒有其他明確標記，所以用這三個條件一起認；真正的中午報工就算 0／0，ended_at＝按送出的時間、
+//   started_at＝上一筆報工時間，兩者不會相等 → 照樣算有報。缺 started_at 的列也算有報（不是只改時間的形狀）。
 //
 // 一台機台的報工＝這台卡片上所有工單（目前工單＋「這台還掛 N 張」）的工序 id 今天的報工合起來看。
 // 資料＝卡片底部「今日已開工／已收工」那一份查詢（production_reports 今天、report_type in dailyStart／noon／finish），不另外打 API。
@@ -67,12 +71,22 @@
     };
   }
 
-  // production_reports 列 → 工序 id → 今天（台灣日期）有哪些報工類型
+  // 只改機台加工時間的報工（不是真的中午報工）：noon、良品 0、不良 0、started_at 和 ended_at 是同一個時間點
+  function isTimeOnlyReport(r) {
+    if (!r || r.report_type !== "noon") return false;
+    if (Number(r.completed_qty) !== 0 || Number(r.defect_qty) !== 0) return false;
+    if (r.completed_qty === null || r.completed_qty === undefined || r.defect_qty === null || r.defect_qty === undefined) return false;
+    const s = Date.parse(r.started_at);
+    const e = Date.parse(r.ended_at);
+    return Number.isFinite(s) && Number.isFinite(e) && s === e;
+  }
+
+  // production_reports 列 → 工序 id → 今天（台灣日期）有哪些報工類型（只改時間的 noon 不算）
   function todayTypesByProcess(reports, nowMs) {
     const today = taipeiParts(nowMs)?.date;
     const map = new Map();
     (Array.isArray(reports) ? reports : []).forEach((r) => {
-      if (!r || !r.process_id || !REPORT_TYPES.includes(r.report_type)) return;
+      if (!r || !r.process_id || !REPORT_TYPES.includes(r.report_type) || isTimeOnlyReport(r)) return;
       const at = taipeiParts(r.ended_at || r.created_at);
       if (!at || at.date !== today) return;
       const key = String(r.process_id);
@@ -143,5 +157,5 @@
     return (next - p.minute) * 60000 - msIntoMinute;
   }
 
-  return { TZ_OFFSET_MINUTES, REPORT_TYPES, BOUNDARY, KINDS, LABEL, taipeiParts, phaseAt, todayTypesByProcess, summarize, msUntilNextBoundary };
+  return { TZ_OFFSET_MINUTES, REPORT_TYPES, BOUNDARY, KINDS, LABEL, taipeiParts, phaseAt, isTimeOnlyReport, todayTypesByProcess, summarize, msUntilNextBoundary };
 });
