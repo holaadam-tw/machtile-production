@@ -14241,34 +14241,56 @@ function renderWorkOrderModule() {
   if (!machtileCanManageWorkOrders()) {
     return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
   }
+  const filters = (window.MachTileWorkOrderListCore?.FILTERS || [{ key: "all", label: "全部" }]);
   return `
-    <form id="machtileWoForm" class="admin-module-form">
-      <label class="admin-field"><span>派工單號 *（貼上或從清單選；已同步的單會自動帶出其餘欄位）</span>
-        <input id="machtileWoNo" type="text" required list="machtileWoNoList" autocomplete="off" inputmode="latin" placeholder="例：XX01202607100012">
-        <datalist id="machtileWoNoList"></datalist></label>
-      <p id="machtileWoPrefillNote" class="admin-module-note" hidden></p>
-      <label class="admin-field"><span>品號</span>
-        <input id="machtileWoPartNo" type="text" list="machtileWoRecentPartNo" autocomplete="off" placeholder="例：DSHG-04-01">
-        <datalist id="machtileWoRecentPartNo"></datalist></label>
-      <label class="admin-field"><span>品名 *</span>
-        <input id="machtileWoPartName" type="text" list="machtileWoRecentPartName" autocomplete="off" required>
-        <datalist id="machtileWoRecentPartName"></datalist></label>
-      <label class="admin-field"><span>數量 *</span>
-        <input id="machtileWoQty" type="number" min="1" inputmode="numeric" list="machtileWoRecentQty" required>
-        <datalist id="machtileWoRecentQty"></datalist></label>
-      <label class="admin-field"><span>交期 *</span>
-        <input id="machtileWoDue" type="date" required></label>
-      <label class="admin-field"><span>指派機台</span>
-        <select id="machtileWoMachine"><option value="">暫不指派</option></select></label>
-      <label class="admin-field"><span>製程名稱</span>
-        <input id="machtileWoProcess" type="text" list="machtileWoRecentProcess" autocomplete="off" placeholder="CNC 加工">
-        <datalist id="machtileWoRecentProcess"></datalist></label>
-      <button class="admin-save-button" type="submit">建立／更新工單</button>
-      <p class="admin-module-note">同單號再次送出＝更新內容或改派機台；選「暫不指派」＝取消指派。</p>
-    </form>
-    <div id="machtileWoList"><p class="admin-module-note">載入工單中…</p></div>
+    <section class="wo-list-section" aria-label="工單清單">
+      <div class="wo-list-toolbar">
+        <label class="wo-search">
+          <span class="wo-sr-only">搜尋工單</span>
+          <input id="machtileWoSearch" type="search" autocomplete="off" placeholder="搜尋單號、品名、品號" value="${escapeHtml(machtileWoListState.query)}">
+        </label>
+        <div class="wo-filter-chips" role="group" aria-label="篩選工單">
+          ${filters.map((f) => `<button type="button" class="wo-filter-chip${machtileWoListState.filter === f.key ? " is-active" : ""}" data-wo-filter="${escapeHtml(f.key)}" aria-pressed="${machtileWoListState.filter === f.key ? "true" : "false"}">${escapeHtml(f.label)}<span class="wo-filter-count" data-wo-filter-count="${escapeHtml(f.key)}"></span></button>`).join("")}
+        </div>
+      </div>
+      <div id="machtileWoList"><p class="admin-module-note">載入工單中…</p></div>
+    </section>
+    <section class="wo-form-section" id="machtileWoFormSection" aria-label="手動建立或改派工單">
+      <h3 class="wo-form-title">手動建立／改派</h3>
+      <p class="wo-sync-warning" role="note">工單由舊 MES 派工自動同步；這裡手動建立或改派，下一輪同步可能被舊 MES 覆蓋。一般情況請在舊 MES 派工。</p>
+      <form id="machtileWoForm" class="admin-module-form">
+        <label class="admin-field"><span>派工單號 *（貼上或從清單選；已同步的單會自動帶出其餘欄位）</span>
+          <input id="machtileWoNo" type="text" required list="machtileWoNoList" autocomplete="off" inputmode="latin" placeholder="例：XX01202607100012">
+          <datalist id="machtileWoNoList"></datalist></label>
+        <p id="machtileWoPrefillNote" class="admin-module-note" hidden></p>
+        <label class="admin-field"><span>品號</span>
+          <input id="machtileWoPartNo" type="text" list="machtileWoRecentPartNo" autocomplete="off" placeholder="例：DSHG-04-01">
+          <datalist id="machtileWoRecentPartNo"></datalist></label>
+        <label class="admin-field"><span>品名 *</span>
+          <input id="machtileWoPartName" type="text" list="machtileWoRecentPartName" autocomplete="off" required>
+          <datalist id="machtileWoRecentPartName"></datalist></label>
+        <label class="admin-field"><span>數量 *</span>
+          <input id="machtileWoQty" type="number" min="1" inputmode="numeric" list="machtileWoRecentQty" required>
+          <datalist id="machtileWoRecentQty"></datalist></label>
+        <label class="admin-field"><span>交期 *</span>
+          <input id="machtileWoDue" type="date" required></label>
+        <label class="admin-field"><span>指派機台</span>
+          <select id="machtileWoMachine"><option value="">暫不指派</option></select></label>
+        <label class="admin-field"><span>製程名稱</span>
+          <input id="machtileWoProcess" type="text" list="machtileWoRecentProcess" autocomplete="off" placeholder="CNC 加工">
+          <datalist id="machtileWoRecentProcess"></datalist></label>
+        <button class="admin-save-button" type="submit">建立／更新工單</button>
+        <p class="admin-module-note">同單號再次送出＝更新內容或改派機台；選「暫不指派」＝取消指派。</p>
+      </form>
+    </section>
   `;
 }
+
+// 工單清單（owner 2026-10-02：加來源欄＋清單優化）。只讀：work_orders＋work_order_processes、建立者名字（app_users）、
+// 完成數（rpc/batch_report_progress，跟 Monitor 卡片同一套 cardProgress 口徑）。純邏輯在 workOrderListCore.js。
+const machtileWoListState = { rows: [], byNo: new Map(), query: "", filter: "all", loaded: false };
+const MACHTILE_WO_LIST_LIMIT = 500;
+const machtileWoListCore = () => (typeof window === "undefined" ? null : window.MachTileWorkOrderListCore);
 
 let machtileWoMachinesCache = null;
 
@@ -14337,27 +14359,218 @@ async function machtileWoPopulateNoDatalist() {
   }
 }
 
+// 來源欄位（source_system 等）是後來加的；萬一某個環境還沒有，退回只取舊欄位（來源就照 created_by 判斷）。
+const MACHTILE_WO_LIST_SELECT_FULL = "id,work_order_no,part_no,part_name,quantity,due_date,status,created_by,source_system,legacy_mes_source,legacy_work_order_no,work_order_processes(id,machine_id,process_order,qty_completed,off_station_at)";
+const MACHTILE_WO_LIST_SELECT_BASIC = "id,work_order_no,part_no,part_name,quantity,due_date,status,created_by,work_order_processes(id,machine_id,process_order,qty_completed,off_station_at)";
+
+async function machtileWoFetchListRows() {
+  const tail = `&order=due_date.asc.nullslast,work_order_no.asc&limit=${MACHTILE_WO_LIST_LIMIT}`;
+  try {
+    return await supabaseFetch(`work_orders?select=${MACHTILE_WO_LIST_SELECT_FULL}${tail}`);
+  } catch (error) {
+    console.warn("work order list: source columns unavailable, retrying basic select", error);
+    return supabaseFetch(`work_orders?select=${MACHTILE_WO_LIST_SELECT_BASIC}${tail}`);
+  }
+}
+
+// 建立者名字（created_by → app_users.name）。讀不到就只顯示「App 手動」，不擋清單。
+async function machtileWoFetchCreatorNames(ids) {
+  const list = [...new Set(ids.filter((v) => isUuid(String(v || ""))))];
+  if (!list.length) return new Map();
+  try {
+    const rows = await supabaseFetch(`app_users?select=id,name&id=in.(${list.join(",")})`);
+    return new Map((rows || []).map((r) => [r.id, r.name || ""]));
+  } catch (error) {
+    console.warn("work order creator lookup failed", error);
+    return new Map();
+  }
+}
+
+// 完成數：跟 Monitor 卡片同一套（batchReportCore.cardProgress：有舊 MES 結算＝舊 MES 已報＋待回寫，否則 App 累計）。
+// rpc/batch_report_progress 是唯讀查詢（卡片牆載入時也是同一支）。
+async function machtileWoFetchProgress(processIds) {
+  const byProcess = new Map();
+  const ids = [...new Set(processIds.map(String).filter(isUuid))];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += MACHTILE_CARD_PROGRESS_CHUNK) chunks.push(ids.slice(i, i + MACHTILE_CARD_PROGRESS_CHUNK));
+  await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const rows = await supabaseFetch("rpc/batch_report_progress", {
+        method: "POST",
+        body: JSON.stringify({ p_process_ids: chunk, p_pending_since: config.batchReportPendingSince || null }),
+      });
+      (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.process_id) byProcess.set(String(row.process_id), row); });
+    } catch (error) {
+      console.warn("batch_report_progress unavailable for work order list; using App-only completion", error);
+    }
+  }));
+  return byProcess;
+}
+
+function machtileWoSortedProcesses(order) {
+  return (order.work_order_processes || []).slice()
+    .sort((a, b) => Number(a.process_order || 0) - Number(b.process_order || 0));
+}
+
+// 一張單的代表工序：還在站上的（off_station_at 為 null）照 process_order 取第一道；都離站了就取第一道。
+function machtileWoRepresentativeProcess(order) {
+  const procs = machtileWoSortedProcesses(order);
+  return procs.find((p) => !p.off_station_at) || procs[0] || null;
+}
+
+function machtileWoBuildRow(order, { labelById, codeById, creatorById, progressByProcess, core, batchCore }) {
+  const procs = machtileWoSortedProcesses(order);
+  const onStation = procs.filter((p) => !p.off_station_at && p.machine_id);
+  const labels = [...new Set(onStation.map((p) => labelById.get(p.machine_id) || "?"))];
+  let machineText = labels.join("、");
+  let machineNote = "";
+  if (!machineText) {
+    const assigned = procs.find((p) => p.machine_id);
+    if (assigned) { machineText = labelById.get(assigned.machine_id) || "?"; machineNote = "已離站"; }
+    else machineText = "未指派";
+  }
+  const rep = machtileWoRepresentativeProcess(order);
+  const appDone = Number(rep?.qty_completed || 0);
+  let progress = { done: appDone, label: "", source: "app" };
+  if (batchCore && typeof batchCore.cardProgress === "function") {
+    try { progress = batchCore.cardProgress(appDone, rep ? progressByProcess.get(String(rep.id)) || null : null, Date.now()); }
+    catch (error) { console.warn("work order progress failed", error); }
+  }
+  const source = core.sourceOf(order);
+  return {
+    ...order,
+    source,
+    creatorName: source.createdBy ? (creatorById.get(source.createdBy) || "") : "",
+    machineText,
+    machineNote,
+    // 建單表單（work_order_upsert）改的是第一道工序的機台；改派確認拿這個比
+    firstMachineCode: procs[0] && procs[0].machine_id ? (codeById.get(procs[0].machine_id) || "") : "",
+    done: Number(progress.done || 0),
+    progressLabel: progress.label || "",
+    progressSource: progress.source || "app",
+  };
+}
+
 async function machtileRefreshWorkOrderList() {
   const holder = document.getElementById("machtileWoList");
   if (!holder) return;
+  const core = machtileWoListCore();
+  if (!core) {
+    holder.innerHTML = '<p class="admin-module-note">工單清單元件沒有載入，請重新整理頁面。</p>';
+    return;
+  }
   try {
-    const [orders, machines] = await Promise.all([
-      supabaseFetch("work_orders?select=work_order_no,part_no,part_name,quantity,due_date,work_order_processes(machine_id)&order=created_at.desc&limit=10"),
-      machtileWoMachines(),
+    const [orders, machines] = await Promise.all([machtileWoFetchListRows(), machtileWoMachines()]);
+    const list = Array.isArray(orders) ? orders : [];
+    const labelById = new Map(machines.map((m) => [m.id, machtileWoMachineLabel(m)]));
+    const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+    const repIds = list.map((o) => machtileWoRepresentativeProcess(o)?.id).filter(Boolean);
+    const [creatorById, progressByProcess] = await Promise.all([
+      machtileWoFetchCreatorNames(list.map((o) => core.sourceOf(o).createdBy).filter(Boolean)),
+      machtileWoFetchProgress(repIds),
     ]);
-    const codeById = new Map(machines.map((m) => [m.id, machtileWoMachineLabel(m)]));
-    const rows = (orders || []).map((o) => {
-      const machineId = o.work_order_processes?.[0]?.machine_id;
-      const machine = machineId ? (codeById.get(machineId) || "?") : "未指派";
-      return `<tr><td>${escapeHtml(o.work_order_no)}</td><td>${escapeHtml(o.part_no || "-")}</td><td>${escapeHtml(String(o.quantity))}</td><td>${escapeHtml(o.due_date || "-")}</td><td>${escapeHtml(machine)}</td></tr>`;
-    }).join("");
-    holder.innerHTML = `
-      <table class="admin-module-table" style="width:100%;font-size:13px;border-collapse:collapse;">
-        <thead><tr><th style="text-align:left;">單號</th><th style="text-align:left;">品號</th><th style="text-align:left;">數量</th><th style="text-align:left;">交期</th><th style="text-align:left;">機台</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="5">尚無工單</td></tr>`}</tbody>
-      </table>`;
+    const ctx = { labelById, codeById, creatorById, progressByProcess, core, batchCore: machtileBatchCore() };
+    machtileWoListState.rows = list.map((o) => machtileWoBuildRow(o, ctx));
+    machtileWoListState.byNo = new Map(machtileWoListState.rows.map((r) => [r.work_order_no, r]));
+    machtileWoListState.loaded = true;
+    machtileRenderWorkOrderRows();
   } catch (error) {
     holder.innerHTML = `<p class="admin-module-note">工單清單載入失敗：${escapeHtml(error.message || "")}</p>`;
+  }
+}
+
+function machtileWoSourceBadge(row) {
+  const isApp = row.source.kind === "app";
+  const by = isApp ? `<small class="wo-source-by">${escapeHtml(row.creatorName ? `建立者：${row.creatorName}` : "建立者不明")}</small>` : "";
+  return `<span class="wo-source-badge ${isApp ? "is-app" : "is-legacy"}" data-wo-source="${escapeHtml(row.source.kind)}">${escapeHtml(row.source.label)}</span>${by}`;
+}
+
+function machtileRenderWorkOrderRows() {
+  const holder = document.getElementById("machtileWoList");
+  const core = machtileWoListCore();
+  if (!holder || !core) return;
+  const today = core.localToday(new Date());
+  const all = machtileWoListState.rows;
+  const counts = core.counts(all, today);
+  document.querySelectorAll("[data-wo-filter-count]").forEach((el) => {
+    const n = counts[el.dataset.woFilterCount];
+    el.textContent = Number.isFinite(n) ? String(n) : "";
+  });
+  const shown = core.filterRows(all, { query: machtileWoListState.query, filter: machtileWoListState.filter, today });
+  const head = `
+    <li class="wo-row wo-row-head" aria-hidden="true">
+      <span>單號</span><span>品名</span><span>數量（已報／訂單）</span><span>交期</span><span>機台</span><span>來源</span>
+    </li>`;
+  const body = shown.map((row) => {
+    const due = core.dueState(row, today);
+    const dueNote = due === "closed" ? "已結案" : core.dueNote(row, today);
+    const pct = core.progressPercent(row.done, row.quantity);
+    const over = Number(row.quantity) > 0 && row.done > Number(row.quantity);
+    return `
+      <li class="wo-row" data-wo-row="${escapeHtml(row.work_order_no)}" data-wo-due-state="${escapeHtml(due)}">
+        <div class="wo-cell wo-no"><button type="button" class="wo-no-button" data-wo-edit="${escapeHtml(row.work_order_no)}" title="帶入下方表單">${escapeHtml(row.work_order_no)}</button></div>
+        <div class="wo-cell wo-part"><strong>${escapeHtml(row.part_name || "-")}</strong>${row.part_no ? `<small>${escapeHtml(row.part_no)}</small>` : ""}</div>
+        <div class="wo-cell wo-qty">
+          <span class="wo-qty-text"><b>${escapeHtml(String(row.done))}</b> / ${escapeHtml(String(row.quantity ?? "-"))}</span>
+          <span class="wo-progress${over ? " is-over" : ""}" role="progressbar" aria-label="完成進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></span>
+          ${row.progressLabel ? `<small class="wo-progress-source${row.progressSource === "legacy" ? "" : " is-missing"}">${escapeHtml(row.progressLabel)}</small>` : ""}
+        </div>
+        <div class="wo-cell wo-due is-${escapeHtml(due)}"><span>${escapeHtml(row.due_date || "-")}</span>${dueNote ? `<small>${escapeHtml(dueNote)}</small>` : ""}</div>
+        <div class="wo-cell wo-machine"><span>${escapeHtml(row.machineText)}</span>${row.machineNote ? `<small>${escapeHtml(row.machineNote)}</small>` : ""}</div>
+        <div class="wo-cell wo-source">${machtileWoSourceBadge(row)}</div>
+      </li>`;
+  }).join("");
+  const empty = !all.length ? "尚無工單" : "沒有符合的工單";
+  const limitNote = all.length >= MACHTILE_WO_LIST_LIMIT ? `<p class="admin-module-note">只顯示前 ${MACHTILE_WO_LIST_LIMIT} 張（依交期）。</p>` : "";
+  holder.innerHTML = `
+    <p class="wo-list-summary">共 ${shown.length} 張${shown.length !== all.length ? `（全部 ${all.length} 張）` : ""}・依交期排序，最急的在最上面・點單號帶入下方表單</p>
+    <ul class="wo-list">${head}${body || `<li class="wo-row wo-row-empty">${empty}</li>`}</ul>
+    ${limitNote}`;
+}
+
+function machtileWoBindListControls() {
+  const search = document.getElementById("machtileWoSearch");
+  if (search) {
+    search.addEventListener("input", () => {
+      machtileWoListState.query = search.value;
+      machtileRenderWorkOrderRows();
+    });
+  }
+  document.querySelectorAll("[data-wo-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      machtileWoListState.filter = button.dataset.woFilter;
+      document.querySelectorAll("[data-wo-filter]").forEach((b) => {
+        const on = b.dataset.woFilter === machtileWoListState.filter;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      machtileRenderWorkOrderRows();
+    });
+  });
+}
+
+// 送出前查「這張單現在是什麼來源、第一道工序掛哪台」：先用清單快取，沒有（例：超過清單上限）再唯讀查一次。
+// 查不到＝新單（不跳確認）。查詢失敗時當作舊 MES 單、機台未知 → 會跳確認（寧可多問一次）。
+async function machtileWoExistingForConfirm(workOrderNo) {
+  const core = machtileWoListCore();
+  if (!core || !workOrderNo) return null;
+  const cached = machtileWoListState.byNo.get(workOrderNo);
+  if (cached) return { source: cached.source, machine_code: cached.firstMachineCode || "" };
+  try {
+    const no = encodeURIComponent(workOrderNo);
+    let rows;
+    try {
+      rows = await supabaseFetch(`work_orders?select=created_by,source_system,legacy_mes_source,legacy_work_order_no&work_order_no=eq.${no}&limit=1`);
+    } catch (error) {
+      rows = await supabaseFetch(`work_orders?select=created_by&work_order_no=eq.${no}&limit=1`);
+    }
+    const row = (rows || [])[0];
+    if (!row) return null;
+    const record = await machtileWoFetchByNo(workOrderNo);
+    return { source: core.sourceOf(row), machine_code: record?.machine_code || "" };
+  } catch (error) {
+    console.warn("work order source lookup failed; asking for confirmation anyway", error);
+    return { source: core.sourceOf({}), machine_code: "（讀取失敗）" };
   }
 }
 
@@ -14378,6 +14591,7 @@ async function machtileInitWorkOrderModule() {
     select.innerHTML = `<option value="">暫不指派</option>` +
       machines.map((m) => `<option value="${escapeHtml(m.machine_code)}">${escapeHtml(machtileWoMachineLabel(m))}</option>`).join("");
   }
+  machtileWoBindListControls();
   machtileRefreshWorkOrderList();
 
   // --- ISSUE-007：貼單號 → 其餘欄位自動帶出 ---
@@ -14470,6 +14684,26 @@ async function machtileInitWorkOrderModule() {
   }
   machtileWoPopulateNoDatalist();
 
+  // 清單點單號 → 帶入下方表單（走同一套「貼單號自動帶出」），捲到表單。只帶入、不送出。
+  const listHolder = document.getElementById("machtileWoList");
+  if (listHolder && noInput) {
+    listHolder.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-wo-edit]");
+      if (!button) return;
+      // 換一張單＝整張重帶：清掉上一張的手動修改記號和欄位值，否則「手動改過的欄位不覆蓋」會把上一張的機台留下來。
+      for (const [field, fieldId] of Object.entries(prefillFieldIds)) {
+        delete prefillEdited[field];
+        const el = document.getElementById(fieldId);
+        if (el) el.value = "";
+      }
+      noInput.value = button.dataset.woEdit;
+      clearTimeout(prefillTimer);
+      lookupAndPrefill();
+      document.getElementById("machtileWoFormSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      noInput.focus({ preventScroll: true });
+    });
+  }
+
   // --- ISSUE-007 第 2 條：數字／文字欄位記「最近使用值」，點選帶入 ---
   // 存在瀏覽器 localStorage（每台平板各自的），只是方便，不是資料來源；
   // 讀寫失敗（隱私模式／配額）一律靜默——絕不能因為記不住上次的值而擋住建單。
@@ -14549,6 +14783,21 @@ async function machtileInitWorkOrderModule() {
         machine_code: document.getElementById("machtileWoMachine").value || null,
         process_name: document.getElementById("machtileWoProcess").value.trim() || null,
       };
+      // 舊 MES 派工來的單要改派機台 → 先講清楚會被同步蓋回去；按取消就不送。
+      const existing = await machtileWoExistingForConfirm(payload.work_order_no);
+      if (machtileWoListCore()?.needsReassignConfirm(existing, payload.machine_code || "")) {
+        const from = existing.machine_code || "未指派";
+        const to = payload.machine_code || "暫不指派";
+        const okToSend = window.confirm(
+          `${payload.work_order_no} 是「舊 MES 派工」自動同步的工單。\n\n`
+          + `這裡把機台從 ${from} 改成 ${to}，下一輪派工同步（約每 5 分鐘）可能被舊 MES 覆蓋回去。\n`
+          + `要長久改派，請在舊 MES 派工。\n\n確定仍要在這裡改派嗎？`
+        );
+        if (!okToSend) {
+          showToast("已取消改派，工單沒有變更");
+          return;
+        }
+      }
       const result = await supabaseFetch("rpc/work_order_upsert", {
         method: "POST",
         body: JSON.stringify({ p_payload: payload }),
