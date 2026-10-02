@@ -139,7 +139,7 @@
 
   // 這張單（產品＋工序、機台類型）用的上下料時間。
   //   source: "actual"（實績 ≥ 3 筆，取中位數）／"default"（預設）
-  //   actualPerPieceSec：實際每件時間的中位數（有任何樣本就給，卡片顯示「實際約 N 個／天」）
+  //   actualPerPieceSec：實際每件時間的中位數（實績 ≥ 3 筆才給，卡片才顯示「實際約 N 個／天」；owner 2026-10-02）
   function resolveLoadUnload({ kind = "unknown", stats = null } = {}) {
     const k = DEFAULT_LOAD_UNLOAD_SECONDS[kind] !== undefined ? kind : "unknown";
     const def = defaultLoadUnloadSeconds(k);
@@ -149,7 +149,7 @@
     const base = {
       kind: k,
       defaultSeconds: def,
-      actualPerPieceSec: perMedian === null ? null : Math.round(perMedian),
+      actualPerPieceSec: perMedian === null || perSamples.length < MIN_SAMPLES ? null : Math.round(perMedian),
       actualSamples: perSamples.length,
     };
     if (luSamples.length >= MIN_SAMPLES) {

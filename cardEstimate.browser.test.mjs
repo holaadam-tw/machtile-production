@@ -99,7 +99,7 @@ const machineTimeRows = [
 //   上下料樣本：65、105（A01）、110、2850（舊單，後者跨午休）→ 中位數 107.5 → 108 秒（1分48秒），實績 4 次
 //   實際每件時間：160、200、260、3000 → 中位數 230 秒 → 實際約 25800/230 = 112 個／天
 //   每日估算：25800 /（95＋108）＝ 127 件
-// A04：同產品只有 2 筆 → 用車床預設 60 秒；每日估算 25800/(100+60) = 161；實際每件 180、200 → 190 → 135 個／天
+// A04：同產品只有 2 筆 → 用車床預設 60 秒；每日估算 25800/(100+60) = 161；實際每件只有 2 筆 → 不顯示實際約
 const calibrationRows = [
   { process_id: id(301), cycle_time_seconds: 95, created_at: "2026-09-20T00:00:00Z", completed_qty: 0, defect_qty: 0, started_at: t0, ended_at: t0, work_order_processes: wop("車削"), work_orders: prodA01 },
   { process_id: id(301), created_at: "2026-09-20T01:00:00Z", completed_qty: 10, defect_qty: 0, started_at: t0, ended_at: after(1600), work_order_processes: wop("車削"), work_orders: prodA01 },
@@ -242,7 +242,7 @@ console.log("== 手機（Pixel 7）==");
   ok((await grid("A01")).includes("上下料 1分48秒（實績 4 次）"), "A01：上下料標明實績、次數（中位數，跨單累積，排除 < 0 與 > 1 小時）", await grid("A01"));
   ok((await grid("A01")).includes("實際約 112 個／天"), "A01：實際約 112 個／天（實際每件中位數 230 秒）", await grid("A01"));
   ok((await grid("A04")).match(/每日估算\s*\n?\s*161 件/) && (await grid("A04")).includes("上下料 1分（預設）"), "A04：同產品只有 2 筆 → 車床預設 60 秒，161 件", await grid("A04"));
-  ok((await grid("A04")).includes("實際約 135 個／天"), "A04：有實績樣本 → 仍顯示實際約 N 個／天", await grid("A04"));
+  ok(!(await grid("A04")).includes("實際約"), "A04：實績只有 2 筆（< 3）→ 不顯示實際約 N 個／天（owner 2026-10-02）", await grid("A04"));
   ok((await grid("B03")).match(/每日估算\s*\n?\s*33 件/) && (await grid("B03")).includes("上下料 3分（預設）"), "B03 銑床：25800 ÷（600＋180）＝ 33 件", await grid("B03"));
   ok(!(await grid("B03")).includes("實際約"), "B03 沒有實績樣本 → 不顯示實際約");
   ok((await grid("B01")).match(/每日估算\s*\n?\s*53 件/) && (await grid("B01")).includes("上下料 3分（預設）"), "B01 臥式：暫用銑床 180 秒（25800 ÷ 480 ＝ 53）", await grid("B01"));

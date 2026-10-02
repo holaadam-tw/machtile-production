@@ -89,7 +89,7 @@ console.log("== buildLoadUnloadStats ==");
   eq("標籤：實績", c.loadUnloadLabel(r), "上下料 1分25秒（實績 4 次）");
   const few = c.resolveLoadUnload({ kind: "lathe", stats: { loadUnloadSamples: [80, 90], perPieceSamples: [180, 190] } });
   eq("只有 2 筆 → 用預設 車床 60", [few.source, few.seconds, few.samples], ["default", 60, 2]);
-  eq("樣本不足時，實際每件時間仍給（卡片可顯示實際約 N 個／天）", few.actualPerPieceSec, 185);
+  eq("樣本不足（< 3 筆）時不給實際每件時間（卡片不顯示實際約 N 個／天，owner 2026-10-02）", few.actualPerPieceSec, null);
   eq("標籤：預設", c.loadUnloadLabel(few), "上下料 1分（預設）");
   const none = c.resolveLoadUnload({ kind: "mill", stats: null });
   eq("沒有樣本 → 銑床預設 180", [none.source, none.seconds, none.actualPerPieceSec, none.actualSamples], ["default", 180, null, 0]);
