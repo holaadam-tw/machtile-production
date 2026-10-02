@@ -266,14 +266,15 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
   const writesBefore = be.writes.length;
   await cardOf(page, "B04").locator('[data-card-pick-key="' + id(341) + '"]').click();
   ok((await shownOn(page, "B04")).startsWith("XX01202604140005 · A37九孔座"), "切到 A37 → 卡片顯示 A37九孔座", await shownOn(page, "B04"));
-  ok((await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText()).includes("這台還掛 2 張・手動切換中"), "標示手動切換中");
+  ok((await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText()).replace(/\s+/g, "") === "這台還掛2張手動切換中", "標示手動切換中（同一行）", await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText());
   ok((await cardOf(page, "B04").locator(".machine-metrics").innerText()).includes("55/165"), "進度跟著換成 55／165");
   ok(be.writes.length === writesBefore, "切換沒有任何寫入請求", be.writes.slice(writesBefore).join(" | "));
   await cardOf(page, "B04").locator(".machine-report-button").click();
   await page.locator("#reportSheet.is-open").waitFor();
   ok((await page.locator("#reportWorkNo").innerText()).trim() === "XX01202604140005", "切換後「回報」→ 報到畫面上顯示的 A37（看到哪張報哪張）");
   await page.evaluate(() => closeReport());
-  await cardOf(page, "B04").locator("[data-card-orders-summary]").click();
+  // 2026-10-02 起展開／收起會記住：切換後重畫仍維持展開，不用再點一次
+  ok(await cardOf(page, "B04").locator("[data-card-orders]").evaluate((el) => el.open), "切換後清單仍展開");
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "02-phone-b04-switched.png") });
   await cardOf(page, "B04").locator(".card-order-auto").click();
   ok((await shownOn(page, "B04")).startsWith("XX01202609170004"), "恢復自動 → 回到 CPDF-16本體");
