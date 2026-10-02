@@ -9881,6 +9881,8 @@ async function loadFromSupabase() {
     machtileLoadCapacityCalendar(),
     machtileLoadAttentionCenter(),
     machtileLoadHmcRuntime(),
+    // 卡片「目前工單」＝這台最近有活動的那張（只讀；讀不到退回原本規則）
+    machtileLoadCardActivity(),
   ]);
 }
 
@@ -9914,6 +9916,8 @@ async function machtileLoadCardLegacyProgress() {
       console.warn("batch_report_progress unavailable for monitor cards; keeping App-only completion", error);
     }
   }));
+  // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
+  machtileCardPickState.progressByProcess = byProcess;
   const nowMs = Date.now();
   orders.forEach((order) => {
     try {
@@ -10161,12 +10165,14 @@ function deriveMachines() {
     ordersByMachine.get(name).push(order);
   });
 
-  // 單一來源：排程有效清單的第一張，同時驅動監控卡的「目前工單」。
-  // 有 queue_order 時依佇列；未建立佇列時才以製程狀態、交期作穩定 fallback。
+  // 監控卡的「目前工單」（owner 2026-10-02）：這台機台上「最近有活動」的那一道在站工序（見 cardActiveOrderCore.js）。
+  // 沒有任何活動時間（Dev 示範資料、讀取失敗）才退回原本的規則：排程佇列 → 製程狀態 → 交期 → 單號。
+  // 單台報工（QR 只帶機台）、批次報工的預設工單也用這裡挑出來的同一張。排程板的順序不受影響。
   ordersByMachine.forEach((orders, name) => {
     const machine = machines.get(name);
     if (!machine) return;
-    const order = [...orders].sort(machtileCompareScheduleOrders)[0];
+    const pick = machtileCardPickForMachine(name, orders);
+    const order = pick.order;
     machines.set(name, {
       ...machine,
       type: machine.type || machineTypeLabel(order.process),
@@ -10180,12 +10186,186 @@ function deriveMachines() {
       done: order.done,
       total: order.total,
       lastReport: order.lastReport,
+      cardOrders: pick.ranked,
+      cardPickBasis: pick.basis,
+      cardPickLatest: pick.latest,
+      cardOtherCount: pick.others,
     });
   });
 
   state.machines = Array.from(machines.values())
     .map((machine) => ({ ...machine, status: machineStatus(machine), department: normalizedMachineDepartment(machine) }))
     .sort((a, b) => (a.displayOrder || 999) - (b.displayOrder || 999) || a.name.localeCompare(b.name, "zh-Hant"));
+}
+
+// ---- 機台卡片「目前工單」挑選（owner 2026-10-02）----
+// 一台機台同時掛好幾張在站單時，卡片顯示最近有活動的那張；可以手動切換（只改畫面，不寫資料庫）。
+const machtileCardActiveCore = window.MachTileCardActiveOrderCore;
+const machtileCardPickState = {
+  // orderKey（工序 id，沒有就單號）→ { lastReportAt, legacyUpdatedAt, actualStartAt, updatedAt }
+  activityByKey: new Map(),
+  // 卡片完成數那次 batch_report_progress 的結果（machtileLoadCardLegacyProgress 填、這裡用完就清）
+  progressByProcess: null,
+  // 機台名稱 → 手動切換顯示的 orderKey（只在這個畫面、這次開啟有效）
+  overrideByMachine: new Map(),
+  status: "idle",
+};
+const MACHTILE_CARD_ACTIVITY_CHUNK = 80;
+
+function machtileCardActivityOf(order) {
+  if (!order) return null;
+  const key = machtileCardActiveCore ? machtileCardActiveCore.orderKey(order) : String(order.processId || order.id || "");
+  return machtileCardPickState.activityByKey.get(key) || null;
+}
+
+function machtileCardPickForMachine(name, orders) {
+  const list = Array.isArray(orders) ? orders : [];
+  if (!machtileCardActiveCore) {
+    const ranked = [...list].sort(machtileCompareScheduleOrders).map((order) => ({ order, latest: null }));
+    return { order: ranked[0]?.order || null, latest: null, basis: ranked.length ? "fallback" : "none", ranked, others: Math.max(0, ranked.length - 1), autoKey: "" };
+  }
+  return machtileCardActiveCore.pickActiveOrder(list, {
+    activityOf: machtileCardActivityOf,
+    fallbackCompare: machtileCompareScheduleOrders,
+    overrideKey: machtileCardPickState.overrideByMachine.get(name) || "",
+  });
+}
+
+// 卡片目前顯示的那張（state.machines 已算好）；機台不在畫面上 → null
+function machtileCardOrderForMachine(machineName) {
+  const key = String(machineName || "").trim();
+  if (!key) return null;
+  const upper = key.toUpperCase();
+  const machine = (state.machines || []).find((m) => m.name === key || String(m.code || "").toUpperCase() === upper || String(m.name || "").toUpperCase() === upper);
+  return machine && machine.order && machine.order.offStation !== true ? machine.order : null;
+}
+
+// 載入每道在站工序的活動時間（只讀）：
+//   App 報工最後時間＝rpc/batch_report_progress.last_report_at（同時帶 actual_start_at）
+//   舊 MES＝legacy_station_progress.legacy_updated_at（同單同機台；有同步序用同步序那列）
+//   工序＝work_order_processes.actual_start_at／updated_at
+// 任何一支讀不到 → 那一項當作沒有；全部讀不到 → 卡片退回原本的規則，不讓整頁壞掉。
+async function machtileLoadCardActivity() {
+  machtileCardPickState.activityByKey = new Map();
+  if (state.source !== "supabase" || !machtileCardActiveCore) { machtileCardPickState.status = "idle"; return; }
+  // 逐工序卡片（#45）合併後會有 machtileStationOrders()；沒有就用一單一筆的 workOrders
+  const pool = (typeof machtileStationOrders === "function" ? machtileStationOrders() : state.workOrders) || [];
+  const orders = pool.filter((order) => order && order.offStation !== true && isUuid(String(order.processId || "")) && isReportableMachineName(order.machine));
+  if (!orders.length) { machtileCardPickState.status = "ready"; return; }
+  machtileCardPickState.status = "loading";
+  const ids = [...new Set(orders.map((order) => String(order.processId)))];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += MACHTILE_CARD_ACTIVITY_CHUNK) chunks.push(ids.slice(i, i + MACHTILE_CARD_ACTIVITY_CHUNK));
+  const procById = new Map();
+  const progressById = new Map();
+  const cached = machtileCardPickState.progressByProcess instanceof Map ? machtileCardPickState.progressByProcess : null;
+  machtileCardPickState.progressByProcess = null;
+  let legacyRows = [];
+  const woNos = [...new Set(orders.map((order) => String(order.id || "")).filter(Boolean))];
+  const woChunks = [];
+  for (let i = 0; i < woNos.length; i += MACHTILE_CARD_ACTIVITY_CHUNK) woChunks.push(woNos.slice(i, i + MACHTILE_CARD_ACTIVITY_CHUNK));
+  await Promise.all([
+    ...chunks.map(async (chunk) => {
+      try {
+        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,actual_start_at,updated_at&id=in.(${chunk.join(",")})`);
+        (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.id) procById.set(String(row.id), row); });
+      } catch (error) {
+        console.warn("card activity: work_order_processes unavailable", error);
+      }
+    }),
+    ...chunks.map(async (chunk) => {
+      // 卡片完成數剛查過的就直接用；只有沒查到的工序才再問一次
+      const missing = chunk.filter((pid) => !(cached && cached.has(pid)));
+      if (cached) chunk.forEach((pid) => { if (cached.has(pid)) progressById.set(pid, cached.get(pid)); });
+      if (!missing.length || cached) return;
+      try {
+        const rows = await supabaseFetch("rpc/batch_report_progress", {
+          method: "POST",
+          body: JSON.stringify({ p_process_ids: missing, p_pending_since: config.batchReportPendingSince || null }),
+        });
+        (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.process_id) progressById.set(String(row.process_id), row); });
+      } catch (error) {
+        console.warn("card activity: batch_report_progress unavailable", error);
+      }
+    }),
+    ...woChunks.map(async (chunk) => {
+      try {
+        const list = chunk.map((no) => `"${encodeURIComponent(no.replace(/"/g, ""))}"`).join(",");
+        const rows = await supabaseFetch(`legacy_station_progress?select=work_order_no,machine_code,process_order,legacy_updated_at&work_order_no=in.(${list})`);
+        legacyRows = legacyRows.concat(Array.isArray(rows) ? rows : []);
+      } catch (error) {
+        console.warn("card activity: legacy_station_progress unavailable", error);
+      }
+    }),
+  ]);
+  const core = machtileBatchCore();
+  const codeOf = (order) => (core && typeof core.machineCodeOf === "function" ? core.machineCodeOf(order) : String(order.machine || "").toUpperCase());
+  const next = new Map();
+  orders.forEach((order) => {
+    const pid = String(order.processId);
+    const proc = procById.get(pid) || null;
+    const progress = progressById.get(pid) || null;
+    const step = Number(proc?.process_order || order.stationStep || progress?.process_order || 0) || null;
+    next.set(machtileCardActiveCore.orderKey(order), {
+      lastReportAt: progress?.last_report_at || null,
+      legacyUpdatedAt: machtileCardActiveCore.legacyUpdatedAtFor(legacyRows, { workOrderNo: order.id, machineCode: codeOf(order), step })
+        || progress?.legacy_updated_at || null,
+      actualStartAt: proc?.actual_start_at || progress?.actual_start_at || null,
+      updatedAt: proc?.updated_at || null,
+    });
+  });
+  machtileCardPickState.activityByKey = next;
+  machtileCardPickState.status = "ready";
+}
+
+// 手動切換卡片顯示哪一張（只改畫面）。key 空白＝恢復自動（依最近活動）。
+function machtileSetCardPick(machineName, key) {
+  const name = String(machineName || "");
+  if (!name) return;
+  if (key) machtileCardPickState.overrideByMachine.set(name, String(key));
+  else machtileCardPickState.overrideByMachine.delete(name);
+  try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("card pick re-render failed", error); }
+  if (machtileBatchState.group) {
+    try { machtileRenderBatchReport(); } catch (error) { /* 批次畫面沒開也沒關係 */ }
+  }
+}
+
+// 卡片上「這台還掛 N 張」＋這台全部在站的單（單號、品名、進度、最後活動時間），可以切換卡片顯示哪一張。
+function machtileCardOrdersMarkup(machine) {
+  const ranked = Array.isArray(machine?.cardOrders) ? machine.cardOrders : [];
+  const others = Number(machine?.cardOtherCount || 0);
+  if (!machine?.order || others <= 0 || ranked.length < 2) return "";
+  const core = machtileCardActiveCore;
+  const keyOf = (order) => (core ? core.orderKey(order) : String(order.processId || order.id || ""));
+  const shownKey = keyOf(machine.order);
+  const machineKey = machine.name;
+  const manual = machine.cardPickBasis === "manual";
+  const label = core ? core.moreOrdersLabel(others) : `這台還掛 ${others} 張`;
+  const items = ranked.map(({ order, latest }) => {
+    const key = keyOf(order);
+    const isShown = key === shownKey;
+    const when = latest ? `${formatDateTime(latest.at)}（${latest.label}）` : "沒有活動紀錄";
+    return `
+      <li class="card-order-item${isShown ? " is-shown" : ""}" data-card-order-key="${escapeHtml(key)}">
+        <div class="card-order-main">
+          <strong>${escapeHtml(order.id)}</strong>
+          <span>${escapeHtml(order.part)}</span>
+        </div>
+        <div class="card-order-meta">
+          <span data-card-order-progress>進度 ${escapeHtml(String(order.done ?? 0))}/${escapeHtml(String(order.total ?? 0))}</span>
+          <span data-card-order-activity>最後活動 ${escapeHtml(when)}</span>
+        </div>
+        ${isShown
+          ? `<span class="card-order-shown">顯示中</span>`
+          : `<button type="button" class="card-order-pick" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="${escapeHtml(key)}">改顯示這張</button>`}
+      </li>`;
+  }).join("");
+  return `
+    <details class="machine-card-orders" data-no-detail data-card-orders="${escapeHtml(machineKey)}">
+      <summary data-card-orders-summary>${escapeHtml(label)}${manual ? "・手動切換中" : ""}</summary>
+      <ol class="card-order-list">${items}</ol>
+      <p class="card-order-note">依最近活動（App 報工、舊 MES 報工、開工）自動挑選；切換只改這個畫面，不會寫資料庫。${manual ? ` <button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
+    </details>`;
 }
 
 // 排程板（2026-07-14，SB1 頂層分頁/SB2 拖拉+按鈕/SB3 佇列第一張=機台卡目前工單）。
@@ -12199,6 +12379,7 @@ function renderMachineCard(machine) {
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
         `}
       </div>
+      ${machtileCardOrdersMarkup(machine)}
 
       ${machtileMonitorHmcRuntime(machine)}
       ${machtileHmcFixedEntries(machine)}
@@ -17276,6 +17457,8 @@ function setSelectedOrder(order) {
 function openReport(orderId, options = {}) {
   resetReportFileInputs();
   const machineName = options.machine || "";
+  // 只帶機台（機台 QR）→ 預設＝卡片目前顯示的那張（這台最近有活動的單），不再是清單裡交期最早的那張
+  if (!orderId && machineName) orderId = machtileCardOrderForMachine(machineName)?.id || "";
   activeReportReturnDetailOrderId = options.returnDetailOrderId || "";
   if (machineName && !isReportableMachineName(machineName)) {
     showToast("未排機不產生報工入口，請先指派實際機台");
@@ -18239,7 +18422,14 @@ function machtileBatchCandidates(code) {
 function machtileBatchSelectedOrder(code) {
   const candidates = machtileBatchCandidates(code);
   const row = machtileBatchRow(code);
-  return candidates.find((o) => o.processId === row.processId) || candidates[0] || null;
+  if (row.processId) {
+    const chosen = candidates.find((o) => o.processId === row.processId);
+    if (chosen) return chosen;
+  }
+  // 預設＝卡片目前顯示的那張（這台最近有活動的單）；不在候選清單裡才用候選第一張（原本的規則）
+  const cardOrder = machtileCardOrderForMachine(code);
+  if (machtileCardActiveCore) return machtileCardActiveCore.defaultCandidate(candidates, cardOrder);
+  return candidates[0] || null;
 }
 
 async function machtileLoadBatchReport(groupKey) {
@@ -18687,6 +18877,12 @@ function machtileHandleBatchInput(event) {
     || t.dataset.batchSelect || t.dataset.batchCtMin || t.dataset.batchCtSec;
   if (!code) return false;
   const row = machtileBatchRow(code);
+  // 開始填這一列時，把畫面上顯示的那張單固定下來：之後卡片的「目前工單」就算因為新的活動或切換而改變，
+  // 這一列也不會偷偷換到別張單（送出的永遠是填數字時看到的那張）。
+  if (!row.processId && !t.dataset.batchOrder) {
+    const shown = machtileBatchSelectedOrder(code);
+    if (shown && shown.processId) row.processId = shown.processId;
+  }
   if (t.dataset.batchGood) row.good = t.value;
   if (t.dataset.batchBad) row.bad = t.value;
   if (t.dataset.batchOperator) row.operatorId = t.value;
@@ -19166,6 +19362,13 @@ function bindEvents() {
     if (scheduleOpenButton) {
       machtileScheduleExpanded = scheduleOpenButton.dataset.scheduleOpen || "";
       switchView("schedule");
+      return;
+    }
+
+    // 卡片「這台還掛 N 張」：切換卡片顯示哪一張（只改畫面，不寫資料庫）
+    const cardPickButton = event.target.closest("[data-card-pick]");
+    if (cardPickButton) {
+      machtileSetCardPick(cardPickButton.dataset.cardPick, cardPickButton.dataset.cardPickKey || "");
       return;
     }
 
