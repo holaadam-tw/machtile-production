@@ -12294,12 +12294,13 @@ function renderStats() {
     ["維修／停用", actualMachines.filter((machine) => matchesStatusFilter(machine, "維修／停用")).length, "risk-red", "維修／停用"],
   ];
 
+  const todayFilterOn = Boolean(machtileTodayActiveFilterKeys());
   $("#statsGrid").innerHTML = stats.map(([label, value, riskClass, filter]) => `
-    <button class="stat-card stat-button ${riskClass} ${activeStatusFilter === filter ? "active" : ""}" data-stat-filter="${escapeHtml(filter)}" type="button">
+    <button class="stat-card stat-button ${riskClass} ${!todayFilterOn && activeStatusFilter === filter ? "active" : ""}" data-stat-filter="${escapeHtml(filter)}" type="button">
       <span class="stat-label">${escapeHtml(label)}</span>
       <strong class="stat-value">${value}</strong>
     </button>
-  `).join("");
+  `).join("") + machtileTodayTilesMarkup();
 }
 
 function renderFilters() {
@@ -12360,11 +12361,15 @@ function machinesForStatusFilter(filter) {
 }
 
 function visibleMachines() {
+  // 總覽「今日未開工／未報工／可能加班」格子的篩選（owner 2026-10-02）：只顯示那幾台，不分課別／狀態
+  const today = machtileTodayActiveFilterKeys();
+  if (today) return managedMachineList().filter((machine) => today.has(machine.name));
   return machinesForStatusFilter(activeStatusFilter);
 }
 
 function renderWorkOrders() {
   const machines = visibleMachines();
+  machtileRenderTodayFilterBar();
   const holder = $("#workOrderGrid");
   holder.innerHTML = machines.length
     ? machines.map(renderMachineCard).join("")
@@ -19296,8 +19301,21 @@ function bindEvents() {
       return;
     }
 
+    const todayTile = event.target.closest("[data-today-tile]");
+    if (todayTile) {
+      machtileToggleTodayFilter(todayTile.dataset.todayTile);
+      return;
+    }
+
+    if (event.target.closest("[data-today-filter-clear]")) {
+      machtileSetTodayFilter(null);
+      showToast("已顯示全部機台");
+      return;
+    }
+
     const statusButton = event.target.closest("[data-status]");
     if (statusButton) {
+      machtileSetTodayFilter(null, { render: false });
       activeStatusFilter = statusButton.dataset.status;
       renderFilters();
       renderStats();
@@ -19307,6 +19325,7 @@ function bindEvents() {
 
     const statButton = event.target.closest("[data-stat-filter]");
     if (statButton) {
+      machtileSetTodayFilter(null, { render: false });
       activeStatusFilter = statButton.dataset.statFilter;
       renderStats();
       renderFilters();
@@ -20087,7 +20106,9 @@ const machtileCardState = {
   statsByKey: new Map(),   // 產品＋工序 → 上下料／實際每件時間樣本
   statsStatus: "idle",     // idle | ok | error（error＝全部用預設值）
   today: new Map(),        // processId → 今天最新一筆 dailyStart／finish
-  todayStatus: "idle",     // idle | ok | error（不是 ok＝卡片底部照原本顯示）
+  todayRows: [],           // 今天的 dailyStart／noon／finish 原始列（總覽「今日報工狀態」三格用，見 todayReportStatusCore.js）
+  todayLoadedAt: 0,        // 上一次讀到 todayRows 的時間（每分鐘重算時，超過 2 分鐘就重讀同一份查詢）
+  todayStatus: "idle",     // idle | ok | error（不是 ok＝卡片底部照原本顯示、總覽三格顯示「—」）
   userNames: new Map(),
   editor: null,            // 開著的小框：{ ref, processId, machineCode, loading, saving, readOnly, notice, error, ctx }
 };
@@ -20143,20 +20164,34 @@ async function machtileLoadCardTodayAndLoadUnload(orders) {
   await Promise.all([machtileLoadCardToday(core), machtileLoadCardLoadUnload(core, Array.isArray(orders) ? orders : [])]);
 }
 
+// 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已收工」與總覽「今日報工狀態」三格共用這一次查詢。
+// 下限＝台灣今天 00:00（created_at）；卡片底部只看 dailyStart／finish（todayStatusByProcess 會略過 noon）。
+// started_at／completed_qty／defect_qty：認出「只改機台加工時間」的 0／0 noon（不算中午報工，見 todayReportStatusCore）。
+function machtileCardTodayPath(core) {
+  const since = core.todayStartIso();
+  return `production_reports?select=process_id,report_type,created_at,started_at,ended_at,completed_qty,defect_qty,user_id,operator_ids&report_type=in.(dailyStart,noon,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`;
+}
+
+function machtileApplyCardTodayRows(core, rows) {
+  if (!Array.isArray(rows)) throw new Error("production_reports returned no rows array");
+  machtileCardState.today = core.todayStatusByProcess(rows);
+  machtileCardState.todayRows = rows;
+  machtileCardState.todayLoadedAt = Date.now();
+  machtileCardState.todayStatus = "ok";
+}
+
 async function machtileLoadCardToday(core) {
   try {
-    const since = core.todayStartIso();
     const [rows, users] = await Promise.all([
-      machtileCardFetch(`production_reports?select=process_id,report_type,created_at,ended_at,user_id,operator_ids&report_type=in.(dailyStart,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`),
+      machtileCardFetch(machtileCardTodayPath(core)),
       machtileFetchOperatorList(),
     ]);
-    if (!Array.isArray(rows)) throw new Error("production_reports returned no rows array");
-    machtileCardState.today = core.todayStatusByProcess(rows);
+    machtileApplyCardTodayRows(core, rows);
     machtileCardState.userNames = new Map((Array.isArray(users) ? users : []).map((u) => [String(u.id), u.name || ""]));
-    machtileCardState.todayStatus = "ok";
   } catch (error) {
     console.warn("today start status unavailable; cards keep the last-report text", error);
     machtileCardState.today = new Map();
+    machtileCardState.todayRows = [];
     machtileCardState.todayStatus = "error";
   }
 }
@@ -20498,5 +20533,170 @@ document.addEventListener("keydown", (event) => {
   }
   machtileHandleCardCtTrigger(event);
 });
+
+// ---- Monitor 總覽「今日報工狀態」三格（owner 2026-10-02 拍板）----
+// 今日未開工／今日未報工／未收工（可能加班）。判斷規則在 todayReportStatusCore.js（台灣時間，不看瀏覽器時區）。
+// 資料＝卡片底部「今日已開工／已收工」同一次查詢（machtileCardState.todayRows），不另外打 API；
+// 每分鐘重算一次（跨過 08:30／13:00／17:15／20:45 自動切換），順便每 2 分鐘重讀那同一份查詢（不然整天開著的畫面看不到新的報工）。
+// 只改畫面，不寫資料庫。點格子＝卡片牆只顯示那幾台；再點一次或按「顯示全部」恢復。選擇記在 localStorage（讀寫都包 try/catch）。
+const machtileTodayReportCore = () => (typeof window === "undefined" ? null : window.MachTileTodayReportCore);
+const MACHTILE_TODAY_FILTER_KEY = "machtile-monitor-today-filter";
+const MACHTILE_TODAY_TICK_MS = 60 * 1000;
+const MACHTILE_TODAY_REFETCH_MS = 2 * 60 * 1000;
+let machtileTodayFilter = machtileReadTodayFilter();
+let machtileTodayTickTimer = null;
+let machtileTodayRefetching = false;
+
+function machtileReadTodayFilter() {
+  try {
+    const value = localStorage.getItem(MACHTILE_TODAY_FILTER_KEY);
+    return ["notStarted", "unreported", "overtime"].includes(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function machtileWriteTodayFilter(value) {
+  try {
+    if (value) localStorage.setItem(MACHTILE_TODAY_FILTER_KEY, value);
+    else localStorage.removeItem(MACHTILE_TODAY_FILTER_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+// 現在的三格；讀不到今日報工（示範資料、讀取失敗、還沒載入）→ null（三格顯示「—」）
+function machtileTodaySummary() {
+  const core = machtileTodayReportCore();
+  if (!core || machtileCardState.todayStatus !== "ok") return null;
+  try {
+    const machines = managedMachineList().map((machine) => {
+      const orders = [machine.order, ...(Array.isArray(machine.cardOrders) ? machine.cardOrders.map((item) => item?.order) : [])].filter(Boolean);
+      return {
+        key: machine.name,
+        hasOrder: Boolean(machine.order) && !machine.isUnassignedBucket,
+        processIds: [...new Set(orders.map((order) => String(order.processId || "")).filter(Boolean))],
+      };
+    });
+    return core.summarize({ machines, reports: machtileCardState.todayRows, nowMs: Date.now() });
+  } catch (error) {
+    console.warn("today report summary failed", error);
+    return null;
+  }
+}
+
+// 篩選中、而且那一格這個時段有在計算 → 那幾台的名稱；否則 null（不篩）
+function machtileTodayActiveFilterKeys(summary) {
+  if (!machtileTodayFilter) return null;
+  const s = summary === undefined ? machtileTodaySummary() : summary;
+  const tile = s ? s[machtileTodayFilter] : null;
+  if (!tile || !tile.active) return null;
+  return new Set(tile.keys);
+}
+
+function machtileTodayTilesMarkup() {
+  const core = machtileTodayReportCore();
+  if (!core) return "";
+  const summary = machtileTodaySummary();
+  const filterOn = Boolean(machtileTodayActiveFilterKeys(summary));
+  return core.KINDS.map((kind) => {
+    const tile = summary ? summary[kind] : null;
+    const active = Boolean(tile?.active);
+    const tone = tile ? tile.tone : "na";
+    const value = active ? `${tile.count}<small> 台</small>` : "—";
+    const hint = tile ? tile.hint : "讀不到今日報工";
+    const pressed = filterOn && machtileTodayFilter === kind;
+    const label = core.LABEL[kind];
+    const aria = active ? `${label} ${tile.count} 台${pressed ? "，篩選中，再點一次顯示全部" : "，點一下只看這幾台"}` : `${label}：${hint}`;
+    const title = active && tile.keys.length ? `${hint}：${tile.keys.join("、")}` : hint;
+    return `
+    <button class="stat-card stat-button today-tile is-${escapeHtml(tone)}${pressed ? " active is-filtering" : ""}" type="button" data-today-tile="${escapeHtml(kind)}" data-today-tone="${escapeHtml(tone)}" data-today-count="${active ? tile.count : ""}" aria-pressed="${pressed ? "true" : "false"}" aria-label="${escapeHtml(aria)}" title="${escapeHtml(title)}">
+      <span class="stat-label">${escapeHtml(label)}</span>
+      <strong class="stat-value">${value}</strong>
+      <small class="today-tile-hint">${pressed ? "篩選中・再點一次恢復" : escapeHtml(hint)}</small>
+    </button>`;
+  }).join("");
+}
+
+function machtileRenderTodayFilterBar() {
+  const bar = document.getElementById("todayFilterBar");
+  if (!bar) return;
+  const core = machtileTodayReportCore();
+  const summary = machtileTodayFilter ? machtileTodaySummary() : null;
+  const keys = machtileTodayActiveFilterKeys(summary);
+  if (!core || !keys) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    delete bar.dataset.todayFilter;
+    return;
+  }
+  const tile = summary[machtileTodayFilter];
+  bar.hidden = false;
+  bar.className = `today-filter-bar is-${tile.tone}`;
+  bar.dataset.todayFilter = machtileTodayFilter;
+  bar.innerHTML = `
+    <span class="today-filter-text"><strong>篩選中：${escapeHtml(core.LABEL[machtileTodayFilter])} ${tile.count} 台</strong>${tile.keys.length ? `<span class="today-filter-keys">${escapeHtml(tile.keys.join("、"))}</span>` : ""}<span class="today-filter-note">台灣時間 ${escapeHtml(summary.phase.time)}・不分課別／狀態</span></span>
+    <button type="button" class="today-filter-clear" data-today-filter-clear>顯示全部</button>`;
+}
+
+function machtileSetTodayFilter(kind, { render = true } = {}) {
+  machtileTodayFilter = kind || null;
+  machtileWriteTodayFilter(machtileTodayFilter);
+  if (!render) return;
+  renderStats();
+  renderFilters();
+  renderWorkOrders();
+}
+
+function machtileToggleTodayFilter(kind) {
+  const core = machtileTodayReportCore();
+  if (!core || !core.KINDS.includes(kind)) return;
+  if (machtileTodayFilter === kind && machtileTodayActiveFilterKeys()) {
+    machtileSetTodayFilter(null);
+    showToast("已顯示全部機台");
+    return;
+  }
+  const summary = machtileTodaySummary();
+  const tile = summary ? summary[kind] : null;
+  if (!tile || !tile.active) {
+    showToast(`${core.LABEL[kind]}：${tile ? tile.hint : "讀不到今日報工"}`);
+    return;
+  }
+  machtileSetTodayFilter(kind);
+  showToast(`已篩選：${core.LABEL[kind]} ${tile.count} 台`);
+}
+
+// 每分鐘：重算三格（時段切換）；篩選中的那一格這個時段不再計算 → 自動恢復全部；超過 2 分鐘沒讀就重讀今天的報工。
+async function machtileTodayTick() {
+  const core = machtileTodayReportCore();
+  if (!core || !document.getElementById("statsGrid")) return;
+  const ecore = machtileCardEstimateCore();
+  if (ecore && state.source === "supabase" && machtileCardState.todayStatus === "ok" && !document.hidden && !machtileTodayRefetching
+    && Date.now() - (machtileCardState.todayLoadedAt || 0) >= MACHTILE_TODAY_REFETCH_MS - 5000) { // 容許計時器誤差：每 2 次重算重讀一次
+    machtileTodayRefetching = true;
+    try {
+      machtileApplyCardTodayRows(ecore, await machtileCardFetch(machtileCardTodayPath(ecore)));
+    } catch (error) {
+      console.warn("today reports refresh failed; keeping the last result", error);
+    } finally {
+      machtileTodayRefetching = false;
+    }
+  }
+  if (machtileTodayFilter && machtileCardState.todayStatus === "ok") {
+    const summary = machtileTodaySummary();
+    if (summary && !summary[machtileTodayFilter]?.active) machtileSetTodayFilter(null, { render: false });
+  }
+  try {
+    renderStats();
+    renderWorkOrders();
+  } catch (error) {
+    console.warn("today tiles re-render failed", error);
+  }
+}
+
+function machtileStartTodayTick() {
+  if (machtileTodayTickTimer || typeof window === "undefined" || typeof window.setInterval !== "function") return;
+  machtileTodayTickTimer = window.setInterval(machtileTodayTick, MACHTILE_TODAY_TICK_MS);
+}
+
+machtileStartTodayTick();
 
 init();

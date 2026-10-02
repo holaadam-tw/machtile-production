@@ -260,6 +260,9 @@ console.log("== 手機（Pixel 7）==");
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid [data-card-orders]").length > 0, null, { timeout: 20000 });
   ok(await isOpen(cardOf(page, "B04").locator("[data-card-orders]")), "重新整理後 B04 仍展開（localStorage）");
   await cardOf(page, "B04").locator("[data-card-orders-summary]").click();
+  // 等收起完成（details 的 toggle 事件是非同步的，寫 localStorage 在那之後）再重新整理；原本直接 reload 會偶發失敗（origin/main 4 次失敗 2 次）
+  await page.waitForFunction(() => { const d = [...document.querySelectorAll("#workOrderGrid [data-card-orders]")].find((x) => x.dataset.cardOrders === "B04"); return d && !d.open; }, null, { timeout: 5000 });
+  await page.waitForTimeout(300);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid [data-card-orders]").length > 0, null, { timeout: 20000 });
   ok(!(await isOpen(cardOf(page, "B04").locator("[data-card-orders]"))), "收起後重新整理 → 收起");

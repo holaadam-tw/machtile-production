@@ -11935,3 +11935,36 @@ body .machtile-session-badge .machtile-session-toggle {
 .report-overqty-warn,
 .batch-overqty { margin: 8px 0 0; border-left: 4px solid #d92d20; border-radius: var(--radius); padding: 8px 10px; background: var(--red-soft); color: #9f1d1d; font-size: 13px; font-weight: 700; line-height: 1.45; }
 .report-overqty-warn[hidden] { display: none; }
+
+/* Monitor 總覽「今日報工狀態」三格（2026-10-02 owner）：今日未開工（橘）／今日未報工（紅）／未收工・可能加班（黃）；
+   0 台＝綠；這個時段不計算＝「—」灰。點格子篩選卡片牆，篩選中格子加粗框＋卡片牆上方一條「篩選中…顯示全部」。 */
+.stats-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.today-tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; }
+.today-tile .stat-value small { font-size: 13px; font-weight: 700; margin-left: 2px; }
+.today-tile-hint { display: block; margin-top: 4px; color: #475467; font-size: 11px; line-height: 1.3; }
+.today-tile.is-ok { --risk: #15803d; --risk-soft: #e9fbe9; --risk-text: #146c32; }
+.today-tile.is-notStarted { --risk: #ea580c; --risk-soft: #fff1e6; --risk-text: #9a3412; }
+.today-tile.is-overtime { --risk: #ca8a04; --risk-soft: #fef9c3; --risk-text: #854d0e; background: #fffbe6; }
+.today-tile.is-unreported { --risk: #d92d20; --risk-soft: #fff0f3; --risk-text: #9f1d1d; }
+.today-tile.is-na { --risk: #98a2b3; --risk-soft: var(--surface); }
+.today-tile.is-na .stat-value { color: #98a2b3; }
+.today-tile.is-filtering { border-width: 2px; border-color: var(--risk); box-shadow: 0 0 0 3px var(--risk-soft), 0 8px 20px rgba(20, 20, 19, 0.12); }
+.today-tile.is-filtering .today-tile-hint { color: var(--risk-text, var(--risk)); font-weight: 800; }
+.today-filter-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0 0 12px; padding: 10px 12px; border: 2px solid var(--risk, var(--brand-blue)); border-radius: var(--radius); background: var(--risk-soft, var(--surface)); color: var(--text); }
+.today-filter-bar[hidden] { display: none; }
+.today-filter-bar.is-notStarted { --risk: #ea580c; --risk-soft: #fff1e6; }
+.today-filter-bar.is-overtime { --risk: #ca8a04; --risk-soft: #fef9c3; }
+.today-filter-bar.is-unreported { --risk: #d92d20; --risk-soft: #fff0f3; }
+.today-filter-bar.is-ok { --risk: #15803d; --risk-soft: #e9fbe9; }
+.today-filter-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; font-size: 14px; }
+.today-filter-text strong { font-size: 15px; }
+.today-filter-keys { font-weight: 700; overflow-wrap: anywhere; }
+.today-filter-note { color: #475467; font-size: 12px; }
+.today-filter-clear { min-height: 40px; padding: 6px 14px; border: 1px solid var(--risk, var(--brand-blue)); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+@media (max-width: 1100px) {
+  .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .today-filter-clear { width: 100%; }
+}
