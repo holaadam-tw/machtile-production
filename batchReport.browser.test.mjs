@@ -264,6 +264,9 @@ console.log("== 手機（Pixel 7）：車床批次報工 ==");
   const millRows = await mill.locator(".batch-row").evaluateAll((els) => els.map((e) => e.dataset.batchRow));
   ok(JSON.stringify(millRows) === JSON.stringify(["B03", "B04", "B05", "B06"]), "銑床只有 B03–B06（B01/B02 不在批次）", millRows.join(","));
   ok(await mill.locator('[data-batch-order="B03"] option').count() === 2, "B03 同時掛兩張單 → 可以選");
+  // 2026-10-02 卡片挑單：預設＝監控卡片顯示的那張＝最近有活動的（307 開工 90 分鐘前，比 306 上次報工 170 分鐘前新）
+  ok(await mill.locator('[data-batch-order="B03"]').inputValue() === id(307), "B03 預設＝卡片那張（最近有活動）", await mill.locator('[data-batch-order="B03"]').inputValue());
+  await mill.locator('[data-batch-order="B03"]').selectOption(id(306));
   ok((await mill.locator('[data-batch-row="B03"] .batch-pending').innerText()).includes("逾 2 小時"), "待回寫超過 2 小時 → 提醒");
   ok(await page.locator('.mobile-tab[data-view="batchLathe"]').evaluate((b) => b.classList.contains("active")), "手機底部「報工」分頁在銑床畫面也亮著");
   await page.locator("#adminDrawerBtn").click();

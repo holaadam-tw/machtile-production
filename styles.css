@@ -11807,3 +11807,54 @@ body .machtile-session-badge .machtile-session-toggle {
 .card-ct-actions [data-card-ct-close] { border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
 .card-ct-actions .primary-submit { margin: 0; border: 0; background: var(--brand-blue); color: #fff; }
 .card-ct-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* 機台卡片「這台還掛 N 張」（owner 2026-10-02）：一台同時掛好幾張在站單時，列出全部、可切換卡片顯示哪一張（只改畫面）。 */
+.machine-card-orders {
+  margin: -4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.machine-card-orders summary {
+  padding: 8px 10px;
+  color: var(--brand-blue);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}
+.machine-card-orders[open] summary { border-bottom: 1px solid var(--border); }
+.card-order-list { list-style: none; margin: 0; padding: 4px 8px; display: grid; gap: 6px; }
+.card-order-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 6px 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.card-order-item:last-child { border-bottom: 0; }
+.card-order-item.is-shown .card-order-main strong { color: var(--blue); }
+.card-order-main { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.card-order-main strong { font-size: 13px; overflow-wrap: anywhere; }
+.card-order-main span { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.card-order-meta { grid-column: 1 / 2; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--muted); }
+.card-order-item > .card-order-shown,
+.card-order-item > .card-order-pick { grid-column: 2; grid-row: 1 / span 2; }
+.card-order-shown { font-size: 12px; font-weight: 800; color: var(--green-strong); white-space: nowrap; }
+.card-order-pick,
+.card-order-auto {
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--brand-blue);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--brand-blue);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.card-order-note { margin: 0; padding: 4px 10px 8px; font-size: 11px; color: var(--muted); }
