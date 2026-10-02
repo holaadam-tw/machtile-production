@@ -10202,7 +10202,7 @@ function deriveMachines() {
 // 一台機台同時掛好幾張在站單時，卡片顯示最近有活動的那張；可以手動切換（只改畫面，不寫資料庫）。
 const machtileCardActiveCore = window.MachTileCardActiveOrderCore;
 const machtileCardPickState = {
-  // orderKey（工序 id，沒有就單號）→ { lastReportAt, legacyUpdatedAt, actualStartAt, updatedAt }
+  // orderKey（工序 id，沒有就單號）→ { lastReportAt, legacyUpdatedAt, actualStartAt }
   activityByKey: new Map(),
   // 卡片完成數那次 batch_report_progress 的結果（machtileLoadCardLegacyProgress 填、這裡用完就清）
   progressByProcess: null,
@@ -10243,7 +10243,7 @@ function machtileCardOrderForMachine(machineName) {
 // 載入每道在站工序的活動時間（只讀）：
 //   App 報工最後時間＝rpc/batch_report_progress.last_report_at（同時帶 actual_start_at）
 //   舊 MES＝legacy_station_progress.legacy_updated_at（同單同機台；有同步序用同步序那列）
-//   工序＝work_order_processes.actual_start_at／updated_at
+//   開工＝work_order_processes.actual_start_at（不用 updated_at：派工橋每次同步都會更新，會誤判成有活動）
 // 任何一支讀不到 → 那一項當作沒有；全部讀不到 → 卡片退回原本的規則，不讓整頁壞掉。
 async function machtileLoadCardActivity() {
   machtileCardPickState.activityByKey = new Map();
@@ -10267,7 +10267,7 @@ async function machtileLoadCardActivity() {
   await Promise.all([
     ...chunks.map(async (chunk) => {
       try {
-        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,actual_start_at,updated_at&id=in.(${chunk.join(",")})`);
+        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,actual_start_at&id=in.(${chunk.join(",")})`);
         (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.id) procById.set(String(row.id), row); });
       } catch (error) {
         console.warn("card activity: work_order_processes unavailable", error);
@@ -10311,7 +10311,6 @@ async function machtileLoadCardActivity() {
       legacyUpdatedAt: machtileCardActiveCore.legacyUpdatedAtFor(legacyRows, { workOrderNo: order.id, machineCode: codeOf(order), step })
         || progress?.legacy_updated_at || null,
       actualStartAt: proc?.actual_start_at || progress?.actual_start_at || null,
-      updatedAt: proc?.updated_at || null,
     });
   });
   machtileCardPickState.activityByKey = next;

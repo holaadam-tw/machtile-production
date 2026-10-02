@@ -25,7 +25,9 @@ eq("全部空白 → null", c.latestActivity({ lastReportAt: null, legacyUpdated
 const la = c.latestActivity({ lastReportAt: "2026-10-01T08:00:00Z", legacyUpdatedAt: "2026-10-02T08:14:47Z", actualStartAt: null, updatedAt: "2026-09-17T08:13:45Z" });
 eq("取最新的一個（舊 MES 10-02 16:14）", [la.source, la.at, la.label], ["legacy", "2026-10-02T08:14:47.000Z", "舊 MES 報工"]);
 eq("App 報工最新 → report", c.latestActivity({ lastReportAt: "2026-10-02T09:00:00Z", legacyUpdatedAt: "2026-10-02T08:00:00Z" }).source, "report");
-eq("只有 updated_at → updated", c.latestActivity({ updatedAt: "2026-10-02T08:19:55Z" }).source, "updated");
+eq("只有 updated_at → 不算活動（派工橋同步會更新它）→ null", c.latestActivity({ updatedAt: "2026-10-02T08:19:55Z" }), null);
+eq("updated_at 比較新也不看 → 仍是舊 MES 時間", c.latestActivity({ legacyUpdatedAt: "2026-09-07T08:13:37Z", updatedAt: "2026-10-02T09:00:00Z" }).at, "2026-09-07T08:13:37.000Z");
+eq("來源只有三項：App 報工、舊 MES、開工", c.SOURCES, ["report", "legacy", "start"]);
 eq("同一個時間 → App 報工優先標示", c.latestActivity({ lastReportAt: "2026-10-02T08:00:00Z", legacyUpdatedAt: "2026-10-02T08:00:00Z" }).source, "report");
 
 console.log("== legacyUpdatedAtFor ==");
@@ -76,7 +78,10 @@ const b06Act = {
 };
 eq("改前 → CPDG-10平蓋(小孔)", [...b06].sort(fallback)[0].id, "XX01202609030001");
 const p6 = c.pickActiveOrder(b06, { activityOf: actOf(b06Act), fallbackCompare: fallback });
-eq("改後 → CRG-10本體（工序 10-02 16:19 異動）", [p6.order.id, p6.latest.source], ["XX01202609290017", "updated"]);
+eq("改後 → CRG-10本體（舊 MES 10-02 16:16；updated_at 不算）", [p6.order.id, p6.latest.source, p6.latest.at], ["XX01202609290017", "legacy", "2026-10-02T08:16:24.000Z"]);
+const syncTouched = { ...b04Activity, "p-0005": { legacyUpdatedAt: "2026-08-27T08:08:13Z", updatedAt: "2026-10-02T09:30:00Z" } };
+eq("派工橋今天同步碰過 A37（updated_at 最新）→ 不會被選，仍是 CPDF-16", c.pickActiveOrder(b04, { activityOf: actOf(syncTouched), fallbackCompare: fallback }).order.id, "XX01202609170004");
+eq("只有 updated_at、沒有其他三項 → 退回原本規則", c.pickActiveOrder(b04, { activityOf: () => ({ updatedAt: "2026-10-02T09:30:00Z" }), fallbackCompare: fallback }).basis, "fallback");
 
 console.log("== App 報工時間 ==");
 const appAct = { ...b04Activity, "p-0002": { ...b04Activity["p-0002"], lastReportAt: "2026-10-02T09:30:00Z" } };
@@ -90,7 +95,7 @@ const none = c.pickActiveOrder(b04, { activityOf: () => null, fallbackCompare: f
 eq("全部沒有活動 → 交期最早（原本規則）", [none.order.id, none.basis, none.latest], ["XX01202604140005", "fallback", null]);
 const queued = b04.map((o) => (o.id === "XX01202606030002" ? { ...o, queue: 1 } : o));
 eq("全部沒有活動、有排程佇列 → 佇列第一張（原本規則）", c.pickActiveOrder(queued, { fallbackCompare: fallback }).order.id, "XX01202606030002");
-const partial = c.pickActiveOrder(b04, { activityOf: (o) => (o.processId === "p-0002" ? { updatedAt: "2026-01-01T00:00:00Z" } : null), fallbackCompare: fallback });
+const partial = c.pickActiveOrder(b04, { activityOf: (o) => (o.processId === "p-0002" ? { actualStartAt: "2026-01-01T00:00:00Z" } : null), fallbackCompare: fallback });
 eq("只有一張有活動（再舊都算）→ 那張；其他照原本規則排在後面", partial.ranked.map((x) => x.order.id), ["XX01202606030002", "XX01202604140005", "XX01202609170004"]);
 const tie = c.pickActiveOrder(b06.slice(0, 2), { activityOf: () => ({ legacyUpdatedAt: "2026-09-07T08:13:37Z" }), fallbackCompare: fallback });
 eq("同一個時間 → 用原本規則決定", tie.order.id, "XX01202609030001");

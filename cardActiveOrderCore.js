@@ -8,7 +8,8 @@
 //   每台機台的「目前工單」＝這台機台上「最近有活動」的那一道在站工序。活動時間取下列中最新的一個：
 //     1. 這道工序 App 報工的最後時間（production_reports；batch_report_progress.last_report_at）
 //     2. 舊 MES 結算時間 legacy_station_progress.legacy_updated_at（同單、同機台；有同步序就用同步序那列，否則取這台這張單最新的一列）
-//     3. work_order_processes.actual_start_at／updated_at
+//     3. work_order_processes.actual_start_at（開工時間）
+//   不用 work_order_processes.updated_at：派工橋每次同步都會更新它，會被誤判成「有活動」（owner 2026-10-02）。
 //   沒有任何活動時間 → 退回原本的規則（呼叫端傳進來的 fallbackCompare）。同一個時間 → 也用原本的規則排。
 //   畫面上可以手動切換卡片顯示哪一張（只改畫面，不寫資料庫）；那張單不在這台了就自動回到依活動挑選。
 //
@@ -21,8 +22,8 @@
   "use strict";
 
   // 活動來源（同一個時間點時，前面的優先標示）
-  const SOURCES = Object.freeze(["report", "legacy", "start", "updated"]);
-  const SOURCE_LABEL = Object.freeze({ report: "App 報工", legacy: "舊 MES 報工", start: "開工", updated: "工序異動" });
+  const SOURCES = Object.freeze(["report", "legacy", "start"]);
+  const SOURCE_LABEL = Object.freeze({ report: "App 報工", legacy: "舊 MES 報工", start: "開工" });
 
   function toMs(value) {
     if (value === null || value === undefined || value === "") return NaN;
@@ -40,14 +41,13 @@
     return String(order.processId || order.id || "");
   }
 
-  // activity：{ lastReportAt, legacyUpdatedAt, actualStartAt, updatedAt } → 最新的一個（沒有任何有效時間 → null）
+  // activity：{ lastReportAt, legacyUpdatedAt, actualStartAt } →（updatedAt 就算有也不看） 最新的一個（沒有任何有效時間 → null）
   function latestActivity(activity) {
     if (!activity) return null;
     const values = {
       report: activity.lastReportAt,
       legacy: activity.legacyUpdatedAt,
       start: activity.actualStartAt,
-      updated: activity.updatedAt,
     };
     let best = null;
     SOURCES.forEach((source) => {

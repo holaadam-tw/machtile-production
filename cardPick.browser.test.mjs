@@ -76,7 +76,8 @@ const machines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04",
 }));
 const wop = {
   [id(301)]: { process_order: 3, actual_start_at: null, updated_at: "2026-09-11T00:34:40Z" },
-  [id(341)]: { process_order: 7, actual_start_at: null, updated_at: "2026-09-01T01:20:06Z" },
+  // A37 的 updated_at 故意設成今天（模擬派工橋同步碰過）：updated_at 不算活動，仍不能被選上
+  [id(341)]: { process_order: 7, actual_start_at: null, updated_at: "2026-10-02T09:30:00Z" },
   [id(342)]: { process_order: 7, actual_start_at: null, updated_at: "2026-09-01T01:20:06Z" },
   [id(343)]: { process_order: 1, actual_start_at: null, updated_at: "2026-09-17T08:13:45Z" },
   [id(361)]: { process_order: 1, actual_start_at: null, updated_at: "2026-09-07T06:28:05Z" },
@@ -142,8 +143,9 @@ function makeBackend(opts = {}) {
     if (p === "/rest/v1/work_order_processes") {
       if (q.includes("queue_order=not.is.null")) return json(200, []);
       const m = q.match(/id=in\.\(([^)]*)\)/);
-      if (m && q.includes("updated_at")) {
+      if (m && q.includes("actual_start_at")) {
         b.reads.push("wop");
+        if (q.includes("updated_at")) b.reads.push("wop-asked-updated_at");
         if (opts.noActivity) return json(500, { message: "simulated outage" });
         return json(200, m[1].split(",").filter((pid) => wop[pid]).map((pid) => ({ id: pid, ...wop[pid] })));
       }
@@ -227,9 +229,10 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
 
   console.log("-- 挑最近活動的那張 --");
   ok((await shownOn(page, "B04")).startsWith("XX01202609170004 · CPDF-16本體"), "B04 卡片＝CPDF-16本體（舊 MES 10-02 16:14），不是 4 月的 A37九孔座", await shownOn(page, "B04"));
-  ok((await shownOn(page, "B06")).startsWith("XX01202609290017 · CRG-10本體"), "B06 卡片＝CRG-10本體（10-02 16:19），不是 CPDG-10平蓋(小孔)", await shownOn(page, "B06"));
+  ok((await shownOn(page, "B06")).startsWith("XX01202609290017 · CRG-10本體"), "B06 卡片＝CRG-10本體（舊 MES 10-02 16:16），不是 CPDG-10平蓋(小孔)", await shownOn(page, "B06"));
   ok((await shownOn(page, "A01")).startsWith("XX01202609020008"), "A01 只有一張 → 照舊");
-  ok(be.reads.includes("wop") && be.reads.includes("legacy"), "有讀工序時間與舊 MES 結算時間（只讀）");
+  ok(be.reads.includes("wop") && be.reads.includes("legacy"), "有讀開工時間與舊 MES 結算時間（只讀）");
+  ok(!be.reads.includes("wop-asked-updated_at"), "不再讀 work_order_processes.updated_at");
   ok(be.reads.filter((r) => r === "progress").length === 1, `進度 RPC 只查一次（卡片完成數與挑單共用，${be.reads.filter((r) => r === "progress").length} 次）`);
   ok((await cardOf(page, "B04").locator(".machine-metrics").innerText()).includes("96/219"), "B04 完成進度跟著那張單（舊 MES 96／219）", await cardOf(page, "B04").locator(".machine-metrics").innerText());
 
@@ -244,7 +247,7 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
   ok(await items.count() === 3, "點開：B04 全部 3 張在站單", String(await items.count()));
   const listText = await cardOf(page, "B04").locator(".card-order-list").innerText();
   ok(/XX01202609170004[\s\S]*CPDF-16本體[\s\S]*進度 96\/219[\s\S]*最後活動 10\/02 16:14（舊 MES 報工）[\s\S]*顯示中/.test(listText), "第一列：單號、品名、進度、最後活動時間（台灣時間）、顯示中", listText);
-  ok(/XX01202606030002[\s\S]*進度 120\/300[\s\S]*最後活動 09\/07 16:12/.test(listText) && /XX01202604140005[\s\S]*A37九孔座[\s\S]*進度 55\/165[\s\S]*最後活動 09\/01 09:20（工序異動）/.test(listText), "其他兩張依最近活動排序、各自的進度與時間", listText);
+  ok(/XX01202606030002[\s\S]*進度 120\/300[\s\S]*最後活動 09\/07 16:12/.test(listText) && /XX01202604140005[\s\S]*A37九孔座[\s\S]*進度 55\/165[\s\S]*最後活動 08\/27 16:08（舊 MES 報工）/.test(listText), "其他兩張依最近活動排序、各自的進度與時間", listText);
   ok(!(await page.locator("#detailSheet").evaluate((e) => e.classList.contains("is-open"))), "點「還掛」不會打開工單明細");
   await cardOf(page, "B04").scrollIntoViewIfNeeded();
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "01-phone-b04-list.png") });
@@ -359,7 +362,7 @@ console.log("== 平板（iPad 810×1080）==");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok(overflow <= 1, `平板沒有橫向捲動（${overflow}px）`);
   const listText = await cardOf(page, "B06").locator(".card-order-list").innerText();
-  ok(/XX01202609290017[\s\S]*最後活動 10\/02 16:19（工序異動）/.test(listText), "B06 清單第一列＝CRG-10本體 10/02 16:19", listText);
+  ok(/XX01202609290017[\s\S]*最後活動 10\/02 16:16（舊 MES 報工）/.test(listText), "B06 清單第一列＝CRG-10本體 10/02 16:16（舊 MES）", listText);
   const hit = await cardOf(page, "B06").locator(".card-order-pick").first().evaluate((btn) => { const r = btn.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return btn.contains(top) && r.height >= 32; });
   ok(hit, "平板：「改顯示這張」按得到（沒有被蓋住、夠高）");
   await cardOf(page, "B06").scrollIntoViewIfNeeded();
