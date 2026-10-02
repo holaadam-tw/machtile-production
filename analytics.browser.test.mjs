@@ -270,16 +270,16 @@ for (const [devName, device, tag] of [["手機 360px", phone360, "phone"], ["平
   ok(byO.B01.reason === "今日未開工", "B01 沒工單也沒報工＝今日未開工");
 
   const rk = await riskRows(page);
-  ok(JSON.stringify(rk.map((r) => [r.wo, r.level])) === JSON.stringify([["WO-A04-LATE", "overdue"], ["WO-A01", "late"], ["WO-A05", "tight"], ["WO-B03", "tight"]]), "交期風險依嚴重度：逾期 → 延誤 → 緊", JSON.stringify(rk.map((r) => [r.wo, r.level])));
+  ok(JSON.stringify(rk.map((r) => [r.wo, r.level])) === JSON.stringify([["WO-A04-LATE", "overdue"], ["WO-A01", "late"], ["WO-A05", "late"], ["WO-B03", "late"]]), "交期風險依嚴重度：逾期 → 延誤 → 緊", JSON.stringify(rk.map((r) => [r.wo, r.level])));
   ok(rk[0].text.includes("已逾期 4 天"), "A04 已逾期 4 天", rk[0].text);
-  ok(rk[1].text.includes("會延誤 4 天") && rk[1].basis === "actual" && rk[1].text.includes("100 件／天") && rk[1].text.includes("10/09") && rk[1].text.includes("已報 300/1000・含舊 MES・待回寫 100"), "A01：已報 300（舊 MES＋待回寫）、實際 100 件／天、預計 10/09（週日不算）、延誤 4 天", rk[1].text);
+  ok(rk[1].text.includes("會延誤 7 天") && rk[1].basis === "actual" && rk[1].text.includes("100 件／天") && rk[1].text.includes("10/12") && rk[1].text.includes("已報 300/1000・含舊 MES・待回寫 100"), "A01：已報 300（舊 MES＋待回寫）、實際 100 件／天、預計 10/12（週六日不算）、延誤 7 天", rk[1].text);
   ok(rk[2].basis === "estimate" && rk[2].text.includes("估算") && rk[2].text.includes("39 件／天") && rk[2].text.includes("10/05"), "A05：速度用估算並標「估算」、預計 10/05", rk[2].text);
-  ok(rk[3].basis === "actual" && rk[3].text.includes("10/17"), "B03：實際 30 件／天、預計 10/17、交期 10/20 → 緊", rk[3].text);
+  ok(rk[3].basis === "actual" && rk[3].text.includes("10/21") && rk[3].text.includes("會延誤 1 天"), "B03：實際 30 件／天、預計 10/21（週六日不算）、交期 10/20 → 延誤 1 天", rk[3].text);
   ok(!rk.some((r) => r.wo === "WO-B04-OVER"), "超量的 B04 不列");
   const summary = await page.locator("[data-risk-summary]").innerText();
   ok(summary.includes("已報滿／超量 1 張不列") && summary.includes("資料不足 2 張") && summary.includes("OK 1 張"), "摘要：超量 1、資料不足 2（A03、B05）、OK 1（A02）", summary);
   const formulas = await page.evaluate(() => [...document.querySelectorAll(".analytics-formula")].map((d) => d.textContent));
-  ok(formulas.length === 3 && formulas[1].includes("估算") && formulas[1].includes("430 分") && formulas[2].includes("週日不算"), "三個區塊都有公式說明（估算標明、週日不算）");
+  ok(formulas.length === 3 && formulas[1].includes("估算") && formulas[1].includes("430 分") && formulas[2].includes("週六、週日不算"), "三個區塊都有公式說明（估算標明、週六日不算）");
   ok(await page.locator("#reportsLegacy").count() === 1 && !(await page.locator("#reportsLegacy").evaluate((d) => d.open)), "原本內容收在下方摺疊（預設收起）");
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

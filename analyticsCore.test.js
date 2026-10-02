@@ -18,7 +18,9 @@ eq("UTC 2026-10-01T16:30Z ＝ 台灣 10/2", c.taipeiDate(Date.parse("2026-10-01T
 eq("近 7 天（含今天）", c.windowDates(tw("10:00")), ["2026-09-26", "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"]);
 eq("查詢下限＝9/26 台灣 00:00", c.windowStartIso(tw("10:00")), "2026-09-25T16:00:00.000Z");
 eq("10/4 是週日", c.weekday("2026-10-04"), 0);
-eq("週日不是工作天、週六是", [c.isWorkday("2026-10-04"), c.isWorkday("2026-10-03")], [false, true]);
+eq("預設週一～週五：週六、週日都不是工作天（owner 2026-10-02 週六沒上班）", [c.isWorkday("2026-10-04"), c.isWorkday("2026-10-03"), c.isWorkday("2026-10-05")], [false, false, true]);
+const SAT = [1, 2, 3, 4, 5, 6]; // 下面情境原本以週一～週六設計，明確帶入以保留演算法驗證
+eq("自訂週一～六時週六是工作天", c.isWorkday("2026-10-03", SAT), true);
 
 console.log("== 報工 → 機台 ==");
 {
@@ -179,7 +181,7 @@ console.log("== 交期風險 ==");
     // OK：估算 100、剩 100、交期 10/30
     { processId: "pOk", workOrderNo: "WO-OK", total: 100, done: 0, dueDate: "2026-10-30", estimateDaily: 100 },
   ];
-  const r = c.dueRisk({ orders, reports, nowMs: now });
+  const r = c.dueRisk({ orders, reports, nowMs: now, workdays: SAT });
   const by = Object.fromEntries(r.risks.map((x) => [x.workOrderNo, x]));
   eq("實際速度：100／天、5 工作天、預計 10/7、延誤 2 天、依據實際", [by["WO-ACT"].speed, by["WO-ACT"].daysNeeded, by["WO-ACT"].projected, by["WO-ACT"].delayDays, by["WO-ACT"].basis], [100, 5, "2026-10-07", 2, "actual"]);
   eq("估算速度：預計 10/3、餘裕 2 天＝緊、依據估算", [by["WO-EST"].projected, by["WO-EST"].level, by["WO-EST"].slackDays, by["WO-EST"].basis], ["2026-10-03", "tight", 2, "estimate"]);
@@ -190,13 +192,16 @@ console.log("== 交期風險 ==");
   eq("排序：逾期 → 延誤 → 緊", r.risks.map((x) => x.workOrderNo), ["WO-OVERDUE", "WO-ACT", "WO-EST"]);
   // 跨週日：今天週六 10/3，估算 10／天、剩 20 → 10/3、10/5（週日 10/4 跳過）；交期 10/4 → 延誤 1 天
   const sun = c.dueRisk({ orders: [{ processId: "pSun", workOrderNo: "WO-SUN", total: 20, done: 0, dueDate: "2026-10-04", estimateDaily: 10 },
-    { processId: "pSun2", workOrderNo: "WO-SUN2", total: 40, done: 0, dueDate: "2026-10-05", estimateDaily: 10 }], reports: [], nowMs: tw("09:00", "2026-10-03") });
+    { processId: "pSun2", workOrderNo: "WO-SUN2", total: 40, done: 0, dueDate: "2026-10-05", estimateDaily: 10 }], reports: [], nowMs: tw("09:00", "2026-10-03"), workdays: SAT });
   eq("週日不算：預計 10/5、延誤 1 天", [sun.risks.find((x) => x.workOrderNo === "WO-SUN")?.projected, sun.risks.find((x) => x.workOrderNo === "WO-SUN")?.delayDays], ["2026-10-05", 1]);
   eq("延誤多的排前面（40 件＝4 工作天 10/3、10/5、10/6、10/7 → 延誤 2 天）", sun.risks.map((x) => [x.workOrderNo, x.delayDays]), [["WO-SUN2", 2], ["WO-SUN", 1]]);
   eq("標籤", [c.riskLabel(by["WO-ACT"]), c.riskLabel(by["WO-EST"])], ["會延誤 2 天", "緊（只剩 2 天餘裕）"]);
   eq("今天週日也能起算（從週一開始）", c.nthWorkday("2026-10-04", 1), "2026-10-05");
   eq("自訂工作天（週一～五）：10/2 起第 2 天＝10/5", c.nthWorkday("2026-10-02", 2, [1, 2, 3, 4, 5]), "2026-10-05");
-  eq("同一道工序只列一次", c.dueRisk({ orders: [orders[2], orders[2]], reports, nowMs: now }).risks.length, 1);
+  eq("同一道工序只列一次", c.dueRisk({ orders: [orders[2], orders[2]], reports, nowMs: now, workdays: SAT }).risks.length, 1);
+  // 預設（週一～五）：週五 10/2 起，剩 20、10／天 → 10/2、10/5；交期 10/3（週六）→ 延誤 2 天
+  const wk = c.dueRisk({ orders: [{ processId: "pWk", workOrderNo: "WO-WK", total: 20, done: 0, dueDate: "2026-10-03", estimateDaily: 10 }], reports: [], nowMs: tw("09:00", "2026-10-02") });
+  eq("預設週一～五：預計 10/5（跳過週六日）", wk.risks[0]?.projected, "2026-10-05");
 }
 
 console.log("== 格式 ==");
