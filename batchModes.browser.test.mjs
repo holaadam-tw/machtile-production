@@ -80,10 +80,8 @@ const baseProgress = {
   [id(306)]: { legacy_output: 172, legacy_fail: 0, last_report_at: ago(60), actual_start_at: null },
 };
 // 機台加工時間：A02 這張單上一次填 1 分 35 秒；其他還沒填過
-// A01 有一筆 550（＝單台舊版 HTML 預設值漏送的假值，正式庫實際有 9 筆）→ 不可以當成機台加工時間（審查 H1）
 const machineTimeRows = [
   { process_id: id(302), cycle_time_seconds: 95, created_at: ago(90) },
-  { process_id: id(301), cycle_time_seconds: 550, created_at: ago(200) },
 ];
 const procToMachine = Object.fromEntries(cards.map((c) => [c.current_process_id, c.machine_name]));
 

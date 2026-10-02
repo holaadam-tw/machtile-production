@@ -210,7 +210,7 @@ const lm550 = c.latestMachineTimeByProcess([
   { process_id: "q2", cycle_time_seconds: 550, created_at: "2026-10-01T05:00:00Z" },
   { process_id: "q2", cycle_time_seconds: 120, created_at: "2026-10-01T01:00:00Z" },
 ]);
-eq("審查 H1：550（舊單台 HTML 預設值）不當成機台加工時間，也不算樣本", [lm550.has("q1"), lm550.get("q2")?.seconds, lm550.get("q2")?.count, lm550.get("q2")?.baselineSeconds], [false, 120, 1, null]);
+eq("550 測試資料已清（2026-10-02），暫時規則拿掉：真的 9 分 10 秒照常採用", [lm550.get("q1")?.seconds, lm550.get("q2")?.seconds, lm550.get("q2")?.count], [550, 550, 2]);
 eq("只有一筆 → 沒有基準", lm.get("p1") && c.latestMachineTimeByProcess([{ process_id: "z", cycle_time_seconds: 80, created_at: "x" }]).get("z").baselineSeconds, null);
 
 console.log("== operatorChoices ==");

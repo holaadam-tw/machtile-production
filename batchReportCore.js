@@ -217,21 +217,15 @@
     return { seconds: parsed.seconds, changed: true, error: "" };
   }
 
-  // ⚠️ 暫時規則（審查 N3，2026-10-02）：單台報工 Cycle time 欄位以前的 HTML 預設值（9 分 10 秒）。
-  // 修正前單台每一種報工都會把它當成 cycle_time_seconds 送出（正式庫 9 筆都是這個值，全是 B02 測試單
-  // WO-GATE-P3-001），分不出是不是真的有人填，所以暫時一律不採用（真的就是 9 分 10 秒的也會被忽略）。
-  // owner 照 PR #42 的 SQL 清完那 9 筆、且單台修正已上線後，**就要拿掉這條**（連同 latestMachineTimeByProcess 裡的判斷）。
-  const LEGACY_DEFAULT_CYCLE_SECONDS = 550;
-
   // production_reports（cycle_time_seconds 不是 null）→ 每道工序：最新一次填的機台加工時間（秒／件）、
   // 樣本數、基準。基準＝**最新這筆以前**歷次填過的值的平均，之前至少要有 2 筆才算（審查 N2：最新那筆
-  // 一起平均會把差異拉向 0，例如只有兩筆時差異只剩實際的一半）。550（舊預設值，暫時規則）不算。
+  // 一起平均會把差異拉向 0，例如只有兩筆時差異只剩實際的一半）。
+  // （2026-10-02 owner 清掉正式庫 9 筆 550 測試資料後，拿掉「550 一律不採用」的暫時規則。）
   function latestMachineTimeByProcess(rows) {
     const map = new Map();
     (Array.isArray(rows) ? rows : []).forEach((r) => {
       const sec = Number(r?.cycle_time_seconds);
       if (!r?.process_id || !Number.isFinite(sec) || sec <= 0) return;
-      if (Math.round(sec) === LEGACY_DEFAULT_CYCLE_SECONDS) return;
       const at = String(r.created_at || "");
       const key = String(r.process_id);
       const prev = map.get(key) || { seconds: 0, at: "", count: 0, sum: 0 };
@@ -405,7 +399,7 @@
   return {
     GROUPS, EXCLUDED_MACHINES, REPORT_TYPE, MODES, MODE_ORDER, FINISH_OVERTIME, MAX_QTY_PER_REPORT, STALE_PENDING_MS,
     MAX_MACHINE_SECONDS, parseMachineTime, splitSeconds, machineTimeToSend, buildRemark, buildReportPayload,
-    latestMachineTimeByProcess, LEGACY_DEFAULT_CYCLE_SECONDS,
+    latestMachineTimeByProcess,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
     operatorChoices, defaultOperatorId, summarizeResults,
