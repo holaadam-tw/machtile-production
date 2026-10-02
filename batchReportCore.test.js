@@ -222,5 +222,43 @@ eq("站別帳號登入 → 預設空白，逼人選", c.defaultOperatorId(c.oper
 console.log("== summarizeResults ==");
 eq("計數", c.summarizeResults([{ status: "sent" }, { status: "queued" }, { status: "failed" }, { status: "sent" }]), { sent: 2, queued: 1, failed: 1, total: 4 });
 
+console.log("== expandStationOrders（同一張單同時在兩台）==");
+{
+  const base = [
+    { id: "XX01202609160002", workOrderId: "w-ar", processId: "p3", machine: "B01", process: "AR16-R01-01_加工製程", processStatus: "pending", done: 4, workStatus: "in_progress", pureCycleSec: 90, machineTimeSource: "view" },
+    { id: "WO-A01", workOrderId: "w-a01", processId: "pa", machine: "A01", process: "車削", processStatus: "running", done: 0 },
+  ];
+  const names = new Map([["m-a02", "A02"], ["m-b01", "B01"], ["m-a03", "A03"], ["m-a01", "A01"]]);
+  const procs = [
+    { id: "p3", work_order_id: "w-ar", process_order: 3, process_name: "AR16-R01-01_加工製程", status: "pending", machine_id: "m-b01", qty_completed: 4, off_station_at: null },
+    { id: "p2", work_order_id: "w-ar", process_order: 2, process_name: "AR16-R01-01_加工製程", status: "pending", machine_id: "m-a02", qty_completed: 0, off_station_at: null },
+    { id: "p1", work_order_id: "w-ar", process_order: 1, process_name: "x", status: "pending", machine_id: "m-a03", qty_completed: 0, off_station_at: "2026-10-01T00:00:00Z" },
+    { id: "p4", work_order_id: "w-ar", process_order: 4, process_name: "x", status: "completed", machine_id: "m-a03", qty_completed: 0, off_station_at: null },
+    { id: "p5", work_order_id: "w-ar", process_order: 5, process_name: "x", status: "pending", machine_id: "m-zz", qty_completed: 0, off_station_at: null },
+    { id: "p6", work_order_id: "w-unknown", process_order: 1, process_name: "x", status: "pending", machine_id: "m-a01", qty_completed: 0, off_station_at: null },
+    { id: "p2", work_order_id: "w-ar", process_order: 2, process_name: "dup", status: "pending", machine_id: "m-a02", qty_completed: 0, off_station_at: null },
+  ];
+  const extras = c.expandStationOrders(base, procs, names);
+  eq("只多出 A02 第 2 道（離站、完工、沒機台名稱、不在畫面的單、重複都不算）", extras.map((o) => `${o.machine}#${o.stationStep}:${o.processId}`), ["A02#2:p2"]);
+  eq("額外那筆：單號／工單 id 同原本，工序與完成數換成自己的", [extras[0].id, extras[0].workOrderId, extras[0].processStatus, extras[0].done, extras[0].isExtraStation], ["XX01202609160002", "w-ar", "pending", 0, true]);
+  eq("屬於原本那道的機台時間不沿用", [extras[0].pureCycleSec, extras[0].machineTimeSource], [null, null]);
+  eq("原本的陣列不動", base.length, 2);
+  eq("物件形式的 machineNameById 也可以", c.expandStationOrders(base, procs, { "m-a02": "A02" }).length, 1);
+  eq("沒有工序資料 → 沒有額外卡片", c.expandStationOrders(base, null, names), []);
+  const all = [...base, ...extras];
+  eq("candidateOrdersForMachine：A02 拿得到這張單（第 2 道）", c.candidateOrdersForMachine(all, "A02").map((o) => o.processId), ["p2"]);
+  eq("candidateOrdersForMachine：B01 仍是第 3 道", c.candidateOrdersForMachine(all, "B01").map((o) => o.processId), ["p3"]);
+  console.log("== orderRef / findOrderByRef ==");
+  eq("orderRef 用工序 id", c.orderRef(extras[0]), "p2");
+  eq("orderRef 沒工序 id 用單號", c.orderRef({ id: "WO-X" }), "WO-X");
+  eq("工序 id → 那一道", c.findOrderByRef(all, "p2").machine, "A02");
+  eq("單號＋機台 A02 → A02 那道", c.findOrderByRef(all, "XX01202609160002", "A02").processId, "p2");
+  eq("單號＋機台「A02 大瀧澤」也認得", c.findOrderByRef(all, "XX01202609160002", "A02 大瀧澤").processId, "p2");
+  eq("只有單號 → 原本那筆（view 挑的）", c.findOrderByRef(all, "XX01202609160002").processId, "p3");
+  eq("單號＋不相干機台 → 原本那筆", c.findOrderByRef(all, "XX01202609160002", "A05").processId, "p3");
+  eq("找不到 → null", c.findOrderByRef(all, "nope"), null);
+  eq("空參照 → null", c.findOrderByRef(all, ""), null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
