@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261002-monitor-today-tiles-r2">
+  <link rel="stylesheet" href="./styles.css?v=20261002-nav-trim">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -124,11 +124,11 @@
     <div id="adminDrawerBackdrop" class="admin-drawer-backdrop" hidden></div>
     <aside id="adminDrawer" class="admin-drawer" hidden aria-label="管理選單"></aside>
 
+    <!-- owner 2026-10-02：主選單拿掉「紀錄」、子選單拿掉「機台管理」；入口改在「管理」抽屜（更多功能→紀錄查詢、機台管理群組），?view=history 照常 -->
     <nav class="desktop-nav" aria-label="主要導覽">
       <button class="nav-item active" data-view="dashboard" type="button">監控</button>
       <button class="nav-item" data-view="schedule" type="button">排程</button>
       <button class="nav-item" data-view="alerts" type="button">待處理</button>
-      <button class="nav-item" data-view="history" type="button">紀錄</button>
       <button class="nav-item" data-view="reports" type="button">分析</button>
     </nav>
 
@@ -141,9 +141,6 @@
       </button>
       <button class="tool-nav-item" data-admin-module="inspection" type="button">
         <span>品檢</span><small>待檢與判定</small>
-      </button>
-      <button class="tool-nav-item" data-admin-module="list" type="button">
-        <span>機台管理</span><small>設備與狀態</small>
       </button>
       <button class="tool-nav-item" data-open-admin-drawer type="button">
         <span>管理</span><small>更多設定</small>
