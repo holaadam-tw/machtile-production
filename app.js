@@ -12199,7 +12199,12 @@ function renderMachineCard(machine) {
         <div>
           <span>完成進度</span>
           <strong>${order ? `${order.done}/${order.total}` : "-"}</strong>
-          <small>${order ? `${percent}%` : "未派工"}</small>
+          ${order ? `
+            <small class="card-progress-pct">${percent}%</small>
+            <div class="progress-track card-progress-track" aria-label="完成進度 ${percent}%">
+              <div class="progress-fill" style="width:${percent}%"></div>
+            </div>
+          ` : "<small>未派工</small>"}
           ${order ? machtileCardProgressNote(order) : ""}
         </div>
         <div>
@@ -12223,12 +12228,6 @@ function renderMachineCard(machine) {
             <span>每日估算</span>
             <strong>${dailyQty ? `${dailyQty} 件` : "-"}</strong>
           </div>
-        </div>
-      ` : ""}
-
-      ${order ? `
-        <div class="progress-track" aria-label="完成進度 ${percent}%">
-          <div class="progress-fill" style="width:${percent}%"></div>
         </div>
       ` : ""}
 
