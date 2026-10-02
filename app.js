@@ -7989,6 +7989,8 @@ function getProgramProfile(order) {
     historyRuns: order?.historyRuns ?? base.historyRuns,
     historyYears: order?.historyYears ?? base.historyYears,
     lastRunDate: order?.lastRunDate || base.lastRunDate,
+    // 上下料時間（每日估算用）：實績中位數（同產品＋工序 ≥ 3 筆）或車床／銑床預設，見 cardEstimateCore.js
+    loadUnload: machtileLoadUnloadFor(order),
   };
 }
 
@@ -8007,9 +8009,15 @@ function cycleDelta(profile) {
   return Math.round(((profile.pureCycleSec - profile.baselineCycleSec) / profile.baselineCycleSec) * 100);
 }
 
-function dailyPureCapacity(profile, minutesPerDay = 480) {
-  if (!Number(profile?.pureCycleSec)) return null;
-  return Math.floor((minutesPerDay * 60) / profile.pureCycleSec);
+// 每日估算（owner 2026-10-02）：一天可加工時間（430 分）÷（機台加工時間＋上下料時間）。
+// 卡片、明細、報工畫面都走 cardEstimateCore.dailyEstimate，數字才會一致（原本卡片 480 分、報工畫面 430 分、都沒算上下料）。
+function dailyPureCapacity(profile, minutesPerDay) {
+  const core = machtileCardEstimateCore();
+  if (!core) {
+    if (!Number(profile?.pureCycleSec)) return null;
+    return Math.floor(((minutesPerDay || 430) * 60) / profile.pureCycleSec);
+  }
+  return core.dailyEstimate(profile?.pureCycleSec, profile?.loadUnload?.seconds ?? 0, minutesPerDay ?? core.WORK_MINUTES_PER_DAY);
 }
 
 function estimatedWorkDays(order, profile) {
@@ -8045,9 +8053,15 @@ function reportCycleSecondsToSend(type) {
   return window.MachTileReportCycleCore.cycleTimeToSend(type, getReportCycleSeconds(), reportCyclePrefilledSeconds);
 }
 
-function reportDailyCapacity(cycleSeconds, minutesPerDay = 430) {
-  if (!Number(cycleSeconds)) return null;
-  return Math.max(1, Math.floor((minutesPerDay * 60) / Number(cycleSeconds)));
+// 報工畫面的估算：跟卡片同一個公式、同一套上下料（這張單的實績中位數或車床／銑床預設）。
+function reportDailyCapacity(cycleSeconds, minutesPerDay, order = selectedOrder) {
+  const core = machtileCardEstimateCore();
+  if (!core) {
+    if (!Number(cycleSeconds)) return null;
+    return Math.max(1, Math.floor(((minutesPerDay || 430) * 60) / Number(cycleSeconds)));
+  }
+  const loadUnload = order ? machtileLoadUnloadFor(order) : null;
+  return core.dailyEstimate(cycleSeconds, loadUnload?.seconds ?? 0, minutesPerDay ?? core.WORK_MINUTES_PER_DAY);
 }
 
 function updateReportEstimate() {
@@ -8064,9 +8078,10 @@ function updateReportEstimate() {
   }
   const workDays = Math.max(1, Math.ceil(totalQty / dailyQty));
   const baseline = Number(profile?.baselineCycleSec) ? `歷史基準 ${formatSeconds(profile.baselineCycleSec)} / 件。` : "尚未建立歷史基準。";
+  const loadUnloadText = profile?.loadUnload ? `＋${machtileCardEstimateCore()?.loadUnloadLabel(profile.loadUnload) || ""}` : "";
   estimate.innerHTML = `
     <strong>預估 ${workDays} 個工作天完成</strong>
-    <span>純加工 ${formatSeconds(cycleSeconds)} / 件，每日約 ${dailyQty} 件，中午應完成約 ${noonTarget || "-"} 件。${baseline}</span>
+    <span>純加工 ${formatSeconds(cycleSeconds)} / 件${escapeHtml(loadUnloadText)}，每日約 ${dailyQty} 件，中午應完成約 ${noonTarget || "-"} 件。${baseline}</span>
   `;
 }
 
@@ -9935,6 +9950,8 @@ async function machtileLoadCardMachineTimes() {
     // 它的 key 是 trigger 自己組的圖號／製程名，卡片對不準，而且裡面混了舊的 550 預設值樣本）
     if (!order.baselineCycleSec && t.baselineSeconds) order.baselineCycleSec = t.baselineSeconds;
   });
+  // 卡片底部「今日開工狀態」＋每日估算的上下料實績（讀不到就退回原本顯示／預設值，不擋整頁）
+  await machtileLoadCardTodayAndLoadUnload(orders);
 }
 
 function machtileCardProgressNote(order) {
@@ -12216,22 +12233,7 @@ function renderMachineCard(machine) {
         </div>
       </div>
 
-      ${order ? `
-        <div class="cycle-mini-grid">
-          <div class="cycle-machine-time${Number(profile.pureCycleSec) ? "" : " is-missing"}">
-            <span>機台加工時間</span>
-            <strong>${Number(profile.pureCycleSec) ? `${escapeHtml(formatSeconds(profile.pureCycleSec))}<small> / 件</small>` : "未填"}</strong>
-          </div>
-          <div>
-            <span>基準差異</span>
-            <strong class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${delta === null ? "-" : `${delta > 0 ? "+" : ""}${delta}%`}</strong>
-          </div>
-          <div>
-            <span>每日估算</span>
-            <strong>${dailyQty ? `${dailyQty} 件` : "-"}</strong>
-          </div>
-        </div>
-      ` : ""}
+      ${order ? machtileCardCycleGrid(machine, order, profile, delta, dailyQty) : ""}
 
       <details class="machine-card-more" data-no-detail>
         <summary>${canReport ? "報工入口與建議" : "指派說明"}</summary>
@@ -12256,7 +12258,7 @@ function renderMachineCard(machine) {
       </details>
 
       <footer class="machine-tile-footer">
-        <span>${escapeHtml(order?.lastReport || machine.note || "尚未回報")}</span>
+        ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
           ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>` : ""}
           ${isHmc
@@ -19673,5 +19675,432 @@ async function machtileResumeInit() {
   applyInitialRoute();
   startDemo();
 }
+
+// ---- Monitor 機台卡片：機台加工時間直接填、今日開工狀態、每日估算（owner 2026-10-02）----
+// 1. 點卡片「機台加工時間」→ 小框填分／秒（作業員看機台控制器螢幕上的每件加工時間）→ 儲存＝送一筆 0／0 的報工，
+//    只帶 cycle_time_seconds。payload 直接用批次報工的 batchReportCore.buildReportPayload（中午報工類型、只改時間），
+//    started_at＝ended_at＝上一筆報工的時間（不推進起算點）、report_uuid 冪等、報工人＝登入者。
+// 2. 卡片底部改成這道工序「今天」的狀態：今日已開工 08:05・姓名／今日已收工 17:00／今日尚未開工。
+//    資料＝production_reports 今天（台灣時區）的 dailyStart／finish 最新一筆。讀不到 → 原本的顯示。
+// 3. 每日估算的上下料時間：cardEstimateCore（實績中位數 ≥ 3 筆，否則車床 60／銑床 180 秒預設）。
+// 全部只讀＋前端計算；寫入只有第 1 項（跟批次報工同一支 field_report_upsert）。
+const machtileCardEstimateCore = () => (typeof window === "undefined" ? null : window.MachTileCardEstimateCore);
+const MACHTILE_CARD_CT_DRAFT_KEY = "machtile-card-machine-time-drafts";
+const MACHTILE_CARD_FETCH_TIMEOUT_MS = 4000;
+const machtileCardState = {
+  statsByKey: new Map(),   // 產品＋工序 → 上下料／實際每件時間樣本
+  statsStatus: "idle",     // idle | ok | error（error＝全部用預設值）
+  today: new Map(),        // processId → 今天最新一筆 dailyStart／finish
+  todayStatus: "idle",     // idle | ok | error（不是 ok＝卡片底部照原本顯示）
+  userNames: new Map(),
+  editor: null,            // 開著的小框：{ ref, processId, machineCode, loading, saving, readOnly, notice, error, ctx }
+};
+
+// 卡片資料（一單一筆＋逐工序 PR #45 的額外卡片；#45 還沒合併時 extraStationOrders 不存在＝空）
+function machtileCardOrders() {
+  return [...(state.workOrders || []), ...(Array.isArray(state.extraStationOrders) ? state.extraStationOrders : [])];
+}
+
+async function machtileCardFetch(path) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), MACHTILE_CARD_FETCH_TIMEOUT_MS) : null;
+  try {
+    return await supabaseFetch(path, controller ? { signal: controller.signal } : {});
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function machtileMachineForOrder(order) {
+  const name = String(order?.machine || "").trim();
+  if (!name) return null;
+  const upper = name.toUpperCase();
+  const same = (m) => m && [m.name, m.code].some((v) => String(v || "").trim().toUpperCase() === upper);
+  return (state.machines || []).find(same) || (state.machineMasters || []).find(same) || baseMachines.find(same) || { name };
+}
+
+function machtileOrderProductKey(order) {
+  const core = machtileCardEstimateCore();
+  if (!core || !order) return null;
+  const drawing = order.drawingNo ?? (order.drawing && order.drawing !== "-" ? order.drawing : "");
+  return core.productKey({ drawingNo: drawing, partNo: order.partNo, partName: order.part, processName: order.process });
+}
+
+// 這張單用的上下料時間（cardEstimateCore.resolveLoadUnload 的結果）；沒有 core → null（估算退回不含上下料）
+function machtileLoadUnloadFor(order) {
+  const core = machtileCardEstimateCore();
+  if (!core || !order) return null;
+  try {
+    const kind = core.machineKind(machtileMachineForOrder(order));
+    const key = machtileOrderProductKey(order);
+    const stats = key ? machtileCardState.statsByKey.get(key) || null : null;
+    return core.resolveLoadUnload({ kind, stats });
+  } catch (error) {
+    console.warn("load/unload estimate failed", error);
+    return null;
+  }
+}
+
+async function machtileLoadCardTodayAndLoadUnload(orders) {
+  const core = machtileCardEstimateCore();
+  if (!core || state.source !== "supabase") return;
+  await Promise.all([machtileLoadCardToday(core), machtileLoadCardLoadUnload(core, Array.isArray(orders) ? orders : [])]);
+}
+
+async function machtileLoadCardToday(core) {
+  try {
+    const since = core.todayStartIso();
+    const [rows, users] = await Promise.all([
+      machtileCardFetch(`production_reports?select=process_id,report_type,created_at,ended_at,user_id,operator_ids&report_type=in.(dailyStart,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`),
+      machtileFetchOperatorList(),
+    ]);
+    if (!Array.isArray(rows)) throw new Error("production_reports returned no rows array");
+    machtileCardState.today = core.todayStatusByProcess(rows);
+    machtileCardState.userNames = new Map((Array.isArray(users) ? users : []).map((u) => [String(u.id), u.name || ""]));
+    machtileCardState.todayStatus = "ok";
+  } catch (error) {
+    console.warn("today start status unavailable; cards keep the last-report text", error);
+    machtileCardState.today = new Map();
+    machtileCardState.todayStatus = "error";
+  }
+}
+
+async function machtileLoadCardLoadUnload(core, orders) {
+  try {
+    // 畫面上工單的圖號／品號：v_work_order_cards 沒有 part_no，正式庫幾乎每張單都只有品號（沒有圖號），
+    // 不補的話卡片會用品名、報工那邊用品號，對不上。
+    const woIds = [...new Set(orders.map((o) => String(o.workOrderId || "")).filter(isUuid))];
+    const woById = new Map();
+    for (let i = 0; i < woIds.length; i += 80) {
+      const chunk = woIds.slice(i, i + 80).map(encodeURIComponent).join(",");
+      const rows = await machtileCardFetch(`work_orders?select=id,drawing_no,part_no,part_name&id=in.(${chunk})`);
+      (Array.isArray(rows) ? rows : []).forEach((r) => woById.set(String(r.id), r));
+    }
+    orders.forEach((o) => {
+      const wo = woById.get(String(o.workOrderId || ""));
+      if (!wo) return;
+      o.drawingNo = wo.drawing_no || "";
+      o.partNo = wo.part_no || "";
+    });
+    // 最近的報工（有數量、或有填機台加工時間），連同產品與工序名稱；跨工單累積同一個產品＋工序
+    const reports = await machtileCardFetch("production_reports?select=process_id,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds,created_at,work_order_processes(process_name),work_orders(drawing_no,part_no,part_name)&or=(completed_qty.gt.0,defect_qty.gt.0,cycle_time_seconds.not.is.null)&order=created_at.desc&limit=3000");
+    const rows = Array.isArray(reports) ? reports : [];
+    const keyByProcess = new Map();
+    rows.forEach((r) => {
+      if (!r?.process_id || keyByProcess.has(String(r.process_id))) return;
+      const wo = r.work_orders || {};
+      keyByProcess.set(String(r.process_id), core.productKey({
+        drawingNo: wo.drawing_no, partNo: wo.part_no, partName: wo.part_name, processName: r.work_order_processes?.process_name,
+      }));
+    });
+    machtileCardState.statsByKey = core.buildLoadUnloadStats(rows, keyByProcess);
+    machtileCardState.statsStatus = "ok";
+  } catch (error) {
+    console.warn("load/unload calibration unavailable; using defaults", error);
+    machtileCardState.statsByKey = new Map();
+    machtileCardState.statsStatus = "error";
+  }
+}
+
+// 卡片底部：今日開工狀態；沒讀到（示範資料、讀取失敗）→ 原本的「最後回報」文字
+function machtileCardFooterStatus(order, machine) {
+  const fallback = `<span>${escapeHtml(order?.lastReport || machine?.note || "尚未回報")}</span>`;
+  const core = machtileCardEstimateCore();
+  if (!order || !core || machtileCardState.todayStatus !== "ok" || !order.processId) return fallback;
+  try {
+    const label = core.todayStatusLabel(machtileCardState.today.get(String(order.processId)), (uid) => machtileCardState.userNames.get(String(uid)) || "");
+    const title = order.lastReport ? ` title="最後回報：${escapeHtml(order.lastReport)}"` : "";
+    return `<span class="card-today-status is-${escapeHtml(label.tone)}" data-today-status="${escapeHtml(label.tone)}"${title}>${escapeHtml(label.text)}</span>`;
+  } catch (error) {
+    console.warn("today status label failed", error);
+    return fallback;
+  }
+}
+
+// 能不能在卡片上改機台加工時間：跟卡片「回報」按鈕同一套（有指派機台、不是臥式多盤），而且有工序 id；
+// 正式模式要登入中（沒登入看不到頁面，這裡是保險）。
+function machtileCardCanEditMachineTime(machine, order) {
+  if (!order || !order.processId || !order.workOrderId) return false;
+  if (!isReportableMachineName(machine?.name) || !isOrderReportable(order) || isHmcMachine(machine)) return false;
+  if (machtileStrictMode() && !machtileSessionActive()) return false;
+  return true;
+}
+
+function machtileCardCycleGrid(machine, order, profile, delta, dailyQty) {
+  const core = machtileCardEstimateCore();
+  const has = Number(profile?.pureCycleSec) > 0;
+  const editable = machtileCardCanEditMachineTime(machine, order);
+  const machineCode = String(machine?.code || machine?.name || "");
+  const timeInner = `
+            <span>機台加工時間</span>
+            <strong>${has ? `${escapeHtml(formatSeconds(profile.pureCycleSec))}<small> / 件</small>` : "未填"}</strong>
+            ${editable ? `<small class="cycle-edit-hint">${has ? "點這裡修改" : "點這裡填"}</small>` : ""}`;
+  const timeCell = editable
+    ? `<div class="cycle-machine-time is-editable${has ? "" : " is-missing"}" role="button" tabindex="0" data-no-detail data-card-ct-edit="${escapeHtml(String(order.processId))}" data-card-ct-machine="${escapeHtml(machineCode)}" aria-label="${escapeHtml(machineCode)} 機台加工時間：${has ? escapeHtml(formatSeconds(profile.pureCycleSec)) : "未填"}，點一下填寫">${timeInner}
+          </div>`
+    : `<div class="cycle-machine-time${has ? "" : " is-missing"}">${timeInner}
+          </div>`;
+  const lu = profile?.loadUnload || null;
+  const actualDaily = core && lu?.actualPerPieceSec ? core.actualDailyEstimate(lu.actualPerPieceSec) : null;
+  const luText = core && lu ? core.loadUnloadLabel(lu) : "";
+  return `
+        <div class="cycle-mini-grid">
+          ${timeCell}
+          <div>
+            <span>基準差異</span>
+            <strong class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${delta === null ? "-" : `${delta > 0 ? "+" : ""}${delta}%`}</strong>
+          </div>
+          <div class="cycle-daily-estimate">
+            <span>每日估算</span>
+            <strong>${dailyQty ? `${dailyQty} 件` : "-"}</strong>
+            ${luText ? `<small class="cycle-load-unload" data-lu-source="${escapeHtml(lu.source)}">${escapeHtml(luText)}</small>` : ""}
+            ${actualDaily ? `<small class="cycle-actual-daily" data-actual-samples="${lu.actualSamples}">實際約 ${actualDaily} 個／天</small>` : ""}
+          </div>
+        </div>`;
+}
+
+// ---- 小框 ----
+function machtileCardCtSheet() {
+  let sheet = document.getElementById("cardMachineTimeSheet");
+  if (sheet) return sheet;
+  sheet = document.createElement("div");
+  sheet.id = "cardMachineTimeSheet";
+  sheet.className = "sheet card-ct-sheet";
+  sheet.setAttribute("aria-hidden", "true");
+  sheet.innerHTML = `
+    <div class="sheet-backdrop" data-card-ct-close></div>
+    <section class="sheet-panel card-ct-panel" role="dialog" aria-modal="true" aria-labelledby="cardCtTitle">
+      <div class="sheet-header">
+        <div><p class="eyebrow" id="cardCtEyebrow"></p><h2 id="cardCtTitle">機台加工時間</h2></div>
+        <button class="icon-button" type="button" data-card-ct-close aria-label="關閉">×</button>
+      </div>
+      <form id="cardCtForm" class="card-ct-form" novalidate></form>
+    </section>`;
+  document.body.appendChild(sheet);
+  sheet.addEventListener("click", (event) => {
+    if (event.target.closest("[data-card-ct-close]")) machtileCloseCardMachineTime();
+  });
+  // 改了數字就把上一次的紅字拿掉（例：「時間跟目前一樣」）
+  sheet.querySelector("#cardCtForm").addEventListener("input", () => {
+    if (machtileCardState.editor) machtileCardState.editor.error = "";
+    sheet.querySelector("[data-card-ct-error]")?.remove();
+  });
+  sheet.querySelector("#cardCtForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    machtileSaveCardMachineTime();
+  });
+  return sheet;
+}
+
+function machtileRenderCardCtSheet() {
+  const ed = machtileCardState.editor;
+  const sheet = machtileCardCtSheet();
+  if (!ed) return;
+  const order = ed.order;
+  sheet.querySelector("#cardCtEyebrow").textContent = `${ed.machineCode} · ${order?.id || ""}${order?.process ? ` · ${order.process}` : ""}`;
+  const form = sheet.querySelector("#cardCtForm");
+  const current = Number(order?.pureCycleSec) > 0 ? `${formatSeconds(order.pureCycleSec)} / 件` : "未填";
+  const disabled = ed.loading || ed.saving || ed.readOnly ? " disabled" : "";
+  form.innerHTML = `
+    <p class="card-ct-help">看<strong>機台控制器螢幕</strong>上的每件加工時間，填分和秒。</p>
+    <p class="card-ct-current">目前：<strong>${escapeHtml(current)}</strong></p>
+    <div class="card-ct-inputs">
+      <label><input id="cardCtMinutes" type="number" inputmode="numeric" min="0" step="1" value="${escapeHtml(ed.minutes)}" aria-label="分"${disabled}><span>分</span></label>
+      <label><input id="cardCtSeconds" type="number" inputmode="numeric" min="0" max="59" step="1" value="${escapeHtml(ed.seconds)}" aria-label="秒"${disabled}><span>秒 / 件</span></label>
+    </div>
+    <p class="card-ct-operator">${ed.loading ? "讀取中…" : `報工人：${escapeHtml(ed.actorName || "（登入者）")}`}</p>
+    ${ed.notice ? `<p class="card-ct-notice" data-card-ct-notice>${escapeHtml(ed.notice)}</p>` : ""}
+    ${ed.error ? `<p class="card-ct-error" role="alert" data-card-ct-error>${escapeHtml(ed.error)}</p>` : ""}
+    <div class="card-ct-actions">
+      <button type="button" class="secondary-button" data-card-ct-close>取消</button>
+      <button type="submit" class="primary-submit" data-card-ct-save${disabled}>${ed.saving ? "儲存中…" : "儲存"}</button>
+    </div>`;
+}
+
+function machtileCloseCardMachineTime() {
+  const sheet = document.getElementById("cardMachineTimeSheet");
+  if (sheet) {
+    sheet.classList.remove("is-open");
+    sheet.setAttribute("aria-hidden", "true");
+  }
+  if (!machtileCardState.editor?.saving) machtileCardState.editor = null;
+}
+
+async function machtileOpenCardMachineTime(processId, machineCode) {
+  const order = machtileCardOrders().find((o) => String(o.processId) === String(processId)) || null;
+  const machine = machtileMachineForOrder(order) || { name: machineCode };
+  if (!order || !machtileCardCanEditMachineTime(machine, order)) {
+    showToast("這張單目前不能在卡片上填機台加工時間。");
+    return;
+  }
+  const bcore = machtileBatchCore();
+  const split = bcore ? bcore.splitSeconds(order.pureCycleSec) : { minutes: "", seconds: "" };
+  const ed = {
+    processId: String(processId), machineCode: String(machineCode || machine.code || machine.name || ""), order,
+    minutes: split.minutes, seconds: split.seconds, loading: state.source === "supabase", saving: false,
+    readOnly: false, notice: "", error: "", actorId: "", actorName: "", operatorMapped: false, progress: null,
+  };
+  machtileCardState.editor = ed;
+  const sheet = machtileCardCtSheet();
+  machtileRenderCardCtSheet();
+  sheet.classList.add("is-open");
+  sheet.setAttribute("aria-hidden", "false");
+  if (state.source !== "supabase") {
+    ed.notice = "示範資料：儲存只改畫面，不會寫入。";
+    machtileRenderCardCtSheet();
+    return;
+  }
+  try {
+    const [actorId, users, progress] = await Promise.all([
+      machtileResolveAppUserId(),
+      machtileBatchFetchUsers(),
+      machtileBatchFetchProgress([ed.processId]),
+    ]);
+    if (machtileCardState.editor !== ed) return;
+    const choices = bcore ? bcore.operatorChoices(users) : [];
+    ed.actorId = actorId || "";
+    ed.actorName = machtileAuthState.appUserName || choices.find((u) => u.id === ed.actorId)?.name || "";
+    ed.operatorMapped = choices.some((u) => u.id === ed.actorId);
+    ed.progress = progress.map.get(ed.processId) || null;
+    if (!ed.actorId) {
+      ed.readOnly = true;
+      ed.notice = "登入帳號沒有對應到啟用中的使用者，不能填。請聯絡管理者。";
+    } else if (!ed.operatorMapped) {
+      ed.readOnly = true;
+      ed.notice = "你的帳號還沒對照舊 MES 工號，產值歸不到人，不能填。站別帳號請用「批次報工」選報工人。";
+    }
+  } catch (error) {
+    if (machtileCardState.editor !== ed) return;
+    ed.readOnly = true;
+    ed.error = `讀取失敗：${error.message}`;
+  }
+  ed.loading = false;
+  machtileRenderCardCtSheet();
+  document.getElementById("cardCtMinutes")?.focus();
+}
+
+function machtileCardCtReadDrafts() {
+  try { return JSON.parse(localStorage.getItem(MACHTILE_CARD_CT_DRAFT_KEY) || "{}") || {}; } catch { return {}; }
+}
+
+function machtileCardCtWriteDrafts(drafts) {
+  try { localStorage.setItem(MACHTILE_CARD_CT_DRAFT_KEY, JSON.stringify(drafts || {})); } catch { /* storage unavailable */ }
+}
+
+function machtileCardCtAfterSaved(processId, seconds) {
+  machtileApplyMachineTime(processId, seconds);
+  try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("monitor re-render after card machine time failed", error); }
+}
+
+async function machtileSaveCardMachineTime() {
+  const ed = machtileCardState.editor;
+  const bcore = machtileBatchCore();
+  if (!ed || !bcore || ed.loading || ed.saving || ed.readOnly) return;
+  ed.minutes = document.getElementById("cardCtMinutes")?.value ?? "";
+  ed.seconds = document.getElementById("cardCtSeconds")?.value ?? "";
+  ed.error = "";
+  const order = ed.order;
+  const ctDefault = Number(order.pureCycleSec) > 0 ? Math.round(Number(order.pureCycleSec)) : null;
+  const parsed = bcore.parseMachineTime(ed.minutes, ed.seconds);
+  if (parsed.error || parsed.seconds === null) {
+    ed.error = parsed.error || "請填機台加工時間（分、秒）";
+    machtileRenderCardCtSheet();
+    return;
+  }
+  if (state.source !== "supabase") {
+    machtileCloseCardMachineTime();
+    machtileCardCtAfterSaved(order.processId, parsed.seconds);
+    showToast(`示範模式：沒有寫入（機台加工時間 ${formatSeconds(parsed.seconds)}／件）`);
+    return;
+  }
+  const endedAt = new Date().toISOString();
+  // 起算點跟批次報工「中午報工」同一套規則（上一筆報工 → 本機 ledger → 工序開工）；只改時間時 ended_at＝started_at
+  const start = bcore.resolveStartedAt({
+    serverLastReportAt: ed.progress?.last_report_at || null,
+    localLedgerAt: machtileBatchLedgerAt(order.processId),
+    actualStartAt: ed.progress?.actual_start_at || null,
+    endedAt,
+  });
+  const model = {
+    mode: "noon",
+    machineCode: ed.machineCode,
+    order,
+    good: "",
+    bad: "",
+    ctDefault,
+    ctMinutes: ed.minutes,
+    ctSeconds: ed.seconds,
+    overtime: "",
+    operatorId: ed.actorId,
+    operatorMapped: ed.operatorMapped,
+    startedAt: start.startedAt,
+    startedAtReason: start.startedAt ? "" : "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。",
+  };
+  const v = bcore.validateRow(model);
+  if (v.empty) { ed.error = "時間跟目前一樣，不用儲存。"; machtileRenderCardCtSheet(); return; }
+  if (!v.send || !v.timeOnly) { ed.error = v.error || "不能儲存"; machtileRenderCardCtSheet(); return; }
+
+  ed.saving = true;
+  machtileRenderCardCtSheet();
+  const drafts = machtileCardCtReadDrafts();
+  const prev = drafts[ed.processId];
+  const id = bcore.ensureReportUuid(prev, model, () => crypto.randomUUID());
+  // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致（同批次）
+  const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : model.startedAt;
+  const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
+  drafts[ed.processId] = { reportUuid: id.reportUuid, fingerprint: id.fingerprint, startedAt, endedAt: end };
+  machtileCardCtWriteDrafts(drafts);
+  let status = "sent";
+  let message = "";
+  try {
+    const built = bcore.buildReportPayload({ row: { ...model, startedAt }, actorAppUserId: ed.actorId, endedAt: end, reportUuid: id.reportUuid, tenantId: order.tenantId });
+    const box = machtileOutboxEnabled() ? await machtileGetOutbox() : null;
+    await machtileBatchSendOne(box, built.payload, built.operators);
+    if (box) {
+      for (let i = 0; i < 3; i += 1) {
+        await box.outbox.flush().catch(() => {});
+        const left = (await box.outbox.pending().catch(() => [])).filter((x) => x.report_uuid === id.reportUuid && (x.next_attempt_at == null || x.next_attempt_at <= Date.now()));
+        if (!left.length) break;
+      }
+      const record = await box.outbox.get(id.reportUuid).catch(() => null);
+      if (record?.status === box.outbox.OUTBOX_STATUS.FAILED) { status = "failed"; message = `伺服器拒收：${record.last_error || ""}`; }
+      else if (record?.status !== box.outbox.OUTBOX_STATUS.SENT) status = "queued";
+    }
+    if (status !== "failed") {
+      delete drafts[ed.processId];
+      machtileCardCtWriteDrafts(drafts);
+      machtileBatchRollLedger(order.processId, built.payload.ended_at);
+      machtileUpdateOutboxBadge();
+      ed.saving = false;
+      machtileCloseCardMachineTime();
+      machtileCardCtAfterSaved(order.processId, built.payload.cycle_time_seconds);
+      showToast(`${ed.machineCode} 機台加工時間 ${formatSeconds(built.payload.cycle_time_seconds)}／件${status === "queued" ? "：已排入待送，連線後自動送出" : "：已儲存"}`);
+      return;
+    }
+  } catch (error) {
+    status = "failed";
+    message = `送出失敗：${error.message}`;
+  }
+  ed.saving = false;
+  ed.error = `${message}（再按一次會重送同一筆，不會變兩筆）`;
+  machtileRenderCardCtSheet();
+}
+
+function machtileHandleCardCtTrigger(event) {
+  const trigger = event.target.closest?.("[data-card-ct-edit]");
+  if (!trigger) return;
+  if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  machtileOpenCardMachineTime(trigger.dataset.cardCtEdit, trigger.dataset.cardCtMachine);
+}
+
+document.addEventListener("click", machtileHandleCardCtTrigger);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.getElementById("cardMachineTimeSheet")?.classList.contains("is-open")) {
+    machtileCloseCardMachineTime();
+    return;
+  }
+  machtileHandleCardCtTrigger(event);
+});
 
 init();
