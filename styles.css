@@ -11826,6 +11826,25 @@ body .machtile-session-badge .machtile-session-toggle {
   align-items: center;
 }
 .machine-card-orders[open] summary { border-bottom: 1px solid var(--border); }
+/* 預設收起（owner 2026-10-02）：一行「這台還掛 N 張 ▸」，手動切換中的標記收起也看得到 */
+.machine-card-orders summary { list-style: none; gap: 6px; flex-wrap: wrap; }
+.machine-card-orders summary::-webkit-details-marker { display: none; }
+.card-orders-caret::before { content: "▸"; font-size: 14px; }
+.machine-card-orders[open] .card-orders-caret::before { content: "▾"; }
+.card-orders-manual {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--amber-soft);
+  color: #7a4b00;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.machine-card-orders.is-manual { border-color: #f0c36d; }
+/* 明細／完整單裡的交換盤盤況（從 B01／B02 卡片搬過來） */
+.detail-hmc-section .machine-hmc-runtime { margin: 0 0 10px; }
+.detail-hmc-section .machine-hmc-runtime:last-child { margin-bottom: 0; }
 .card-order-list { list-style: none; margin: 0; padding: 4px 8px; display: grid; gap: 6px; }
 .card-order-item {
   display: grid;

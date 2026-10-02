@@ -10329,6 +10329,43 @@ function machtileSetCardPick(machineName, key) {
   }
 }
 
+// 「這台還掛 N 張」展開／收起：每台各自記，預設收起。
+// 存在 localStorage 只當個人偏好（私密視窗、封鎖網站資料時讀寫會丟錯 → 只記在這次開啟的記憶體裡）。
+// 卡片每 30 秒重畫一次，所以一定要記住，否則剛點開的清單會自己收回去。
+const MACHTILE_CARD_ORDERS_OPEN_KEY = "machtile.cardOrdersOpen.v1";
+let machtileCardOrdersOpenSet = null;
+
+function machtileCardOrdersOpenState() {
+  if (machtileCardOrdersOpenSet) return machtileCardOrdersOpenSet;
+  machtileCardOrdersOpenSet = new Set();
+  try {
+    const raw = window.localStorage.getItem(MACHTILE_CARD_ORDERS_OPEN_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(list)) list.forEach((name) => { if (typeof name === "string" && name) machtileCardOrdersOpenSet.add(name); });
+  } catch (error) {
+    /* 讀不到 → 全部當預設收起 */
+  }
+  return machtileCardOrdersOpenSet;
+}
+
+function machtileCardOrdersIsOpen(machineName) {
+  return machtileCardOrdersOpenState().has(String(machineName || ""));
+}
+
+function machtileSetCardOrdersOpen(machineName, open) {
+  const name = String(machineName || "");
+  if (!name) return;
+  const set = machtileCardOrdersOpenState();
+  if (open === set.has(name)) return;
+  if (open) set.add(name);
+  else set.delete(name);
+  try {
+    window.localStorage.setItem(MACHTILE_CARD_ORDERS_OPEN_KEY, JSON.stringify([...set]));
+  } catch (error) {
+    /* 寫不進去 → 只記在這次開啟 */
+  }
+}
+
 // 卡片上「這台還掛 N 張」＋這台全部在站的單（單號、品名、進度、最後活動時間），可以切換卡片顯示哪一張。
 function machtileCardOrdersMarkup(machine) {
   const ranked = Array.isArray(machine?.cardOrders) ? machine.cardOrders : [];
@@ -10359,9 +10396,11 @@ function machtileCardOrdersMarkup(machine) {
           : `<button type="button" class="card-order-pick" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="${escapeHtml(key)}">改顯示這張</button>`}
       </li>`;
   }).join("");
+  // 預設收起（owner 2026-10-02）：只顯示一行「這台還掛 N 張 ▸」；手動切換中的標記放在這一行，收起也看得到。
+  const open = machtileCardOrdersIsOpen(machineKey);
   return `
-    <details class="machine-card-orders" data-no-detail data-card-orders="${escapeHtml(machineKey)}">
-      <summary data-card-orders-summary>${escapeHtml(label)}${manual ? "・手動切換中" : ""}</summary>
+    <details class="machine-card-orders${manual ? " is-manual" : ""}" data-no-detail data-card-orders="${escapeHtml(machineKey)}"${open ? " open" : ""}>
+      <summary data-card-orders-summary><span class="card-orders-label">${escapeHtml(label)}</span><span class="card-orders-caret" aria-hidden="true"></span>${manual ? `<span class="card-orders-manual">手動切換中</span>` : ""}</summary>
       <ol class="card-order-list">${items}</ol>
       <p class="card-order-note">依最近活動（App 報工、舊 MES 報工、開工）自動挑選；切換只改這個畫面，不會寫資料庫。${manual ? ` <button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
     </details>`;
@@ -12271,6 +12310,7 @@ function renderWorkOrders() {
   holder.innerHTML = machines.length
     ? machines.map(renderMachineCard).join("")
     : `<article class="empty-card"><strong>沒有符合條件的機台</strong><span>請調整課別或狀態篩選。</span></article>`;
+  machtileRefreshDetailHmc();
 }
 
 function ensureHmcDashboardEntry() {
@@ -12322,6 +12362,73 @@ function machtileMonitorHmcRuntime(machine) {
       </div>` : ""}
     </section>
   `;
+}
+
+// B01／B02 的「6 盤最近人工盤況」和「固定工件配置 · Staging」（owner 2026-10-02 從 Monitor 卡片搬到明細／完整單）。
+// 內容、資料、按鈕（盤位、回報停機／恢復機台、固定工件盤位）都跟原本卡片上的一樣，只是換位置。
+function machtileHmcMachineFor(machineName) {
+  const key = String(machineName || "").trim();
+  if (!key) return null;
+  const upper = key.toUpperCase();
+  const found = (state.machines || []).find((m) => m.name === key || String(m.code || "").toUpperCase() === upper || String(m.name || "").toUpperCase() === upper);
+  if (found) return isHmcMachine(found) ? found : null;
+  const master = (state.machineMasters || []).find((m) => String(m.code || m.name || "").toUpperCase() === upper);
+  return master && isHmcMachine(master) ? master : null;
+}
+
+function machtileHmcDetailInner(machine) {
+  let runtime = "";
+  let fixed = "";
+  try { runtime = machtileMonitorHmcRuntime(machine); } catch (error) { console.warn("HMC runtime block failed", error); }
+  try { fixed = machtileHmcFixedEntries(machine); } catch (error) { console.warn("HMC fixed entries failed", error); }
+  return `${runtime}${fixed}`;
+}
+
+function machtileHmcDetailSection(machine) {
+  if (!machine || !isHmcMachine(machine)) return "";
+  const code = String(machine.code || machine.name || "");
+  const inner = machtileHmcDetailInner(machine);
+  if (!inner.trim()) return "";
+  return `
+    <section class="detail-section detail-hmc-section" data-detail-hmc="${escapeHtml(code)}">
+      <div class="detail-section-title">
+        <h3>交換盤盤況</h3>
+        <span>${escapeHtml(code)} · 臥式多盤</span>
+      </div>
+      <div data-detail-hmc-body>${inner}</div>
+    </section>`;
+}
+
+// 盤況每 30 秒更新（或送出事件後）重畫卡片時，明細開著的話那一塊也跟著換
+function machtileRefreshDetailHmc() {
+  const sheet = document.getElementById("detailSheet");
+  if (!sheet || !sheet.classList.contains("is-open")) return;
+  const section = sheet.querySelector("[data-detail-hmc]");
+  const body = section?.querySelector("[data-detail-hmc-body]");
+  if (!section || !body) return;
+  const machine = machtileHmcMachineFor(section.dataset.detailHmc);
+  if (!machine) return;
+  body.innerHTML = machtileHmcDetailInner(machine);
+}
+
+// 臥式機台沒有工單時，卡片「明細」只看這台的盤況
+function machtileOpenHmcMachineDetail(machineCode) {
+  const machine = machtileHmcMachineFor(machineCode);
+  if (!machine) return;
+  const code = String(machine.code || machine.name || "");
+  $("#detailSheet").classList.remove("route-sheet");
+  document.body.classList.remove("route-mode");
+  $("#detailSheet").classList.add("is-open");
+  $("#detailSheet").setAttribute("aria-hidden", "false");
+  $("#detailContent").innerHTML = `
+    <section class="detail-head">
+      <div class="detail-head-order">
+        <div class="detail-head-pills"><span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span></div>
+        <h3>${escapeHtml(code)}</h3>
+        <p>${escapeHtml(machine.note || "目前沒有指派工單")}</p>
+      </div>
+    </section>
+    ${machtileHmcDetailSection(machine) || '<p class="empty-note">目前沒有盤況資料。</p>'}`;
 }
 
 function renderMachineCard(machine) {
@@ -12380,9 +12487,6 @@ function renderMachineCard(machine) {
       </div>
       ${machtileCardOrdersMarkup(machine)}
 
-      ${machtileMonitorHmcRuntime(machine)}
-      ${machtileHmcFixedEntries(machine)}
-
       ${order ? `
         <div class="program-strip">
           <span>CNC 程式</span>
@@ -12440,7 +12544,11 @@ function renderMachineCard(machine) {
       <footer class="machine-tile-footer">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
-          ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>` : ""}
+          ${order
+            ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>`
+            : isHmc
+              ? `<button class="machine-detail-button" type="button" data-no-detail data-hmc-machine-detail="${escapeHtml(machine.code || machine.name)}">明細</button>`
+              : ""}
           ${isHmc
             ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
             : order
@@ -17735,6 +17843,8 @@ function renderDetail(order, detail) {
       <div><span>品檢</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${currentProcess?.inspection_required ? "需要品檢" : "未要求"}</small></div>
     </div>
 
+    ${machtileHmcDetailSection(machtileHmcMachineFor(order.machine))}
+
     <section class="detail-ai ${status.className}">
       <div class="advice-title"><span></span>MachTile AI 建議</div>
       <p>${escapeHtml(riskSuggestion(order))}</p>
@@ -19078,6 +19188,14 @@ function handleLocalReport(completed, defects, options = {}) {
 }
 
 function bindEvents() {
+  // 卡片「這台還掛 N 張」展開／收起 → 記住（toggle 不會冒泡，用 capture 收）
+  document.addEventListener("toggle", (event) => {
+    const box = event.target;
+    if (box && box.matches && box.matches("details[data-card-orders]") && box.isConnected) {
+      machtileSetCardOrdersOpen(box.dataset.cardOrders, box.open);
+    }
+  }, true);
+
   document.addEventListener("click", (event) => {
     if (machtileHandleBatchClick(event)) return;
     const viewButton = event.target.closest("[data-view]");
@@ -19368,6 +19486,13 @@ function bindEvents() {
     const cardPickButton = event.target.closest("[data-card-pick]");
     if (cardPickButton) {
       machtileSetCardPick(cardPickButton.dataset.cardPick, cardPickButton.dataset.cardPickKey || "");
+      return;
+    }
+
+    // 臥式機台沒有工單：卡片「明細」→ 只看這台的交換盤盤況
+    const hmcMachineDetail = event.target.closest("[data-hmc-machine-detail]");
+    if (hmcMachineDetail) {
+      machtileOpenHmcMachineDetail(hmcMachineDetail.dataset.hmcMachineDetail);
       return;
     }
 
