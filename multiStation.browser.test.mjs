@@ -67,7 +67,7 @@ const card = (woId, wo, machine, procId, status, extra = {}) => ({
 });
 // v_work_order_cards: one row per order. AR's current step is B01#3 (what the view picks today).
 const cards = [
-  card(id(101), AR, "B01", P.arStep3, "pending"),
+  card(id(101), AR, "B01", P.arStep3, "pending", { last_report_at: ago(5), open_risk_level: "high" }),
   card(id(102), "XX01202609020008", "A01", P.a01, "running", { quantity: 5000 }),
 ];
 // work_order_processes as the per-step station sync leaves them: A02#2 and B01#3 on station, A03#1 off station.
@@ -182,6 +182,10 @@ console.log("== 平板：Monitor 卡片（同一張單在 A02 第 2 道＋B01 �
   ok(b01.includes(AR) && b01.includes("第 3 道"), "B01 卡片照常顯示 XX01202609160002（第 3 道）", b01.slice(0, 200));
   ok(!a03.includes(AR), "A03（舊 MES 已移走的第 1 道）不顯示這張單");
   ok(a01.includes("XX01202609020008") && !a01.includes("第 3 道"), "只在一台的單：卡片跟原本一樣（不加「第 N 道」）");
+  const a02Footer = (await tile(page, "A02").locator(".machine-tile-footer").innerText()).trim();
+  const b01Footer = (await tile(page, "B01").locator(".machine-tile-footer").innerText()).trim();
+  ok(a02Footer.includes("尚未回報") && !b01Footer.includes("尚未回報"), "審查 #45：A02 的「最後回報」是第 2 道自己的（尚未回報），不是 B01 那道的時間", `A02=${a02Footer} | B01=${b01Footer}`);
+  ok(a02.includes("整單 ·") && !b01.includes("整單 ·"), "審查 #45：A02 卡片上工單風險標「整單」（風險掛在整張單）", a02.slice(0, 240));
   await page.screenshot({ path: path.join(outDir, "01-tablet-monitor.png"), fullPage: true });
 
   // A02 card: 回報 opens the report sheet on A02's step (process_id of step 2), not B01's

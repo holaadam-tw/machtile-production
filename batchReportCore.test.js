@@ -225,7 +225,8 @@ eq("計數", c.summarizeResults([{ status: "sent" }, { status: "queued" }, { sta
 console.log("== expandStationOrders（同一張單同時在兩台）==");
 {
   const base = [
-    { id: "XX01202609160002", workOrderId: "w-ar", processId: "p3", machine: "B01", process: "AR16-R01-01_加工製程", processStatus: "pending", done: 4, workStatus: "in_progress", pureCycleSec: 90, machineTimeSource: "view" },
+    { id: "XX01202609160002", workOrderId: "w-ar", processId: "p3", machine: "B01", process: "AR16-R01-01_加工製程", processStatus: "pending", done: 4, workStatus: "in_progress", pureCycleSec: 90, machineTimeSource: "view",
+      lastReport: "5 分鐘前", risk: "high", dueDate: "2026-10-31", total: 210, customer: "C", part: "AR16/AR22泵浦本體", programName: "O1234", programVersion: "v3", scheduleSetupMinutes: 30, scheduleOverrideReason: "x", inspectionHold: true, loadUnloadSec: 20 },
     { id: "WO-A01", workOrderId: "w-a01", processId: "pa", machine: "A01", process: "車削", processStatus: "running", done: 0 },
   ];
   const names = new Map([["m-a02", "A02"], ["m-b01", "B01"], ["m-a03", "A03"], ["m-a01", "A01"]]);
@@ -242,6 +243,9 @@ console.log("== expandStationOrders（同一張單同時在兩台）==");
   eq("只多出 A02 第 2 道（離站、完工、沒機台名稱、不在畫面的單、重複都不算）", extras.map((o) => `${o.machine}#${o.stationStep}:${o.processId}`), ["A02#2:p2"]);
   eq("額外那筆：單號／工單 id 同原本，工序與完成數換成自己的", [extras[0].id, extras[0].workOrderId, extras[0].processStatus, extras[0].done, extras[0].isExtraStation], ["XX01202609160002", "w-ar", "pending", 0, true]);
   eq("屬於原本那道的機台時間不沿用", [extras[0].pureCycleSec, extras[0].machineTimeSource], [null, null]);
+  eq("審查 #45：最後回報不沿用（別道的時間），改成這一道自己的、先顯示尚未回報", [extras[0].lastReport, extras[0].lastReportScope], ["尚未回報", "step"]);
+  eq("審查 #45：程式、排程工時、品檢停等、上下料不沿用", [extras[0].programName, extras[0].programVersion, extras[0].scheduleSetupMinutes, extras[0].scheduleOverrideReason, extras[0].inspectionHold, extras[0].loadUnloadSec], [undefined, undefined, null, "", false, null]);
+  eq("審查 #45：整單欄位保留（風險、交期、數量、客戶、品名）並標為整單", [extras[0].risk, extras[0].dueDate, extras[0].total, extras[0].customer, extras[0].part, extras[0].orderScopeFields.includes("risk")], ["high", "2026-10-31", 210, "C", "AR16/AR22泵浦本體", true]);
   eq("原本的陣列不動", base.length, 2);
   eq("物件形式的 machineNameById 也可以", c.expandStationOrders(base, procs, { "m-a02": "A02" }).length, 1);
   eq("沒有工序資料 → 沒有額外卡片", c.expandStationOrders(base, null, names), []);
