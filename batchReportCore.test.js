@@ -180,6 +180,15 @@ eq("只改時間、不填數量 → 也能送（timeOnly）", [to.send, to.timeO
 const toB = c.buildReportPayload({ row: { ...tRow, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" }, endedAt: "2026-10-02T05:00:00.000Z", reportUuid: "x" });
 eq("只改時間：0／0、started_at＝ended_at＝上一筆時間（不推進起算點、不吃工時）", [toB.payload.completed_qty, toB.payload.defect_qty, toB.payload.started_at, toB.payload.ended_at, toB.timeOnly], [0, 0, "2026-10-02T04:00:00.000Z", "2026-10-02T04:00:00.000Z", true]);
 eq("只改時間但沒有任何開工紀錄 → 擋（請先今日開工）", c.validateRow({ ...tRow, startedAt: null, startedAtReason: "請先按上方「今日開工」", good: "", ctMinutes: "2", ctSeconds: "0" }).error, "請先按上方「今日開工」");
+// 卡片小框（2026-10-02）：沒有舊 MES 工號的登入者也能「只改時間」——0／0 回寫橋 SKIP_ZERO，不寫回舊 MES
+const unm = { ...tRow, operatorMapped: false, allowUnmappedTimeOnly: true };
+eq("沒工號＋明確允許＋只改時間 → 可以送", (({ send, timeOnly }) => [send, timeOnly])(c.validateRow({ ...unm, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" })), [true, true]);
+eq("沒工號＋明確允許但有數量 → 照樣擋", c.validateRow({ ...unm, good: "5", ctMinutes: "1", ctSeconds: "40" }).error, "這位報工人還沒對照舊 MES 工號，產值歸不到人");
+eq("沒工號＋明確允許但只有不良 → 照樣擋", c.validateRow({ ...unm, good: "", bad: "1", ctMinutes: "1", ctSeconds: "40" }).send, false);
+eq("沒工號、沒允許（批次報工）→ 只改時間也擋", c.validateRow({ ...tRow, operatorMapped: false, good: "", ctMinutes: "1", ctSeconds: "40" }).send, false);
+eq("今日開工不吃 allowUnmappedTimeOnly", c.validateRow({ ...unm, mode: "dailyStart", selected: true }).send, false);
+const unmB = c.buildReportPayload({ row: { ...unm, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" }, actorAppUserId: base.operatorId, endedAt: "2026-10-02T05:00:00.000Z", reportUuid: "x" });
+eq("沒工號只改時間：payload 0／0、只帶時間、報工人＝登入者 app_user id", [unmB.payload.completed_qty, unmB.payload.defect_qty, unmB.payload.cycle_time_seconds, unmB.payload.user_id, unmB.operators], [0, 0, 100, base.operatorId, [base.operatorId]]);
 eq("時間沒改、數量空白 → 空白列", c.validateRow({ ...tRow, ctMinutes: "1", ctSeconds: "35" }).empty, true);
 eq("時間填錯 → 紅字", c.validateRow({ ...tRow, good: "3", ctMinutes: "1", ctSeconds: "75" }).error, "機台加工時間的秒數要在 0–59");
 eq("改時間 → 新 uuid（指紋含時間）", c.rowFingerprint({ ...tRow, good: "5", ctMinutes: "1", ctSeconds: "40" }) === c.rowFingerprint({ ...tRow, good: "5", ctMinutes: "1", ctSeconds: "35" }), false);

@@ -145,8 +145,8 @@ function makeBackend(opts = {}) {
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/app_users") {
-      const list = users.map(({ auth, ...u }) => (opts.actorUnmapped && u.id === users[0].id ? { ...u, legacy_user_id: "" } : u));
-      if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: users[0].name }]);
+      const list = users.map(({ auth, ...u }) => (opts.actorUnmapped && u.id === users[0].id ? { ...u, name: opts.actorName || u.name, legacy_user_id: "" } : u));
+      if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: opts.actorName || users[0].name }]);
       return json(200, list);
     }
     if (p === "/rest/v1/work_orders") {
@@ -323,21 +323,44 @@ console.log("== 手機（Pixel 7）==");
   await context.close();
 }
 
-// ================= 沒有對照工號的登入者：只讀 =================
-console.log("== 登入者沒有對照舊 MES 工號 → 只讀 ==");
+// ================= 沒有對照工號的登入者（例：系統管理者）：也能存，只記機台時間 =================
+// 小框只送 0／0（只帶 cycle_time_seconds），回寫橋 SKIP_ZERO 不寫回舊 MES，所以不需要舊 MES 工號（owner 2026-10-02）。
+console.log("== 登入者沒有對照舊 MES 工號（系統管理者）→ 也能存，報工人＝登入者 ==");
 {
-  const be = makeBackend({ actorUnmapped: true });
+  const be = makeBackend({ actorUnmapped: true, actorName: "系統管理者" });
   const { context, page, errors } = await newPage(browser, devices["Pixel 7"], be);
   await waitLoaded(page);
   await cardOf(page, "A01").locator("[data-card-ct-edit]").click();
   const sheet = page.locator("#cardMachineTimeSheet");
-  await sheet.locator("[data-card-ct-notice]").waitFor({ timeout: 10000 });
-  ok((await sheet.locator("[data-card-ct-notice]").innerText()).includes("對照"), "說明為什麼不能填");
-  ok(await sheet.locator("[data-card-ct-save]").isDisabled() && await page.locator("#cardCtMinutes").isDisabled(), "輸入框與儲存都鎖住");
-  await page.screenshot({ path: path.join(outDir, "06-phone-editor-readonly.png") });
-  await sheet.locator("[data-card-ct-close]").last().click();
-  ok(!(await sheet.isVisible()), "取消可以關掉");
-  ok(be.calls.length === 0, "沒有送出任何報工");
+  await sheet.locator("[data-card-ct-save]:not([disabled])").waitFor({ timeout: 10000 });
+  const opText = await sheet.locator("[data-card-ct-operator]").innerText();
+  ok(opText === "報工人：系統管理者（只記錄機台時間，不寫回舊 MES）", "中性說明：報工人＝系統管理者、只記錄機台時間", opText);
+  ok(await sheet.locator("[data-card-ct-notice]").count() === 0 && !(await sheet.innerText()).includes("對照"), "不再出現「還沒對照舊 MES 工號」的擋人訊息");
+  ok(!(await page.locator("#cardCtMinutes").isDisabled()) && !(await sheet.locator("[data-card-ct-save]").isDisabled()), "輸入框與儲存可以用");
+  await page.locator("#cardCtMinutes").fill("1");
+  await page.locator("#cardCtSeconds").fill("40");
+  await page.screenshot({ path: path.join(outDir, "06-phone-editor-unmapped.png") });
+  await sheet.locator("[data-card-ct-save]").click();
+  await page.waitForFunction(() => !document.getElementById("cardMachineTimeSheet")?.classList.contains("is-open"), null, { timeout: 15000 });
+  ok(be.calls.length === 1 && be.inserted.size === 1, `送出 1 筆（${be.calls.length}）`);
+  const sent = be.calls[0]?.p_payload || {};
+  const last = progress[id(301)].last_report_at;
+  ok(sent.completed_qty === 0 && sent.defect_qty === 0 && sent.cycle_time_seconds === 100 && sent.report_payload?.cycle_time_seconds === 100, "0／0 報工，只帶 cycle_time_seconds＝100", JSON.stringify(sent));
+  ok(sent.started_at === last && sent.ended_at === last, "started_at＝ended_at＝上一筆報工的時間");
+  ok(sent.user_id === users[0].id && JSON.stringify(sent.operators) === JSON.stringify([users[0].id]), "報工人＝登入者本人（user_id、operators 都是 app_users.id）", JSON.stringify({ user_id: sent.user_id, operators: sent.operators }));
+  ok(!users.some((u) => u.legacy_user_id && JSON.stringify(sent).includes(u.legacy_user_id)), "payload 裡沒有任何舊 MES 工號（不捏造）");
+  const expected = await page.evaluate(([s, uid]) => {
+    const core = window.MachTileBatchReportCore;
+    const order = { workOrderId: s.work_order_id, processId: s.process_id, tenantId: s.tenant_id, processStatus: s.status_after_report, done: s.report_payload.machine_qty, total: s.report_payload.work_total_qty };
+    const row = { mode: "noon", machineCode: "A01", order, good: "", bad: "", ctDefault: 95, ctMinutes: "1", ctSeconds: "40", overtime: "", operatorId: uid, operatorMapped: false, allowUnmappedTimeOnly: true, startedAt: s.started_at };
+    const built = core.buildReportPayload({ row, actorAppUserId: uid, endedAt: new Date().toISOString(), reportUuid: s.report_uuid, tenantId: s.tenant_id });
+    return { ...built.payload, operators: built.operators };
+  }, [sent, users[0].id]);
+  const norm = (o) => JSON.stringify(Object.keys(o).sort().reduce((a, k) => ({ ...a, [k]: o[k] }), {}));
+  ok(norm(expected) === norm(sent), "payload 跟批次「只改時間」逐欄相同", `
+        card  ${norm(sent)}
+        batch ${norm(expected)}`);
+  ok((await cardOf(page, "A01").locator(".cycle-mini-grid").innerText()).includes("1分40秒"), "存完卡片顯示新的值 1分40秒");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
