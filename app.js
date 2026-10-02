@@ -9960,6 +9960,8 @@ async function machtileLoadCardLegacyProgress() {
       const progress = core.cardProgress(order.appDone, row, nowMs);
       order.done = progress.done;
       order.progressSource = progress;
+      // 逐工序額外卡片：「最後回報」用這一道自己的時間（view 的 last_report_at 是整張單的）
+      if (order.isExtraStation) order.lastReport = row && row.last_report_at ? formatRelativeTime(row.last_report_at) : "尚未回報";
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
     }
@@ -12222,7 +12224,7 @@ function renderMachineCard(machine) {
         </div>
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
-          ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
+          ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">${order.isExtraStation && ["overdue", "aiRisk"].includes(orderRiskKey) ? "整單" : "工單"} · ${escapeHtml(orderRisk.label)}</span>` : ""}
           ${order ? `<a class="machine-open-link" data-no-detail href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
         </div>
       </header>

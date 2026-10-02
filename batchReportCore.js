@@ -405,6 +405,23 @@
   // 只收：有機台、在站（off_station_at 空）、狀態跟 view 挑得到的一樣（pending/running/abnormal/waiting_inspection）、
   // 不是原本那筆已經顯示的工序。回傳只有「額外」那幾筆；原本的 state.workOrders 不動（警示、歷史、關注中心照舊一單一筆）。
   const STATION_CARD_STATUSES = Object.freeze(["pending", "running", "abnormal", "waiting_inspection"]);
+  // 額外卡片從原本那筆複製來的欄位分兩種（審查 #45）：
+  //   整單（同一張工單每一道都一樣，保留，畫面上標「整單」）：單號、客戶、品名、圖號、交期、訂單數量、優先、工單狀態、
+  //     未結風險（delivery_risk_alerts 掛在工單上）、備料狀態。
+  //   別道（v_work_order_cards 算的是原本那一道或整單的最後一筆，不能沿用）：最後回報時間、程式／版本／雜湊、機台時間、
+  //     基準、上下料、歷史次數、排程工時／修正、品檢停等。這些清掉，最後回報改用這一道自己的（batch_report_progress）。
+  const ORDER_SCOPE_FIELDS = Object.freeze(["id", "workOrderId", "customer", "part", "drawing", "dueDate", "total", "priority", "workStatus", "risk", "materialStatus", "tenantId"]);
+  const STEP_SCOPE_RESET = Object.freeze({
+    lastReport: "尚未回報", lastReportScope: "step",
+    programName: undefined, programVersion: undefined, previousProgramVersion: undefined, programHash: undefined, previousProgramHash: undefined,
+    changedLines: undefined, toolChanges: undefined,
+    pureCycleSec: null, machineTimeSource: null, baselineCycleSec: null, loadUnloadSec: null,
+    historyRuns: null, historyYears: null, lastRunDate: undefined,
+    scheduleSetupMinutes: null, scheduleStandardUnitMinutes: null, scheduleHandlingMinutes: null, scheduleOverrideMinutes: null,
+    scheduleOverrideReason: "", scheduleOverrideBy: "", scheduleOverrideAt: "",
+    inspectionHold: false,
+    appDone: undefined, progressSource: undefined,
+  });
   function expandStationOrders(orders, procs, machineNameById) {
     const list = Array.isArray(orders) ? orders : [];
     const byWorkOrder = new Map();
@@ -424,8 +441,12 @@
         const machine = p.machine_id ? names.get(String(p.machine_id)) : "";
         if (!machine) return;
         shown.add(String(p.id));
+        const orderPart = {};
+        ORDER_SCOPE_FIELDS.forEach((key) => { if (key in base) orderPart[key] = base[key]; });
         extras.push({
-          ...base,
+          ...orderPart,
+          ...STEP_SCOPE_RESET,
+          orderScopeFields: ORDER_SCOPE_FIELDS,
           processId: p.id,
           process: p.process_name || base.process,
           processStatus: String(p.status),
@@ -434,9 +455,6 @@
           offStation: false,
           stationStep: Number(p.process_order || 0) || null,
           isExtraStation: true,
-          // 這幾欄在 view 裡屬於原本那道工序，不能沿用
-          pureCycleSec: null, machineTimeSource: null, baselineCycleSec: null,
-          appDone: undefined, progressSource: undefined,
         });
       });
     return extras;
@@ -477,6 +495,6 @@
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
     operatorChoices, defaultOperatorId, summarizeResults,
-    expandStationOrders, orderRef, findOrderByRef, STATION_CARD_STATUSES,
+    expandStationOrders, orderRef, findOrderByRef, STATION_CARD_STATUSES, ORDER_SCOPE_FIELDS,
   };
 });
