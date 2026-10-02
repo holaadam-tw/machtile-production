@@ -11776,3 +11776,34 @@ body .machtile-session-badge .machtile-session-toggle {
 .machine-metrics small.card-progress-pct { color: var(--brand-blue); font-size: 14px; font-weight: 800; }
 .card-progress-track { height: 8px; margin: 6px 4px 2px; background: rgba(0, 103, 255, 0.14); }
 .card-progress-track .progress-fill { background: var(--brand-blue); }
+
+/* Monitor 卡片：點「機台加工時間」直接填、每日估算的上下料來源、今日開工狀態（2026-10-02 owner） */
+.cycle-machine-time.is-editable { cursor: pointer; border-color: var(--brand-blue) !important; border-style: dashed !important; }
+.cycle-machine-time.is-editable:hover,
+.cycle-machine-time.is-editable:focus-visible { background: var(--brand-blue-soft) !important; outline: none; }
+.cycle-machine-time .cycle-edit-hint { display: block; margin-top: 2px; color: var(--brand-blue); font-size: 11px; font-weight: 700; }
+.cycle-daily-estimate small { display: block; margin-top: 2px; color: #475467; font-size: 11px; line-height: 1.35; }
+.cycle-daily-estimate small.cycle-actual-daily { color: var(--green-strong); font-weight: 700; }
+.card-today-status { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.card-today-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.card-today-status.is-started { color: var(--green-strong); }
+.card-today-status.is-finished { color: var(--blue); }
+.card-today-status.is-none { color: var(--gray); }
+.sheet.card-ct-sheet { z-index: 9500; }
+.card-ct-panel { top: auto; bottom: 18px; height: auto; max-height: calc(100vh - 36px); }
+.card-ct-form { display: grid; gap: 12px; }
+.card-ct-form p { margin: 0; }
+.card-ct-help { color: #475467; font-size: 14px; }
+.card-ct-current { font-size: 14px; }
+.card-ct-inputs { display: flex; gap: 10px; }
+.card-ct-inputs label { flex: 1; display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.card-ct-inputs input { width: 100%; min-width: 0; min-height: 52px; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px; font-size: 22px; font-variant-numeric: tabular-nums; }
+.card-ct-inputs span { white-space: nowrap; }
+.card-ct-operator { color: #475467; font-size: 13px; }
+.card-ct-notice { border-radius: var(--radius); padding: 8px 10px; background: var(--amber-soft); color: #7a4b00; font-size: 13px; }
+.card-ct-error { border-radius: var(--radius); padding: 8px 10px; background: var(--red-soft); color: #b42318; font-size: 13px; font-weight: 700; }
+.card-ct-actions { display: flex; gap: 10px; }
+.card-ct-actions button { flex: 1; min-height: 48px; border-radius: 999px; font-size: 16px; font-weight: 700; }
+.card-ct-actions [data-card-ct-close] { border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.card-ct-actions .primary-submit { margin: 0; border: 0; background: var(--brand-blue); color: #fff; }
+.card-ct-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
