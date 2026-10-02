@@ -235,7 +235,21 @@ console.log("== 手機（Pixel 7）：Monitor 卡片 ==");
   const brItem = b03.locator('.card-order-item', { hasText: "XX01202609170001" });
   ok(await brItem.count() === 1, "清單裡有 BR-03（194/194，以前會被排除）");
   ok((await brItem.locator(".card-overqty-tag").innerText()).trim() === "已報滿", "清單裡 BR-03 標「已報滿」");
-  ok((await brItem.locator("[data-card-order-progress]").innerText()).includes("194/194"), "清單進度 194/194");
+  ok((await brItem.locator("[data-card-order-progress]").innerText()).includes("194/194（100%）"), "清單進度 194/194（100%）", await brItem.locator("[data-card-order-progress]").innerText());
+  // 2026-10-02 清單改版：報滿／超量的列，數字紅色、細進度條滿格紅色（沿用 #51）
+  const brLook = await brItem.evaluate((el) => ({
+    qty: getComputedStyle(el.querySelector(".card-order-qty")).color,
+    over: el.querySelector(".card-order-bar")?.classList.contains("is-over"),
+    width: el.querySelector(".card-order-bar .progress-fill")?.style.width,
+    fill: getComputedStyle(el.querySelector(".card-order-bar .progress-fill")).backgroundColor,
+    tagBg: getComputedStyle(el.querySelector(".card-overqty-tag")).backgroundColor,
+    pick: el.querySelector(".card-order-pick")?.textContent.trim(),
+  }));
+  ok(brLook.qty === "rgb(217, 45, 32)" && brLook.over && brLook.width === "100%" && brLook.fill === "rgb(217, 45, 32)" && brLook.tagBg === "rgb(217, 45, 32)", "報滿的列：數字紅色、進度條滿格紅色、紅色標籤", JSON.stringify(brLook));
+  ok(brLook.pick === "切換顯示", "按鈕字樣「切換顯示」", brLook.pick);
+  const a37Item = b03.locator(".card-order-item.is-shown");
+  ok((await a37Item.locator(".card-order-shown").innerText()).trim() === "目前顯示" && await a37Item.locator(".card-order-pick").count() === 0, "顯示中的 A37 標「目前顯示」、沒有切換按鈕");
+  ok(await a37Item.locator(".card-order-qty").evaluate((el) => getComputedStyle(el).color) !== "rgb(217, 45, 32)", "沒滿的列數字不是紅色");
   // 手動切到 BR-03 → 卡片顯示 BR-03、100%、紅色滿格（超量單可以被選）
   await brItem.locator(".card-order-pick").click();
   const b03b = cardOf(page, "B03");

@@ -242,8 +242,14 @@ console.log("== 手機（Pixel 7）==");
   ok((await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText()).replace(/\s+/g, "") === "這台還掛2張手動切換中", "那一行＝這台還掛 2 張 ▸ 手動切換中", await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText());
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "04-phone-b04-manual-collapsed.png") });
   await cardOf(page, "B04").locator("[data-card-orders-summary]").click();
+  // 2026-10-02 清單改版：「恢復自動」樣式維持 #50（藍框、白底、圓角 8px、36px 高），放在一行小字說明旁
+  const autoLook = await cardOf(page, "B04").locator(".card-order-note .card-order-auto").evaluate((el) => { const s = getComputedStyle(el); return { text: el.textContent.trim(), border: s.borderTopColor, bw: s.borderTopWidth, bg: s.backgroundColor, radius: s.borderTopLeftRadius, h: el.getBoundingClientRect().height }; });
+  ok(autoLook.text === "恢復自動" && autoLook.border === "rgb(0, 103, 255)" && autoLook.bw === "1px" && autoLook.bg === "rgb(255, 255, 255)" && autoLook.radius === "8px" && autoLook.h >= 36, "「恢復自動」維持 #50 樣式", JSON.stringify(autoLook));
+  ok((await cardOf(page, "B04").locator(".card-order-note > span").innerText()).trim() === "依最近活動自動挑選；切換只影響這個畫面", "說明縮成一行小字");
+  ok(await cardOf(page, "B04").locator(".card-order-item.is-shown .card-order-shown").innerText() === "目前顯示", "切到的那張標「目前顯示」");
   await cardOf(page, "B04").locator(".card-order-auto").click();
   ok(await cardOf(page, "B04").locator("[data-card-orders-summary] .card-orders-manual").count() === 0, "恢復自動 → 標記消失");
+  ok(await cardOf(page, "B04").locator(".card-order-auto").count() === 0, "恢復自動 → 「恢復自動」按鈕也消失");
 
   console.log("-- 個人偏好：localStorage 記住每台展開或收起 --");
   ok(await isOpen(cardOf(page, "B04").locator("[data-card-orders]")), "B04 目前展開");

@@ -10399,7 +10399,36 @@ function machtileSetCardOrdersOpen(machineName, open) {
   }
 }
 
-// 卡片上「這台還掛 N 張」＋這台全部在站的單（單號、品名、進度、最後活動時間），可以切換卡片顯示哪一張。
+// 卡片上「這台還掛 N 張」＋這台全部在站的單（品名、單號、進度、最後活動時間），可以切換卡片顯示哪一張。
+// 2026-10-02 owner「清楚一點（顏色和文字）」：目前顯示那列淡藍底＋左側藍條＋「目前顯示」小標；其他列品名當標題、單號灰色小字、
+// 細進度條＋「52/124（42%）」、最後活動用相對時間＋來源小色塊、沒有活動紀錄整列變淡、「切換顯示」細框次要按鈕。只改畫面。
+function machtileCardOrderProgressMarkup(order) {
+  const info = machtileOverQtyInfo(order);
+  const isFull = Boolean(info?.full);
+  // 跟卡片「完成進度」同一套算法：未滿＝pct()（四捨五入、最多 100）；報滿／超量＝照實（例 128%）、進度條滿格紅色
+  const percent = isFull ? info.percent : pct(order);
+  const bar = isFull ? 100 : percent;
+  const done = String(order.done ?? 0);
+  const total = String(order.total ?? 0);
+  return `
+        <div class="card-order-progress${isFull ? " is-over" : ""}" data-card-order-progress>
+          <div class="progress-track card-order-bar${isFull ? " is-over" : ""}" aria-hidden="true"><div class="progress-fill" style="width:${bar}%"></div></div>
+          <span class="card-order-qty">${escapeHtml(done)}/${escapeHtml(total)}（${escapeHtml(String(percent))}%）</span>${machtileOverQtyTag(order)}
+        </div>`;
+}
+
+function machtileCardOrderActivityMarkup(latest) {
+  const core = machtileCardActiveCore;
+  if (!latest) return `<div class="card-order-activity is-none" data-card-order-activity>沒有活動紀錄</div>`;
+  const rel = (core?.relativeActivityText ? core.relativeActivityText(latest.at) : "") || formatDateTime(latest.at);
+  const source = ["report", "legacy", "start"].includes(latest.source) ? latest.source : "legacy";
+  const short = core?.SOURCE_SHORT?.[source] || latest.label;
+  const full = `最後活動 ${formatDateTime(latest.at)}（${latest.label}）`;
+  return `<div class="card-order-activity" data-card-order-activity title="${escapeHtml(full)}" data-card-order-at="${escapeHtml(formatDateTime(latest.at))}">
+          <span class="card-order-when">最後活動 ${escapeHtml(rel)}</span><span class="card-order-src is-${source}" data-card-order-src="${source}">${escapeHtml(short)}</span>
+        </div>`;
+}
+
 function machtileCardOrdersMarkup(machine) {
   const ranked = Array.isArray(machine?.cardOrders) ? machine.cardOrders : [];
   const others = Number(machine?.cardOtherCount || 0);
@@ -10413,20 +10442,17 @@ function machtileCardOrdersMarkup(machine) {
   const items = ranked.map(({ order, latest }) => {
     const key = keyOf(order);
     const isShown = key === shownKey;
-    const when = latest ? `${formatDateTime(latest.at)}（${latest.label}）` : "沒有活動紀錄";
+    const part = String(order.part || "").trim();
+    const cls = `card-order-item${isShown ? " is-shown" : ""}${!latest && !isShown ? " is-idle" : ""}`;
     return `
-      <li class="card-order-item${isShown ? " is-shown" : ""}" data-card-order-key="${escapeHtml(key)}">
-        <div class="card-order-main">
-          <strong>${escapeHtml(order.id)}</strong>
-          <span>${escapeHtml(order.part)}</span>${machtileOverQtyTag(order)}
-        </div>
-        <div class="card-order-meta">
-          <span data-card-order-progress>進度 ${escapeHtml(String(order.done ?? 0))}/${escapeHtml(String(order.total ?? 0))}</span>
-          <span data-card-order-activity>最後活動 ${escapeHtml(when)}</span>
-        </div>
+      <li class="${cls}" data-card-order-key="${escapeHtml(key)}">
+        <strong class="card-order-part">${escapeHtml(part || order.id)}</strong>
         ${isShown
-          ? `<span class="card-order-shown">顯示中</span>`
-          : `<button type="button" class="card-order-pick" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="${escapeHtml(key)}">改顯示這張</button>`}
+          ? `<span class="card-order-shown">目前顯示</span>`
+          : `<button type="button" class="card-order-pick" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="${escapeHtml(key)}">切換顯示</button>`}
+        <span class="card-order-no">${escapeHtml(order.id)}</span>
+        ${machtileCardOrderProgressMarkup(order)}
+        ${machtileCardOrderActivityMarkup(latest)}
       </li>`;
   }).join("");
   // 預設收起（owner 2026-10-02）：只顯示一行「這台還掛 N 張 ▸」；手動切換中的標記放在這一行，收起也看得到。
@@ -10435,7 +10461,7 @@ function machtileCardOrdersMarkup(machine) {
     <details class="machine-card-orders${manual ? " is-manual" : ""}" data-no-detail data-card-orders="${escapeHtml(machineKey)}"${open ? " open" : ""}>
       <summary data-card-orders-summary><span class="card-orders-label">${escapeHtml(label)}</span><span class="card-orders-caret" aria-hidden="true"></span>${manual ? `<span class="card-orders-manual">手動切換中</span>` : ""}</summary>
       <ol class="card-order-list">${items}</ol>
-      <p class="card-order-note">依最近活動（App 報工、舊 MES 報工、開工）自動挑選；切換只改這個畫面，不會寫資料庫。${manual ? ` <button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
+      <p class="card-order-note"><span>依最近活動自動挑選；切換只影響這個畫面</span>${manual ? `<button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
     </details>`;
 }
 

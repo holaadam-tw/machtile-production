@@ -163,5 +163,25 @@ eq("超量單活動較新 → 挑超量單", mixed.order.processId, "p-hcg");
 const mixed2 = c.pickActiveOrder([{ ...hcg, processId: "p-new", id: "NEW", done: 1 }, hcg], { activityOf: (o) => ({ legacyUpdatedAt: o.processId === "p-hcg" ? "2026-09-01T00:00:00Z" : "2026-10-02T09:00:00Z" }), fallbackCompare: fallback });
 eq("另一張活動較新 → 挑另一張，超量單排在「這台還掛」", [mixed2.order.processId, mixed2.others], ["p-new", 1]);
 
+// ---- 清單的最後活動：相對時間（本地時間；用 new Date(年,月,日,時,分) 建，跟時區無關）----
+const L = (y, mo, d, h, mi, sec = 0) => new Date(y, mo - 1, d, h, mi, sec).getTime();
+const NOW = L(2026, 10, 2, 20, 30);
+eq("30 秒前 → 剛剛", c.relativeActivityText(NOW - 30000, NOW), "剛剛");
+eq("時間在未來（時鐘差）→ 剛剛", c.relativeActivityText(NOW + 5 * 60000, NOW), "剛剛");
+eq("5 分鐘前", c.relativeActivityText(NOW - 5 * 60000, NOW), "5 分鐘前");
+eq("59 分 59 秒前 → 59 分鐘前", c.relativeActivityText(NOW - 59 * 60000 - 59000, NOW), "59 分鐘前");
+eq("今天 17:20 → 3 小時前（無條件捨去）", c.relativeActivityText(L(2026, 10, 2, 17, 20), NOW), "3 小時前");
+eq("今天 00:05 → 20 小時前", c.relativeActivityText(L(2026, 10, 2, 0, 5), NOW), "20 小時前");
+eq("昨天 16:57", c.relativeActivityText(L(2026, 10, 1, 16, 57, 12), NOW), "昨天 16:57");
+eq("昨天 23:50", c.relativeActivityText(L(2026, 10, 1, 23, 50), NOW), "昨天 23:50");
+eq("凌晨 00:30 看昨天 23:50 → 40 分鐘前", c.relativeActivityText(L(2026, 10, 1, 23, 50), L(2026, 10, 2, 0, 30)), "40 分鐘前");
+eq("前天以前、同一年 → 月/日 時:分", c.relativeActivityText(L(2026, 9, 29, 17, 5), NOW), "09/29 17:05");
+eq("月初看上個月最後一天 → 昨天", c.relativeActivityText(L(2026, 9, 30, 8, 0), L(2026, 10, 1, 9, 0)), "昨天 08:00");
+eq("去年 → 年/月/日", c.relativeActivityText(L(2025, 12, 31, 9, 0), NOW), "2025/12/31");
+eq("ISO 字串也可以", c.relativeActivityText(new Date(NOW - 2 * 3600000).toISOString(), NOW), "2 小時前");
+eq("沒有時間 → 空字串", c.relativeActivityText(null, NOW), "");
+eq("壞時間 → 空字串", c.relativeActivityText("not-a-date", NOW), "");
+eq("來源短字", [c.SOURCE_SHORT.report, c.SOURCE_SHORT.legacy, c.SOURCE_SHORT.start], ["App 報工", "舊 MES", "開工"]);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

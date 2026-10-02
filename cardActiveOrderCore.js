@@ -169,8 +169,34 @@
     return `${head}仍可以報工，請確認單號和數量沒有報錯。`;
   }
 
+  // ---- 「這台還掛 N 張」清單的最後活動：相對時間（owner 2026-10-02「清楚一點」）----
+  // 一小時內「N 分鐘前」、今天「N 小時前」、昨天「昨天 16:57」、今年「09/29 17:50」、更早「2025/12/31」。
+  // 用瀏覽器本地時間（跟原本 formatDateTime 一樣；工廠平板都是台灣時間）。時間在未來（時鐘差）一律「剛剛」。
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function relativeActivityText(value, nowValue) {
+    const ms = toMs(value);
+    if (!Number.isFinite(ms)) return "";
+    const nowMs = nowValue === undefined || nowValue === null ? Date.now() : toMs(nowValue);
+    if (!Number.isFinite(nowMs)) return "";
+    const diff = nowMs - ms;
+    if (diff < 60 * 1000) return "剛剛";
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分鐘前`;
+    const at = new Date(ms);
+    const nowDate = new Date(nowMs);
+    const dayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+    const hm = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
+    if (ms >= dayStart) return `${Math.floor(diff / 3600000)} 小時前`;
+    const yesterdayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 1).getTime();
+    if (ms >= yesterdayStart) return `昨天 ${hm}`;
+    if (at.getFullYear() === nowDate.getFullYear()) return `${pad2(at.getMonth() + 1)}/${pad2(at.getDate())} ${hm}`;
+    return `${at.getFullYear()}/${pad2(at.getMonth() + 1)}/${pad2(at.getDate())}`;
+  }
+
+  // 清單上來源小色塊的短字（舊 MES 灰、App 報工綠、開工藍；顏色在 styles.css .card-order-src.is-*）
+  const SOURCE_SHORT = Object.freeze({ report: "App 報工", legacy: "舊 MES", start: "開工" });
+
   return {
-    SOURCES, SOURCE_LABEL,
+    SOURCES, SOURCE_LABEL, SOURCE_SHORT, relativeActivityText,
     orderKey, latestActivity, legacyUpdatedAtFor, rankOrders, pickActiveOrder, moreOrdersLabel, defaultCandidate,
     isCardCandidate, overQtyInfo, overQtyLabel, overQtyReportWarning,
   };
