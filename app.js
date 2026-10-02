@@ -13381,6 +13381,327 @@ async function machtileRenderHistoryReal() {
   }
 }
 
+// ---- 營運分析：稼動率／實際 vs 估算／交期風險（owner 2026-10-02，純邏輯在 analyticsCore.js）----
+// 規則：數字只來自真實報工；估算一律標「估算」並寫公式；資料不足就寫原因，不補 0。讀取失敗顯示錯誤，不顯示假資料。
+// 讀取（全部 SELECT）：
+//   1. production_reports 近 7 天（台灣 00:00 起，created_at 下限，最多 5000 筆）
+//   2. machines（id → 機台代碼）
+//   3. 這些工序歷次填過的機台加工時間（cycle_time_seconds 不是 null；算「當時的機台加工時間」）
+// 卡片已經載入的資料直接用：目前工單、已報（舊 MES＋待回寫）、卡片機台加工時間、每日估算。
+const machtileAnalyticsCore = () => (typeof window === "undefined" ? null : window.MachTileAnalyticsCore);
+const MACHTILE_ANALYTICS_STALE_MS = 2 * 60 * 1000;
+const MACHTILE_ANALYTICS_REPORT_LIMIT = 5000;
+const MACHTILE_ANALYTICS_RANGE_KEY = "machtile-analytics-range";
+const machtileAnalyticsState = {
+  status: "idle",        // idle | loading | ok | error | demo
+  error: "",
+  cycleError: "",
+  loadedAt: 0,
+  reports: [],
+  cycleRows: [],
+  unknownMachine: 0,
+  truncated: false,
+  promise: null,
+  range: (() => { try { return localStorage.getItem(MACHTILE_ANALYTICS_RANGE_KEY) === "7d" ? "7d" : "today"; } catch { return "today"; } })(),
+  legacyOpen: false,
+};
+
+function machtileReportsViewActive() {
+  return Boolean(document.getElementById("reportsView")?.classList.contains("is-active"));
+}
+
+function machtileAnalyticsRerender() {
+  const holder = document.getElementById("machtileAnalytics");
+  if (holder) holder.innerHTML = machtileAnalyticsHtml();
+}
+
+async function machtileLoadAnalytics(force = false) {
+  const core = machtileAnalyticsCore();
+  const st = machtileAnalyticsState;
+  if (!core) return;
+  if (state.source !== "supabase") {
+    st.status = "demo";
+    machtileAnalyticsRerender();
+    return;
+  }
+  if (!force && st.status === "ok" && Date.now() - st.loadedAt < MACHTILE_ANALYTICS_STALE_MS) return;
+  if (st.promise) return st.promise;
+  if (st.status !== "ok") { st.status = "loading"; machtileAnalyticsRerender(); }
+  st.promise = (async () => {
+    try {
+      const nowMs = Date.now();
+      const since = core.windowStartIso(nowMs);
+      const [reports, machines] = await Promise.all([
+        supabaseFetch(`production_reports?select=id,process_id,machine_id,report_type,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds,created_at,overtime_plan:report_payload->>overtime_plan,work_order_processes(machine_id)&created_at=gte.${encodeURIComponent(since)}&order=created_at.asc&limit=${MACHTILE_ANALYTICS_REPORT_LIMIT}`),
+        supabaseFetch("machines?select=id,machine_code").catch((error) => { console.warn("analytics: machines lookup failed", error); return []; }),
+      ]);
+      if (!Array.isArray(reports)) throw new Error("報工資料格式不對");
+      const codeByMachineId = new Map();
+      (state.machineMasters || []).forEach((m) => { if (m.id && m.code) codeByMachineId.set(String(m.id), m.code); });
+      (Array.isArray(machines) ? machines : []).forEach((m) => { if (m?.id && m.machine_code) codeByMachineId.set(String(m.id), m.machine_code); });
+      const codeByProcessId = new Map();
+      machtileCardOrders().forEach((o) => { if (o?.processId && o.machine) codeByProcessId.set(String(o.processId), o.machine); });
+      const attached = core.attachMachineCodes(reports, { codeByMachineId, codeByProcessId });
+      // 當時的機台加工時間：報工裡的工序＋畫面上的工序，歷次填過的值
+      const pids = [...new Set([...reports.map((r) => String(r?.process_id || "")), ...machtileCardOrders().map((o) => String(o?.processId || ""))].filter(isUuid))];
+      const cycleRows = [];
+      let cycleError = "";
+      for (let i = 0; i < pids.length; i += 80) {
+        const chunk = pids.slice(i, i + 80).map(encodeURIComponent).join(",");
+        try {
+          const got = await supabaseFetch(`production_reports?select=process_id,cycle_time_seconds,created_at&process_id=in.(${chunk})&cycle_time_seconds=not.is.null&order=created_at.desc&limit=1000`);
+          if (Array.isArray(got)) cycleRows.push(...got);
+        } catch (error) {
+          cycleError = String(error?.message || error || "");
+        }
+      }
+      st.reports = attached.rows;
+      st.unknownMachine = attached.unknown;
+      st.truncated = reports.length >= MACHTILE_ANALYTICS_REPORT_LIMIT;
+      st.cycleRows = cycleRows;
+      st.cycleError = cycleError;
+      st.error = "";
+      st.status = "ok";
+      st.loadedAt = Date.now();
+    } catch (error) {
+      console.warn("analytics load failed", error);
+      st.status = "error";
+      st.error = String(error?.message || error || "未知錯誤");
+      st.reports = [];
+      st.cycleRows = [];
+    } finally {
+      st.promise = null;
+      machtileAnalyticsRerender();
+    }
+  })();
+  return st.promise;
+}
+
+function machtileBindAnalyticsEvents() {
+  const holder = document.getElementById("reportsContent");
+  if (!holder || holder.dataset.analyticsBound === "1") return;
+  holder.dataset.analyticsBound = "1";
+  holder.addEventListener("click", (event) => {
+    const rangeButton = event.target.closest("[data-analytics-range]");
+    if (rangeButton) {
+      machtileAnalyticsState.range = rangeButton.dataset.analyticsRange === "7d" ? "7d" : "today";
+      try { localStorage.setItem(MACHTILE_ANALYTICS_RANGE_KEY, machtileAnalyticsState.range); } catch { /* 只是記住選項 */ }
+      machtileAnalyticsRerender();
+      return;
+    }
+    if (event.target.closest("[data-analytics-retry]")) machtileLoadAnalytics(true).catch(() => {});
+  });
+}
+
+function machtileAnalyticsMachines() {
+  return managedMachineList().map((machine) => ({ machine, code: String(machine.code || machine.name || "").trim().toUpperCase(), label: machtileMachineDisplay(machine.name) }));
+}
+
+function machtileAnalyticsOrderEstimate(order) {
+  if (!order) return { estimate: null, reason: "沒有目前工單" };
+  const profile = getProgramProfile(order);
+  if (!(Number(profile?.pureCycleSec) > 0)) return { estimate: null, reason: "未填機台加工時間" };
+  const qty = dailyPureCapacity(profile);
+  return qty ? { estimate: qty, reason: "" } : { estimate: null, reason: "估算缺值" };
+}
+
+function machtileAnalyticsMd(date) {
+  const [, m, d] = String(date || "").split("-");
+  return m && d ? `${m}/${d}` : "-";
+}
+
+function machtileAnalyticsSigned(n) {
+  const v = Math.round(Number(n) || 0);
+  return v > 0 ? `+${v}` : v < 0 ? `−${Math.abs(v)}` : "0";
+}
+
+function machtileAnalyticsHtml() {
+  const core = machtileAnalyticsCore();
+  const st = machtileAnalyticsState;
+  if (!core) return '<p class="admin-module-note">分析元件沒有載入，請重新整理頁面。</p>';
+  const range = st.range === "7d" ? "7d" : "today";
+  const nowMs = Date.now();
+  const rangeLabel = range === "7d" ? `近 7 天（${machtileAnalyticsMd(core.windowDates(nowMs)[0])}–${machtileAnalyticsMd(core.taipeiDate(nowMs))}）` : `今天 ${machtileAnalyticsMd(core.taipeiDate(nowMs))}`;
+  const toggle = `
+    <div class="analytics-toolbar">
+      <div class="analytics-range" role="group" aria-label="期間">
+        <button type="button" data-analytics-range="today" aria-pressed="${range === "today"}">今天</button>
+        <button type="button" data-analytics-range="7d" aria-pressed="${range === "7d"}">近 7 天</button>
+      </div>
+      <small class="analytics-asof">${st.status === "ok" ? `資料讀取於 ${escapeHtml(core.hhmm(st.loadedAt))}（台灣時間）` : ""}</small>
+    </div>`;
+  if (st.status === "demo") {
+    return `${toggle}<section class="report-panel analytics-panel"><p class="analytics-reason" data-analytics-state="demo">示範資料模式沒有真實報工，分析不顯示（不拿示範資料冒充實績）。</p></section>`;
+  }
+  if (st.status === "error") {
+    return `${toggle}<section class="report-panel analytics-panel analytics-error" data-analytics-state="error" role="alert">
+      <div class="panel-title"><h2>營運分析</h2><span>讀取失敗</span></div>
+      <p>真資料讀取失敗，以下三個分析都不顯示（不顯示假資料）：${escapeHtml(st.error)}</p>
+      <button type="button" class="secondary-button" data-analytics-retry>重新讀取</button>
+    </section>`;
+  }
+  if (st.status !== "ok") {
+    return `${toggle}<section class="report-panel analytics-panel" data-analytics-state="loading"><p class="admin-module-note">正在讀取報工資料（近 7 天）…</p></section>`;
+  }
+  const machines = machtileAnalyticsMachines();
+  const warnings = [];
+  if (st.truncated) warnings.push(`近 7 天報工超過 ${MACHTILE_ANALYTICS_REPORT_LIMIT} 筆，只讀到前 ${MACHTILE_ANALYTICS_REPORT_LIMIT} 筆，數字可能偏低。`);
+  if (st.unknownMachine) warnings.push(`${st.unknownMachine} 筆報工對不到機台，沒有算進去。`);
+  const warnHtml = warnings.length ? `<p class="analytics-warning">${warnings.map(escapeHtml).join("<br>")}</p>` : "";
+  return `${toggle}${warnHtml}
+    ${machtileAnalyticsUtilHtml(core, machines, range, rangeLabel, nowMs)}
+    ${machtileAnalyticsOutputHtml(core, machines, range, rangeLabel, nowMs)}
+    ${machtileAnalyticsRiskHtml(core, nowMs)}`;
+}
+
+function machtileAnalyticsUtilHtml(core, machines, range, rangeLabel, nowMs) {
+  const st = machtileAnalyticsState;
+  const title = `<div class="panel-title"><h2>機台稼動率</h2><span>${escapeHtml(rangeLabel)}・由低到高</span></div>`;
+  if (st.cycleError) {
+    return `<section class="report-panel analytics-panel analytics-error" data-analytics-section="utilization" role="alert">${title}<p>機台加工時間讀取失敗，稼動率不顯示：${escapeHtml(st.cycleError)}</p></section>`;
+  }
+  const cardSecondsByProcess = new Map();
+  machtileCardOrders().forEach((o) => { if (o?.processId && Number(o.pureCycleSec) > 0) cardSecondsByProcess.set(String(o.processId), Number(o.pureCycleSec)); });
+  const result = core.machineUtilization({ machines: machines.map((m) => ({ code: m.code, label: m.label })), reports: st.reports, cycleRows: st.cycleRows, cardSecondsByProcess, nowMs, range });
+  const rows = result.rows.map((r) => {
+    const has = r.utilization !== null;
+    const pct = has ? Math.round(r.utilization * 100) : null;
+    const width = has ? Math.max(0, Math.min(100, pct)) : 0;
+    const tone = !has ? "is-na" : r.lowest ? "is-lowest" : "";
+    const detail = has
+      ? `純加工 ${escapeHtml(core.formatHours(r.pureSec))}／在班 ${escapeHtml(core.formatHours(r.shiftSec))}${range === "7d" ? `（${r.days} 天）` : ""}・報工覆蓋 ${escapeHtml(core.formatPercent(r.coverage))}`
+      : r.coverage !== null && r.shiftSec > 0 ? `在班 ${escapeHtml(core.formatHours(r.shiftSec))}・報工覆蓋 ${escapeHtml(core.formatPercent(r.coverage))}` : "";
+    const notes = [r.status === "partial" ? r.reason : "", ...r.notes].filter(Boolean);
+    return `
+      <div class="analytics-util-row ${tone}" data-util-machine="${escapeHtml(r.code)}" data-util-status="${escapeHtml(r.status)}">
+        <div class="analytics-row-head">
+          <strong>${escapeHtml(r.label)}</strong>
+          ${r.lowest ? '<span class="analytics-badge is-low">最低</span>' : ""}
+          <b class="analytics-value" data-util-value>${has ? `${r.status === "partial" ? "≥" : ""}${pct}%` : "—"}</b>
+        </div>
+        ${has ? `<div class="analytics-bar" aria-hidden="true"><i style="width:${width}%"></i></div>` : `<p class="analytics-reason" data-util-reason>${escapeHtml(r.reason)}</p>`}
+        ${detail ? `<small class="analytics-detail">${detail}</small>` : ""}
+        ${notes.length ? `<small class="analytics-note">${notes.map(escapeHtml).join("；")}</small>` : ""}
+      </div>`;
+  }).join("");
+  return `
+    <section class="report-panel analytics-panel" data-analytics-section="utilization">
+      ${title}
+      ${result.valuedCount ? "" : `<p class="analytics-empty" data-analytics-empty>資料不足：${range === "7d" ? "近 7 天" : "今天"}沒有任何一台同時有開工、數量報工和機台加工時間，算不出稼動率。</p>`}
+      <div class="analytics-rows">${rows}</div>
+      <details class="analytics-formula">
+        <summary>公式與口徑</summary>
+        <p>稼動率 ＝ 純加工時間 ÷ 在班時間。</p>
+        <p>純加工時間 ＝ Σ（報工良品＋不良）× 當時的機台加工時間（這道工序在那筆報工以前最新一次填的值；沒有就用卡片上最新的值，並註明）。</p>
+        <p>在班時間 ＝ 當天第一筆「今日開工」到最後一筆「收工」。還沒收工：今天算到現在，但不超過下班時間（17:00；當天報工選了加班 17:30／20:30 就算到那時）；以前的日子沒收工算到下班時間。近 7 天＝有開工的天加總。</p>
+        <p>報工覆蓋 ＝ 有報工的時段（每筆報工 開始～結束 的聯集）÷ 在班時間。覆蓋低＝中間有一段時間沒有報工，稼動率可能偏低。</p>
+        <p>沒開工、沒數量、沒填機台加工時間的機台不給數字，寫出原因。「≥」＝有部分數量沒有機台加工時間、沒算進去。</p>
+      </details>
+    </section>`;
+}
+
+function machtileAnalyticsOutputHtml(core, machines, range, rangeLabel, nowMs) {
+  const st = machtileAnalyticsState;
+  const input = machines.map((m) => {
+    const est = machtileAnalyticsOrderEstimate(m.machine.order);
+    return { code: m.code, label: m.label, estimate: est.estimate, estimateReason: est.reason };
+  });
+  const result = core.dailyOutput({ machines: input, reports: st.reports, nowMs, range });
+  const anyActual = result.rows.some((r) => r.actual !== null);
+  const rows = result.rows.map((r) => {
+    const behind = r.diff !== null && r.diff < 0;
+    const cell = (label, value, cls = "") => `<div class="${cls}"><dt>${label}</dt><dd>${value}</dd></div>`;
+    return `
+      <div class="analytics-out-row ${r.status !== "ok" ? "is-na" : behind ? "is-behind" : "is-ahead"}" data-out-machine="${escapeHtml(r.code)}" data-out-status="${escapeHtml(r.status)}">
+        <div class="analytics-row-head">
+          <strong>${escapeHtml(r.label)}</strong>
+          ${r.status === "noEstimate" ? '<span class="analytics-badge is-warn">估算缺值</span>' : ""}
+          ${r.status === "ok" ? `<b class="analytics-value" data-out-rate>${escapeHtml(core.formatPercent(r.rate))}</b>` : ""}
+        </div>
+        ${r.status === "notOpened" ? `<p class="analytics-reason" data-out-reason>${escapeHtml(r.reason)}</p><small class="analytics-detail">實際良品 —・估算 ${r.estimatePerDay ? `${r.estimatePerDay} 件／天` : `缺值（${escapeHtml(r.estimateReason)}）`}</small>` : `<dl class="analytics-out-grid">
+          ${cell("實際良品", r.actual === null ? "—" : `${r.actual} 件`)}
+          ${cell("估算", r.estimate !== null ? `${Math.round(r.estimate)} 件` : r.estimatePerDay ? `${r.estimatePerDay} 件／天` : "缺值", r.estimate === null && !r.estimatePerDay ? "is-missing" : "")}
+          ${cell("差額", r.diff === null ? "—" : `${machtileAnalyticsSigned(r.diff)} 件`, behind ? "is-bad" : "")}
+          ${cell("達成率", r.rate === null ? "—" : escapeHtml(core.formatPercent(r.rate)))}
+        </dl>`}
+        ${r.status === "noEstimate" ? `<p class="analytics-reason" data-out-reason>${escapeHtml(r.status === "noEstimate" ? `估算缺值：${r.reason}` : r.reason)}</p>` : ""}
+        ${r.status === "ok" && range === "7d" ? `<small class="analytics-detail">開工 ${r.openedDays} 天 × 每日估算 ${r.estimatePerDay} 件</small>` : ""}
+      </div>`;
+  }).join("");
+  const totals = range === "7d" ? `
+      <div class="analytics-day-totals" data-out-totals>
+        <strong>每天 App 報工良品合計</strong>
+        <ul>${result.dailyTotals.map((t) => `<li><span>${machtileAnalyticsMd(t.date)}</span><b>${t.good + t.bad > 0 ? `${t.good} 件` : "無報工"}</b></li>`).join("")}</ul>
+      </div>` : "";
+  return `
+    <section class="report-panel analytics-panel" data-analytics-section="output">
+      <div class="panel-title"><h2>產量：實際 vs 估算</h2><span>${escapeHtml(rangeLabel)}・落後最多的在前</span></div>
+      ${anyActual ? "" : `<p class="analytics-empty" data-analytics-empty>資料不足：${range === "7d" ? "近 7 天" : "今天"}沒有任何一台在 App 報工，沒有實際產量可以比較。</p>`}
+      ${totals}
+      <div class="analytics-rows">${rows}</div>
+      <details class="analytics-formula">
+        <summary>公式與口徑</summary>
+        <p>實際 ＝ 這段期間 App 報工的良品合計（不良另計，不算進實際）。只算 App 報工；舊 MES 沒有逐日紀錄（只有累計），所以不列，累計請看卡片上「含舊 MES」的完成數。</p>
+        <p><strong>估算</strong> ＝ 卡片上的每日估算 ＝ 430 分 ÷（機台加工時間＋上下料時間），照這台目前的工單算；近 7 天 ＝ 每日估算 × 有開工的天數。</p>
+        <p>差額 ＝ 實際 − 估算；達成率 ＝ 實際 ÷ 估算。今天還沒收工時，達成率會隨時間往上走。</p>
+      </details>
+    </section>`;
+}
+
+function machtileAnalyticsRiskHtml(core, nowMs) {
+  const st = machtileAnalyticsState;
+  const seen = new Set();
+  const orders = machtileCardOrders().filter((o) => {
+    if (!o || !o.processId || o.offStation === true || !isReportableMachineName(o.machine)) return false;
+    if (["completed", "cancelled"].includes(String(o.processStatus || ""))) return false;
+    if (["completed", "shipped", "cancelled"].includes(String(o.workStatus || "").toLowerCase())) return false;
+    if (seen.has(String(o.processId))) return false;
+    seen.add(String(o.processId));
+    return true;
+  }).map((o) => ({
+    processId: o.processId, workOrderNo: o.id, machine: o.machine, part: o.part, process: o.process,
+    total: Number(o.total || 0), done: Number(o.done || 0), doneLabel: o.progressSource?.label || "", dueDate: o.dueDate,
+    estimateDaily: machtileAnalyticsOrderEstimate(o).estimate,
+  }));
+  const result = core.dueRisk({ orders, reports: st.reports, nowMs });
+  const levelClass = { overdue: "is-overdue", late: "is-late", tight: "is-tight" };
+  const rows = result.risks.map((r) => `
+      <div class="analytics-risk-row ${levelClass[r.level]}" data-risk-wo="${escapeHtml(r.workOrderNo)}" data-risk-level="${r.level}">
+        <div class="analytics-row-head">
+          <span class="analytics-risk-badge">${escapeHtml(core.riskLabel(r))}</span>
+          <strong>${escapeHtml(r.workOrderNo)}</strong>
+          <span class="analytics-risk-machine">${escapeHtml(machtileMachineDisplay(r.machine))}</span>
+        </div>
+        <small class="analytics-detail">${escapeHtml(r.part || "")}${r.process ? `・${escapeHtml(r.process)}` : ""}</small>
+        <dl class="analytics-risk-grid">
+          <div><dt>剩餘</dt><dd>${r.remaining} 件<small>已報 ${r.done}/${r.total}${r.doneLabel ? `・${escapeHtml(r.doneLabel)}` : ""}</small></dd></div>
+          <div><dt>每日速度</dt><dd data-risk-basis="${escapeHtml(r.basis || "none")}">${r.speed ? `${Math.round(r.speed * 10) / 10} 件／天<small>${r.basis === "actual" ? "實際" : "估算"}：${escapeHtml(r.speedNote)}</small>` : "—<small>沒有速度資料</small>"}</dd></div>
+          <div><dt>預計完成</dt><dd>${r.projected ? `${machtileAnalyticsMd(r.projected)}<small>${r.basis === "estimate" ? "估算・" : ""}還要 ${r.daysNeeded} 個工作天</small>` : "—"}</dd></div>
+          <div><dt>交期</dt><dd>${machtileAnalyticsMd(r.dueDate)}</dd></div>
+        </dl>
+      </div>`).join("");
+  const insufficient = result.insufficient.length ? `
+      <details class="analytics-insufficient" data-risk-insufficient="${result.insufficient.length}">
+        <summary>資料不足、無法判斷：${result.insufficient.length} 張</summary>
+        <ul>${result.insufficient.map((r) => `<li><strong>${escapeHtml(r.workOrderNo)}</strong> ${escapeHtml(machtileMachineDisplay(r.machine))}・${escapeHtml(r.reason)}</li>`).join("")}</ul>
+      </details>` : "";
+  const count = (level) => result.risks.filter((r) => r.level === level).length;
+  return `
+    <section class="report-panel analytics-panel" data-analytics-section="risk">
+      <div class="panel-title"><h2>交期風險</h2><span>在站未完工 ${orders.length} 張・只列有風險的</span></div>
+      <p class="analytics-summary" data-risk-summary>有風險 ${result.risks.length} 張（逾期 ${count("overdue")}、會延誤 ${count("late")}、緊 ${count("tight")}）；OK ${result.okCount} 張；已報滿／超量 ${result.excludedOver} 張不列；資料不足 ${result.insufficient.length} 張。</p>
+      ${rows ? `<div class="analytics-rows">${rows}</div>` : '<p class="analytics-empty">目前沒有判斷得出來的風險工單。</p>'}
+      ${insufficient}
+      <details class="analytics-formula">
+        <summary>公式與口徑</summary>
+        <p>剩餘 ＝ 訂單數量 − 已報（跟卡片同一個口徑：有舊 MES 資料＝舊 MES 已報＋待回寫；沒有＝App 累計）。剩餘 ≤ 0（已報滿或超量）不列。</p>
+        <p>每日速度：優先用<strong>實際</strong>＝近 7 天這道工序 App 報工良品 ÷ 有報工的天數；沒有實際就用<strong>估算</strong>＝卡片每日估算（430 分 ÷（機台加工時間＋上下料））。</p>
+        <p>預計完成日 ＝ 從今天起（含今天）第「剩餘 ÷ 每日速度（無條件進位）」個工作天；工作天＝週一到週五，週六、週日不算。</p>
+        <p>已逾期＝交期已過還沒做完；會延誤 N 天＝預計完成日比交期晚 N 天；緊＝預計完成日離交期只剩 ${core.TIGHT_DAYS} 天以內。</p>
+      </details>
+    </section>`;
+}
+
 function renderReports() {
   const activeOrders = state.workOrders.filter((order) => !["completed", "shipped", "cancelled"].includes(String(order.workStatus || "").toLowerCase()));
   const total = activeOrders.length || 1;
@@ -13407,8 +13728,17 @@ function renderReports() {
     { title: "歷史加工次數", value: historyRuns, meta: `${programOrders.length} 個工件已有程式履歷`, status: "risk-purple" },
   ];
 
+  // owner 2026-10-02：上方換成三個有意義的分析（稼動率、實際 vs 估算、交期風險，見 analyticsCore.js）；
+  // 原本的內容一字不改收進下方摺疊（打開才載入營運追蹤／加工時間統計，不打開不查）。
+  const realSession = machtileStrictMode() && machtileSessionActive();
+  const legacyOpen = machtileAnalyticsState.legacyOpen === true;
   $("#reportsContent").innerHTML = `
-    ${machtileStrictMode() && machtileSessionActive() ? '<div id="machtileOperationalTracking"><p class="admin-module-note">正在載入營運追蹤（真資料）...</p></div>' : ""}
+    <div id="machtileAnalytics" class="analytics-root">${machtileAnalyticsHtml()}</div>
+
+    <details id="reportsLegacy" class="analytics-legacy"${legacyOpen ? " open" : ""}>
+      <summary>原本的分析內容（營運追蹤、工單進度、加工時間統計…）</summary>
+      <div class="analytics-legacy-body">
+    ${realSession ? '<div id="machtileOperationalTracking"><p class="admin-module-note">正在載入營運追蹤（真資料）...</p></div>' : ""}
 
     <div class="report-card-grid">
       ${reportCards.map((card) => `
@@ -13485,12 +13815,25 @@ function renderReports() {
       </div>
     </section>
 
-    ${machtileStrictMode() && machtileSessionActive() ? '<div id="machtileTimeStats"><p class="admin-module-note">正在載入加工時間統計（真資料）...</p></div>' : ""}
+    ${realSession ? '<div id="machtileTimeStats"><p class="admin-module-note">正在載入加工時間統計（真資料）...</p></div>' : ""}
+      </div>
+    </details>
   `;
-  if (machtileStrictMode() && machtileSessionActive()) {
-    machtileRenderOperationalTracking(30).catch(() => {});
-    machtileRenderTimeStats().catch(() => {});
-  }
+  machtileBindAnalyticsEvents();
+  const legacy = document.getElementById("reportsLegacy");
+  legacy?.addEventListener("toggle", () => {
+    machtileAnalyticsState.legacyOpen = legacy.open;
+    if (legacy.open) machtileLoadReportsLegacy();
+  });
+  if (legacyOpen) machtileLoadReportsLegacy();
+  // 分析頁正開著才重讀（資料超過 2 分鐘）；沒開著不查
+  if (machtileReportsViewActive()) machtileLoadAnalytics().catch(() => {});
+}
+
+function machtileLoadReportsLegacy() {
+  if (!(machtileStrictMode() && machtileSessionActive())) return;
+  machtileRenderOperationalTracking(30).catch(() => {});
+  machtileRenderTimeStats().catch(() => {});
 }
 
 function machtileTrackingPercent(value, signed = false) {
@@ -17620,6 +17963,8 @@ function switchView(view) {
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
+  // 營運分析：每次進畫面讀（2 分鐘內讀過就用上次的）
+  if (view === "reports") machtileLoadAnalytics().catch(() => {});
 }
 
 function setSelectedOrder(order) {
