@@ -8041,10 +8041,11 @@ function setReportCycleSeconds(seconds) {
 // 送成 cycle_time_seconds（沒基準時＝HTML 預設 550 秒），後端 trigger 每筆都記一次加工履歷、基準被同一個值湊滿。
 // 現在只有「首次開工」或「使用者這次真的改過 Cycle time」才送，其他一律 null。
 let reportCycleTouched = false;
+let reportCyclePrefilledSeconds = null;
 
 function reportCycleSecondsToSend(type) {
   if (type !== "workStart" && !reportCycleTouched) return null;
-  return getReportCycleSeconds() || null;
+  return window.MachTileReportCycleCore.cycleTimeToSend(type, getReportCycleSeconds(), reportCyclePrefilledSeconds);
 }
 
 function reportDailyCapacity(cycleSeconds, minutesPerDay = 430) {
@@ -8107,6 +8108,7 @@ function setReportDefaults(order) {
   if (defectInput) defectInput.value = 0;
   // 沒有這張單的時間就留白，不可以沿用上一張單（審查 M1）
   setReportCycleSeconds(profile?.pureCycleSec || 0);
+  reportCyclePrefilledSeconds = Number(profile?.pureCycleSec) > 0 ? Math.round(Number(profile.pureCycleSec)) : null;
   reportCycleTouched = false;
   updateReportEstimate();
   updateNoonAdvice();
