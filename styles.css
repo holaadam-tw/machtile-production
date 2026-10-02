@@ -11968,3 +11968,338 @@ body .machtile-session-badge .machtile-session-toggle {
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .today-filter-clear { width: 100%; }
 }
+
+/* ---- 營運分析：稼動率／實際 vs 估算／交期風險（2026-10-02）---- */
+.analytics-root {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 14px;
+}
+
+.analytics-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analytics-range {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.analytics-range button {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.analytics-range button[aria-pressed="true"] {
+  background: var(--text);
+  color: #ffffff;
+}
+
+.analytics-asof {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+}
+
+.analytics-panel {
+  min-width: 0;
+  color: var(--text);
+}
+
+.analytics-panel .panel-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+
+.analytics-rows {
+  display: grid;
+  gap: 8px;
+}
+
+@media (min-width: 720px) {
+  .analytics-panel[data-analytics-section="output"] .analytics-rows,
+  .analytics-panel[data-analytics-section="risk"] .analytics-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.analytics-util-row,
+.analytics-out-row,
+.analytics-risk-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.analytics-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.analytics-row-head strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.analytics-value {
+  margin-left: auto;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.analytics-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.analytics-badge.is-low {
+  background: var(--red-soft);
+  color: #b42318;
+}
+
+.analytics-badge.is-warn {
+  background: var(--amber-soft);
+  color: #8a5300;
+}
+
+.analytics-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--gray-soft);
+  overflow: hidden;
+}
+
+.analytics-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.analytics-util-row.is-lowest {
+  border-color: rgba(217, 45, 32, 0.35);
+  background: #fff7f6;
+}
+
+.analytics-util-row.is-lowest .analytics-bar i {
+  background: #d92d20;
+}
+
+.analytics-util-row.is-na,
+.analytics-out-row.is-na {
+  background: var(--surface);
+}
+
+.analytics-detail,
+.analytics-note {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.analytics-note {
+  color: #8a5300;
+}
+
+.analytics-reason {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.analytics-empty,
+.analytics-warning,
+.analytics-summary {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--gray-soft);
+  color: #344054;
+  font-size: 13px;
+}
+
+.analytics-warning {
+  background: var(--amber-soft);
+  color: #8a5300;
+}
+
+.analytics-error {
+  border-color: rgba(217, 45, 32, 0.4);
+}
+
+.analytics-error p {
+  color: #b42318;
+  overflow-wrap: anywhere;
+}
+
+.analytics-out-grid,
+.analytics-risk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+}
+
+@media (min-width: 480px) {
+  .analytics-out-grid,
+  .analytics-risk-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.analytics-out-grid div,
+.analytics-risk-grid div {
+  min-width: 0;
+}
+
+.analytics-out-grid dt,
+.analytics-risk-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.analytics-out-grid dd,
+.analytics-risk-grid dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.analytics-risk-grid dd small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.analytics-out-grid .is-bad dd {
+  color: #b42318;
+}
+
+.analytics-out-grid .is-missing dd {
+  color: #8a5300;
+}
+
+.analytics-out-row.is-behind {
+  border-left: 4px solid #d92d20;
+}
+
+.analytics-out-row.is-ahead {
+  border-left: 4px solid var(--green-strong);
+}
+
+.analytics-day-totals {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.analytics-day-totals ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analytics-day-totals li {
+  display: grid;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.analytics-day-totals li span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.analytics-risk-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.analytics-risk-row.is-overdue { border-left: 4px solid #b42318; }
+.analytics-risk-row.is-overdue .analytics-risk-badge { background: #b42318; color: #ffffff; }
+.analytics-risk-row.is-late { border-left: 4px solid #ea580c; }
+.analytics-risk-row.is-late .analytics-risk-badge { background: #ffedd5; color: #9a3412; }
+.analytics-risk-row.is-tight { border-left: 4px solid #ca8a04; }
+.analytics-risk-row.is-tight .analytics-risk-badge { background: var(--amber-soft); color: #8a5300; }
+
+.analytics-risk-machine {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.analytics-formula,
+.analytics-insufficient {
+  margin-top: 10px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.analytics-formula summary,
+.analytics-insufficient summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.analytics-formula p {
+  margin: 6px 0;
+}
+
+.analytics-insufficient ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.analytics-legacy {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.analytics-legacy > summary {
+  padding: 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.analytics-legacy-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 10px 14px;
+}
