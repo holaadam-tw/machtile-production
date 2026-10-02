@@ -396,6 +396,74 @@
     return (Array.isArray(choices) ? choices : []).some((c) => c.id === actorAppUserId) ? actorAppUserId : "";
   }
 
+  // 逐工序卡片（owner 2026-10-02）：同一張工單同時在兩台機台（例 XX01202609160002：A02 第 2 道、B01 第 3 道）。
+  // v_work_order_cards 一張單只挑一道（current_process_id），另一台的卡片就空了。這裡把「同一張單、其他在站的工序」
+  // 各做成一筆額外的卡片資料（跟原本那筆一樣的欄位，只換工序 id／名稱／狀態／機台／完成數），掛到它自己的機台上。
+  //   orders：normalizeOrder 後的 state.workOrders（一單一筆）
+  //   procs：work_order_processes 列（id, work_order_id, process_order, process_name, status, machine_id, qty_completed, off_station_at）
+  //   machineNameById：machines.id → 卡片用的機台名稱（跟 view 的 machine_name 同一個值）
+  // 只收：有機台、在站（off_station_at 空）、狀態跟 view 挑得到的一樣（pending/running/abnormal/waiting_inspection）、
+  // 不是原本那筆已經顯示的工序。回傳只有「額外」那幾筆；原本的 state.workOrders 不動（警示、歷史、關注中心照舊一單一筆）。
+  const STATION_CARD_STATUSES = Object.freeze(["pending", "running", "abnormal", "waiting_inspection"]);
+  function expandStationOrders(orders, procs, machineNameById) {
+    const list = Array.isArray(orders) ? orders : [];
+    const byWorkOrder = new Map();
+    list.forEach((o) => { if (o && o.workOrderId && !byWorkOrder.has(String(o.workOrderId))) byWorkOrder.set(String(o.workOrderId), o); });
+    const shown = new Set(list.map((o) => String(o?.processId || "")).filter(Boolean));
+    const names = machineNameById instanceof Map ? machineNameById : new Map(Object.entries(machineNameById || {}));
+    const extras = [];
+    (Array.isArray(procs) ? procs : [])
+      .slice()
+      .sort((a, b) => Number(a?.process_order || 0) - Number(b?.process_order || 0))
+      .forEach((p) => {
+        if (!p || !p.id || shown.has(String(p.id))) return;
+        if (p.off_station_at) return;
+        if (!STATION_CARD_STATUSES.includes(String(p.status || ""))) return;
+        const base = byWorkOrder.get(String(p.work_order_id || ""));
+        if (!base) return;
+        const machine = p.machine_id ? names.get(String(p.machine_id)) : "";
+        if (!machine) return;
+        shown.add(String(p.id));
+        extras.push({
+          ...base,
+          processId: p.id,
+          process: p.process_name || base.process,
+          processStatus: String(p.status),
+          machine,
+          done: Number(p.qty_completed || 0),
+          offStation: false,
+          stationStep: Number(p.process_order || 0) || null,
+          isExtraStation: true,
+          // 這幾欄在 view 裡屬於原本那道工序，不能沿用
+          pureCycleSec: null, machineTimeSource: null, baselineCycleSec: null,
+          appDone: undefined, progressSource: undefined,
+        });
+      });
+    return extras;
+  }
+
+  // 一筆卡片資料的參照：有工序 id 用工序 id（同一張單掛在兩台時才分得開），沒有才用單號。
+  function orderRef(order) {
+    return String(order?.processId || order?.id || "");
+  }
+
+  // 用參照找卡片資料：先比工序 id，再比單號（指定機台時優先同機台那筆）。舊連結、QR、警示都只帶單號，照樣找得到。
+  function findOrderByRef(orders, ref, machine = "") {
+    const list = Array.isArray(orders) ? orders : [];
+    const key = String(ref ?? "");
+    if (!key) return null;
+    const byProcess = list.find((o) => o && o.processId && String(o.processId) === key);
+    if (byProcess) return byProcess;
+    const byId = list.filter((o) => o && String(o.id) === key);
+    if (!byId.length) return null;
+    if (machine) {
+      const code = machineCodeOf({ machine });
+      const sameMachine = byId.find((o) => machineCodeOf(o) === code && o.offStation !== true);
+      if (sameMachine) return sameMachine;
+    }
+    return byId.find((o) => !o.isExtraStation) || byId[0];
+  }
+
   function summarizeResults(results) {
     const list = Array.isArray(results) ? results : [];
     const count = (s) => list.filter((r) => r.status === s).length;
@@ -409,5 +477,6 @@
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
     operatorChoices, defaultOperatorId, summarizeResults,
+    expandStationOrders, orderRef, findOrderByRef, STATION_CARD_STATUSES,
   };
 });

@@ -275,6 +275,9 @@ const UNASSIGNED_MACHINE = "未排機";
 
 const state = {
   workOrders: [],
+  // 逐工序卡片（2026-10-02）：同一張單其他在站工序的額外卡片資料（見 machtileLoadStationOrders）。
+  // 只給機台卡片、排程板、報工（單台／批次）用；警示、關注中心、歷史仍只看 workOrders（一單一筆）。
+  extraStationOrders: [],
   machines: [],
   machineMasters: [],
   source: "mock",
@@ -9854,8 +9857,9 @@ async function loadFromSupabase() {
     console.warn("v_machine_management_cards is not ready yet; using local machine defaults.", error);
     state.machineMasters = [];
   }
-  await machtileLoadScheduleQueue();
   state.source = "supabase";
+  await machtileLoadStationOrders();
+  await machtileLoadScheduleQueue();
   // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
   await machtileLoadCardLegacyProgress();
   await machtileLoadCardMachineTimes();
@@ -9867,6 +9871,58 @@ async function loadFromSupabase() {
   ]);
 }
 
+// 逐工序卡片（owner 2026-10-02「同單多站」）：v_work_order_cards 一張單只挑一道工序，同一張單同時在兩台機台
+// （例 XX01202609160002：A02 第 2 道、B01 第 3 道）時，另一台的卡片就顯示空閒、作業員沒辦法報。
+// 這裡另外讀「在站、有機台」的工序，把同一張單的其他道各做成一筆卡片資料（batchReportCore.expandStationOrders），
+// 存在 state.extraStationOrders。讀不到（例如 Dev 專案沒有 off_station_at 欄）就只用原本的一單一筆，不讓整頁壞掉。
+async function machtileLoadStationOrders() {
+  state.extraStationOrders = [];
+  const core = machtileBatchCore();
+  if (!core || typeof core.expandStationOrders !== "function" || state.source !== "supabase") return;
+  const nameById = new Map((state.machineMasters || []).filter((m) => m.id).map((m) => [String(m.id), m.name]));
+  if (!nameById.size) return;
+  try {
+    const procs = await supabaseFetch("work_order_processes?select=id,work_order_id,process_order,process_name,status,machine_id,qty_completed,off_station_at&off_station_at=is.null&machine_id=not.is.null&status=in.(pending,running,abnormal,waiting_inspection)&order=process_order.asc&limit=2000");
+    const rows = Array.isArray(procs) ? procs : [];
+    const stepById = new Map(rows.map((p) => [String(p.id), Number(p.process_order || 0) || null]));
+    (state.workOrders || []).forEach((order) => {
+      if (order.processId && stepById.has(String(order.processId))) order.stationStep = stepById.get(String(order.processId));
+    });
+    state.extraStationOrders = core.expandStationOrders(state.workOrders, rows, nameById);
+  } catch (error) {
+    console.warn("per-step station cards unavailable; one card per work order", error);
+    state.extraStationOrders = [];
+  }
+}
+
+// 機台卡片／排程板／報工用：一單一筆＋同一張單其他在站工序。
+function machtileStationOrders() {
+  return [...(state.workOrders || []), ...(state.extraStationOrders || [])];
+}
+
+// 同一張單同時掛在兩台以上機台時，卡片上標「第 N 道」（兩台的製程名稱常常一樣，例 AR16-R01-01_加工製程）。
+// 只有一台時不加，畫面跟原本一樣。
+function machtileStationStepLabel(order) {
+  if (!order || !order.stationStep || !order.workOrderId) return "";
+  const machines = new Set(machtileStationOrders()
+    .filter((o) => String(o.workOrderId) === String(order.workOrderId) && o.offStation !== true && o.machine)
+    .map((o) => o.machine));
+  return machines.size > 1 ? `・第 ${order.stationStep} 道` : "";
+}
+
+function machtileOrderRef(order) {
+  const core = machtileBatchCore();
+  return core && typeof core.orderRef === "function" ? core.orderRef(order) : String(order?.processId || order?.id || "");
+}
+
+// 參照（工序 id 或單號）→ 卡片資料。舊連結／QR／警示只帶單號，照樣找得到（優先同機台、再原本那筆）。
+function machtileFindOrder(ref, machine = "") {
+  const core = machtileBatchCore();
+  const all = machtileStationOrders();
+  if (core && typeof core.findOrderByRef === "function") return core.findOrderByRef(all, ref, machine);
+  return all.find((order) => order.id === ref) || null;
+}
+
 // Monitor 機台卡片的完成數（owner 2026-10-02）：原本只算 App 自己的報工（v_work_order_cards.qty_completed），
 // 舊 MES 已報的看不到（例：A01 舊 MES 良品 3440，卡片卻 0/5000）。改成跟批次報工同一套口徑：
 // 完成數＝舊 MES 已報＋待回寫，資料用同一支 batch_report_progress（一次查畫面上所有工序，每批最多 200 道）。
@@ -9875,7 +9931,7 @@ async function loadFromSupabase() {
 const MACHTILE_CARD_PROGRESS_CHUNK = 200;
 
 async function machtileLoadCardLegacyProgress() {
-  const orders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const orders = machtileStationOrders();
   orders.forEach((order) => {
     order.appDone = Number(order.done || 0);
     delete order.progressSource;
@@ -9919,7 +9975,7 @@ async function machtileLoadCardLegacyProgress() {
 //   基準：view 的 baseline_cycle_seconds → 否則 part_process_time_baselines 同圖號＋製程＋機台的歷史平均（至少 2 筆才算基準）
 //   每日估算：用上面的機台加工時間算（原本的公式不變）。CNC 程式分析的預估秒數（cnc_program_versions.estimated_seconds）不混進來。
 async function machtileLoadCardMachineTimes() {
-  const orders = Array.isArray(state.workOrders) ? state.workOrders : [];
+  const orders = machtileStationOrders();
   if (state.source !== "supabase" || !orders.length) return;
   const need = orders.filter((o) => o.machineTimeSource !== "view" && isUuid(String(o.processId || "")));
   const times = await machtileFetchMachineTimes(need.map((o) => o.processId));
@@ -10124,7 +10180,7 @@ function deriveMachines() {
   });
 
   const ordersByMachine = new Map();
-  state.workOrders.filter(machtileIsSchedulableOrder).forEach((order) => {
+  machtileStationOrders().filter(machtileIsSchedulableOrder).forEach((order) => {
     const hasAssignedMachine = isReportableMachineName(order.machine);
     const name = hasAssignedMachine ? order.machine : UNASSIGNED_MACHINE;
     if (!machines.has(name)) {
@@ -10609,7 +10665,7 @@ async function machtileLoadScheduleContracts() {
     machtileResetScheduleContracts();
     return;
   }
-  const processIds = [...new Set(state.workOrders.map((order) => order.processId).filter(machtileValidProcessId))];
+  const processIds = [...new Set(machtileStationOrders().map((order) => order.processId).filter(machtileValidProcessId))];
   machtileScheduleState.contractsStatus = "loading";
   machtileScheduleState.contractsError = "";
   if (!processIds.length) {
@@ -10904,18 +10960,18 @@ function machtileScheduleForecastMarkup(order, forecast) {
 }
 
 function machtileScheduleOverrideEditor(order, duration) {
-  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "override") return "";
+  if (machtileScheduleState.editingOrderId !== machtileOrderRef(order) || machtileScheduleState.editingAction !== "override") return "";
   const override = machtileScheduleOverride(order);
   const currentHours = Math.round((duration.effectiveMinutes / 60) * 100) / 100;
   return `
-    <form class="schedule-override-form" data-schedule-override-form="${escapeHtml(order.id)}">
+    <form class="schedule-override-form" data-schedule-override-form="${escapeHtml(machtileOrderRef(order))}">
       <strong>主管修正預計工時</strong>
       <p>原始基準保留為 ${escapeHtml(machtileFormatScheduleMinutes(duration.baselineMinutes))}，只改本次有效工時。</p>
       <label><span>修正後總工時（小時）</span><input name="overrideHours" type="number" min="0.1" step="0.1" value="${escapeHtml(currentHours)}" required></label>
       <label><span>修正原因（必填）</span><textarea name="overrideReason" rows="2" required placeholder="例如：新刀具試切、材料難加工">${escapeHtml(override?.reason || "")}</textarea></label>
       <div>
         <button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>套用修正</button>
-        ${duration.source === "override" ? `<button type="button" class="is-danger" data-schedule-editor="clear" data-schedule-order="${escapeHtml(order.id)}">恢復系統計算</button>` : ""}
+        ${duration.source === "override" ? `<button type="button" class="is-danger" data-schedule-editor="clear" data-schedule-order="${escapeHtml(machtileOrderRef(order))}">恢復系統計算</button>` : ""}
         <button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button>
       </div>
     </form>
@@ -10923,11 +10979,11 @@ function machtileScheduleOverrideEditor(order, duration) {
 }
 
 function machtileScheduleInputEditor(order) {
-  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "input") return "";
+  if (machtileScheduleState.editingOrderId !== machtileOrderRef(order) || machtileScheduleState.editingAction !== "input") return "";
   const input = machtileScheduleInput(order);
   const value = (number) => number == null ? "" : String(Math.round(Number(number) * 1000) / 1000);
   return `
-    <form class="schedule-override-form schedule-standard-form" data-schedule-input-form="${escapeHtml(order.id)}">
+    <form class="schedule-override-form schedule-standard-form" data-schedule-input-form="${escapeHtml(machtileOrderRef(order))}">
       <strong>標準工時</strong>
       <p>系統使用「架機＋單件 × 剩餘數量＋本批上下料」計算；更新會建立新版本，舊值不覆蓋。</p>
       <div class="schedule-standard-grid">
@@ -10942,9 +10998,9 @@ function machtileScheduleInputEditor(order) {
 }
 
 function machtileScheduleClearEditor(order) {
-  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "clear") return "";
+  if (machtileScheduleState.editingOrderId !== machtileOrderRef(order) || machtileScheduleState.editingAction !== "clear") return "";
   return `
-    <form class="schedule-override-form schedule-clear-form" data-schedule-clear-form="${escapeHtml(order.id)}">
+    <form class="schedule-override-form schedule-clear-form" data-schedule-clear-form="${escapeHtml(machtileOrderRef(order))}">
       <strong>恢復系統計算</strong>
       <p>主管修正會撤銷，但原始修正與這次撤銷原因都會保留。</p>
       <label><span>撤銷原因（必填）</span><textarea name="reason" rows="2" required placeholder="例如：試切完成，恢復標準工時"></textarea></label>
@@ -10954,9 +11010,9 @@ function machtileScheduleClearEditor(order) {
 }
 
 function machtileScheduleHoldEditor(order) {
-  if (machtileScheduleState.editingOrderId !== order.id || machtileScheduleState.editingAction !== "hold") return "";
+  if (machtileScheduleState.editingOrderId !== machtileOrderRef(order) || machtileScheduleState.editingAction !== "hold") return "";
   return `
-    <form class="schedule-override-form schedule-hold-form" data-schedule-hold-form="${escapeHtml(order.id)}">
+    <form class="schedule-override-form schedule-hold-form" data-schedule-hold-form="${escapeHtml(machtileOrderRef(order))}">
       <strong>新增排程停等</strong>
       <p>停等會阻止此製程進入可執行排程，解除前仍保留原始工時。</p>
       <label><span>類型</span><select name="holdType" required><option value="manual">人工停等</option><option value="material">缺料</option><option value="inspection">待品檢</option><option value="abnormal">異常</option></select></label>
@@ -10971,12 +11027,12 @@ function machtileScheduleHoldsMarkup(order, canEdit) {
   if (!holds.length) return "";
   const labels = { material: "缺料", inspection: "待品檢", abnormal: "異常", source_removed: "來源移除", manual: "人工停等" };
   return `<div class="schedule-hold-list">${holds.map((hold) => {
-    const releaseOpen = machtileScheduleState.editingOrderId === order.id && machtileScheduleState.editingAction === `release:${hold.id}`;
+    const releaseOpen = machtileScheduleState.editingOrderId === machtileOrderRef(order) && machtileScheduleState.editingAction === `release:${hold.id}`;
     return `
       <section class="schedule-hold-item">
         <div><strong>${escapeHtml(labels[hold.type] || hold.type)}</strong><span>${escapeHtml(hold.reason)}</span><small>${escapeHtml(hold.source || "machtile")} · ${escapeHtml(machtileFormatAuditTime(hold.heldAt))}</small></div>
-        ${canEdit ? `<button type="button" data-schedule-editor="release:${escapeHtml(hold.id)}" data-schedule-order="${escapeHtml(order.id)}">解除</button>` : ""}
-        ${releaseOpen ? `<form data-schedule-release-form="${escapeHtml(order.id)}" data-schedule-hold-id="${escapeHtml(hold.id)}" data-schedule-hold-type="${escapeHtml(hold.type)}"><label><span>解除原因（必填）</span><textarea name="reason" rows="2" required></textarea></label><div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>確認解除</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div></form>` : ""}
+        ${canEdit ? `<button type="button" data-schedule-editor="release:${escapeHtml(hold.id)}" data-schedule-order="${escapeHtml(machtileOrderRef(order))}">解除</button>` : ""}
+        ${releaseOpen ? `<form data-schedule-release-form="${escapeHtml(machtileOrderRef(order))}" data-schedule-hold-id="${escapeHtml(hold.id)}" data-schedule-hold-type="${escapeHtml(hold.type)}"><label><span>解除原因（必填）</span><textarea name="reason" rows="2" required></textarea></label><div><button type="submit" ${machtileScheduleState.writePending ? "disabled" : ""}>確認解除</button><button type="button" class="is-quiet" data-schedule-editor-cancel>取消</button></div></form>` : ""}
       </section>`;
   }).join("")}</div>`;
 }
@@ -11058,7 +11114,7 @@ function machtileScheduleColumns() {
   }
   const byMachine = new Map(machineDefs.map((machine) => [machine.name, { def: machine, list: [] }]));
   const unassigned = [];
-  state.workOrders.filter(machtileIsSchedulableOrder).forEach((order) => {
+  machtileStationOrders().filter(machtileIsSchedulableOrder).forEach((order) => {
     if (order.machine && byMachine.has(order.machine)) byMachine.get(order.machine).list.push(order);
     // 課別篩選時，掛在其他課機台上的單不進「未排機」也不重建欄位
     else if (order.machine) {
@@ -11089,7 +11145,7 @@ function machtileScheduleCard(order, index, total, colKey, canEdit, forecast) {
   const canManageContract = canEdit && machtileScheduleUsesServerContracts() && machtileValidProcessId(order.processId);
   const canOverride = canEdit && duration.ready && (state.source === "mock" || canManageContract);
   return `
-    <article class="schedule-card ${status.className} ${isFirst ? "is-first" : ""}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(order.id)}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
+    <article class="schedule-card ${status.className} ${isFirst ? "is-first" : ""}" ${canEdit ? 'draggable="true"' : ""} data-schedule-card="${escapeHtml(machtileOrderRef(order))}" data-schedule-process="${escapeHtml(order.processId || "")}" data-schedule-from="${escapeHtml(colKey)}">
       <span class="schedule-card-index" aria-label="第 ${index + 1} 順位">${index + 1}</span>
       <div class="schedule-card-body">
         <div class="schedule-card-head">
@@ -11103,9 +11159,9 @@ function machtileScheduleCard(order, index, total, colKey, canEdit, forecast) {
         <div class="schedule-card-tools">
           <button type="button" data-schedule-move="up" ${index === 0 ? "disabled" : ""} aria-label="往前排">↑</button>
           <button type="button" data-schedule-move="down" ${index === total - 1 ? "disabled" : ""} aria-label="往後排">↓</button>
-          ${canManageContract ? `<button type="button" data-schedule-editor="input" data-schedule-order="${escapeHtml(order.id)}">${duration.ready ? "標準工時" : "補標準工時"}</button>` : ""}
-          ${canOverride ? `<button type="button" data-schedule-editor="override" data-schedule-order="${escapeHtml(order.id)}">${duration.source === "override" ? "查看修正" : "調整工時"}</button>` : ""}
-          ${canManageContract ? `<button type="button" data-schedule-editor="hold" data-schedule-order="${escapeHtml(order.id)}">設定停等</button>` : ""}
+          ${canManageContract ? `<button type="button" data-schedule-editor="input" data-schedule-order="${escapeHtml(machtileOrderRef(order))}">${duration.ready ? "標準工時" : "補標準工時"}</button>` : ""}
+          ${canOverride ? `<button type="button" data-schedule-editor="override" data-schedule-order="${escapeHtml(machtileOrderRef(order))}">${duration.source === "override" ? "查看修正" : "調整工時"}</button>` : ""}
+          ${canManageContract ? `<button type="button" data-schedule-editor="hold" data-schedule-order="${escapeHtml(machtileOrderRef(order))}">設定停等</button>` : ""}
         </div>` : ""}
         ${machtileScheduleHoldsMarkup(order, canManageContract)}
         ${machtileScheduleInputEditor(order)}
@@ -11118,7 +11174,7 @@ function machtileScheduleCard(order, index, total, colKey, canEdit, forecast) {
             <option value="">選擇機台</option>
             ${machtileAssignableMachineOptions()}
           </select>
-          <button type="button" data-schedule-assign="${escapeHtml(order.id)}">指派機台</button>
+          <button type="button" data-schedule-assign="${escapeHtml(machtileOrderRef(order))}">指派機台</button>
         </div>` : ""}
       </div>
     </article>
@@ -11191,7 +11247,7 @@ function machtileScheduleHmcPanel(machineDef) {
 }
 
 function machtileScheduleOverview(forecast, byMachine, unassigned) {
-  const schedulable = state.workOrders.filter(machtileIsSchedulableOrder);
+  const schedulable = machtileStationOrders().filter(machtileIsSchedulableOrder);
   const readyCount = schedulable.filter((order) => machtileScheduleDuration(order).ready).length;
   const missingCount = schedulable.length - readyCount;
   const values = [...forecast.items.values()];
@@ -11336,7 +11392,8 @@ async function machtileScheduleCommit(actions) {
 }
 
 function machtileScheduleOrderById(orderId) {
-  return state.workOrders.find((order) => order.id === orderId) || null;
+  // 參照可能是工序 id（逐工序卡片）或單號
+  return machtileFindOrder(orderId);
 }
 
 function machtileRecordScheduleAudit(order, beforeMinutes, afterMinutes, reason, action) {
@@ -11572,9 +11629,9 @@ function machtileBindScheduleEvents(holder) {
       }
       const fromKey = card?.dataset.scheduleFrom || "";
       const fromList = [...machtileScheduleListOrders(fromKey)];
-      const moving = fromList.find((order) => order.id === assignButton.dataset.scheduleAssign);
+      const moving = fromList.find((order) => machtileOrderRef(order) === assignButton.dataset.scheduleAssign);
       if (!moving) return;
-      const sourceRest = fromList.filter((order) => order.id !== moving.id);
+      const sourceRest = fromList.filter((order) => machtileOrderRef(order) !== machtileOrderRef(moving));
       const toList = [...machtileScheduleListOrders(toKey), moving];
       const actions = [{ colKey: toKey, orders: toList }];
       if (fromKey && sourceRest.length) actions.push({ colKey: fromKey, orders: sourceRest });
@@ -11587,7 +11644,7 @@ function machtileBindScheduleEvents(holder) {
     const card = moveButton.closest("[data-schedule-card]");
     const colKey = card.dataset.scheduleFrom;
     const list = [...machtileScheduleListOrders(colKey)];
-    const index = list.findIndex((order) => order.id === card.dataset.scheduleCard);
+    const index = list.findIndex((order) => machtileOrderRef(order) === card.dataset.scheduleCard);
     if (index < 0) return;
     const target = moveButton.dataset.scheduleMove === "up" ? index - 1 : index + 1;
     if (target < 0 || target >= list.length) return;
@@ -11672,19 +11729,19 @@ function machtileBindScheduleEvents(holder) {
       const fromKey = payload.from || "";
       const toKey = listEl.dataset.scheduleList || "";
       const fromList = [...machtileScheduleListOrders(fromKey)];
-      const moving = fromList.find((order) => order.id === payload.orderId);
+      const moving = fromList.find((order) => machtileOrderRef(order) === payload.orderId);
       if (!moving) return;
       const targetCard = event.target.closest("[data-schedule-card]");
       if (fromKey === toKey) {
-        const list = fromList.filter((order) => order.id !== payload.orderId);
-        const insertAt = targetCard ? list.findIndex((order) => order.id === targetCard.dataset.scheduleCard) : list.length;
+        const list = fromList.filter((order) => machtileOrderRef(order) !== payload.orderId);
+        const insertAt = targetCard ? list.findIndex((order) => machtileOrderRef(order) === targetCard.dataset.scheduleCard) : list.length;
         list.splice(insertAt < 0 ? list.length : insertAt, 0, moving);
         machtileScheduleCommit([{ colKey: toKey, orders: list }]);
         return;
       }
-      const sourceRest = fromList.filter((order) => order.id !== payload.orderId);
+      const sourceRest = fromList.filter((order) => machtileOrderRef(order) !== payload.orderId);
       const toList = [...machtileScheduleListOrders(toKey)];
-      const insertAt = targetCard ? toList.findIndex((order) => order.id === targetCard.dataset.scheduleCard) : toList.length;
+      const insertAt = targetCard ? toList.findIndex((order) => machtileOrderRef(order) === targetCard.dataset.scheduleCard) : toList.length;
       toList.splice(insertAt < 0 ? toList.length : insertAt, 0, moving);
       const actions = [{ colKey: toKey, orders: toList }];
       if (fromKey && sourceRest.length) actions.push({ colKey: fromKey, orders: sourceRest });
@@ -12136,11 +12193,11 @@ function renderMachineCard(machine) {
   const profile = order ? getProgramProfile(order) : null;
   const delta = profile ? cycleDelta(profile) : null;
   const dailyQty = profile ? dailyPureCapacity(profile) : null;
-  const detailAttr = order ? `data-detail="${escapeHtml(order.id)}"` : "";
+  const detailAttr = order ? `data-detail="${escapeHtml(machtileOrderRef(order))}"` : "";
   const isHmc = isHmcMachine(machine);
   const hmcUrl = isHmc ? hmcReportRouteUrl(machine) : "";
   const canReport = isReportableMachineName(machine.name) && (!order || isOrderReportable(order));
-  const reportAttr = order && canReport ? `data-report="${escapeHtml(order.id)}"` : "";
+  const reportAttr = order && canReport ? `data-report="${escapeHtml(machtileOrderRef(order))}"` : "";
   const reportUrl = canReport ? machineReportUrl(machine) : "";
   const qrReportUrl = reportUrl ? publicReportUrlOnLocalhost(reportUrl) : "";
   const reportLinkText = isHmc
@@ -12174,7 +12231,7 @@ function renderMachineCard(machine) {
         <span>目前工單</span>
         ${order ? `
           <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>
-          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
+          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}${escapeHtml(machtileStationStepLabel(order))}</small>
         ` : `
           <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
@@ -12256,7 +12313,7 @@ function renderMachineCard(machine) {
       <footer class="machine-tile-footer">
         <span>${escapeHtml(order?.lastReport || machine.note || "尚未回報")}</span>
         <div class="machine-tile-actions">
-          ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>` : ""}
+          ${order ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(machtileOrderRef(order))}">明細</button>` : ""}
           ${isHmc
             ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
             : order
@@ -17220,7 +17277,7 @@ function renderMachineAdminDetail(machine) {
 function renderAll() {
   deriveMachines();
   applyDashboardFilterParams();
-  selectedOrder = state.workOrders.find((order) => order.id === selectedOrder?.id) || state.workOrders[0] || null;
+  selectedOrder = (selectedOrder ? machtileFindOrder(machtileOrderRef(selectedOrder)) || machtileFindOrder(selectedOrder.id, selectedOrder.machine) : null) || state.workOrders[0] || null;
   if (selectedOrder) setSelectedOrder(selectedOrder);
   $("#dataSourceLabel").textContent = state.source === "supabase" ? "Supabase 已連線" : "Mock data";
   ensureHmcDashboardEntry();
@@ -17277,9 +17334,10 @@ function openReport(orderId, options = {}) {
     showToast("未排機不產生報工入口，請先指派實際機台");
     return;
   }
-  const orderById = state.workOrders.find((item) => item.id === orderId);
+  // orderId 可能是工序 id（逐工序卡片）或單號；帶機台時優先同機台那一道（同一張單同時在兩台）。
+  const orderById = orderId ? machtileFindOrder(orderId, machineName) : null;
   // Off-station orders (old MES moved them off this machine) are not picked for a machine QR/report.
-  const orderByMachine = machineName ? state.workOrders.find((item) => item.machine === machineName && item.offStation !== true) : null;
+  const orderByMachine = machineName ? machtileStationOrders().find((item) => item.machine === machineName && item.offStation !== true) : null;
   const order = orderById || orderByMachine || (!machineName ? selectedOrder || state.workOrders[0] : null);
   if (order && !isOrderReportable(order)) {
     showToast("這張工單尚未指派機台，不能開啟報工入口");
@@ -17314,7 +17372,7 @@ function closeReport() {
 }
 
 function openDetail(orderId, options = {}) {
-  const order = state.workOrders.find((item) => item.id === orderId);
+  const order = machtileFindOrder(orderId);
   if (!order) return;
   setSelectedOrder(order);
   $("#detailSheet").classList.toggle("route-sheet", Boolean(options.routeMode));
@@ -17534,8 +17592,8 @@ function renderDetail(order, detail) {
 
     <div class="detail-action-row detail-action-row-primary">
       ${reportable
-        ? `<button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="workStart">首次開工</button>
-           <button type="button" data-open-report="${escapeHtml(order.id)}" data-open-report-type="dailyStart">今日開工</button>
+        ? `<button type="button" data-open-report="${escapeHtml(machtileOrderRef(order))}" data-open-report-type="workStart">首次開工</button>
+           <button type="button" data-open-report="${escapeHtml(machtileOrderRef(order))}" data-open-report-type="dailyStart">今日開工</button>
            <a class="detail-link-button" data-no-detail href="${escapeHtml(fullOrderUrl)}" target="_blank" rel="noopener">查看完整工單 ↗</a>`
         : `<button type="button" class="disabled-action" disabled>未指派機台</button>
            <span class="detail-link-button disabled-action">無報工 QR</span>
@@ -18229,7 +18287,7 @@ async function machtileFetchMachineTimes(processIds) {
 
 function machtileBatchCandidates(code) {
   const core = machtileBatchCore();
-  return core ? core.candidateOrdersForMachine(state.workOrders, code) : [];
+  return core ? core.candidateOrdersForMachine(machtileStationOrders(), code) : [];
 }
 
 function machtileBatchSelectedOrder(code) {
@@ -18358,8 +18416,8 @@ function machtileRenderBatchReport() {
     const orderCell = !order
       ? `<span class="batch-muted">目前沒有派工</span>`
       : candidates.length > 1
-        ? `<select class="batch-order-select" data-batch-order="${code}" aria-label="${code} 工單"${busy ? " disabled" : ""}>${candidates.map((o) => `<option value="${escapeHtml(o.processId)}"${o.processId === order.processId ? " selected" : ""}>${escapeHtml(o.id)}・${escapeHtml(o.process)}</option>`).join("")}</select>`
-        : `<strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(order.process)}・${escapeHtml(order.part)}</span>`;
+        ? `<select class="batch-order-select" data-batch-order="${code}" aria-label="${code} 工單"${busy ? " disabled" : ""}>${candidates.map((o) => `<option value="${escapeHtml(o.processId)}"${o.processId === order.processId ? " selected" : ""}>${escapeHtml(o.id)}・${escapeHtml(o.process)}${escapeHtml(machtileStationStepLabel(o))}</option>`).join("")}</select>`
+        : `<strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(order.process)}${escapeHtml(machtileStationStepLabel(order))}・${escapeHtml(order.part)}</span>`;
     let doneHtml = `<div class="batch-done-empty"><span class="batch-label">已報</span><span class="batch-muted">—</span></div>`;
     if (order && progress) {
       const pendingText = progress.pendingCount
@@ -18480,7 +18538,7 @@ async function machtileBatchSendOne(box, payload, operators) {
 function machtileApplyMachineTime(processId, seconds) {
   if (!processId || !(Number(seconds) > 0)) return;
   machtileBatchState.machineTimeByProcess.set(String(processId), Number(seconds));
-  (state.workOrders || []).forEach((order) => {
+  machtileStationOrders().forEach((order) => {
     if (String(order.processId) === String(processId) && order.machineTimeSource !== "view") {
       order.pureCycleSec = Number(seconds);
       order.machineTimeSource = "report";
