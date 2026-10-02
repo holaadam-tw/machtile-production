@@ -12008,6 +12008,7 @@ function machtileAdminDrawerGroups() {
     { key: "__batchMill", icon: "🧮", label: "銑床報工（批次）" },
     { key: "__history", icon: "🕘", label: "紀錄查詢" },
     { key: "__reports", icon: "📊", label: "營運分析" },
+    { key: "__tv", icon: "📺", label: "現場電視" },
   ]});
   groups.push({ title: "機台管理", items: [
     { key: "add", icon: "➕", label: "新增機台" },
@@ -19893,6 +19894,10 @@ function bindEvents() {
         switchView("reports");
         return;
       }
+      if (key === "__tv") {
+        machtileEnterTvFromMenu();
+        return;
+      }
       if (key === "add") machtileMachineEditSeed = null;
       openAdminModule(key);
       return;
@@ -20345,6 +20350,12 @@ function applyInitialRoute() {
       return;
     }
     openReport(orderNo, { routeMode: true, machine: machineName, reportType: params.get("type") || "dailyStart" });
+    return;
+  }
+
+  // 現場大螢幕電視頁（owner 2026-10-03）：全螢幕、沒有導覽，見 machtileOpenTvWall
+  if (routeView === "tv") {
+    machtileOpenTvWall();
     return;
   }
 
@@ -21041,6 +21052,264 @@ function machtileStartTodayTick() {
   if (machtileTodayTickTimer || typeof window === "undefined" || typeof window.setInterval !== "function") return;
   machtileTodayTickTimer = window.setInterval(machtileTodayTick, MACHTILE_TODAY_TICK_MS);
 }
+
+// ---- 現場大螢幕電視頁（?view=tv，owner 2026-10-03 拍板）----
+// 掛在廠區電視上給作業員看（3～5 公尺外）。全螢幕、沒有側欄／導覽，純邏輯在 tvWallCore.js。
+// 資料口徑全部跟 Monitor 卡片同一套：目前工單（cardActiveOrderCore 挑單）、已報（batchReportCore.cardProgress）、
+// 上方三格（todayReportStatusCore，machtileTodaySummary 同一個函式）。
+// 每 60 秒自動重讀（只讀：v_work_order_cards、v_machine_management_cards、work_order_processes 佇列、
+// rpc/batch_report_progress（唯讀 RPC）、今天的 production_reports、app_users、legacy_station_progress）；0 次寫入。
+// 讀取失敗：畫面保留上一次成功的內容，角落顯示「資料更新失敗，最後更新 HH:MM」，下一輪自動再試。
+const machtileTvCore = () => (typeof window === "undefined" ? null : window.MachTileTvWallCore);
+const MACHTILE_TV_LOAD_TIMEOUT_MS = 30 * 1000;
+const MACHTILE_TV_CLOCK_MS = 5 * 1000;
+const machtileTvState = {
+  open: false,
+  model: null,        // 上一次成功的畫面資料（讀取失敗也不清掉）
+  lastOkAt: 0,
+  failed: false,
+  failReason: "",
+  demo: false,
+  loading: false,
+  generation: 0,
+  refreshTimer: null,
+  clockTimer: null,
+};
+
+function machtileTvMachineInputs() {
+  const byCode = new Map();
+  (state.machines || []).forEach((machine) => {
+    if (!machine || machine.isUnassignedBucket) return;
+    const code = String(machine.code || machine.name || "").trim().toUpperCase();
+    if (!code || byCode.has(code)) return;
+    const order = machine.order || null;
+    const orders = [order, ...(Array.isArray(machine.cardOrders) ? machine.cardOrders.map((item) => item?.order) : [])].filter(Boolean);
+    byCode.set(code, {
+      code,
+      key: machine.name,
+      alias: machine.location || "",
+      found: true,
+      order: order ? { id: order.id, part: order.part, process: order.process, done: order.done, total: order.total, dueDate: order.dueDate } : null,
+      processIds: [...new Set(orders.map((o) => String(o.processId || "")).filter(Boolean))],
+    });
+  });
+  return byCode;
+}
+
+function machtileTvBuildModel() {
+  const core = machtileTvCore();
+  if (!core) return null;
+  deriveMachines();
+  const todayOk = machtileCardState.todayStatus === "ok";
+  return core.buildModel({
+    machinesByCode: machtileTvMachineInputs(),
+    summary: todayOk ? machtileTodaySummary() : null,
+    todayMap: todayOk ? machtileCardState.today : null,
+    nowMs: Date.now(),
+  });
+}
+
+// 只讀重新載入（loadFromSupabase 的子集合：電視用不到的排程合約、產能日曆、提醒中心、HMC 盤況、上下料統計不讀）
+async function machtileTvFetchAll() {
+  const ecore = machtileCardEstimateCore();
+  if (!ecore) throw new Error("卡片元件沒有載入");
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), MACHTILE_TV_LOAD_TIMEOUT_MS) : null;
+  let rows;
+  try {
+    rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc", controller ? { signal: controller.signal } : {});
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error("工單資料是空的");
+  let masters = null;
+  try {
+    masters = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
+  } catch (error) {
+    console.warn("tv: machine masters unavailable; keeping the last ones", error);
+  }
+  state.workOrders = rows.map(normalizeOrder);
+  if (Array.isArray(masters) && masters.length) state.machineMasters = masters.map(normalizeMachineMaster);
+  state.source = "supabase";
+  await machtileLoadScheduleQueue();
+  await machtileLoadCardLegacyProgress();
+  await machtileLoadCardToday(ecore);
+  await machtileLoadCardActivity();
+  if (machtileCardState.todayStatus !== "ok") throw new Error("今日報工讀取失敗");
+}
+
+function machtileTvWithTimeout(promise, ms) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("讀取逾時")), ms); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+async function machtileTvReload() {
+  if (!machtileTvState.open || machtileTvState.loading) return;
+  const generation = ++machtileTvState.generation;
+  machtileTvState.loading = true;
+  try {
+    if (!(config.useSupabase && config.supabaseUrl && config.supabaseAnonKey)) {
+      // 示範模式（Dev、無後端）：照樣顯示，但畫面標「示範資料」
+      machtileTvState.demo = true;
+      machtileTvState.model = machtileTvBuildModel();
+      machtileTvState.lastOkAt = Date.now();
+      machtileTvState.failed = false;
+      return;
+    }
+    if (machtileStrictMode() && !machtileSessionActive()) throw new Error("登入已過期，請重新登入");
+    await machtileTvWithTimeout(machtileTvFetchAll(), MACHTILE_TV_LOAD_TIMEOUT_MS + 15000);
+    if (generation !== machtileTvState.generation) return;
+    const model = machtileTvBuildModel();
+    if (!model) throw new Error("電視頁元件沒有載入");
+    machtileTvState.model = model;
+    machtileTvState.lastOkAt = Date.now();
+    machtileTvState.failed = false;
+    machtileTvState.failReason = "";
+    machtileTvState.demo = false;
+  } catch (error) {
+    if (generation !== machtileTvState.generation) return;
+    console.warn("tv refresh failed; keeping the last screen", error);
+    machtileTvState.failed = true;
+    machtileTvState.failReason = machtileStrictMode() && !machtileSessionActive() ? "登入已過期，請重新登入" : String(error?.message || error || "").slice(0, 80);
+  } finally {
+    if (generation === machtileTvState.generation) machtileTvState.loading = false;
+    machtileRenderTvWall();
+  }
+}
+
+function machtileTvTileHtml(tile) {
+  const sub = tile.active && tile.count > 0 && tile.keys.length ? tile.keys.join("、") : tile.hint;
+  return `
+    <div class="tv-tile is-${escapeHtml(tile.tone)}" data-tv-tile="${escapeHtml(tile.kind)}" data-tv-tone="${escapeHtml(tile.tone)}" data-tv-count="${tile.active ? tile.count : ""}">
+      <span class="tv-tile-label">${escapeHtml(tile.label)}</span>
+      <b class="tv-tile-value">${escapeHtml(tile.value)}${tile.active ? "<small>台</small>" : ""}</b>
+      <em class="tv-tile-sub">${escapeHtml(sub)}</em>
+    </div>`;
+}
+
+function machtileTvCellHtml(cell) {
+  const tags = cell.tags.map((tag) => `<span class="tv-tag is-${escapeHtml(tag.kind)}" data-tv-tag="${escapeHtml(tag.kind)}">${escapeHtml(tag.label)}</span>`).join("");
+  const head = `<div class="tv-cell-head"><b class="tv-code">${escapeHtml(cell.code)}</b>${cell.alias ? `<span class="tv-alias">${escapeHtml(cell.alias)}</span>` : ""}</div>`;
+  if (!cell.hasOrder) {
+    return `
+      <article class="tv-cell is-idle${cell.severity ? ` sev-${escapeHtml(cell.severity)}` : ""}" data-tv-machine="${escapeHtml(cell.code)}" data-tv-severity="${escapeHtml(cell.severity)}">
+        ${head}
+        <p class="tv-part is-empty">${cell.found ? "無工單" : "沒有這台機台的資料"}</p>
+        <p class="tv-today is-${escapeHtml(cell.today.tone)}" data-tv-today="${escapeHtml(cell.today.tone)}">${cell.today.tone === "idle" ? "" : escapeHtml(cell.today.text)}</p>
+        ${tags ? `<div class="tv-tags">${tags}</div>` : ""}
+      </article>`;
+  }
+  const qty = cell.total
+    ? `<b class="tv-done">${escapeHtml(cell.done)}</b><span class="tv-total">/ ${escapeHtml(cell.total)}</span><em class="tv-pct">${escapeHtml(cell.percent)}%</em>`
+    : `<b class="tv-done">${escapeHtml(cell.done)}</b><span class="tv-total">/ 未填數量</span>`;
+  return `
+    <article class="tv-cell${cell.severity ? ` sev-${escapeHtml(cell.severity)}` : ""}" data-tv-machine="${escapeHtml(cell.code)}" data-tv-severity="${escapeHtml(cell.severity)}">
+      ${head}
+      <p class="tv-part" title="${escapeHtml(cell.part)}">${escapeHtml(cell.part)}</p>
+      <p class="tv-sub">${escapeHtml(cell.orderNo)}${cell.process ? `・${escapeHtml(cell.process)}` : ""}</p>
+      <div class="tv-qty" data-tv-qty="${escapeHtml(cell.done)}/${escapeHtml(cell.total)}">${qty}${cell.fullNote ? `<span class="tv-fullnote">${escapeHtml(cell.fullNote)}</span>` : ""}</div>
+      <div class="tv-bar${cell.full && cell.over > 0 ? " is-over" : ""}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, Number(cell.bar) || 0))}%"></i></div>
+      <p class="tv-today is-${escapeHtml(cell.today.tone)}" data-tv-today="${escapeHtml(cell.today.tone)}">${escapeHtml(cell.today.text)}</p>
+      <div class="tv-tags">${tags}</div>
+    </article>`;
+}
+
+function machtileRenderTvWall() {
+  const holder = document.getElementById("tvWall");
+  const core = machtileTvCore();
+  if (!holder || !core) return;
+  const st = machtileTvState;
+  const model = st.model;
+  const clock = core.clockParts(Date.now());
+  const stateName = st.failed ? "error" : !model ? "loading" : st.demo ? "demo" : "ok";
+  holder.dataset.tvState = stateName;
+  holder.dataset.tvUpdated = core.hhmm(st.lastOkAt);
+  const alert = st.failed
+    ? `<div class="tv-alert" role="alert" data-tv-alert><strong>${escapeHtml(core.failureText(st.lastOkAt))}</strong>${st.failReason ? `<small>${escapeHtml(st.failReason)}・60 秒後自動再試</small>` : "<small>60 秒後自動再試</small>"}</div>`
+    : "";
+  const tiles = (model ? model.tiles : core.headerTiles(null)).map(machtileTvTileHtml).join("");
+  const body = model
+    ? model.lines.map((line) => `
+      <section class="tv-line" data-tv-line="${escapeHtml(line.key)}" aria-label="${escapeHtml(line.title)}">
+        <h2 class="tv-line-title">${escapeHtml(line.title)}</h2>
+        <div class="tv-grid" style="--tv-cols:${line.machines.length}">${line.machines.map(machtileTvCellHtml).join("")}</div>
+      </section>`).join("")
+    : `<section class="tv-empty" data-tv-empty><p>${st.failed ? "資料讀取失敗，60 秒後自動重試。" : "正在讀取資料…"}</p></section>`;
+  holder.innerHTML = `
+    <header class="tv-top">
+      <div class="tv-clock"><b data-tv-clock>${escapeHtml(clock.time)}</b><span data-tv-date>${escapeHtml(`${clock.date} ${clock.weekday}`)}</span></div>
+      <div class="tv-tiles">${tiles}</div>
+    </header>
+    ${body}
+    <footer class="tv-foot">
+      <span data-tv-updated>${st.lastOkAt ? `資料更新 ${escapeHtml(core.hhmm(st.lastOkAt))}` : "尚未取得資料"}・每 60 秒自動更新・台灣時間${st.demo ? "・<b class=\"tv-demo\">示範資料</b>" : ""}</span>
+      <a class="tv-exit" href="./">離開電視頁</a>
+    </footer>
+    ${alert}`;
+}
+
+function machtileTvTickClock() {
+  const core = machtileTvCore();
+  const el = document.querySelector("#tvWall [data-tv-clock]");
+  if (!core || !el) return;
+  const clock = core.clockParts(Date.now());
+  el.textContent = clock.time;
+  const date = document.querySelector("#tvWall [data-tv-date]");
+  if (date) date.textContent = `${clock.date} ${clock.weekday}`;
+}
+
+function machtileOpenTvWall() {
+  const core = machtileTvCore();
+  if (!core) { showToast("電視頁元件沒有載入，請重新整理"); return; }
+  machtileToggleAdminDrawer(false);
+  let holder = document.getElementById("tvWall");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "tvWall";
+    holder.className = "tv-wall";
+    holder.setAttribute("aria-label", "現場電視");
+    document.body.appendChild(holder);
+  }
+  document.body.classList.add("tv-mode");
+  document.title = "現場電視・MachTile";
+  const st = machtileTvState;
+  st.open = true;
+  // 開機剛讀過的真資料直接用（不再多讀一次）；示範資料模式照樣顯示；其餘（開機讀取失敗退回示範資料）→ 馬上重讀，不拿示範資料冒充
+  const backend = Boolean(config.useSupabase && config.supabaseUrl && config.supabaseAnonKey);
+  if (!st.model && state.source === "supabase" && machtileCardState.todayStatus === "ok") {
+    st.model = machtileTvBuildModel();
+    st.lastOkAt = machtileCardState.todayLoadedAt || Date.now();
+  } else if (!st.model && !backend) {
+    st.demo = true;
+    st.model = machtileTvBuildModel();
+    st.lastOkAt = Date.now();
+  }
+  machtileRenderTvWall();
+  if (!st.model) machtileTvReload().catch(() => {});
+  if (!st.refreshTimer) st.refreshTimer = window.setInterval(() => { machtileTvReload().catch(() => {}); }, core.REFRESH_MS);
+  if (!st.clockTimer) st.clockTimer = window.setInterval(machtileTvTickClock, MACHTILE_TV_CLOCK_MS);
+}
+
+// 選單「現場電視」：同一個分頁切到電視頁，網址改成 ?view=tv（電視可以直接把這個網址設成首頁）
+function machtileEnterTvFromMenu() {
+  try {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("view", "tv");
+    window.history.pushState(null, "", url.toString());
+  } catch { /* 網址改不了也照樣開 */ }
+  machtileOpenTvWall();
+}
+
+// 電視頁按瀏覽器「上一頁」→ 重新載入回到一般畫面
+window.addEventListener("popstate", () => {
+  if (!machtileTvState.open) return;
+  if (new URLSearchParams(window.location.search).get("view") !== "tv") window.location.reload();
+});
 
 machtileStartTodayTick();
 
