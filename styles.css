@@ -11845,25 +11845,71 @@ body .machtile-session-badge .machtile-session-toggle {
 /* 明細／完整單裡的交換盤盤況（從 B01／B02 卡片搬過來） */
 .detail-hmc-section .machine-hmc-runtime { margin: 0 0 10px; }
 .detail-hmc-section .machine-hmc-runtime:last-child { margin-bottom: 0; }
-.card-order-list { list-style: none; margin: 0; padding: 4px 8px; display: grid; gap: 6px; }
+/* 清單（2026-10-02 owner「清楚一點，顏色和文字」）：每張單一個白底小卡、間距＋框線分開；目前顯示那張淡藍底＋左側藍條＋「目前顯示」小標。
+   品名當標題（太長就換行）、單號灰色小字、細進度條＋「52/124（42%）」、最後活動相對時間＋來源小色塊（舊 MES 灰／App 報工綠／開工藍）、
+   沒有活動紀錄整列變淡。只用 :root 既有 token（＋#51 的超量紅）；App 沒有深色主題，深色偏好下維持淺色（不宣告 color-scheme）。 */
+.card-order-list { list-style: none; margin: 0; padding: 8px; display: grid; gap: 8px; }
 .card-order-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 8px;
-  align-items: center;
-  padding: 6px 4px;
-  border-bottom: 1px dashed var(--border);
+  grid-template-areas: "part action" "no no" "prog prog" "act act";
+  gap: 2px 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
 }
-.card-order-item:last-child { border-bottom: 0; }
-.card-order-item.is-shown .card-order-main strong { color: var(--blue); }
-.card-order-main { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
-.card-order-main strong { font-size: 13px; overflow-wrap: anywhere; }
-.card-order-main span { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
-.card-order-meta { grid-column: 1 / 2; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--muted); }
+.card-order-item.is-shown {
+  border-color: rgba(0, 103, 255, 0.28);
+  border-left: 4px solid var(--brand-blue);
+  padding-left: 9px;
+  background: var(--brand-blue-soft);
+}
+.card-order-item.is-idle { opacity: 0.55; }
+.card-order-part { grid-area: part; min-width: 0; font-size: 15px; font-weight: 800; line-height: 1.35; color: var(--text); overflow-wrap: anywhere; }
+.card-order-no { grid-area: no; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .card-order-item > .card-order-shown,
-.card-order-item > .card-order-pick { grid-column: 2; grid-row: 1 / span 2; }
-.card-order-shown { font-size: 12px; font-weight: 800; color: var(--green-strong); white-space: nowrap; }
-.card-order-pick,
+.card-order-item > .card-order-pick { grid-area: action; align-self: start; }
+.card-order-shown {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-blue);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.card-order-progress { grid-area: prog; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin-top: 8px; }
+.card-order-bar { flex: 1 1 90px; min-width: 70px; height: 6px; background: rgba(0, 103, 255, 0.14); }
+.card-order-bar .progress-fill { background: var(--brand-blue); }
+.card-order-bar.is-over { background: var(--red-soft); }
+.card-order-bar.is-over .progress-fill { background: #d92d20; }
+.card-order-qty { font-size: 13px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card-order-progress.is-over .card-order-qty { color: #d92d20; }
+.card-order-item .card-order-progress .card-overqty-tag { margin-left: 0; font-size: 11px; }
+.card-order-activity { grid-area: act; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.card-order-src { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1.5; white-space: nowrap; }
+.card-order-src.is-legacy { background: var(--gray-soft); color: #475467; }
+.card-order-src.is-report { background: var(--green-soft); color: var(--green-strong); }
+.card-order-src.is-start { background: var(--blue-soft); color: var(--blue); }
+/* 「切換顯示」：小一號的次要按鈕（細框）；平板也要按得到（≥ 32px 高） */
+.card-order-pick {
+  min-height: 32px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* 「恢復自動」維持 #50 的樣式 */
 .card-order-auto {
   min-height: 36px;
   padding: 4px 10px;
@@ -11876,7 +11922,7 @@ body .machtile-session-badge .machtile-session-toggle {
   cursor: pointer;
   white-space: nowrap;
 }
-.card-order-note { margin: 0; padding: 4px 10px 8px; font-size: 11px; color: var(--muted); }
+.card-order-note { margin: 0; padding: 0 10px 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; font-size: 11px; color: var(--muted); }
 
 /* 超量（已報良品 ≥ 訂單數量）仍在站的單：卡片照樣顯示、標紅（2026-10-02 owner） */
 .card-overqty-tag,

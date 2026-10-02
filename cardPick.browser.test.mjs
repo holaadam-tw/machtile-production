@@ -246,8 +246,54 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
   const items = cardOf(page, "B04").locator(".card-order-item");
   ok(await items.count() === 3, "點開：B04 全部 3 張在站單", String(await items.count()));
   const listText = await cardOf(page, "B04").locator(".card-order-list").innerText();
-  ok(/XX01202609170004[\s\S]*CPDF-16本體[\s\S]*進度 96\/219[\s\S]*最後活動 10\/02 16:14（舊 MES 報工）[\s\S]*顯示中/.test(listText), "第一列：單號、品名、進度、最後活動時間（台灣時間）、顯示中", listText);
-  ok(/XX01202606030002[\s\S]*進度 120\/300[\s\S]*最後活動 09\/07 16:12/.test(listText) && /XX01202604140005[\s\S]*A37九孔座[\s\S]*進度 55\/165[\s\S]*最後活動 08\/27 16:08（舊 MES 報工）/.test(listText), "其他兩張依最近活動排序、各自的進度與時間", listText);
+  // 2026-10-02 清單改版：品名當標題 → 單號（灰色小字）→ 進度「96/219（44%）」→ 最後活動相對時間＋來源小色塊；完整時間放在 title
+  ok(/CPDF-16本體[\s\S]*目前顯示[\s\S]*XX01202609170004[\s\S]*96\/219（44%）[\s\S]*最後活動[\s\S]*舊 MES/.test(listText), "第一列：品名、目前顯示、單號、進度（百分比）、最後活動、來源", listText);
+  ok(!listText.includes("顯示中") && !listText.includes("改顯示這張"), "舊字樣「顯示中」「改顯示這張」不再出現", listText);
+  const rowInfo = await items.evaluateAll((els) => els.map((el) => ({
+    key: el.dataset.cardOrderKey,
+    part: el.querySelector(".card-order-part")?.textContent.trim(),
+    no: el.querySelector(".card-order-no")?.textContent.trim(),
+    qty: el.querySelector(".card-order-qty")?.textContent.trim(),
+    title: el.querySelector("[data-card-order-activity]")?.getAttribute("title") || "",
+    when: el.querySelector(".card-order-when")?.textContent.trim() || "",
+    src: el.querySelector("[data-card-order-src]")?.dataset.cardOrderSrc || "",
+    srcText: el.querySelector("[data-card-order-src]")?.textContent.trim() || "",
+    badge: el.querySelector(".card-order-shown")?.textContent.trim() || "",
+    pick: el.querySelector(".card-order-pick")?.textContent.trim() || "",
+  })));
+  ok(JSON.stringify(rowInfo.map((r) => [r.part, r.no, r.qty])) === JSON.stringify([["CPDF-16本體", "XX01202609170004", "96/219（44%）"], ["P08九孔座-AR齒 (素材用AR16-R01-04-N)", "XX01202606030002", "120/300（40%）"], ["A37九孔座", "XX01202604140005", "55/165（33%）"]]), "三張依最近活動排序；品名、單號、進度（百分比）各自正確", JSON.stringify(rowInfo));
+  ok(rowInfo[0].title === "最後活動 10/02 16:14（舊 MES 報工）" && rowInfo[1].title === "最後活動 09/07 16:12（舊 MES 報工）" && rowInfo[2].title === "最後活動 08/27 16:08（舊 MES 報工）", "完整最後活動時間（台灣時間）放在 title", JSON.stringify(rowInfo.map((r) => r.title)));
+  const expectWhen = await page.evaluate(() => ["2026-10-02T08:14:47Z", "2026-09-07T08:12:33Z", "2026-08-27T08:08:13Z"].map((t) => `最後活動 ${machtileCardActiveCore.relativeActivityText(t)}`));
+  ok(JSON.stringify(rowInfo.map((r) => r.when)) === JSON.stringify(expectWhen), "最後活動改成相對時間（例：3 小時前／昨天 16:57）", JSON.stringify(rowInfo.map((r) => r.when)));
+  ok(rowInfo.every((r) => r.src === "legacy" && r.srcText === "舊 MES"), "來源小色塊：舊 MES", JSON.stringify(rowInfo.map((r) => r.srcText)));
+  ok(rowInfo[0].badge === "目前顯示" && rowInfo[0].pick === "" && rowInfo.slice(1).every((r) => r.badge === "" && r.pick === "切換顯示"), "目前顯示那列只有「目前顯示」小標、沒有切換按鈕；其他列「切換顯示」", JSON.stringify(rowInfo.map((r) => [r.badge, r.pick])));
+  const look = await cardOf(page, "B04").evaluate((card) => {
+    const cs = (el) => getComputedStyle(el);
+    const shown = card.querySelector(".card-order-item.is-shown");
+    const other = card.querySelector(".card-order-item:not(.is-shown)");
+    const badge = shown.querySelector(".card-order-shown");
+    const pick = other.querySelector(".card-order-pick");
+    const src = other.querySelector(".card-order-src");
+    return {
+      shownBg: cs(shown).backgroundColor, shownLeft: cs(shown).borderLeftWidth, shownLeftColor: cs(shown).borderLeftColor,
+      otherBg: cs(other).backgroundColor, otherLeft: cs(other).borderLeftWidth,
+      badgeBg: cs(badge).backgroundColor, badgeFg: cs(badge).color,
+      partSize: parseFloat(cs(other.querySelector(".card-order-part")).fontSize), partWeight: Number(cs(other.querySelector(".card-order-part")).fontWeight),
+      noSize: parseFloat(cs(other.querySelector(".card-order-no")).fontSize), noColor: cs(other.querySelector(".card-order-no")).color,
+      pickBorder: cs(pick).borderTopWidth, pickBg: cs(pick).backgroundColor, pickH: pick.getBoundingClientRect().height,
+      srcBg: cs(src).backgroundColor,
+      bar: !!other.querySelector(".card-order-progress .card-order-bar .progress-fill"),
+      note: card.querySelector(".card-order-note").textContent.trim(),
+    };
+  });
+  ok(look.shownBg === "rgb(234, 243, 255)" && look.shownLeft === "4px" && look.shownLeftColor === "rgb(0, 103, 255)", "目前顯示那列：淡藍底＋左側 4px 藍條", JSON.stringify(look));
+  ok(look.otherBg === "rgb(255, 255, 255)" && look.otherLeft === "1px", "其他列：白底、一般框線");
+  ok(look.badgeBg === "rgb(0, 103, 255)" && look.badgeFg === "rgb(255, 255, 255)", "「目前顯示」藍底白字小標", JSON.stringify(look));
+  ok(look.partSize > look.noSize && look.partWeight >= 700 && look.noColor === "rgb(102, 112, 133)", "品名放大加粗；單號小一號、灰色", JSON.stringify(look));
+  ok(look.pickBorder === "1px" && look.pickBg === "rgb(255, 255, 255)" && look.pickH >= 32 && look.pickH <= 40, "「切換顯示」細框次要按鈕（不再是大藍框）", JSON.stringify(look));
+  ok(look.srcBg === "rgb(238, 242, 246)", "舊 MES 來源色塊＝灰", look.srcBg);
+  ok(look.bar, "每列有細進度條");
+  ok(look.note === "依最近活動自動挑選；切換只影響這個畫面", "說明縮成一行小字", look.note);
   ok(!(await page.locator("#detailSheet").evaluate((e) => e.classList.contains("is-open"))), "點「還掛」不會打開工單明細");
   await cardOf(page, "B04").scrollIntoViewIfNeeded();
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "01-phone-b04-list.png") });
@@ -276,8 +322,17 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
   // 2026-10-02 起展開／收起會記住：切換後重畫仍維持展開，不用再點一次
   ok(await cardOf(page, "B04").locator("[data-card-orders]").evaluate((el) => el.open), "切換後清單仍展開");
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "02-phone-b04-switched.png") });
+  const switched = await cardOf(page, "B04").evaluate((card) => ({
+    shown: card.querySelector(".card-order-item.is-shown .card-order-part")?.textContent.trim(),
+    badges: card.querySelectorAll(".card-order-shown").length,
+    picks: [...card.querySelectorAll(".card-order-pick")].map((b) => b.textContent.trim()),
+    auto: card.querySelector(".card-order-note .card-order-auto")?.textContent.trim() || "",
+  }));
+  ok(switched.shown === "A37九孔座" && switched.badges === 1 && switched.picks.length === 2 && switched.picks.every((t) => t === "切換顯示"), "切換後「目前顯示」移到 A37，其他兩列「切換顯示」", JSON.stringify(switched));
+  ok(switched.auto === "恢復自動", "手動切換中 → 說明那行有「恢復自動」");
   await cardOf(page, "B04").locator(".card-order-auto").click();
   ok((await shownOn(page, "B04")).startsWith("XX01202609170004"), "恢復自動 → 回到 CPDF-16本體");
+  ok(await cardOf(page, "B04").locator(".card-order-auto").count() === 0, "恢復自動後按鈕消失");
   ok(be.writes.length === writesBefore, "恢復自動也沒有寫入");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok(overflow <= 1, `手機沒有橫向捲動（${overflow}px）`);
@@ -345,11 +400,39 @@ console.log("== 活動時間全部讀不到 → 退回原本的規則（交期�
   ok((await cardOf(page, "B04").locator("[data-card-orders-summary]").innerText()).trim() === "這台還掛 2 張", "仍顯示這台還掛 2 張");
   await cardOf(page, "B04").locator("[data-card-orders-summary]").click();
   ok((await cardOf(page, "B04").locator(".card-order-list").innerText()).includes("沒有活動紀錄"), "清單標示沒有活動紀錄");
+  const idle = await cardOf(page, "B04").locator(".card-order-item").evaluateAll((els) => els.map((el) => ({ shown: el.classList.contains("is-shown"), opacity: Number(getComputedStyle(el).opacity), text: el.querySelector("[data-card-order-activity]")?.textContent.trim() })));
+  ok(idle.every((r) => r.text === "沒有活動紀錄"), "每列都寫「沒有活動紀錄」", JSON.stringify(idle));
+  ok(idle.filter((r) => !r.shown).every((r) => r.opacity < 1) && idle.filter((r) => r.shown).every((r) => r.opacity === 1), "沒有活動紀錄的其他列整列變淡（目前顯示那列不變淡）", JSON.stringify(idle));
   await page.evaluate(() => openReport("", { machine: "B04", reportType: "dailyStart" }));
   ok((await page.locator("#reportWorkNo").innerText()).trim() === "XX01202604140005", "報工預設也跟卡片一致（A37）");
   ok(realErrors(errors).length === 0, "頁面沒有 JS 錯誤", realErrors(errors).join(" | "));
   await page.evaluate(() => closeReport());
   await cardOf(page, "B04").screenshot({ path: path.join(outDir, "05-phone-b04-fallback.png") });
+  await context.close();
+}
+
+// ================= 窄手機 360px：不橫向捲動、品名換行不截斷 =================
+console.log("== 窄手機（360px）：清單不橫向捲動、長品名換行 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, { ...devices["Pixel 7"], viewport: { width: 360, height: 780 }, screen: { width: 360, height: 780 } }, be);
+  await waitLoaded(page);
+  await cardOf(page, "B04").locator("[data-card-orders-summary]").click();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  ok(overflow <= 1, `360px 沒有橫向捲動（${overflow}px）`);
+  const fit = await cardOf(page, "B04").locator(".card-order-item").evaluateAll((els) => els.map((el) => {
+    const li = el.getBoundingClientRect();
+    const inside = [...el.querySelectorAll("*")].every((n) => { const r = n.getBoundingClientRect(); return r.width === 0 || (r.left >= li.left - 0.5 && r.right <= li.right + 0.5); });
+    const part = el.querySelector(".card-order-part");
+    const cs = getComputedStyle(part);
+    return { text: part.textContent.trim(), inside, clipped: part.scrollWidth > part.clientWidth + 1 || cs.textOverflow === "ellipsis" || cs.whiteSpace === "nowrap", lines: Math.round(part.getBoundingClientRect().height / parseFloat(cs.lineHeight)) };
+  }));
+  ok(fit.every((r) => r.inside && !r.clipped), "每列內容都在框內、品名沒有被截斷", JSON.stringify(fit));
+  const longName = fit.find((r) => r.text.startsWith("P08九孔座"));
+  ok(longName && longName.lines >= 2, "長品名（P08九孔座-AR齒 (素材用AR16-R01-04-N)）換行顯示", JSON.stringify(longName));
+  await cardOf(page, "B04").locator("[data-card-orders]").screenshot({ path: path.join(outDir, "08-phone360-b04-list.png") });
+  ok(be.writes.length === 0, "沒有任何寫入請求", be.writes.join(" | "));
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
@@ -363,9 +446,10 @@ console.log("== 平板（iPad 810×1080）==");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok(overflow <= 1, `平板沒有橫向捲動（${overflow}px）`);
   const listText = await cardOf(page, "B06").locator(".card-order-list").innerText();
-  ok(/XX01202609290017[\s\S]*最後活動 10\/02 16:16（舊 MES 報工）/.test(listText), "B06 清單第一列＝CRG-10本體 10/02 16:16（舊 MES）", listText);
-  const hit = await cardOf(page, "B06").locator(".card-order-pick").first().evaluate((btn) => { const r = btn.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return btn.contains(top) && r.height >= 32; });
-  ok(hit, "平板：「改顯示這張」按得到（沒有被蓋住、夠高）");
+  ok(/^CRG-10本體\(新型\)\(大孔\)[\s\S]*目前顯示[\s\S]*XX01202609290017/.test(listText.trim()), "B06 清單第一列＝CRG-10本體（目前顯示）", listText);
+  ok(await cardOf(page, "B06").locator(".card-order-item").first().locator("[data-card-order-activity]").getAttribute("title") === "最後活動 10/02 16:16（舊 MES 報工）", "B06 第一列最後活動 10/02 16:16（舊 MES）");
+  const hit = await cardOf(page, "B06").locator(".card-order-pick").first().evaluate((btn) => { const r = btn.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return btn.contains(top) && r.height >= 32 && btn.textContent.trim() === "切換顯示"; });
+  ok(hit, "平板：「切換顯示」按得到（沒有被蓋住、夠高）");
   await cardOf(page, "B06").scrollIntoViewIfNeeded();
   await cardOf(page, "B06").screenshot({ path: path.join(outDir, "06-tablet-b06-list.png") });
   await page.screenshot({ path: path.join(outDir, "07-tablet-monitor.png"), fullPage: false });
