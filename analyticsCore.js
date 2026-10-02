@@ -395,65 +395,114 @@
     return out;
   }
 
-  // orders：[{ key, workOrderNo, machine, part, process, total, done, doneLabel?, dueDate, processId, estimateDaily }]
+  // orders：[{ key, workOrderNo, workOrderKey?, machine, part, process, step?, total, done, doneLabel?, dueDate, processId, estimateDaily }]
+  // 逐工序卡片（#45）：同一張單同時在兩台機台（例 A02 第 2 道、B01 第 3 道）時，每一道各自算一次，
+  // 再依 workOrderKey 合成「一張單一筆」——取最差的那一道（逾期 > 會延誤 > 緊 > 資料不足 > OK > 已報滿），
+  // 其他道放在 otherSteps。張數（risks／okCount／excludedOver／insufficient／orderCount）都以工單算，不會因為兩台而算兩次。
+  // 沒給 workOrderKey＝一道工序一筆（原本的行為）。
   function dueRisk({ orders, reports, nowMs, workdays = DEFAULT_WORKDAYS, holidays = [] } = {}) {
     const now = Number.isFinite(nowMs) ? nowMs : Date.now();
     const today = taipeiDate(now);
     const rates = actualDailyRateByProcess(reports, now);
-    const risks = [];
-    const insufficient = [];
-    let excludedOver = 0;
-    let okCount = 0;
     const seen = new Set();
+    const groups = new Map();
     (Array.isArray(orders) ? orders : []).forEach((o) => {
       const key = String(o?.processId || o?.key || o?.workOrderNo || "");
       if (!key || seen.has(key)) return;
       seen.add(key);
-      const total = Number(o.total);
-      const done = Math.max(0, Number(o.done) || 0);
-      const base = { key, workOrderNo: o.workOrderNo || "", machine: o.machine || "", part: o.part || "", process: o.process || "", total, done, doneLabel: o.doneLabel || "", dueDate: o.dueDate || "" };
-      if (!(total > 0)) { insufficient.push({ ...base, reason: "訂單數量未填" }); return; }
-      const remaining = total - done;
-      if (remaining <= 0) { excludedOver += 1; return; }
-      const due = /^\d{4}-\d{2}-\d{2}/.test(String(o.dueDate || "")) ? String(o.dueDate).slice(0, 10) : "";
-      if (!due) { insufficient.push({ ...base, remaining, reason: "沒有交期" }); return; }
-      const actual = rates.get(String(o.processId || ""));
-      let speed = null;
-      let basis = "";
-      let speedNote = "";
-      if (actual && actual.rate > 0) {
-        speed = actual.rate;
-        basis = "actual";
-        speedNote = `近 7 天 ${actual.days} 天報工 ${actual.good} 件`;
-      } else if (Number(o.estimateDaily) > 0) {
-        speed = Number(o.estimateDaily);
-        basis = "estimate";
-        speedNote = "卡片每日估算";
-      }
-      if (overdueCheck(today, due)) {
-        // 交期已過、還沒做完：不管速度，一律「已逾期」
-        const projected = speed ? nthWorkday(today, Math.ceil(remaining / speed), workdays, holidays) : null;
-        risks.push({ ...base, remaining, level: "overdue", overdueDays: daysBetween(due, today), speed, basis, speedNote, daysNeeded: speed ? Math.ceil(remaining / speed) : null, projected, delayDays: projected ? daysBetween(due, projected) : null });
-        return;
-      }
-      if (!speed) { insufficient.push({ ...base, remaining, reason: "沒有近 7 天實際日產，也沒有機台加工時間可估算" }); return; }
-      const daysNeeded = Math.ceil(remaining / speed);
-      const projected = nthWorkday(today, daysNeeded, workdays, holidays);
-      if (!projected) { insufficient.push({ ...base, remaining, reason: "沒有工作天設定" }); return; }
-      const delayDays = daysBetween(due, projected);
-      const row = { ...base, remaining, speed, basis, speedNote, daysNeeded, projected, delayDays };
-      if (delayDays > 0) risks.push({ ...row, level: "late" });
-      else if (-delayDays <= TIGHT_DAYS) risks.push({ ...row, level: "tight", slackDays: -delayDays });
-      else okCount += 1;
+      const group = String(o.workOrderKey || "") || `step:${key}`;
+      const outcome = evaluateDueStep(o, key, today, rates, workdays, holidays);
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(outcome);
     });
-    const rank = { overdue: 0, late: 1, tight: 2 };
-    risks.sort((a, b) => rank[a.level] - rank[b.level]
+    const risks = [];
+    const insufficient = [];
+    let excludedOver = 0;
+    let okCount = 0;
+    groups.forEach((outcomes) => {
+      const ranked = outcomes.slice().sort(compareDueOutcome);
+      const worst = ranked[0];
+      const otherSteps = ranked.slice(1).map((x) => ({
+        key: x.row.key, machine: x.row.machine, process: x.row.process, step: x.row.step, kind: x.kind,
+        level: x.row.level || "", label: x.kind === "risk" ? riskLabel(x.row) : DUE_KIND_LABEL[x.kind] || "",
+      }));
+      const row = otherSteps.length ? { ...worst.row, otherSteps } : worst.row;
+      if (worst.kind === "risk") risks.push(row);
+      else if (worst.kind === "insufficient") insufficient.push(row);
+      else if (worst.kind === "ok") okCount += 1;
+      else excludedOver += 1;
+    });
+    risks.sort(compareRiskRows);
+    return { today, risks, insufficient, excludedOver, okCount, orderCount: groups.size };
+  }
+
+  const DUE_KIND_RANK = Object.freeze({ risk: 0, insufficient: 1, ok: 2, over: 3 });
+  const DUE_KIND_LABEL = Object.freeze({ insufficient: "資料不足", ok: "OK", over: "已報滿" });
+  const DUE_LEVEL_RANK = Object.freeze({ overdue: 0, late: 1, tight: 2 });
+
+  function compareRiskRows(a, b) {
+    return DUE_LEVEL_RANK[a.level] - DUE_LEVEL_RANK[b.level]
       || (a.level === "overdue" ? b.overdueDays - a.overdueDays : 0)
       || (a.level === "late" ? b.delayDays - a.delayDays : 0)
       || (a.level === "tight" ? a.slackDays - b.slackDays : 0)
       || String(a.dueDate).localeCompare(String(b.dueDate))
-      || String(a.workOrderNo).localeCompare(String(b.workOrderNo)));
-    return { today, risks, insufficient, excludedOver, okCount };
+      || String(a.workOrderNo).localeCompare(String(b.workOrderNo));
+  }
+
+  // 同一張單的各道：最差的排第一（同一級風險再比延誤天數；同一級非風險照原本順序）
+  function compareDueOutcome(a, b) {
+    const k = DUE_KIND_RANK[a.kind] - DUE_KIND_RANK[b.kind];
+    if (k) return k;
+    if (a.kind === "risk") {
+      // 同一張單、都已逾期（逾期天數一樣）→ 預計完成比較晚的那一道比較嚴重；都會延誤／緊 → compareRiskRows
+      const r = compareRiskRows(a.row, b.row);
+      if (a.row.level === "overdue" && b.row.level === "overdue" && a.row.overdueDays === b.row.overdueDays) {
+        const p = String(b.row.projected || "9999").localeCompare(String(a.row.projected || "9999"));
+        if (p) return p;
+      }
+      return r || a.index - b.index;
+    }
+    return a.index - b.index;
+  }
+
+  let dueStepIndex = 0;
+  function evaluateDueStep(o, key, today, rates, workdays, holidays) {
+    const index = dueStepIndex++;
+    const total = Number(o.total);
+    const done = Math.max(0, Number(o.done) || 0);
+    const base = { key, workOrderNo: o.workOrderNo || "", machine: o.machine || "", part: o.part || "", process: o.process || "", step: o.step ?? null, total, done, doneLabel: o.doneLabel || "", dueDate: o.dueDate || "" };
+    if (!(total > 0)) return { kind: "insufficient", index, row: { ...base, reason: "訂單數量未填" } };
+    const remaining = total - done;
+    if (remaining <= 0) return { kind: "over", index, row: { ...base, remaining } };
+    const due = /^\d{4}-\d{2}-\d{2}/.test(String(o.dueDate || "")) ? String(o.dueDate).slice(0, 10) : "";
+    if (!due) return { kind: "insufficient", index, row: { ...base, remaining, reason: "沒有交期" } };
+    const actual = rates.get(String(o.processId || ""));
+    let speed = null;
+    let basis = "";
+    let speedNote = "";
+    if (actual && actual.rate > 0) {
+      speed = actual.rate;
+      basis = "actual";
+      speedNote = `近 7 天 ${actual.days} 天報工 ${actual.good} 件`;
+    } else if (Number(o.estimateDaily) > 0) {
+      speed = Number(o.estimateDaily);
+      basis = "estimate";
+      speedNote = "卡片每日估算";
+    }
+    if (overdueCheck(today, due)) {
+      // 交期已過、還沒做完：不管速度，一律「已逾期」
+      const projected = speed ? nthWorkday(today, Math.ceil(remaining / speed), workdays, holidays) : null;
+      return { kind: "risk", index, row: { ...base, remaining, level: "overdue", overdueDays: daysBetween(due, today), speed, basis, speedNote, daysNeeded: speed ? Math.ceil(remaining / speed) : null, projected, delayDays: projected ? daysBetween(due, projected) : null } };
+    }
+    if (!speed) return { kind: "insufficient", index, row: { ...base, remaining, reason: "沒有近 7 天實際日產，也沒有機台加工時間可估算" } };
+    const daysNeeded = Math.ceil(remaining / speed);
+    const projected = nthWorkday(today, daysNeeded, workdays, holidays);
+    if (!projected) return { kind: "insufficient", index, row: { ...base, remaining, reason: "沒有工作天設定" } };
+    const delayDays = daysBetween(due, projected);
+    const row = { ...base, remaining, speed, basis, speedNote, daysNeeded, projected, delayDays };
+    if (delayDays > 0) return { kind: "risk", index, row: { ...row, level: "late" } };
+    if (-delayDays <= TIGHT_DAYS) return { kind: "risk", index, row: { ...row, level: "tight", slackDays: -delayDays } };
+    return { kind: "ok", index, row };
   }
 
   function overdueCheck(today, due) {

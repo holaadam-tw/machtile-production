@@ -204,6 +204,37 @@ console.log("== 交期風險 ==");
   eq("預設週一～五：預計 10/5（跳過週六日）", wk.risks[0]?.projected, "2026-10-05");
 }
 
+console.log("== 交期風險：同一張單在兩台（逐工序 #45）==");
+{
+  const now = tw("09:00", "2026-10-02");
+  // XX01202609160002：A02 第 2 道剩 20（10／天 → 10/2、10/5，交期 10/9 → 餘裕 4 天＝OK）、B01 第 3 道剩 80（10／天 → 8 工作天 → 10/13，延誤 4 天）
+  const two = [
+    { processId: "pA02", workOrderNo: "XX01202609160002", workOrderKey: "wo-ms", step: 2, machine: "A02", total: 100, done: 80, dueDate: "2026-10-09", estimateDaily: 10 },
+    { processId: "pB01", workOrderNo: "XX01202609160002", workOrderKey: "wo-ms", step: 3, machine: "B01", total: 100, done: 20, dueDate: "2026-10-09", estimateDaily: 10 },
+    { processId: "pOther", workOrderNo: "WO-OTHER", workOrderKey: "wo-other", step: 1, machine: "A01", total: 10, done: 0, dueDate: "2026-10-30", estimateDaily: 10 },
+  ];
+  const r = c.dueRisk({ orders: two, reports: [], nowMs: now });
+  eq("同單兩道只列一張、取最差那一道（B01 第 3 道會延誤）", r.risks.map((x) => [x.workOrderNo, x.machine, x.step, x.level]), [["XX01202609160002", "B01", 3, "late"]]);
+  eq("另一道寫在 otherSteps", r.risks[0].otherSteps.map((x) => [x.machine, x.step, x.kind, x.label]), [["A02", 2, "ok", "OK"]]);
+  eq("張數以工單算：在站 2 張、OK 1 張（A02 那道不另算 OK）", [r.orderCount, r.okCount, r.excludedOver, r.insufficient.length], [2, 1, 0, 0]);
+  // 兩道都 OK → 只算一張 OK
+  const ok = c.dueRisk({ orders: two.map((o) => ({ ...o, dueDate: "2026-11-30" })), reports: [], nowMs: now });
+  eq("兩道都 OK → XX 那張只算 1 張 OK（加 WO-OTHER 共 2 張，不是 3 張）", [ok.okCount, ok.orderCount, ok.risks.length], [2, 2, 0]);
+  // 一道報滿、另一道還在做 → 依還在做的那一道判斷，不算進「已報滿」
+  const half = c.dueRisk({ orders: [{ ...two[0], done: 120 }, two[1]], reports: [], nowMs: now });
+  eq("一道報滿、另一道延誤 → 列延誤、已報滿 0 張", [half.risks.map((x) => x.machine), half.excludedOver, half.risks[0].otherSteps[0].kind], [["B01"], 0, "over"]);
+  // 兩道都報滿 → 已報滿 1 張
+  const full = c.dueRisk({ orders: [{ ...two[0], done: 100 }, { ...two[1], done: 130 }], reports: [], nowMs: now });
+  eq("兩道都報滿 → 已報滿只算 1 張", [full.excludedOver, full.orderCount], [1, 1]);
+  // 實際速度只看自己那一道的報工（B01 的報工不會拿去算 A02）
+  const reports = [rep("pB01", "B01", "noon", "10:00", { completed_qty: 40 }, "2026-10-01")];
+  const act = c.dueRisk({ orders: two.slice(0, 2), reports, nowMs: now });
+  eq("B01 實際 40／天 → 2 工作天 10/5、OK；A02 估算 OK → 整張單 OK", [act.okCount, act.risks.length], [1, 0]);
+  // 沒給 workOrderKey → 維持一道一筆（舊行為）
+  const legacy = c.dueRisk({ orders: two.slice(0, 2).map(({ workOrderKey, ...o }) => o), reports: [], nowMs: now });
+  eq("沒給 workOrderKey → 一道一筆（舊行為）", [legacy.okCount, legacy.risks.length, legacy.orderCount], [1, 1, 2]);
+}
+
 console.log("== 格式 ==");
 eq("formatHours", [c.formatHours(3 * 3600 + 12 * 60), c.formatHours(45 * 60), c.formatHours(7200)], ["3時12分", "45分", "2時"]);
 eq("formatPercent", [c.formatPercent(0.625), c.formatPercent(null)], ["63%", "—"]);
