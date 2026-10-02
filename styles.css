@@ -11771,3 +11771,8 @@ body .machtile-session-badge .machtile-session-toggle {
 }
 /* 單台報工：數量欄說明 */
 .report-qty-help { margin: -4px 0 6px; color: var(--muted); font-size: 12px; }
+
+/* 卡片完成進度：百分比與色條同色、色條放在百分比正下方（2026-10-02 owner） */
+.machine-metrics small.card-progress-pct { color: var(--brand-blue); font-size: 14px; font-weight: 800; }
+.card-progress-track { height: 8px; margin: 6px 4px 2px; background: rgba(0, 103, 255, 0.14); }
+.card-progress-track .progress-fill { background: var(--brand-blue); }
