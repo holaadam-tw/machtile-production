@@ -155,7 +155,7 @@ function makeBackend(opts = {}) {
       return json(200, workOrders);
     }
     if (p === "/rest/v1/production_reports") {
-      if (q.includes("report_type=in.(dailyStart,finish)")) {
+      if (q.includes("report_type=in.(dailyStart,noon,finish)")) {
         b.reads.push("today");
         if (opts.failReads) return json(500, { message: "simulated outage" });
         return json(200, todayRows);
