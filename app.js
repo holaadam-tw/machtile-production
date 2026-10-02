@@ -19908,7 +19908,7 @@ function machtileRenderCardCtSheet() {
       <label><input id="cardCtMinutes" type="number" inputmode="numeric" min="0" step="1" value="${escapeHtml(ed.minutes)}" aria-label="分"${disabled}><span>分</span></label>
       <label><input id="cardCtSeconds" type="number" inputmode="numeric" min="0" max="59" step="1" value="${escapeHtml(ed.seconds)}" aria-label="秒"${disabled}><span>秒 / 件</span></label>
     </div>
-    <p class="card-ct-operator">${ed.loading ? "讀取中…" : `報工人：${escapeHtml(ed.actorName || "（登入者）")}`}</p>
+    <p class="card-ct-operator" data-card-ct-operator>${ed.loading ? "讀取中…" : `報工人：${escapeHtml(ed.actorName || "（登入者）")}（只記錄機台時間，不寫回舊 MES）`}</p>
     ${ed.notice ? `<p class="card-ct-notice" data-card-ct-notice>${escapeHtml(ed.notice)}</p>` : ""}
     ${ed.error ? `<p class="card-ct-error" role="alert" data-card-ct-error>${escapeHtml(ed.error)}</p>` : ""}
     <div class="card-ct-actions">
@@ -19965,10 +19965,9 @@ async function machtileOpenCardMachineTime(processId, machineCode) {
     if (!ed.actorId) {
       ed.readOnly = true;
       ed.notice = "登入帳號沒有對應到啟用中的使用者，不能填。請聯絡管理者。";
-    } else if (!ed.operatorMapped) {
-      ed.readOnly = true;
-      ed.notice = "你的帳號還沒對照舊 MES 工號，產值歸不到人，不能填。站別帳號請用「批次報工」選報工人。";
     }
+    // 沒有舊 MES 工號對照也可以填：這個小框只送 0／0（只帶 cycle_time_seconds），回寫橋不會寫回舊 MES
+    // （SKIP_ZERO），所以不需要工號；報工人＝登入者本人（user_id、operators 都是 app_users.id，不捏造工號）。
   } catch (error) {
     if (machtileCardState.editor !== ed) return;
     ed.readOnly = true;
@@ -20033,6 +20032,7 @@ async function machtileSaveCardMachineTime() {
     overtime: "",
     operatorId: ed.actorId,
     operatorMapped: ed.operatorMapped,
+    allowUnmappedTimeOnly: true,
     startedAt: start.startedAt,
     startedAtReason: start.startedAt ? "" : "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。",
   };
