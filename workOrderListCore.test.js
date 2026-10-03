@@ -11,10 +11,13 @@ console.log("== sourceOf ==");
 eq("created_by null → 舊 MES 派工（推斷）", c.sourceOf({ created_by: null }), { kind: "legacy", label: "舊 MES 派工", basis: "created_by_null", createdBy: null });
 eq("created_by 有值 → App 手動", c.sourceOf({ created_by: "u-1" }), { kind: "app", label: "App 手動", basis: "created_by", createdBy: "u-1" });
 eq("空白 created_by 當 null", c.sourceOf({ created_by: "  " }).kind, "legacy");
-eq("legacy_mes_source 有值 → 舊 MES（明確）", c.sourceOf({ created_by: "u-1", legacy_mes_source: "SoftNet" }).basis, "legacy_mes_source");
-eq("legacy_work_order_no 有值 → 舊 MES", c.sourceOf({ legacy_work_order_no: "X" }).basis, "legacy_work_order_no");
+eq("source_system null 時退回 created_by（即使舊欄位有值）", c.sourceOf({ created_by: "u-1", legacy_mes_source: "SoftNet", legacy_work_order_no: "X" }).basis, "created_by");
+eq("source_system null 且 created_by null 時以舊資料規則判斷", c.sourceOf({ legacy_mes_source: "SoftNet" }).basis, "created_by_null");
 eq("source_system=softnet → 舊 MES", c.sourceOf({ source_system: "softnet_aps", created_by: "u-1" }).kind, "legacy");
-eq("source_system=app → App 手動", c.sourceOf({ source_system: "app" }).kind, "app");
+eq("source_system=app_manual 優先於 created_by null", c.sourceOf({ source_system: "app_manual", created_by: null }).kind, "app");
+eq("source_system=softnet_bridge 優先於 created_by 有值", c.sourceOf({ source_system: "softnet_bridge", created_by: "u-1" }).createdBy, null);
+eq("undefined source_system 也退回 created_by", c.sourceOf({ source_system: undefined, created_by: "u-2" }).basis, "created_by");
+eq("空字串 source_system 視為已明確填值，不退回 created_by", c.sourceOf({ source_system: "", created_by: "u-2" }).basis, "source_system");
 eq("null 列安全", c.sourceOf(null).kind, "legacy");
 
 console.log("== dueState / dueNote ==");

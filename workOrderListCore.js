@@ -1,10 +1,7 @@
 // workOrderListCore.js — 「工單管理」清單的純邏輯（owner 2026-10-02：加來源欄＋清單優化）。
 //
-// 來源判斷（2026-10-02 查正式庫）：
-//   work_orders 有 source_system／legacy_mes_source／legacy_work_order_no 這幾個「來源」欄位，但 76 張全部是 null，
-//   派工橋（DispatchBridge.ps1）跟 App 建單表單呼叫的是同一支 rpc/work_order_upsert，這支 RPC 不寫 created_by。
-//   所以目前唯一分得出來的訊號是 created_by：有值＝有人掛名建的（App 手動）；null＝派工橋自動同步（舊 MES 派工）。
-//   將來後端把來源欄位填上，就以那幾欄為準（明確來源優先於推斷）。
+// 來源判斷：先看明確的 source_system（BF）；只有 source_system 為 null/undefined
+// 才沿用 created_by 的舊資料判斷，避免 App 手動新單被錯標為舊 MES 派工。
 //
 // DOM 與 fetch 留在 app.js；這裡只做可測的決策：來源、交期狀態、排序、搜尋、篩選。
 (function attachMachTileWorkOrderListCore(root, factory) {
@@ -26,18 +23,16 @@
   const text = (v) => (v === null || v === undefined ? "" : String(v).trim());
 
   // 來源。回傳 { kind: "legacy" | "app", label, basis, createdBy }
-  //   basis：判斷依據（"source_system" / "legacy_mes_source" / "legacy_work_order_no" / "created_by" / "created_by_null"）
+  //   basis：判斷依據（"source_system" / "created_by" / "created_by_null"）
   function sourceOf(row) {
     const r = row || {};
-    const sourceSystem = text(r.source_system);
-    if (sourceSystem) {
+    if (r.source_system !== null && r.source_system !== undefined) {
+      const sourceSystem = text(r.source_system);
       const isApp = /^(app|machtile|manual)/i.test(sourceSystem);
       return isApp
         ? { kind: "app", label: "App 手動", basis: "source_system", createdBy: text(r.created_by) || null }
         : { kind: "legacy", label: "舊 MES 派工", basis: "source_system", createdBy: null };
     }
-    if (text(r.legacy_mes_source)) return { kind: "legacy", label: "舊 MES 派工", basis: "legacy_mes_source", createdBy: null };
-    if (text(r.legacy_work_order_no)) return { kind: "legacy", label: "舊 MES 派工", basis: "legacy_work_order_no", createdBy: null };
     if (text(r.created_by)) return { kind: "app", label: "App 手動", basis: "created_by", createdBy: text(r.created_by) };
     return { kind: "legacy", label: "舊 MES 派工", basis: "created_by_null", createdBy: null };
   }
