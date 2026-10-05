@@ -28,7 +28,7 @@ const cards=[{work_order_id:id(40),work_order_no:'TEST-ORDER',part_name:'TEST PA
   current_process_id:id(41),current_process_order:1,current_process_name:'TEST PROCESS',machine_code:'A01',machine_name:'A01',process_status:'pending',qty_completed:0},
   {work_order_id:id(42),work_order_no:'TEST-MILL-ORDER',part_name:'TEST MILL PART',quantity:10,due_date:'2026-12-01',status:'not_started',
   current_process_id:id(43),current_process_order:1,current_process_name:'TEST MILL PROCESS',machine_code:'B03',machine_name:'B03',process_status:'pending',qty_completed:0}];
-let checks=0,departmentFail=false,machinesFail=false;
+let checks=0,departmentFail=false,machinesFail=false,missingContext=false,contextDenied=false,contextWrongTenant=false,contextCalls=0;
 let access={tenant_id:tenant,role:'admin',is_bridge:false,all_departments:true,department_codes:['LATHE','MILL']},accessFail=false;
 const posts=[],blocked=[],errors=[];
 const check=(ok,label)=>{assert.ok(ok,label);checks++;console.log(`PASS ${label}`)};
@@ -36,6 +36,7 @@ const browser=await chromium.launch();
 try{
   for(const width of [1440,390]){
     departmentFail=false;machinesFail=false;
+    access={tenant_id:tenant,role:'admin',is_bridge:false,all_departments:true,department_codes:['LATHE','MILL']};
     const context=await browser.newContext({viewport:{width,height:900},serviceWorkers:'block'});
     await context.addInitScript(token=>sessionStorage.setItem('machtileAuthSession',JSON.stringify({version:1,accessToken:token,refreshToken:'',email:'admin@test.invalid',authMethod:'password',mode:'session',createdAt:Date.now(),rememberUntil:0})),token);
     await context.route('**/*',async route=>{
@@ -43,9 +44,16 @@ try{
       if(url.origin===fake){
         const p=url.pathname;
         if(p==='/auth/v1/user')return json({id:id(10),email:'admin@test.invalid',app_metadata:metadata});
-        if(p==='/rest/v1/rpc/machine_department_context')return accessFail?route.fulfill({status:503,body:'unavailable'}):json(access);
+        if(p==='/rest/v1/rpc/machine_department_context'){
+          contextCalls++;
+          if(contextDenied)return route.fulfill({status:403,body:'TENANT_ACCESS_DENIED'});
+          if(contextWrongTenant)return json({...access,tenant_id:id(999)});
+          if(missingContext)return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({code:'P0001',message:'DEPARTMENT_CONFIGURATION_MISSING'})});
+          return accessFail?route.fulfill({status:503,body:'unavailable'}):json(access);
+        }
         if(p==='/rest/v1/app_users')return json([{id:id(11),name:'TEST ADMIN',account:'admin@test.invalid',role:'admin',is_active:true}]);
         if(p==='/rest/v1/v_work_order_cards')return json(cards);
+        if(p==='/rest/v1/work_order_processes'&&(url.searchParams.get('select')||'').includes('work_orders!inner'))return json(cards.map(c=>({id:c.current_process_id,tenant_id:tenant,process_order:1,process_name:c.current_process_name,status:'pending',process_type:'cnc',qty_completed:0,work_orders:{id:c.work_order_id,work_order_no:c.work_order_no,quantity:c.quantity,part_name:c.part_name,status:'not_started',due_date:c.due_date},machines:machines.find(m=>m.machine_code===c.machine_code)})));
         if(p==='/rest/v1/v_machine_management_cards')return machinesFail?route.fulfill({status:503,body:'unavailable'}):json(machines);
         if(p==='/rest/v1/machine_departments')return departmentFail?route.fulfill({status:503,body:'unavailable'}):json(departments);
         if(p==='/rest/v1/machines')return json([{machine_code:'A01',name:'TEST MACHINE',machine_type:'加工中心',department_id:id(30),status:'idle',display_order:1}]);
@@ -68,6 +76,14 @@ try{
     check(await page.evaluate(()=>normalizedMachineDepartment(normalizeMachineMaster({machine_type:'車床',department_name:null})))==='未設定課別',`${width}: actual normalizer ignores type as authority`);
     await page.evaluate(()=>openReport(state.workOrders[0].id));
     accessFail=true;
+    await page.evaluate(async()=>{await machtileLoadDepartmentAccess({readOnly:true,force:true});});
+    const privilegedBefore=posts.length;
+    await page.evaluate(()=>supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'}));
+    check(posts.length===privilegedBefore+1&&await page.evaluate(()=>state.workOrders.length>0&&document.getElementById('reportSheet').classList.contains('is-open')),`${width}: admin context outage does not gate operations or blank the form`);
+    accessFail=false;access={...access,role:'operator'};
+    await page.evaluate(async()=>{machtileAuthState.role='operator';await loadFromSupabase();openReport(state.workOrders[0].id);});
+    accessFail=true;
+    await page.evaluate(()=>{machtileDepartmentAccessFetchedAt=Date.now()-31000;});
     const postBefore=posts.length;
     const retrySafe=await page.evaluate(async()=>{
       const before={orders:JSON.stringify(state.workOrders),machines:JSON.stringify(state.machines),
@@ -80,7 +96,8 @@ try{
         &&document.getElementById('reportSheet').classList.contains('is-open');}
     });
     check(retrySafe&&posts.length===postBefore,`${width}: pre-POST context 503 preserves cards/selection/open report; sends no write`);
-    accessFail=false;await page.evaluate(()=>closeReport());
+    accessFail=false;access={...access,role:'admin'};
+    await page.evaluate(async()=>{machtileAuthState.role='admin';await loadFromSupabase();closeReport();});
     await page.evaluate(()=>openAdminModule('add'));
     await page.locator('#machtileMcDepartment:not([disabled])').waitFor();
     await page.locator('#machtileMcCode').fill('A06');await page.locator('#machtileMcName').fill('TEST NEW');
@@ -107,8 +124,8 @@ try{
     await page.evaluate(()=>closeAdminModule());
     for(const codes of [['LATHE'],['MILL'],['LATHE','MILL'],[]]){
       access={...access,role:'operator',all_departments:false,department_codes:codes};
-      await page.evaluate(async()=>{await loadFromSupabase();renderAll();});
-      const labels=codes.map(x=>x==='LATHE'?'車床課':'銑床課');
+      await page.evaluate(async()=>{machtileAuthState.role='operator';await loadFromSupabase();renderAll();});
+      const labels=codes.length===2?['全部','車床課','銑床課']:codes.map(x=>x==='LATHE'?'車床課':'銑床課');
       check(JSON.stringify(await page.locator('#departmentChips [data-department]').evaluateAll(nodes=>nodes.map(n=>n.dataset.department)))===JSON.stringify(labels),`${width}: staff course controls exactly ${codes.join('+')||'empty'}`);
       check(await page.evaluate(()=>machtileAvailableDepartments().includes(activeDepartmentFilter)||(activeDepartmentFilter===''&&machtileAvailableDepartments().length===0)),`${width}: selection remains inside permitted courses`);
       const tvCodes=await page.evaluate(()=>machtileTvBuildModel().lines.flatMap(line=>line.machines.map(cell=>cell.code)));
@@ -116,8 +133,9 @@ try{
       const expected=codes.flatMap(code=>code==='LATHE'?['A01']:['B03']).sort();
       check(JSON.stringify(await page.evaluate(()=>state.machineMasters.map(m=>m.code).sort()))===JSON.stringify(expected),`${width}: actual machine data matches the permitted course set`);
       await page.evaluate(()=>{const b=document.createElement('button');b.dataset.department='全部';document.body.append(b);b.click();b.remove();});
-      check(await page.evaluate(()=>activeDepartmentFilter!=='全部'),`${width}: forged all-course DOM click ignored`);
+      check(await page.evaluate(both=>both?activeDepartmentFilter==='全部':activeDepartmentFilter!=='全部',codes.length===2),`${width}: all-course selection permitted only for both courses`);
       if(codes.length===2){
+        check(await page.evaluate(()=>activeDepartmentFilter==='全部'),`${width}: default both-course member sees both courses together`);
         await page.locator('#departmentChips [data-department="銑床課"]').click();
         check(await page.evaluate(()=>activeDepartmentFilter==='銑床課'),`${width}: two-course member can actually switch to mill`);
         check(await page.locator('.machine-tile-card').filter({hasText:'B03'}).count()===1&&await page.locator('.machine-tile-card').filter({hasText:'A01'}).count()===0,`${width}: actual mill card replaces lathe card after switch`);
@@ -131,15 +149,45 @@ try{
       }
     }
     access={...access,role:'planner',all_departments:true,department_codes:['LATHE','MILL']};
-    await page.evaluate(async()=>{await loadFromSupabase();renderAll();});
+    await page.evaluate(async()=>{machtileAuthState.role='planner';await loadFromSupabase();renderAll();});
     check(await page.locator('#departmentChips [data-department="全部"]').count()===1,`${width}: planner retains all-course selector`);
     machinesFail=true;
     const tvDenied=await page.evaluate(async()=>{machtileTvState.model={fixture:true};try{await machtileTvFetchAll();return false;}catch(e){return e.message.includes('機台清單讀取失敗')&&machtileTvState.model===null&&state.machineMasters.length===0;}});
     check(tvDenied,`${width}: TV failed machine read clears previous privileged model`);
     machinesFail=false;
     accessFail=true;
-    const denied=await page.evaluate(async()=>{try{await loadFromSupabase();return false;}catch(e){renderAll();return state.machines.length===0&&state.workOrders.length===0;}});
-    check(denied&&await page.locator('#departmentChips [data-department]').count()===0,`${width}: context outage fails closed, no cached cards/chips`);
+    await page.evaluate(async()=>{await loadFromSupabase();renderAll();});
+    check(await page.evaluate(()=>state.machines.length>0&&state.workOrders.length>0)&&await page.locator('#departmentChips [data-department]').count()===3,`${width}: planner context outage retains readable cards and course controls`);
+    await page.evaluate(()=>supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'}));
+    check((await page.locator('#dataSourceLabel').innerText()).includes('課別權限讀取失敗'),`${width}: context outage has a visible explanation`);
+    accessFail=false;missingContext=true;
+    await page.evaluate(async()=>{machtileAuthState.role='operator';machtileDepartmentAccess=null;activeDepartmentFilter='';await loadFromSupabase();renderAll();});
+    check(await page.evaluate(()=>activeDepartmentFilter==='全部'&&machtileAvailableDepartments().length===3),`${width}: explicit missing configuration defaults both courses (not empty revoked membership)`);
+    missingContext=false;access={...access,role:'operator'};
+    for(const wrongTenant of [false,true]){
+      contextDenied=!wrongTenant;contextWrongTenant=wrongTenant;
+      await page.evaluate(async()=>{machtileDepartmentAccess=null;machtileDepartmentAccessFetchedAt=0;await loadFromSupabase();});
+      check(await page.evaluate(()=>machtileDepartmentAccess===null),`${width}: ${wrongTenant?'wrong tenant':'403'} is not interpreted as default two-course membership`);
+      const deniedBefore=posts.length;
+      const blockedWrite=await page.evaluate(async()=>{try{await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});return false;}catch(e){return e.message.includes('已保留表單');}});
+      check(blockedWrite&&posts.length===deniedBefore,`${width}: ${wrongTenant?'wrong tenant':'403'} context cannot authorize a write`);
+    }
+    contextDenied=false;contextWrongTenant=false;
+    await page.evaluate(async()=>{await loadFromSupabase();});
+    const cacheBefore=contextCalls;
+    await page.evaluate(async()=>{await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});});
+    check(contextCalls===cacheBefore,`${width}: two writes within 30 seconds reuse the confirmed context`);
+    await page.evaluate(async()=>{machtileDepartmentAccessFetchedAt=Date.now()-31000;await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});});
+    check(contextCalls===cacheBefore+1,`${width}: expired write context is rechecked`);
+    accessFail=true;
+    await page.evaluate(async()=>{machtileDepartmentAccess=null;machtileDepartmentAccessFetchedAt=0;await loadFromSupabase();renderAll();});
+    check(await page.evaluate(()=>state.machines.length>0&&state.workOrders.length>0),`${width}: initial operator context outage does not hide server-readable data`);
+    const denied=await page.evaluate(async()=>{try{await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});return false;}catch(e){return e.message.includes('已保留表單');}});
+    check(denied,`${width}: operator with no confirmed context cannot write`);
+    await page.evaluate(async()=>{await supabaseFetch('rpc/batch_report_progress',{method:'POST',body:'{}'});await machtileTvFetchAll();});
+    check(await page.evaluate(()=>state.workOrders.length>0),`${width}: read-only RPC and TV refresh survive context outage`);
+    await page.evaluate(()=>{state.assignedCardOrders=[{id:'sentinel'}];state.cardProcessError='sentinel';machtileClearDepartmentData();});
+    check(await page.evaluate(()=>state.assignedCardOrders===null&&state.cardProcessError===''),`${width}: clearing department state also clears per-machine processes`);
     accessFail=false;access={...access,role:'admin',all_departments:true};
     const logoutRace=await page.evaluate(async()=>{
       const oldFetch=window.fetch;let release;

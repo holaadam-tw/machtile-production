@@ -121,7 +121,19 @@ async function handleFake(route) {
   const url = new URL(req.url());
   const p = url.pathname;
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  if (p === "/rest/v1/rpc/machine_department_context") return json(200, {tenant_id:T,role:"operator",is_bridge:false,all_departments:true,department_codes:["LATHE","MILL"]});
   if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
+  if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
+    return json(200, cards.filter(c => machines.some(m => m.machine_code === c.machine_name)).map(c => ({
+      id: c.current_process_id, tenant_id: c.tenant_id, process_order: 1,
+      process_name: c.current_process_name, process_type: "cnc", status: c.current_process_status,
+      off_station_at: c.current_process_off_station ? "2026-01-01T00:00:00Z" : null,
+      qty_completed: c.qty_completed, queue_order: null,
+      work_orders: { id: c.id, work_order_no: c.work_order_no, part_no: c.drawing_no,
+        part_name: c.part_name, quantity: c.quantity, due_date: c.due_date, status: c.work_order_status },
+      machines: machines.find(m => m.machine_code === c.machine_name),
+    })));
+  }
   if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
   if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
   if (p === "/rest/v1/app_users") {

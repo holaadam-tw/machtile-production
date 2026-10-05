@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { assignedCardFixture } from './assignedCardFixture.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = process.env.TV_E2E_OUT || path.join(root, ".e2e-out", "tv-wall");
@@ -118,6 +119,7 @@ function makeBackend() {
     if (b.mode === "down" && p.startsWith("/rest/v1/")) return json(503, { message: "service unavailable (test)" });
     if (b.mode === "expired" && p.startsWith("/rest/v1/")) return json(401, { message: "JWT expired (test)" });
     if (p === "/rest/v1/v_work_order_cards") { b.cardReads++; return json(200, cards); }
+    if (p === '/rest/v1/work_order_processes' && (url.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, assignedCardFixture(cards, machines));
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/app_users") {
       if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: users[0].name }]);
