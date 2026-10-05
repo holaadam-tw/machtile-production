@@ -48,4 +48,26 @@ check((flow.render(rows,{currentId:'p1',compact:true}).match(/class="process-flo
 check((flow.render(rows,{currentId:'p8',compact:true}).match(/class="process-flow-step /g)||[]).length===2,'last step never fabricates next step');
 check(flow.render(rows.map(p=>({...p,status:'pending'})),{compact:true}).includes('目前道未確認'),'unknown current does not guess a preview');
 check(flow.render(rows,{currentId:'p2',alignCurrent:false}).includes('data-flow-aligned="true"'),'full route may start at N1 instead of auto-scrolling current');
+// Part A: pending status follows the SAME reported quantity the card shows (legacy MES + App via cardProgress).
+const qtyRow=(reported,status='pending')=>flow.steps([{id:'q',process_order:3,process_name:'CNC車床加工',machine_code:'A01',status,reported,qty_completed:0}],null,5000)[0].label;
+check(qtyRow(0)==='未開始','pending with reported 0 => 未開始');
+check(qtyRow(4690)==='進行中','legacy-reported 4690/5000 with no App report (qty_completed 0) => 進行中, not 未開始 (XX01202609020008 N3 A01)');
+check(qtyRow(5000)==='已達數'&&qtyRow(5200)==='已達數'&&!flow.render([{id:'q',process_order:3,status:'pending',reported:5000}],{quantity:5000}).includes('完成'),'reported >= quantity => 已達數, never 完成');
+check(qtyRow(4690,'running')==='進行中'&&qtyRow(0,'completed')==='已完成'&&qtyRow(4690,'paused')==='狀態待確認'&&qtyRow(5000,'abnormal')==='狀態待確認'&&qtyRow(10,'waiting_inspection')==='狀態待確認','explicit statuses keep existing labels and take precedence over quantity');
+check(qtyRow(null)==='未開始'&&flow.render([{id:'q',process_order:3,status:'pending',reported:null}],{quantity:5000}).includes('已報無資料'),'unknown progress is not shown as zero output');
+check(flow.steps([{id:'q',status:'pending',reported:30}],null,null)[0].label==='進行中','unknown work-order quantity never claims 已達數');
+check(flow.steps([{id:'q',status:'pending',process_type:'outsourced',reported:30}],null,100)[0].label==='待發包','outsourced pending keeps its own label');
+// Part B: per-role visibility levels. Default for every role is full.
+check(Object.values(flow.normalizeVisibility(null)).every(v=>v==='full')&&flow.ROLES.length===6,'every role defaults to full');
+check(flow.visibilityLevel({operator:'bogus'},'operator')==='full'&&flow.visibilityLevel({operator:'hidden'},'unknown-role')==='full','invalid level or unknown role falls back to full');
+const lv=(visibility,extra={})=>flow.render(rows,{currentId:'p2',quantity:100,compact:true,orderNo:'TEST-ORDER',visibility,...extra});
+check(lv('full')===preview&&lv(undefined)===preview,'full level is exactly today preview (opener included)');
+check((lv('adjacent').match(/class="process-flow-step /g)||[]).length===3&&!lv('adjacent').includes('data-flow-open')&&!lv('adjacent').includes('點開看完整路線')&&!lv('adjacent').includes('共 8 道'),'adjacent shows three cells without full-route expansion');
+check(!flow.render(rows,{currentId:'p2',quantity:100,compact:false,visibility:'adjacent'}).includes('data-flow-process="p8"'),'adjacent never renders full route even when asked for non-compact');
+const nextOnly=lv('next_only',{nextQueued:{status:'ok',orderNo:'NEXT-ORDER',operation:'N2 車削',part:'零件'}});
+check(nextOnly.includes('data-flow-process="p3"')&&!nextOnly.includes('data-flow-process="p2"')&&!nextOnly.includes('data-flow-process="p1"')&&!nextOnly.includes('data-flow-process="p4"'),'next_only shows only this order next step');
+check(nextOnly.includes('本機下一張')&&nextOnly.includes('NEXT-ORDER')&&!nextOnly.includes('data-flow-open')&&!nextOnly.includes('共 8 道'),'next_only shows machine next queued order and no route opener/count');
+check(lv('next_only',{nextQueued:{status:'none'}}).includes('本機佇列沒有下一張')&&lv('next_only').includes('佇列資料無法確認'),'next_only queue empty vs unknown are distinct');
+check(flow.render(rows,{currentId:'p8',compact:true,visibility:'next_only',nextQueued:{status:'none'}}).includes('最後一道'),'next_only last step never invents a next step');
+check(lv('hidden')===''&&flow.render([],{visibility:'hidden'})==='','hidden renders no flow strip');
 console.log(`${checks}/${checks} PASS`);
