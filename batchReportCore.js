@@ -305,7 +305,7 @@
     const parts = [`[${MODES[m].label}]`];
     if (m === "dailyStart") {
       parts.push(`機台已加工數量 ${machineQty || 0}`);
-      parts.push("首件檢查完成");
+      // 2026-10-05 owner：首件檢查只在首次開工做，今日開工（單台／批次）都不再宣告首件完成。
     }
     if (m === "finish") parts.push(overtime === "2030" ? FINISH_OVERTIME["2030"] : FINISH_OVERTIME.none);
     return parts.join("；");

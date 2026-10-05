@@ -2,7 +2,7 @@
 
 ## 配套與上線順序
 
-配套後端：holaadam-tw/machtile-mini-mes [PR #92](https://github.com/holaadam-tw/machtile-mini-mes/pull/92)，必須採用已回覆本輪審查的最新 head（同道派工橋改機台例外，不是原始版）。
+配套後端：holaadam-tw/machtile-mini-mes [PR #92](https://github.com/holaadam-tw/machtile-mini-mes/pull/92)，審查修正版 head `f313422afded292fd4ab12096c99dd652e2f5659`（同道派工橋改機台例外，不是原始版）。
 
 1. Owner 審查並授權後，先套 #92 的 `supabase/migrations/20261005060352_work_order_process_guard.sql`。套前核對函式版本、保存完整定義及 ACL；migration 對來源漂移會停止，不可改雜湊繞過。
 2. 確認 RPC 工序保護生效，再核准合併本前端 PR 到 main。不可先合前端而讓舊 RPC 繼續預設 N1／接受已報工搬移。
@@ -35,14 +35,16 @@ git diff --check
 
 - 新工序／卡片整合：38 PASS、0 FAIL（含原名稱保留、機台讀取失敗、整頁重載保持、連點不重送）。
 - 更新舊工單測試：91 PASS、0 FAIL。原自動帶第一台的斷言改為先選工序；已報 N1 鎖定、未報 N2 改派、取消確認不送出；瀏覽與查詢不寫入。
-- 原卡片測試：76 PASS、0 FAIL。
+- 原卡片測試：77 PASS、0 FAIL；main #59 已移除今日開工首件檢查，對應舊測試同步改驗不渲染該欄位。
 - 11 支 Core 測試：655 PASS、0 FAIL；app.js 語法與 diff check 通過。
 - #92 記憶體 SQL 測試46 PASS：多道缺步序拒絕、偽造步序／跨租戶／權限拒絕、App／legacy 報工保護、橋同道改機台／取消派機、legacy N2保留、新N3新增、正式queue完整快照驗證、rollback精確恢復。
 - 瀏覽器使用 localhost 靜態頁與攔截的假 API；零正式網域請求。新截圖皆 TEST-* 假品號，留本機 `output/playwright/process-identity/`，不納入 PR。
 
 ## 範圍／剩餘風險／回滾
 
-程式檔只有 app.js、index.html、styles.css；測試只改 workOrders.browser.test.mjs、新增 workOrderProcess.browser.test.mjs。沒有改 config.js、既有報工節點／品檢打卡板、auth、schema、依賴或派工橋。原 checkout 使用者本地變更保留。
+相對最新 main，程式檔只有 app.js、index.html、styles.css；測試改 workOrders.browser.test.mjs、cardPick.browser.test.mjs，新增 workOrderProcess.browser.test.mjs。沒有改 config.js、既有報工節點／品檢打卡板、auth、schema、依賴或派工橋。原 checkout 使用者本地變更保留。
+
+以非改寫歷史的 merge 帶入 main 5c7ca9d（#59）：app.js 自動合併，index.html 只有兩個資產版本字串衝突，採本 PR r2 版本。上游首件檢查及 batchReportCore 等檔案保持 main 原碼；另重跑 firstArticle 瀏覽器測試。没有合併 GitHub PR 或推 main。
 
 未在正式帳號／瀏覽器重跑事故，不宣稱已線上修復；真實多連線競態與正式函式當下版本仍須上線前核對。未知課別故意不顯示，不建立工序↔機台能力表。
 

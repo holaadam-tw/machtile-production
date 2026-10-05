@@ -363,7 +363,7 @@
           <section class="report-section" data-report-section="workStart">
             <div class="report-section-head">
               <strong>首次開工</strong>
-              <span>第一次開始加工，建立預估工期基準</span>
+              <span>第一次開始加工，完成首件檢查並建立預估工期基準</span>
             </div>
             <div class="report-form-grid">
               <label class="field-label" for="workTotalQty">工件總數 <small>必填</small></label>
@@ -390,29 +390,29 @@
             <div id="reportEstimate" class="report-estimate-card" aria-live="polite">
               輸入工件總數與 cycle time 後，系統會估算每日產能與完工天數。
             </div>
+            <div class="checklist-card">
+              <strong>首件檢查表 <small>必填</small></strong>
+              <label><input id="firstArticleSize" type="checkbox"> 主要尺寸符合圖面</label>
+              <label><input id="firstArticleSurface" type="checkbox"> 外觀 / 毛邊確認</label>
+              <label><input id="firstArticleTool" type="checkbox"> 刀具與程式版本確認</label>
+            </div>
           </section>
 
           <section class="report-section is-hidden" data-report-section="dailyStart">
             <div class="report-section-head">
               <strong>今日開工</strong>
-              <span>加工當日第一筆回報，確認機台與首件</span>
+              <span>加工當日第一筆回報，記錄機台已加工數量；機台照片選填</span>
             </div>
             <div class="report-form-grid">
               <label class="field-label" for="machineQty">目前機台已加工數量 <small>必填</small></label>
               <input id="machineQty" class="report-input" type="number" min="0" value="0">
 
-              <label class="field-label" for="machinePhoto">開啟相機拍機台照片 <small>必填</small></label>
+              <label class="field-label" for="machinePhoto">開啟相機拍機台照片 <small class="opt">選填</small></label>
               <div class="camera-capture-field">
                 <input id="machinePhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
                 <button class="camera-open-button" type="button" data-camera-for="machinePhoto" data-camera-label="機台照片">開啟相機拍照</button>
                 <span class="camera-file-status" data-camera-status-for="machinePhoto">尚未拍照</span>
               </div>
-            </div>
-            <div class="checklist-card">
-              <strong>當日首件檢查表 <small>必填</small></strong>
-              <label><input id="firstArticleSize" type="checkbox"> 主要尺寸符合圖面</label>
-              <label><input id="firstArticleSurface" type="checkbox"> 外觀 / 毛邊確認</label>
-              <label><input id="firstArticleTool" type="checkbox"> 刀具與程式版本確認</label>
             </div>
           </section>
 
@@ -723,7 +723,7 @@
   <script src="./authSessionPersistenceCore.js?v=20260728-unified-login-v1"></script>
   <script src="./oauthPkceCore.js?v=20261001-pwa-oauth-handoff"></script>
   <script src="./workOrderPrefillCore.js?v=20260904-recent-enter-v1"></script>
-  <script src="./batchReportCore.js?v=20261002-card-time-nomap"></script>
+  <script src="./batchReportCore.js?v=20261005-first-article-work-start"></script>
   <script src="./previews/hmc-fixed-slots/project-target.js?v=20260910-hmc-fixed-slots-port"></script>
   <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20260913-catalog-timeout-v1"></script>
   <script src="./previews/hmc-fixed-slots/transport.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
