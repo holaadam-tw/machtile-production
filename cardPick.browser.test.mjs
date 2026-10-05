@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { assignedCardFixture } from './assignedCardFixture.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = process.env.CARD_PICK_E2E_OUT || path.join(root, ".e2e-out", "card-pick");
@@ -141,6 +142,7 @@ function makeBackend(opts = {}) {
       return json(200, users.map(({ auth, ...u }) => u));
     }
     if (p === "/rest/v1/work_order_processes") {
+      if ((url.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, assignedCardFixture(cards, machines, wop));
       if (q.includes("queue_order=not.is.null")) return json(200, []);
       const m = q.match(/id=in\.\(([^)]*)\)/);
       if (m && q.includes("actual_start_at")) {

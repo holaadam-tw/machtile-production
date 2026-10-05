@@ -29,6 +29,7 @@ const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_out
   last_report_at:p.id===id(303)?'2026-10-01T00:00:00Z':p.id===id(309)?'2026-10-04T00:00:00Z':null,legacy_updated_at:null});
 let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false,rejectPreplan=false,rejectAudit=false;
 const preplans=[],assignmentEvents=[];
+let badParents=false, offStationFixture=false, processTimeout=false;
 const upserts=[], queues=[], blocked=[], errors=[], rpcCalls=[];
 const ok=(value,label)=>{assert(value,label); checks++; console.log('PASS '+label);};
 const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json'};
@@ -57,7 +58,6 @@ await ctx.route('**/*',async route=>{
     const eq=u.searchParams.get('work_order_no');
     return json(200,orders.filter(o=>!eq||eq.startsWith('in.')||o.work_order_no===eq.slice(3)).map(o=>({...o,work_order_processes:procs.filter(p=>p.work_order_id===o.id)})));
   }
-  if(p==='/rest/v1/work_order_processes')return rejectMetadata?json(503,{message:'fixture process metadata unavailable'}):json(200,procs);
   if(p==='/rest/v1/process_assignment_events')return rejectAudit?json(404,{message:'fixture audit migration missing'}):json(200,[...assignmentEvents].reverse());
   if(p==='/rest/v1/rpc/machine_queue_append') {
     preplans.push(body.p_payload);
@@ -68,7 +68,15 @@ await ctx.route('**/*',async route=>{
     assignmentEvents.push({id:assignmentEvents.length+1,process_id:target.id,kind:'preplan',machine_code:machineRows.find(m=>m.id===x.machine_id).machine_code});
     return json(200,{event_id:assignmentEvents.length,queue_order:rank,replayed:false});
   }
-  if(p==='/rest/v1/v_work_order_cards')return json(200,procs.map(p=>{const o=orders.find(o=>o.id===p.work_order_id);return {id:o.id,tenant_id:tenant,work_order_no:o.work_order_no,part_name:o.part_name,quantity:o.quantity,due_date:o.due_date,work_order_status:o.status,current_process_id:p.id,current_process_name:p.process_name,current_process_status:p.status,machine_name:machineRows.find(m=>m.id===p.machine_id)?.machine_code||null,qty_completed:p.qty_completed,qty_defect:0,current_process_off_station:false}}));
+  if(p==='/rest/v1/work_order_processes') {
+    if(processTimeout&&(u.searchParams.get('select')||'').includes('work_orders!inner'))return route.abort('timedout');
+    if(rejectMetadata)return json(503,{message:'fixture process metadata unavailable'});
+    if((u.searchParams.get('select')||'').includes('work_orders!inner'))return json(200,procs.filter(p=>p.machine_id).map(p=>({...p,off_station_at:offStationFixture&&p.id===id(304)?'2026-10-01T00:00:00Z':null,work_orders:{...orders.find(o=>o.id===p.work_order_id),...(badParents?{status:'completed'}:{})},machines:machineRows.find(m=>m.id===p.machine_id)})));
+    return json(200,procs);
+  }
+  // Production view is ONE current step per work order, not every step.
+  // Keep unassigned fixture rows for the existing schedule-board pool.
+  if(p==='/rest/v1/v_work_order_cards')return json(200,procs.filter(p=>!p.machine_id||p.id===id(303)||p.id===id(309)).map(p=>{const o=orders.find(o=>o.id===p.work_order_id);return {id:o.id,tenant_id:tenant,work_order_no:o.work_order_no,part_name:o.part_name,quantity:o.quantity,due_date:o.due_date,work_order_status:o.status,current_process_id:p.id,current_process_name:p.process_name,current_process_status:p.status,machine_name:machineRows.find(m=>m.id===p.machine_id)?.machine_code||null,qty_completed:p.qty_completed,qty_defect:0,current_process_off_station:false}}));
   if(p==='/rest/v1/rpc/batch_report_progress')return rejectProgress?json(503,{message:'fixture progress unavailable'}):json(200,procs.filter(p=>(body.p_process_ids||[]).includes(p.id)).map(progress));
   if(p==='/rest/v1/rpc/work_order_upsert'){
     upserts.push(body.p_payload);const x=body.p_payload,target=procs.find(p=>p.id===x.process_id);
@@ -86,10 +94,39 @@ await ctx.route('**/*',async route=>{
   return json(200,[]);
 });
 const page=await ctx.newPage();page.on('pageerror',e=>errors.push(String(e)));page.on('dialog',d=>d.accept());
-const out=path.join(root,'output/playwright/process-identity');await mkdir(out,{recursive:true});
+const out=process.env.MACHTILE_SCREENSHOT_DIR || path.join(root,'output/playwright/process-identity');await mkdir(out,{recursive:true});
 try{
   await page.goto(base,{waitUntil:'domcontentloaded'});
   await page.waitForFunction(()=>document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
+  console.log('acceptance replica: planner, local app, TEST-MULTI N3 A01/N4 A03; GET fixture 200; base 79961f81');
+  await page.locator('[data-card-select-open="A03"]').click();
+  ok(await page.locator(`#machtileCardSelection [data-card-selection-assigned] [data-card-select-process="${id(304)}"]`).count()===1,'A03 sees N4 while one-row view only exposes A01 N3');
+  ok((await page.locator('[data-card-selection-assigned]').innerText()).includes('N4 第二次車削'),'A03 row shows its exact operation');
+  ok((await page.evaluate(()=>machtileCardOrderForMachine('A03')))?.processId===id(304),'A03 main machine card also uses N4, not empty or N3');
+  await page.locator('[data-close-card-selection]').click();
+  await page.locator('.machine-tile-card').filter({has:page.locator('[data-card-select-open="A03"]')}).locator('[data-report]').click();
+  ok(await page.evaluate(()=>selectedOrder?.processId)===(id(304)),'A03 report entry resolves the exact machine step, never same-work-order A01 N3');
+  await page.evaluate(()=>closeReport());
+  await page.evaluate(pid=>openReport('TEST-MULTI',{machine:'A03',processId:pid}),id(303));
+  ok(!(await page.locator('#reportSheet').getAttribute('class')).includes('is-open')&&(await page.locator('#toast').innerText()).includes('已不在此機台'),'stale/foreign machine process ID cannot silently open a different step');
+  await page.locator('[data-card-select-open="A03"]').click();
+  offStationFixture=true;
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok(await page.evaluate(()=>machtileCardSelectionCandidates(machtileScheduleMachine('A03')).assigned.length)===0,'off-station N4 excluded even if returned by a stale source');
+  offStationFixture=false;badParents=true;
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok(await page.evaluate(()=>machtileCardSelectionCandidates(machtileScheduleMachine('A03')).assigned.length)===0,'completed parent excluded');
+  badParents=false;
+  procs.find(p=>p.id===id(304)).status='waiting_inspection';
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok(await page.evaluate(()=>machtileCardSelectionCandidates(machtileScheduleMachine('A03')).assigned.length)===1,'waiting_inspection remains an assigned selection candidate');
+  procs.find(p=>p.id===id(304)).status='pending';
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:path.join(out,'a03-n4-mobile.png')});
+  await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:path.join(out,'a03-n4-desktop.png')});
+  await page.locator('[data-close-card-selection]').click();
   await page.evaluate(()=>openAdminModule('workOrders'));
   await page.locator('[data-wo-edit="TEST-MULTI"]').click();
   await page.waitForFunction(()=>document.querySelectorAll('#machtileWoSteps .wo-step-row').length===3);
@@ -188,8 +225,21 @@ try{
   await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
   await page.locator('[data-card-select-open="A01"]').click();
   ok(await page.locator('[data-card-selection-unassigned] [data-card-select-process]').count()===0,'unknown process metadata excludes unassigned candidates');
-  rejectMetadata=false;
+  ok((await page.locator('[data-card-selection-error]').innerText()).includes('工序清單讀取失敗'),'failed per-process read is visibly distinct from an empty candidate result');
+  ok((await page.locator('#dataSourceLabel').innerText()).includes('暫以工單目前道顯示'),'503 displays current-step fallback notice');
+  ok((await page.evaluate(()=>machtileCardOrderForMachine('A01')))?.processId===id(303),'503 preserves A01 current-step card from original view');
   await page.locator('[data-close-card-selection]').click();
+  await page.locator('.machine-tile-card').filter({has:page.locator('[data-card-select-open="A01"]')}).locator('[data-report]').click();
+  ok(await page.evaluate(()=>selectedOrder?.processId)===id(303),'503 card reporting still resolves the original view process');
+  await page.evaluate(()=>closeReport());
+  await page.evaluate(()=>openReport('',{machine:'A01'}));
+  ok(await page.evaluate(()=>selectedOrder?.processId)===id(303)&&await page.locator('#reportSheet').evaluate(el=>el.classList.contains('is-open')),'503 machine QR reporting remains usable');
+  await page.evaluate(()=>closeReport());
+  rejectMetadata=false;
+  processTimeout=true;
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok((await page.evaluate(()=>machtileCardOrderForMachine('A01')))?.processId===id(303)&&await page.evaluate(()=>state.assignedCardOrders===null),'network timeout falls back atomically to original current-step view');
+  processTimeout=false;
   await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
   await page.locator('[data-card-select-open="A01"]').click();
   rejectQueue=true;
@@ -252,8 +302,8 @@ try{
     const order=state.workOrders.find(o=>o.processId);
     const route=Array.from({length:8},(_,i)=>({id:i===2?order.processId:`fixture-route-${i}`,process_order:i+1,
       process_name:`測試工序${i+1}`,process_type:i===4?'outsourced':'cnc',supplier_code:i===4?'TEST-VENDOR':null,
-      machine_code:'A01',status:i<2?'completed':i===2?'running':'pending',reported:i<2?order.qty:i===2?order.done:0}));
-    machtileProcessFlows.set(order.id,{quantity:order.qty,processes:route});
+      machine_code:'A01',status:i<2?'completed':i===2?'running':'pending',reported:i<2?order.total:i===2?order.done:0}));
+    machtileProcessFlows.set(order.id,{quantity:order.total,processes:route});
     const preview=document.createElement('section');preview.id='processFlowPreview';preview.style.cssText='width:100%;max-width:700px;margin:auto';
     preview.innerHTML=renderMachineCard({name:'A01',code:'A01',type:'lathe',department:'車床課',status:'running',order})
       +machtileScheduleCard(order,0,1,'A01',false,null);
@@ -266,7 +316,8 @@ try{
   for(const width of [1440,390]) {
     await page.setViewportSize({width,height:1000});
     ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px page has no horizontal overflow`);
-    ok(await page.locator('.process-flow').first().evaluate(el=>el.scrollWidth>el.clientWidth),'long route contained in scroll region');
+    const flowGeometry=await page.locator('.process-flow').first().evaluate(el=>({scroll:el.scrollWidth,client:el.clientWidth,overflow:getComputedStyle(el).overflowX,display:getComputedStyle(el.querySelector('ol')).display}));
+    ok(flowGeometry.scroll>flowGeometry.client,`long route contained in scroll region ${JSON.stringify(flowGeometry)}`);
     await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft=el.scrollWidth);
     ok(await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft>0),'flow can scroll to downstream steps');
     await page.locator('.process-flow').evaluateAll(els=>els.forEach(el=>{const current=el.querySelector('[aria-current=step]');if(current)el.scrollLeft+=current.getBoundingClientRect().left-el.getBoundingClientRect().left-8;}));
