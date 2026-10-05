@@ -56,6 +56,7 @@ async function scenario(outbox) {
       const p = url.pathname;
       if (p === "/auth/v1/user") return json({ id: id(801), email: "operator@test.invalid" });
       if (p === "/rest/v1/app_users") return json([user]);
+      if (p === "/rest/v1/rpc/machine_department_context") return json({tenant_id:tenant,role:"operator",is_bridge:false,all_departments:false,department_codes:["LATHE","MILL"]});
       if (p === "/rest/v1/v_work_order_cards") return json([card]);
       if (p === "/rest/v1/v_machine_management_cards") return json(machines);
       if (p === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: id(301), legacy_output: 0, legacy_fail: 0, last_report_at: null, actual_start_at: null }]);

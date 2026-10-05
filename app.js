@@ -252,6 +252,68 @@ const reportTypeMeta = {
 };
 
 let activeDepartmentFilter = "全部";
+let machtileDepartmentAccess = null;
+let machtileDepartmentAccessPending = null;
+let machtileDepartmentGeneration = 0;
+const machtileDepartmentLabels = { LATHE: "車床課", MILL: "銑床課" };
+
+function machtileAvailableDepartments() {
+  if (!machtileStrictMode()) return departmentFilters;
+  if (!machtileDepartmentAccess) return [];
+  return machtileDepartmentAccess.all_departments ? departmentFilters
+    : machtileDepartmentAccess.department_codes.map(code => machtileDepartmentLabels[code]);
+}
+
+function machtileClearDepartmentData() {
+  state.machineMasters = []; state.machines = []; state.workOrders = [];
+  state.extraStationOrders = [];
+  selectedOrder = null;
+  closeReport();
+  $("#detailSheet")?.classList.remove("is-open");
+  machtileHistoryRealRows = null;
+  machtileScheduleState.queueOrderByProcess = new Map();
+  machtileCardPickState.progressByProcess = new Map();
+  machtileCardPickState.activityByKey = new Map();
+  machtileCardPickState.overrideByMachine = new Map();
+  machtileCardState.today = new Map(); machtileCardState.todayRows = [];
+  machtileCardState.todayLoadedAt = 0; machtileCardState.todayStatus = "idle";
+  machtileCardState.statsByKey = new Map(); machtileCardState.editor = null;
+  for (const key of ["estimateByProcess", "inputByProcess", "overrideByProcess", "holdsByProcess"]) machtileScheduleState[key] = new Map();
+  machtileScheduleState.auditEvents = [];
+  machtileHmcRuntimeState.snapshot = null;
+  machtileTvState.model = null;
+}
+
+async function machtileLoadDepartmentAccess() {
+  if (!machtileStrictMode()) return;
+  if (machtileDepartmentAccessPending) return machtileDepartmentAccessPending;
+  const generation = machtileDepartmentGeneration;
+  const userId = machtileAuthState.userId;
+  const pending = (async () => {
+    try {
+      const ctx = await supabaseFetch("rpc/machine_department_context", { method: "POST", body: "{}" });
+      if (generation !== machtileDepartmentGeneration || userId !== machtileAuthState.userId) throw new Error("STALE_DEPARTMENT_CONTEXT");
+      if (!ctx || typeof ctx.all_departments !== "boolean" || !isUuid(ctx.tenant_id)
+          || !Array.isArray(ctx.department_codes) || ctx.department_codes.some(code => !machtileDepartmentLabels[code])
+          || new Set(ctx.department_codes).size !== ctx.department_codes.length) throw new Error("INVALID_DEPARTMENT_CONTEXT");
+      if (JSON.stringify(ctx) !== JSON.stringify(machtileDepartmentAccess)) {
+        machtileDepartmentGeneration += 1;
+        machtileClearDepartmentData();
+      }
+      machtileDepartmentAccess = ctx;
+      const choices = machtileAvailableDepartments();
+      if (!choices.includes(activeDepartmentFilter)) activeDepartmentFilter = choices[0] || "";
+    } catch (error) {
+      if (generation === machtileDepartmentGeneration) {
+        machtileDepartmentAccess = null; activeDepartmentFilter = "";
+        machtileClearDepartmentData();
+      }
+      throw new Error("課別權限讀取失敗，已停用機台操作；請重新整理。");
+    }
+  })().finally(() => { if (machtileDepartmentAccessPending === pending) machtileDepartmentAccessPending = null; });
+  machtileDepartmentAccessPending = pending;
+  return pending;
+}
 let activeMillingModeFilter = "全部銑床";
 let activeStatusFilter = "全部狀態";
 let activeAlertFilter = "全部";
@@ -8799,6 +8861,10 @@ function machtileSetSession(authResponse, email, persistence = null) {
 }
 
 function machtileClearSession(message = "") {
+  machtileDepartmentGeneration += 1;
+  machtileDepartmentAccess = null; machtileDepartmentAccessPending = null;
+  activeDepartmentFilter = "";
+  machtileClearDepartmentData();
   machtileHmcFixedHost?.invalidate();
   machtileAuthState.hmcFixedSignedTenantId = "";
   machtileAuthState.status = "signedOut";
@@ -9791,7 +9857,15 @@ function supabaseHeaders() {
 }
 
 async function supabaseFetch(path, options = {}) {
+  if (machtileStrictMode() && path !== "rpc/machine_department_context"
+      && !["GET", "HEAD"].includes(String(options.method || "GET").toUpperCase())) {
+    await machtileLoadDepartmentAccess();
+    if (!machtileDepartmentAccess.all_departments && machtileDepartmentAccess.department_codes.length === 0) {
+      throw new Error("此帳號沒有任何課別，請管理員設定");
+    }
+  }
   const baseUrl = String(config.supabaseUrl || "").replace(/\/$/, "");
+  const departmentGeneration = machtileDepartmentGeneration;
   const response = await fetch(`${baseUrl}/rest/v1/${path}`, {
     ...options,
     headers: {
@@ -9808,7 +9882,9 @@ async function supabaseFetch(path, options = {}) {
   }
 
   if (response.status === 204) return null;
-  return response.json();
+  const data = await response.json();
+  if (machtileStrictMode() && departmentGeneration !== machtileDepartmentGeneration) throw new Error("STALE_DEPARTMENT_RESPONSE");
+  return data;
 }
 
 function normalizeOrder(row) {
@@ -9870,6 +9946,7 @@ function normalizeMachineMaster(row) {
     assetNo: row.asset_no,
     displayOrder: Number(row.display_order || 0),
     department: row.department_name,
+    departmentSourceVerified: true,
     qrPath: row.qr_path,
     vendorName: row.vendor_name,
     coolantType: row.coolant_type,
@@ -9885,14 +9962,23 @@ function normalizeMachineMaster(row) {
 }
 
 async function loadFromSupabase() {
+  await machtileLoadDepartmentAccess();
   machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
-  if (!Array.isArray(rows) || rows.length === 0) throw new Error("v_work_order_cards has no rows");
+  if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
   state.workOrders = rows.map(normalizeOrder);
   try {
     const machineRows = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
     state.machineMasters = Array.isArray(machineRows) ? machineRows.map(normalizeMachineMaster) : [];
+    if (machtileStrictMode() && !machtileDepartmentAccess.all_departments) {
+      const permitted = machtileAvailableDepartments();
+      state.machineMasters = state.machineMasters.filter(machine => permitted.includes(normalizedMachineDepartment(machine)));
+    }
   } catch (error) {
+    if (machtileStrictMode()) {
+      state.machineMasters = []; state.machines = []; state.workOrders = [];
+      throw new Error("機台清單讀取失敗，已停用機台操作；請重新整理。");
+    }
     console.warn("v_machine_management_cards is not ready yet; using local machine defaults.", error);
     state.machineMasters = [];
   }
@@ -10086,6 +10172,7 @@ function departmentForMachine(machine) {
 
 function normalizedMachineDepartment(machine) {
   const raw = String(machine?.department || "").trim();
+  if (machine?.departmentSourceVerified) return raw || "未設定課別";
   const rawLower = raw.toLowerCase();
   if (raw === "車床課" || raw.includes("車") || rawLower.includes("lathe")) return "車床課";
   if (raw === "銑床課" || raw.includes("銑") || raw.includes("五軸") || rawLower.includes("mill") || rawLower.includes("milling")) return "銑床課";
@@ -10171,8 +10258,9 @@ function machtileCompareScheduleOrders(a, b) {
 
 function deriveMachines() {
   const machines = new Map();
-  const masterMachines = state.machineMasters.length ? [...state.machineMasters] : [...baseMachines];
-  if (state.machineMasters.length) {
+  const masterMachines = machtileStrictMode() ? [...state.machineMasters]
+    : state.machineMasters.length ? [...state.machineMasters] : [...baseMachines];
+  if (!machtileStrictMode() && state.machineMasters.length) {
     const knownMachineKeys = new Set(masterMachines.flatMap((machine) => [machine.name, machine.code].filter(Boolean)));
     baseMachines.filter(isHmcMachine).forEach((machine) => {
       if (!knownMachineKeys.has(machine.name) && !knownMachineKeys.has(machine.code)) {
@@ -10197,6 +10285,8 @@ function deriveMachines() {
   state.workOrders.filter(machtileIsCardCandidateOrder).forEach((order) => {
     const hasAssignedMachine = isReportableMachineName(order.machine);
     const name = hasAssignedMachine ? order.machine : UNASSIGNED_MACHINE;
+    // Never recreate a filtered-out machine from an order, local defaults or its type.
+    if (machtileStrictMode() && hasAssignedMachine && !machines.has(name)) return;
     if (!machines.has(name)) {
       machines.set(name, {
         name,
@@ -11330,7 +11420,7 @@ function machtileAssignableMachineOptions() {
 
 function machtileScheduleColumns() {
   const deptMatch = (machine) => activeDepartmentFilter === "全部" || normalizedMachineDepartment(machine) === activeDepartmentFilter;
-  const machineDefs = (state.machineMasters.length ? state.machineMasters : baseMachines)
+  const machineDefs = (machtileStrictMode() ? state.machineMasters : state.machineMasters.length ? state.machineMasters : baseMachines)
     .filter((machine) => !machine.isUnassignedBucket)
     .filter(deptMatch)
     .map((machine) => {
@@ -12319,7 +12409,9 @@ function renderStats() {
 }
 
 function renderFilters() {
-  $("#departmentChips").innerHTML = departmentFilters.map((filter) => `
+  const available = machtileAvailableDepartments();
+  if (!available.includes(activeDepartmentFilter)) activeDepartmentFilter = available[0] || "";
+  $("#departmentChips").innerHTML = available.map((filter) => `
     <span class="department-filter-group ${activeDepartmentFilter === filter ? "is-active" : ""}">
       <button class="filter-chip department-chip ${activeDepartmentFilter === filter ? "active" : ""}" data-department="${escapeHtml(filter)}" type="button">
         ${escapeHtml(filter)}
@@ -12336,6 +12428,7 @@ function renderFilters() {
     </span>
   `).join("");
 
+  if (machtileStrictMode() && available.length === 0) $("#departmentChips").innerHTML = `<p role="status">${machtileDepartmentAccess ? "此帳號沒有任何課別，請管理員設定" : "課別權限尚未取得，機台操作已停用"}</p>`;
   $("#statusChips").innerHTML = statusFilters.map((filter) => `
     <button class="filter-chip status-chip ${activeStatusFilter === filter ? "active" : ""}" data-status="${escapeHtml(filter)}" type="button">
       ${escapeHtml(filter)}${filter === "全部狀態" ? "" : ` <span class="filter-chip-count">${machinesForStatusFilter(filter).length}</span>`}
@@ -12551,6 +12644,7 @@ function renderMachineCard(machine) {
           </div>
           <span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span>
           ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
+          ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}
         </div>
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
@@ -15006,6 +15100,8 @@ function renderAddMachineModule() {
           <input id="machtileMcCode" type="text" required value="${escapeHtml(seed?.machine_code || "")}" ${seed ? "readonly" : ""} placeholder="例：B03"></label>
         <label class="admin-field"><span>機台名稱 *</span>
           <input id="machtileMcName" type="text" required value="${escapeHtml(seed?.name || "")}" placeholder="例：B03 大立加工中心"></label>
+        <label class="admin-field"><span>課別 *（必須選擇，不依機型推斷）</span>
+          <select id="machtileMcDepartment" required disabled><option value="">讀取課別中…</option></select></label>
         <label class="admin-field"><span>機型</span>
           <select id="machtileMcType">${machtileMachineTypes.map((type) => `<option ${((seed?.machine_type) || "銑床") === type ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
         <label class="admin-field"><span>俗名／位置（顯示在機台卡代號旁，例：小瀧澤）</span>
@@ -15018,7 +15114,7 @@ function renderAddMachineModule() {
           <input id="machtileMcRapid" type="number" min="1000" max="200000" value="${escapeHtml(seed?.rapid_rate_mm_min ?? 40000)}"></label>
         <label class="admin-field"><span>換刀時間（秒，估時用）</span>
           <input id="machtileMcToolChange" type="number" min="0" max="120" step="0.1" value="${escapeHtml(seed?.tool_change_seconds ?? 4.5)}"></label>
-        <button class="admin-save-button" type="submit">${seed ? "更新機台" : "建立機台"}</button>
+        <button class="admin-save-button" type="submit" disabled>${seed ? "更新機台" : "建立機台"}</button>
         <p class="admin-module-note">機型選「臥式加工中心」會自動獲得多盤多工件盤點入口；「停用」只改狀態、不會刪除資料。</p>
       </form>
     `;
@@ -15047,6 +15143,8 @@ function renderAddMachineModule() {
 
 function machtileMachineErrorText(error) {
   const msg = String(error?.message || error || "");
+  if (msg.includes("DEPARTMENT_REQUIRED")) return "請選擇機台課別。";
+  if (msg.includes("INVALID_MACHINE_DEPARTMENT")) return "課別不存在、已停用或不屬於此租戶，請重新整理。";
   if (msg.includes("FORBIDDEN")) return "此帳號沒有機台管理權限（需排程以上）。";
   if (msg.includes("machine_code is required")) return "機台代號必填。";
   if (msg.includes("name is required")) return "機台名稱必填。";
@@ -15057,8 +15155,26 @@ function machtileMachineErrorText(error) {
 async function machtileInitMachineModule() {
   const form = document.getElementById("machtileMachineForm");
   if (!form) return;
+  const departmentSelect = form.querySelector("#machtileMcDepartment");
+  const submitButton = form.querySelector('button[type="submit"]');
+  const editDepartmentId = machtileMachineEditSeed?.department_id || "";
+  let departmentRows = [];
+  try {
+    const rows = await supabaseFetch("machine_departments?select=id,name,department_code&is_active=eq.true&order=sort_order.asc,name.asc");
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error("NO_DEPARTMENTS");
+    departmentRows = rows;
+    departmentSelect.innerHTML = '<option value="">請選課別</option>' + rows.map(row =>
+      `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)}</option>`).join("");
+    departmentSelect.value = departmentRows.some(row => row.id === editDepartmentId) ? editDepartmentId : "";
+    departmentSelect.disabled = false; submitButton.disabled = false;
+  } catch (error) {
+    departmentSelect.innerHTML = '<option value="">課別讀取失敗，請重新整理</option>';
+    showToast("課別讀取失敗，已停用儲存；不會取消機台指派。");
+    return;
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!form.reportValidity() || !departmentRows.some(row => row.id === departmentSelect.value)) return;
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     try {
@@ -15066,6 +15182,7 @@ async function machtileInitMachineModule() {
         machine_code: document.getElementById("machtileMcCode").value.trim(),
         name: document.getElementById("machtileMcName").value.trim(),
         machine_type: document.getElementById("machtileMcType").value,
+        department_id: departmentSelect.value,
         location: document.getElementById("machtileMcLocation").value.trim() || null,
         display_order: Number(document.getElementById("machtileMcOrder").value) || 0,
         status: document.getElementById("machtileMcStatus").value,
@@ -15091,7 +15208,7 @@ async function machtileInitMachineModule() {
 
 async function machtileOpenMachineEdit(machineCode) {
   try {
-    const rows = await supabaseFetch(`machines?select=machine_code,name,machine_type,location,display_order,status,rapid_rate_mm_min,tool_change_seconds&machine_code=eq.${encodeURIComponent(machineCode)}&limit=1`);
+    const rows = await supabaseFetch(`machines?select=machine_code,name,machine_type,department_id,location,display_order,status,rapid_rate_mm_min,tool_change_seconds&machine_code=eq.${encodeURIComponent(machineCode)}&limit=1`);
     machtileMachineEditSeed = Array.isArray(rows) && rows[0] ? rows[0] : null;
   } catch (error) {
     machtileMachineEditSeed = null;
@@ -18024,7 +18141,7 @@ function machineAdminMeta(machine) {
   const order = machine.order;
   const match = String(machine.name).match(/(\d+)/);
   const number = match ? Number(match[1]) : state.machines.indexOf(machine) + 1;
-  const department = machine.department || departmentForMachine(machine);
+  const department = normalizedMachineDepartment(machine);
   // strict＝真資料模式：沒填的欄位誠實顯示「未設定」，不再用示範預設值充數
   const strictReal = machtileStrictMode() && machtileSessionActive();
   const unset = "未設定";
@@ -19885,6 +20002,7 @@ function bindEvents() {
 
     const departmentButton = event.target.closest("[data-department]");
     if (departmentButton) {
+      if (!machtileAvailableDepartments().includes(departmentButton.dataset.department)) return;
       activeDepartmentFilter = departmentButton.dataset.department;
       renderFilters();
       renderWorkOrders();
@@ -20688,6 +20806,12 @@ async function machtileResumeInit() {
     try {
       await loadFromSupabase();
     } catch (error) {
+      if (machtileStrictMode()) {
+        machtileClearDepartmentData();
+        renderAll();
+        showToast(error?.message || "權限或資料讀取失敗，已停用操作");
+        return;
+      }
       console.warn("Supabase load failed, fallback to mock data:", error);
       loadMockData();
       showToast("Supabase 讀取失敗，已切回示範資料");
@@ -21354,16 +21478,23 @@ function machtileTvBuildModel() {
   if (!core) return null;
   deriveMachines();
   const todayOk = machtileCardState.todayStatus === "ok";
-  return core.buildModel({
+  const model = core.buildModel({
     machinesByCode: machtileTvMachineInputs(),
     summary: todayOk ? machtileTodaySummary() : null,
     todayMap: todayOk ? machtileCardState.today : null,
     nowMs: Date.now(),
   });
+  if (machtileStrictMode()) {
+    const permitted = new Set(machtileTvMachineInputs().keys());
+    model.lines = model.lines.map(line => ({...line, machines: line.machines.filter(cell => permitted.has(cell.code))}))
+      .filter(line => line.machines.length > 0);
+  }
+  return model;
 }
 
 // 只讀重新載入（loadFromSupabase 的子集合：電視用不到的排程合約、產能日曆、提醒中心、HMC 盤況、上下料統計不讀）
 async function machtileTvFetchAll() {
+  await machtileLoadDepartmentAccess();
   const ecore = machtileCardEstimateCore();
   if (!ecore) throw new Error("卡片元件沒有載入");
   const controller = typeof AbortController === "function" ? new AbortController() : null;
@@ -21374,15 +21505,25 @@ async function machtileTvFetchAll() {
   } finally {
     if (timer) clearTimeout(timer);
   }
-  if (!Array.isArray(rows) || rows.length === 0) throw new Error("工單資料是空的");
+  if (!Array.isArray(rows) || (!machtileStrictMode() && rows.length === 0)) throw new Error("工單資料是空的");
   let masters = null;
   try {
     masters = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
   } catch (error) {
+    if (machtileStrictMode()) {
+      machtileClearDepartmentData();
+      throw new Error("機台清單讀取失敗");
+    }
     console.warn("tv: machine masters unavailable; keeping the last ones", error);
   }
   state.workOrders = rows.map(normalizeOrder);
-  if (Array.isArray(masters) && masters.length) state.machineMasters = masters.map(normalizeMachineMaster);
+  if (machtileStrictMode() && !Array.isArray(masters)) {
+    machtileClearDepartmentData();
+    throw new Error("機台清單讀取失敗");
+  }
+  if (Array.isArray(masters)) state.machineMasters = masters.map(normalizeMachineMaster)
+    .filter(machine => !machtileStrictMode() || machtileDepartmentAccess?.all_departments
+      || machtileAvailableDepartments().includes(normalizedMachineDepartment(machine)));
   state.source = "supabase";
   await machtileLoadScheduleQueue();
   await machtileLoadCardLegacyProgress();
@@ -21424,7 +21565,8 @@ async function machtileTvReload() {
     machtileTvState.demo = false;
   } catch (error) {
     if (generation !== machtileTvState.generation) return;
-    console.warn("tv refresh failed; keeping the last screen", error);
+    if (machtileStrictMode()) machtileTvState.model = null;
+    console.warn("tv refresh failed", error);
     machtileTvState.failed = true;
     machtileTvState.failReason = machtileStrictMode() && !machtileSessionActive() ? "登入已過期，請重新登入" : String(error?.message || error || "").slice(0, 80);
   } finally {
