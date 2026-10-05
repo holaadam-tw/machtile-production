@@ -22,9 +22,12 @@ const metadata={tenant_id:tenant,role:'admin'};
 const token=`${encode({alg:'HS256'})}.${encode({sub:id(10),email:'admin@test.invalid',exp:Math.floor(Date.now()/1000)+3600,role:'authenticated',app_metadata:metadata})}.synthetic`;
 const departments=[{id:id(30),name:'車床課',department_code:'LATHE'},{id:id(31),name:'銑床課',department_code:'MILL'}];
 const machines=[{machine_id:id(20),machine_code:'A01',machine_name:'A01',machine_type:'加工中心',department_name:'車床課',status:'idle',display_order:1},
-  {machine_id:id(21),machine_code:'A99',machine_name:'A99',machine_type:'車床',department_name:null,status:'idle',display_order:2}];
+  {machine_id:id(21),machine_code:'A99',machine_name:'A99',machine_type:'車床',department_name:null,status:'idle',display_order:2},
+  {machine_id:id(23),machine_code:'B03',machine_name:'B03',machine_type:'加工中心',department_name:'銑床課',status:'idle',display_order:3}];
 const cards=[{work_order_id:id(40),work_order_no:'TEST-ORDER',part_name:'TEST PART',quantity:10,due_date:'2026-12-01',status:'not_started',
-  current_process_id:id(41),current_process_order:1,current_process_name:'TEST PROCESS',machine_code:'A01',machine_name:'A01',process_status:'pending',qty_completed:0}];
+  current_process_id:id(41),current_process_order:1,current_process_name:'TEST PROCESS',machine_code:'A01',machine_name:'A01',process_status:'pending',qty_completed:0},
+  {work_order_id:id(42),work_order_no:'TEST-MILL-ORDER',part_name:'TEST MILL PART',quantity:10,due_date:'2026-12-01',status:'not_started',
+  current_process_id:id(43),current_process_order:1,current_process_name:'TEST MILL PROCESS',machine_code:'B03',machine_name:'B03',process_status:'pending',qty_completed:0}];
 let checks=0,departmentFail=false,machinesFail=false;
 let access={tenant_id:tenant,role:'admin',is_bridge:false,all_departments:true,department_codes:['LATHE','MILL']},accessFail=false;
 const posts=[],blocked=[],errors=[];
@@ -94,12 +97,15 @@ try{
       check(JSON.stringify(await page.locator('#departmentChips [data-department]').evaluateAll(nodes=>nodes.map(n=>n.dataset.department)))===JSON.stringify(labels),`${width}: staff course controls exactly ${codes.join('+')||'empty'}`);
       check(await page.evaluate(()=>machtileAvailableDepartments().includes(activeDepartmentFilter)||(activeDepartmentFilter===''&&machtileAvailableDepartments().length===0)),`${width}: selection remains inside permitted courses`);
       const tvCodes=await page.evaluate(()=>machtileTvBuildModel().lines.flatMap(line=>line.machines.map(cell=>cell.code)));
-      check(tvCodes.every(code=>codes.includes('LATHE')&&code==='A01'),`${width}: TV cannot recreate unauthorized fixed machine tiles`);
+      check(tvCodes.every(code=>codes.includes('LATHE')&&code==='A01'||codes.includes('MILL')&&code==='B03'),`${width}: TV cannot recreate unauthorized fixed machine tiles`);
+      const expected=codes.flatMap(code=>code==='LATHE'?['A01']:['B03']).sort();
+      check(JSON.stringify(await page.evaluate(()=>state.machineMasters.map(m=>m.code).sort()))===JSON.stringify(expected),`${width}: actual machine data matches the permitted course set`);
       await page.evaluate(()=>{const b=document.createElement('button');b.dataset.department='全部';document.body.append(b);b.click();b.remove();});
       check(await page.evaluate(()=>activeDepartmentFilter!=='全部'),`${width}: forged all-course DOM click ignored`);
       if(codes.length===2){
         await page.locator('#departmentChips [data-department="銑床課"]').click();
         check(await page.evaluate(()=>activeDepartmentFilter==='銑床課'),`${width}: two-course member can actually switch to mill`);
+        check(await page.locator('.machine-tile-card').filter({hasText:'B03'}).count()===1&&await page.locator('.machine-tile-card').filter({hasText:'A01'}).count()===0,`${width}: actual mill card replaces lathe card after switch`);
         await page.screenshot({path:path.join(root,`output/playwright/machine-departments/course-switch-${width}.png`)});
       }
       if(codes.length===0){

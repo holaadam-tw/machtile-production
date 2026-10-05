@@ -23,7 +23,7 @@ $tests = @(Get-ChildItem -File -Filter '*Core.test.js' | ForEach-Object Name)
 node --test $tests
 ```
 
-1440/390 真正 index.html+app.js 合成 HTTP fixture：66/66 PASS、0 JS errors。
+1440/390 真正 index.html+app.js 合成 HTTP fixture：76/76 PASS、0 JS errors。
 涵蓋單課／兩課實際點擊／全取消／生管、偽造全部按鈕、查詢失敗、TV 過期資料、登出遲到回應、新增機台必填與保存欄位。
 所有 API 僅 fake backend route.fulfill，本機主機只接受 GET，其他網路一律阻擋。
 Core suite 11 個 test files PASS；首次／今日開工瀏覽器回歸 40/40（只補合成課別 context 回應，首件檢查業務不變）；截圖為合成資料，留 output/playwright 本機，不入 PR。
