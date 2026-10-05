@@ -8147,6 +8147,11 @@ function setReportType(type) {
     section.classList.toggle("is-hidden", section.dataset.reportSection !== activeReportType);
   });
   $("#quantitySection")?.classList.toggle("is-hidden", !meta.needsQty);
+  $$("#quantitySection .field-label small").forEach((label) => {
+    const optional = activeReportType === "dailyStart";
+    label.textContent = optional ? "選填" : "必填";
+    label.classList.toggle("opt", optional);
+  });
   const submitButton = $(".submit-report");
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
@@ -8182,11 +8187,10 @@ function validateReportForm(type) {
     if (!Number($("#workTotalQty")?.value || 0)) return "請填寫工件總數。";
     if (!getReportCycleSeconds()) return "請填寫 cycle time。";
     if (!hasFile("startPhoto")) return "首次開工必須拍照。";
+    if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成首次開工首件檢查表。";
   }
   if (type === "dailyStart") {
     if (($("#machineQty")?.value ?? "") === "") return "請填寫目前機台已加工數量。";
-    if (!hasFile("machinePhoto")) return "今日開工必須拍攝機台照片。";
-    if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成當日首件檢查表。";
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
     if (completed < 0 || defects < 0) return "這次良品與這次不良不可小於 0。";
@@ -8214,10 +8218,10 @@ function buildReportRemark(type, remark) {
     parts.push(`總數 ${$("#workTotalQty")?.value || 0}`);
     parts.push(`cycle ${formatSeconds(getReportCycleSeconds())}`);
     parts.push(hasFile("programUpload") ? "程式已附檔" : "程式未上傳");
+    parts.push("首件檢查完成");
   }
   if (type === "dailyStart") {
     parts.push(`機台已加工數量 ${$("#machineQty")?.value || 0}`);
-    parts.push("首件檢查完成");
   }
   if (type === "afternoonCheck") {
     parts.push(selectedRadioValue("pmAbnormal") === "yes" ? "下午檢查有異常" : "下午檢查正常");
@@ -8237,6 +8241,11 @@ function buildReportRemark(type, remark) {
 function buildReportPayload(type) {
   return {
     report_type: type,
+    ...(type === "workStart" ? {
+      first_article_size: Boolean($("#firstArticleSize")?.checked),
+      first_article_surface: Boolean($("#firstArticleSurface")?.checked),
+      first_article_tool: Boolean($("#firstArticleTool")?.checked),
+    } : {}),
     work_total_qty: Number($("#workTotalQty")?.value || 0) || null,
     cycle_time_seconds: reportCycleSecondsToSend(type),
     machine_qty: Number($("#machineQty")?.value || 0),
@@ -8266,6 +8275,11 @@ function reportFilesForType(type) {
 }
 
 function resetReportFileInputs() {
+  // 首件檢查跟著首次開工，不可把上一張工單的勾選沿用到下一次開表單。
+  ["firstArticleSize", "firstArticleSurface", "firstArticleTool"].forEach((id) => {
+    const input = $(`#${id}`);
+    if (input) input.checked = false;
+  });
   ["programUpload", "startPhoto", "machinePhoto", "finishPhoto", "abnormalPhoto"].forEach((id) => {
     const input = $(`#${id}`);
     if (input) input.value = "";
@@ -15364,8 +15378,8 @@ async function machtileInitAlarmModule() {
 
 function renderReportRulesModule() {
   const rules = [
-    ["首次開工", "工件總數、cycle time 必填", "程式選填、開工照片必填", "產生預估完工與中午目標"],
-    ["今日開工", "當日第一筆", "機台已加工數量、相機照片與首件檢查必填", "建立當日加工基準"],
+    ["首次開工", "工件總數、cycle time 必填", "開工照片、首件檢查必填；程式選填", "產生預估完工與中午目標"],
+    ["今日開工", "當日第一筆", "機台已加工數量必填；機台照片選填", "建立當日加工基準"],
     ["中午報工", "中午休息前", "這次良品 / 這次不良必填（不是累計）", "判斷是否加班或拆單"],
     ["下午 4:30 檢查", "固定提醒", "下午檢查表必填、不填數量", "主管下班前確認風險"],
     ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）/ 完工照片必填", "結算當日進度"],
@@ -18658,13 +18672,13 @@ function appendAiSupportMessage(role, text) {
 function aiSupportAnswer(question) {
   const q = String(question || "").toLowerCase();
   if (q.includes("相機") || q.includes("拍照") || q.includes("照片")) {
-    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n首次開工、今日開工、收工/完工、異常回報的照片是必填；CNC 程式檔是選填。";
+    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n首次開工、收工/完工、異常回報的照片是必填；今日開工的機台照片與 CNC 程式檔是選填。";
   }
   if (q.includes("暫停") || q.includes("pause") || q.includes("停工")) {
     return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。正常中午休息不要用暫停，請用「中午報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片。\n2. 今日開工：目前機台已加工數量、機台照片、首件檢查。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 今日開工：目前機台已加工數量必填，機台照片選填。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";

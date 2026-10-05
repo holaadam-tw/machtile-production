@@ -354,7 +354,7 @@ try {
   console.log("== 跟單台報工畫面逐欄比對（同工序 A02、同類型）==");
   const sDaily = await singleReport(page, "XX01202609160002", "dailyStart", async (pg) => {
     await pg.locator("#machinePhoto").setInputFiles(png);
-    for (const cb of ["firstArticleSize", "firstArticleSurface", "firstArticleTool"]) await pg.locator(`#${cb}`).check();
+    ok(await pg.locator('[data-report-section="dailyStart"] .checklist-card').count() === 0, "單台今日開工不再有首次開工首件表");
     await pg.locator("#completedQty").fill("0");
   });
   const sNoon = await singleReport(page, "XX01202609160002", "noon", async (pg) => { await pg.locator("#completedQty").fill("7"); await pg.locator("#defectQty").fill("1"); });
@@ -371,7 +371,11 @@ try {
   await root2.locator("[data-batch-first-article]").check();
   await root2.locator("[data-batch-submit]").click();
   await waitBatchDone(page);
-  parity("今日開工", sDaily, byMachine("A02", "dailyStart").at(-1));
+  const batchDaily = byMachine("A02", "dailyStart").at(-1);
+  ok(batchDaily.p_payload.remark === `${sDaily.p_payload.remark}；首件檢查完成`, "批次仍保留原首件規則，單台今日開工不再宣告首件完成");
+  parity("今日開工（扣除明確保留的批次首件註記）", sDaily, {
+    ...batchDaily, p_payload: { ...batchDaily.p_payload, remark: sDaily.p_payload.remark },
+  });
   await root2.locator('[data-batch-mode="noon"]').click();
   await root2.locator('[data-batch-good="A02"]').fill("7");
   await root2.locator('[data-batch-bad="A02"]').fill("1");
@@ -401,6 +405,7 @@ try {
     await pg.locator("#cycleMinutes").fill("2");
     await pg.locator("#cycleSeconds").fill("5");
     await pg.locator("#startPhoto").setInputFiles(png);
+    for (const cb of ["firstArticleSize", "firstArticleSurface", "firstArticleTool"]) await pg.locator(`#${cb}`).check();
   });
   ok(sWork?.p_payload?.report_type === "workStart" && sWork.p_payload.cycle_time_seconds === 125, "單台首次開工：使用者填的 2 分 5 秒照送（125）", JSON.stringify(sWork?.p_payload?.cycle_time_seconds));
   const sNoon2 = await singleReport(page, "XX01202609020008", "noon", async (pg) => {
