@@ -10034,7 +10034,7 @@ function machtileAssignedCardProcess(row) {
 }
 
 async function machtileLoadAssignedCardProcesses() {
-  state.assignedCardOrders = [];
+  state.assignedCardOrders = null;
   state.cardProcessError = "";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
@@ -10061,7 +10061,10 @@ async function machtileLoadAssignedCardProcesses() {
     }
     throw new Error("工序資料超過讀取上限，請縮小範圍");
   } catch (error) {
-    state.cardProcessError = "機台工序資料讀取失敗，請重新整理後再選工單";
+    // A failed source is not an empty result. Keep the original current-step
+    // view usable for cards/report/QR; do not publish partial paginated rows.
+    state.assignedCardOrders = null;
+    state.cardProcessError = "工序清單讀取失敗，暫以工單目前道顯示";
     console.warn(state.cardProcessError, error);
   } finally { clearTimeout(timer); }
 }
@@ -10118,7 +10121,7 @@ async function machtileLoadCardLegacyProgress() {
 //   基準：view 的 baseline_cycle_seconds → 否則 part_process_time_baselines 同圖號＋製程＋機台的歷史平均（至少 2 筆才算基準）
 //   每日估算：用上面的機台加工時間算（原本的公式不變）。CNC 程式分析的預估秒數（cnc_program_versions.estimated_seconds）不混進來。
 async function machtileLoadCardMachineTimes() {
-  const orders = machtileMachineCardOrders();
+  const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
   if (state.source !== "supabase" || !orders.length) return;
   const need = orders.filter((o) => o.machineTimeSource !== "view" && isUuid(String(o.processId || "")));
   const times = await machtileFetchMachineTimes(need.map((o) => o.processId));

@@ -29,7 +29,7 @@ const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_out
   last_report_at:p.id===id(303)?'2026-10-01T00:00:00Z':p.id===id(309)?'2026-10-04T00:00:00Z':null,legacy_updated_at:null});
 let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false,rejectPreplan=false,rejectAudit=false;
 const preplans=[],assignmentEvents=[];
-let badParents=false, offStationFixture=false;
+let badParents=false, offStationFixture=false, processTimeout=false;
 const upserts=[], queues=[], blocked=[], errors=[], rpcCalls=[];
 const ok=(value,label)=>{assert(value,label); checks++; console.log('PASS '+label);};
 const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json'};
@@ -69,6 +69,7 @@ await ctx.route('**/*',async route=>{
     return json(200,{event_id:assignmentEvents.length,queue_order:rank,replayed:false});
   }
   if(p==='/rest/v1/work_order_processes') {
+    if(processTimeout&&(u.searchParams.get('select')||'').includes('work_orders!inner'))return route.abort('timedout');
     if(rejectMetadata)return json(503,{message:'fixture process metadata unavailable'});
     if((u.searchParams.get('select')||'').includes('work_orders!inner'))return json(200,procs.filter(p=>p.machine_id).map(p=>({...p,off_station_at:offStationFixture&&p.id===id(304)?'2026-10-01T00:00:00Z':null,work_orders:{...orders.find(o=>o.id===p.work_order_id),...(badParents?{status:'completed'}:{})},machines:machineRows.find(m=>m.id===p.machine_id)})));
     return json(200,procs);
@@ -224,9 +225,21 @@ try{
   await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
   await page.locator('[data-card-select-open="A01"]').click();
   ok(await page.locator('[data-card-selection-unassigned] [data-card-select-process]').count()===0,'unknown process metadata excludes unassigned candidates');
-  ok((await page.locator('[data-card-selection-error]').innerText()).includes('資料讀取失敗'),'failed per-process read is visibly distinct from an empty candidate result');
-  rejectMetadata=false;
+  ok((await page.locator('[data-card-selection-error]').innerText()).includes('工序清單讀取失敗'),'failed per-process read is visibly distinct from an empty candidate result');
+  ok((await page.locator('#dataSourceLabel').innerText()).includes('暫以工單目前道顯示'),'503 displays current-step fallback notice');
+  ok((await page.evaluate(()=>machtileCardOrderForMachine('A01')))?.processId===id(303),'503 preserves A01 current-step card from original view');
   await page.locator('[data-close-card-selection]').click();
+  await page.locator('.machine-tile-card').filter({has:page.locator('[data-card-select-open="A01"]')}).locator('[data-report]').click();
+  ok(await page.evaluate(()=>selectedOrder?.processId)===id(303),'503 card reporting still resolves the original view process');
+  await page.evaluate(()=>closeReport());
+  await page.evaluate(()=>openReport('',{machine:'A01'}));
+  ok(await page.evaluate(()=>selectedOrder?.processId)===id(303)&&await page.locator('#reportSheet').evaluate(el=>el.classList.contains('is-open')),'503 machine QR reporting remains usable');
+  await page.evaluate(()=>closeReport());
+  rejectMetadata=false;
+  processTimeout=true;
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok((await page.evaluate(()=>machtileCardOrderForMachine('A01')))?.processId===id(303)&&await page.evaluate(()=>state.assignedCardOrders===null),'network timeout falls back atomically to original current-step view');
+  processTimeout=false;
   await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
   await page.locator('[data-card-select-open="A01"]').click();
   rejectQueue=true;
