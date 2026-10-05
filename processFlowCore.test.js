@@ -1,0 +1,36 @@
+const assert = require('node:assert/strict');
+const flow = require('./processFlowCore');
+let checks = 0;
+const check = (v, name) => { assert(v, name); checks++; console.log('PASS '+name); };
+const rows = Array.from({length:8}, (_,i)=>({id:`p${i+1}`,process_order:i+1,process_name:`測試工序${i+1}`,process_type:'cnc',machine_code:'A01',status:i===0?'completed':i===1?'running':'pending',reported:i===0?100:i===1?48:0}));
+rows[4] = {...rows[4],process_type:'outsourced',supplier_code:'TEST-VENDOR'};
+check(flow.steps(rows,'p2').length===8,'eight real steps retained');
+check(flow.steps(rows,'p2').filter(p=>p.current).length===1,'current comes from exact process identity');
+check(flow.steps(rows).filter(p=>p.current).length===1,'unique running step may identify current in management');
+check(flow.steps([{id:'a',status:'running'},{id:'b',status:'running'}]).every(p=>!p.current),'ambiguous running steps do not guess current');
+check(flow.steps(rows).at(0).label==='已完成','completed step');
+check(flow.steps(rows)[1].label==='進行中','running step');
+check(flow.steps(rows)[4].label==='待發包','pending outsourced step');
+check(flow.steps([{...rows[4],status:'running'}])[0].label==='委外中','running outsourced step');
+check(flow.steps([{id:'gap',process_order:7,PP_Name:'原製程',status:'paused'}])[0].name==='原製程','blank name falls back to source route');
+check(flow.steps([{process_order:7}]).length===1,'missing earlier steps never invented');
+check(flow.steps([{status:'paused'}])[0].label==='狀態待確認','paused is not mislabeled as running');
+check(flow.render([{process_order:3,process_name:'<img onerror=x>',reported:null}],{quantity:0}).includes('&lt;img'),'source names escaped');
+check(flow.render([{process_order:3,reported:null}],{quantity:0}).includes('已報無資料 / 0'),'unknown output not displayed as zero');
+check(flow.render(rows,{currentId:'p2',quantity:100}).includes('aria-current="step"'),'accessible current marker');
+check(flow.render(rows).includes('TEST-VENDOR'),'vendor code retained');
+check(!flow.render(rows).includes('<button')&&!flow.render(rows).includes('<form'),'display component cannot mutate');
+check(flow.render([]).includes('無資料'),'empty route explicit');
+const latheRows=rows.map(p=>({...p,process_name:'CNC車床加工'}));
+const machines=[{id:'a',code:'A01',department:'車床課',status:'idle'},
+ {id:'bad',code:'A02',department:'車床課',status:'maintenance'},
+ {id:'mill',code:'B01',department:'銑床課',status:'idle'}];
+check(flow.preplanTarget(latheRows,'p2')?.id==='p3','only immediate next existing step can be preplanned');
+check(flow.candidateMachines(flow.preplanTarget(latheRows,'p2'),machines).map(x=>x.id).join()==='a','same department only, maintenance excluded');
+check(flow.preplanTarget(latheRows.map(p=>p.id==='p3'?{...p,hasReports:true}:p),'p2')===null,'reported next step not editable');
+check(flow.preplanTarget(latheRows.map(p=>p.id==='p3'?{...p,reported:null}:p),'p2')===null,'failed progress source disables preplan');
+check(flow.preplanTarget(latheRows.map(p=>p.id==='p3'?{...p,process_type:'outsourced'}:p),'p2')===null,'outsourced next step not assignable');
+check(!flow.render(latheRows,{currentId:'p2',canPreplan:true,machines}).includes('data-flow-append'),'missing audit migration fails closed');
+check(flow.render(latheRows,{currentId:'p2',canPreplan:true,machines,auditAvailable:true}).includes('data-flow-append="p3"'),'authorized preplan control on next step');
+check(flow.render([{...rows[0],assignmentEvent:{kind:'legacy_reassigned'}}]).includes('已依舊 MES 改派'),'only recorded legacy reassignment shown');
+console.log(`${checks}/${checks} PASS`);
