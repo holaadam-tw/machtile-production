@@ -12796,3 +12796,24 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .card-selection-panel li { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid #d7dde4; overflow-wrap: anywhere; }
 .card-selection-panel button { min-height: 44px; padding: 8px 12px; cursor: pointer; }
 .card-selection-panel [role="alert"] { color: #be342a; }
+
+/* Process route: neutral states, steel-blue current step, contained horizontal scroll. */
+.process-flow { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 10px 0; border: 1px solid #d7dde4; border-radius: 8px; background: #f5f7f9; }
+.process-flow:focus-visible { outline: 2px solid #1f5fa8; outline-offset: 2px; }
+.process-flow ol { display: flex; list-style: none; width: max-content; padding: 8px; margin: 0; gap: 20px; }
+.process-flow .process-flow-step { position: relative; display: flex; flex-direction: column; gap: 5px; width: 176px; padding: 10px; border: 1px solid #d7dde4; border-radius: 6px; background: white; color: #263545; font-size: 12px; }
+.process-flow-step:not(:last-child)::after { content: '→'; position: absolute; left: calc(100% + 3px); top: 40%; color: #687583; }
+.process-flow .is-current { border: 2px solid #1f5fa8; background: #e3edf8; padding: 9px; }
+.process-flow-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.process-flow-head strong,.process-flow-quantity { font-family: ui-monospace,Consolas,monospace; font-variant-numeric: tabular-nums; }
+.process-flow-status { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.process-flow-status i { width: 5px; height: 5px; border-radius: 50%; background: #687583; }
+.process-flow .is-current .process-flow-status i { background: #1f5fa8; }
+.process-flow-name { white-space: normal; overflow-wrap: anywhere; }
+.process-flow-empty { color: #687583; font-size: 12px; }
+.schedule-card-body,.machine-tile-card { min-width: 0; }
+.process-flow-preplan{display:grid;gap:6px;margin-top:8px;font-size:12px}
+.process-flow-preplan label{display:grid;gap:4px}
+.process-flow-preplan select,.process-flow-preplan button{max-width:100%;min-width:0;font:inherit;padding:6px;border:1px solid #d7dde4;border-radius:5px;background:#fff;color:#1f5fa8}
+.process-flow-preplan small{white-space:normal;color:#63717e}
+.process-flow-reassigned{color:#986821}

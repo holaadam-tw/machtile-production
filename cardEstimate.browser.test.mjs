@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { assignedCardFixture } from './assignedCardFixture.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = process.env.CARD_E2E_OUT || path.join(root, ".e2e-out", "card-estimate");
@@ -143,6 +144,7 @@ function makeBackend(opts = {}) {
     const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
+    if (p === '/rest/v1/work_order_processes' && (url.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, assignedCardFixture(cards, machines));
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/app_users") {
       const list = users.map(({ auth, ...u }) => (opts.actorUnmapped && u.id === users[0].id ? { ...u, name: opts.actorName || u.name, legacy_user_id: "" } : u));
