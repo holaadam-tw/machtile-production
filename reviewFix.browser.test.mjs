@@ -76,6 +76,7 @@ async function handleFake(r) {
   const url = new URL(req.url());
   const p = url.pathname;
   const json = (status, body) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  if (p === "/rest/v1/rpc/machine_department_context") return json(200, {tenant_id:T,role:"operator",is_bridge:false,all_departments:true,department_codes:["LATHE","MILL"]});
   if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
   if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
     return json(200, cards.filter(c => machines.some(m => m.machine_code === c.machine_name)).map(c => ({

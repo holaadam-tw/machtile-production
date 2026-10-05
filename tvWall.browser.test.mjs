@@ -102,7 +102,7 @@ const testConfig = `window.MACHTILE_CONFIG = {
 
 // ---------- fake backend ----------
 // 唯讀 RPC（POST 但只查詢）：卡片完成數、開機時的排程日曆／提醒中心／HMC 盤況／事件清單快照。其他任何非 GET 都算寫入。
-const READ_RPCS = new Set(["/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
+const READ_RPCS = new Set(["/rest/v1/rpc/machine_department_context", "/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
 function makeBackend() {
   const rows = [...todayRows];
   const b = { rows, clockNow: 0, mode: "ok", cardReads: 0, todayReads: 0, writes: [], requests: [] };
@@ -115,6 +115,7 @@ function makeBackend() {
     b.requests.push(`${req.method()} ${p}`);
     if (req.method() !== "GET" && !READ_RPCS.has(p)) b.writes.push(`${req.method()} ${p}`);
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "tv@test.invalid" });
+    if (p === "/rest/v1/rpc/machine_department_context" && b.mode === "ok") return json(200, { tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
     if (b.mode === "down" && p.startsWith("/rest/v1/")) return json(503, { message: "service unavailable (test)" });
     if (b.mode === "expired" && p.startsWith("/rest/v1/")) return json(401, { message: "JWT expired (test)" });
     if (p === "/rest/v1/v_work_order_cards") { b.cardReads++; return json(200, cards); }
@@ -283,7 +284,7 @@ for (const [label, opts, tag, minPx] of tvSizes) {
 }
 
 // ================= 自動刷新、讀取失敗、恢復（假時鐘）=================
-console.log("== 每 60 秒自動刷新／讀取失敗保留畫面 ==");
+console.log("== 每 60 秒自動刷新／權限讀取失敗不可保留舊授權資料 ==");
 {
   const be = makeBackend();
   const { context, page, errors } = await newPage(browser, tvSizes[1][1], be, { atMs: tw("12:58") });
@@ -305,9 +306,9 @@ console.log("== 每 60 秒自動刷新／讀取失敗保留畫面 ==");
   await advance(page, be, 60);
   info = await tvInfo(page);
   ok(info.state === "error" && info.alert.includes("資料更新失敗，最後更新 12:59"), "讀取失敗 → 角落「資料更新失敗，最後更新 12:59」", info.alert);
-  ok(info.cells.length === 11 && cellOf(info, "A01").qty === "120/400" && cellOf(info, "A04").tags.includes("超量 +153"), "畫面沒有被清空（11 台、數字、標籤都還在）");
+  ok(info.cells.length === 0, "GET 刷新權限來源失敗：清除舊授權機台，不顯示快取資料（不同於 POST 前確認失敗保留表單）");
   ok(info.clock === "13:00", `時鐘照走（${info.clock}）`);
-  const lay = await layout(page);
+  const lay = await page.evaluate(()=>({scrollX:Math.max(0,document.documentElement.scrollWidth-innerWidth),scrollY:Math.max(0,document.documentElement.scrollHeight-innerHeight)}));
   ok(lay.scrollX <= 0 && lay.scrollY <= 0, "提示出現也不會造成捲動");
   await page.screenshot({ path: path.join(outDir, "tv-1280x720-error.png") });
   await advance(page, be, 60);

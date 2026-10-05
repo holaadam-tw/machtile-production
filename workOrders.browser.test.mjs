@@ -105,6 +105,7 @@ function makeBackend() {
     const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (recording && req.method() !== "GET" && req.method() !== "HEAD") writes.push({ method: req.method(), path: p, body: req.postData() || "" });
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "planner@test.invalid" });
+    if (p === "/rest/v1/rpc/machine_department_context") return json(200, { tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, cardMachines);
     if (p === "/rest/v1/machines") return json(200, machineRows);
@@ -303,7 +304,7 @@ for (const [label, device, name] of [["平板（810×1080）", tabletDevice, "ta
   ok(await page.locator("#machtileWoForm").isVisible() && await page.locator("#machtileWoForm button[type=submit]").isVisible(), `${label}：建單表單保留`);
 
   // ---- 開模組到現在：只有讀取 ----
-  const nonReadSoFar = backend.writes.filter((w) => w.path !== "/rest/v1/rpc/batch_report_progress");
+  const nonReadSoFar = backend.writes.filter((w) => !["/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/machine_department_context"].includes(w.path));
   ok(nonReadSoFar.length === 0, `${label}：瀏覽／搜尋／篩選沒有任何寫入`, JSON.stringify(nonReadSoFar));
 
   // ---- 改派確認：舊 MES 派工單 ----
@@ -346,7 +347,7 @@ for (const [label, device, name] of [["平板（810×1080）", tabletDevice, "ta
 
   // ---- 全程寫入只有建單送出 ----
   // 送出後卡片牆會重新載入（原本就有的行為），那幾支是唯讀快照 RPC（POST 但不寫入），列在這裡、其餘一律算寫入
-  const readOnlyRpc = new Set(["/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
+  const readOnlyRpc = new Set(["/rest/v1/rpc/machine_department_context", "/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
   const nonRead = backend.writes.filter((w) => !readOnlyRpc.has(w.path));
   ok(nonRead.length === 3 && nonRead.every((w) => w.path === "/rest/v1/rpc/work_order_upsert" && w.method === "POST"), `${label}：除了 3 次建單送出（rpc/work_order_upsert）之外沒有其他寫入`, JSON.stringify(nonRead.map((w) => w.method + " " + w.path)));
   ok(realErrors(errors).length === 0, `${label}：沒有 JS 錯誤`, realErrors(errors).join(" | "));

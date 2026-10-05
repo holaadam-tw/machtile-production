@@ -131,9 +131,10 @@ function makeBackend(opts = {}) {
     const method = req.method();
     const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
+    if (p === "/rest/v1/rpc/machine_department_context") return json(200, { tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
     // 寫入紀錄：除了讀用的 RPC 以外，任何 POST／PATCH／DELETE 都記下來（切換卡片不可以有任何一筆）
     // 讀用的 RPC（快照／清單／進度）不算寫入
-    const readRpc = /^\/rest\/v1\/rpc\/(batch_report_progress|[a-z_]+_snapshot|[a-z_]+_list)$/.test(p);
+    const readRpc = /^\/rest\/v1\/rpc\/(machine_department_context|batch_report_progress|[a-z_]+_snapshot|[a-z_]+_list)$/.test(p);
     if (method !== "GET" && method !== "HEAD" && !readRpc) b.writes.push(`${method} ${p}`);
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
@@ -354,7 +355,7 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
     const box = mill.locator(`[data-batch-select="${code}"]`);
     if (await box.count() && await box.isEnabled() && await box.isChecked()) await box.uncheck();
   }
-  ok(await mill.locator("[data-batch-first-article]").count() === 0, "今日開工不再要求首件檢查（沿用 main #59）");
+  ok(await mill.locator("[data-batch-first-article]").count() === 0, "今日開工已不要求首件檢查（首件在首次開工）");
   await page.screenshot({ path: path.join(outDir, "04-phone-mill-default.png"), fullPage: true });
   await mill.locator("[data-batch-submit]").click();
   for (let i = 0; i < 80 && be.calls.length === 0; i++) await page.waitForTimeout(100);

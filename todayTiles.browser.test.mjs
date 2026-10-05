@@ -112,6 +112,7 @@ function makeBackend({ rows: initialRows = todayRowsAll } = {}) {
     const p = url.pathname;
     const q = decodeURIComponent(url.search);
     const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (p === "/rest/v1/rpc/machine_department_context") return json(200, {tenant_id:T,role:"operator",is_bridge:false,all_departments:true,department_codes:["LATHE","MILL"]});
     if (req.method() !== "GET") b.writes.push(`${req.method()} ${p}`);
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
   if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {

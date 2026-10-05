@@ -10,7 +10,7 @@ const imported = await import(process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFil
 const { chromium } = imported.default || imported;
 const fake = 'https://process-fixture.test', id = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const tenant = id(1), auth = id(901), actor = id(902);
-const machineRows = [1,3,4,5].map(n=>({id:id(100+n),machine_code:`A0${n}`,name:`A0${n}`,status:n===4?'maintenance':n===5?'offline':'idle',machine_type:'lathe',display_order:n}));
+const machineRows = [1,3,4,5].map(n=>({id:id(100+n),machine_code:`A0${n}`,name:`A0${n}`,department_name:'車床課',status:n===4?'maintenance':n===5?'offline':'idle',machine_type:'lathe',display_order:n}));
 machineRows[0].department_name='車床課'; machineRows[0].machine_type='mill';
 machineRows.push({id:id(123),machine_code:'B03',name:'B03',status:'idle',machine_type:'lathe',department_name:'銑床課',display_order:23});
 const orders = [{id:id(201),work_order_no:'TEST-MULTI',part_no:'TEST-PART',part_name:'測試零件',quantity:5000,due_date:'2026-10-20',status:'in_progress',source_system:'app_manual',created_by:actor},
@@ -25,9 +25,10 @@ procs.push(...[
   [312,'CNC 加工','cnc','pending',0], [313,'車削委外','outsourced','pending',0],
   [314,'車削','cnc','completed',0], [315,'車削','cnc','pending',100],
 ].map(([n,name,type,status,qty])=>({id:id(n),work_order_id:id(202),process_order:n-300,process_name:name,process_type:type,machine_id:null,status,qty_completed:qty,qty_defect:0})));
-const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?3440:null,legacy_input:5000,legacy_fail:0,pending_output:p.id===id(303)?20:0,pending_fail:0,pending_count:0,
+let n4LegacyOutput=2065;
+const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?3440:p.id===id(304)?n4LegacyOutput:null,legacy_input:5000,legacy_fail:0,pending_output:p.id===id(303)?20:0,pending_fail:0,pending_count:0,
   last_report_at:p.id===id(303)?'2026-10-01T00:00:00Z':p.id===id(309)?'2026-10-04T00:00:00Z':null,legacy_updated_at:null});
-let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false,rejectPreplan=false,rejectAudit=false;
+let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false,rejectPreplan=false,rejectAudit=false,rejectContext=false;
 const preplans=[],assignmentEvents=[];
 let badParents=false, offStationFixture=false, processTimeout=false;
 const upserts=[], queues=[], blocked=[], errors=[], rpcCalls=[];
@@ -53,7 +54,8 @@ await ctx.route('**/*',async route=>{
   if(req.method()!=='GET')rpcCalls.push(p);
   if(p==='/auth/v1/user')return json(200,{id:auth,email:'planner@test.invalid'});
   if(p==='/rest/v1/app_users')return json(200,[{id:actor,auth_user_id:auth,name:'測試生管',legacy_user_id:'TEST-001'}]);
-  if(p==='/rest/v1/machines'||p==='/rest/v1/v_machine_management_cards')return rejectMachines?json(503,{message:'fixture machines unavailable'}):json(200,machineRows);
+  if(p==='/rest/v1/rpc/machine_department_context')return rejectContext?json(503,{message:'fixture context unavailable'}):json(200,{tenant_id:tenant,role:'planner',all_departments:true,is_bridge:false,department_codes:['LATHE','MILL']});
+  if(p==='/rest/v1/machines'||p==='/rest/v1/v_machine_management_cards')return rejectMachines?json(503,{message:'fixture machines unavailable'}):json(200,p.endsWith('/v_machine_management_cards')?machineRows.map(({id,name,...row})=>({...row,machine_id:id,machine_name:name})):machineRows);
   if(p==='/rest/v1/work_orders'){
     const eq=u.searchParams.get('work_order_no');
     return json(200,orders.filter(o=>!eq||eq.startsWith('in.')||o.work_order_no===eq.slice(3)).map(o=>({...o,work_order_processes:procs.filter(p=>p.work_order_id===o.id)})));
@@ -98,6 +100,16 @@ const out=process.env.MACHTILE_SCREENSHOT_DIR || path.join(root,'output/playwrig
 try{
   await page.goto(base,{waitUntil:'domcontentloaded'});
   await page.waitForFunction(()=>document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
+  await page.waitForFunction(()=>machtileProcessFlows.get('TEST-MULTI')?.processes.some(p=>p.process_order===4));
+  console.log('Task 3 acceptance: synthetic planner; local index/app; view machine_id -> N4 machine_id A03; expect A03, no write');
+  ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-MULTI')?.processes.find(p=>p.process_order===4)?.machine_code==='A03'),'real view machine_id shape resolves N4 assigned A03, not 機台無資料');
+  await page.locator('[data-flow-open="TEST-MULTI"]').first().click();
+  const n4=page.locator(`#machtileFullProcessFlow [data-flow-process="${id(304)}"]`);
+  ok((await n4.innerText()).includes('A03')&&(await n4.innerText()).includes('2065'),'full route visibly retains N4 actual machine and legacy-reported 2065');
+  await page.screenshot({path:path.join(out,'task3-n4-view-shape.png')});
+  await page.locator('[data-close-flow]').click();
+  n4LegacyOutput=0; // Independent unreported fixture for subsequent reassignment/preplan cases.
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
   console.log('acceptance replica: planner, local app, TEST-MULTI N3 A01/N4 A03; GET fixture 200; base 79961f81');
   await page.locator('[data-card-select-open="A03"]').click();
   ok(await page.locator(`#machtileCardSelection [data-card-selection-assigned] [data-card-select-process="${id(304)}"]`).count()===1,'A03 sees N4 while one-row view only exposes A01 N3');
@@ -207,16 +219,23 @@ try{
   ok(chosen?.order?.processId===id(303)||chosen?.processId===id(303),'selected current process persists after refreshed data');
   ok(procs.find(p=>p.id===id(303)).qty_completed===10&&progress(procs.find(p=>p.id===id(303))).legacy_output===3440,'queue selection does not reset reported quantities');
   await page.locator('[data-card-select-open="A01"]').click();
-  const queueBefore=queues.length;
+  let queueBefore=queues.length;
   procs.find(p=>p.id===id(309)).machine_id=id(103);
   await page.locator(`#machtileCardSelection [data-card-select-process="${id(309)}"]`).click();
   await page.waitForFunction(()=>document.querySelector('[data-card-selection-error]')?.textContent.length>0);
   ok(queues.length===queueBefore,'stale candidate moved to another machine cannot be pulled back');
   await page.locator('[data-close-card-selection]').click();
   await page.locator('[data-card-select-open="A01"]').click();
+  rejectContext=true;
+  await page.locator(`#machtileCardSelection [data-card-select-process="${id(303)}"]`).click();
+  await page.waitForFunction(()=>!document.getElementById('machtileCardSelection'));
+  ok(queues.length===queueBefore+1&&await page.evaluate(()=>state.workOrders.length>0),'planner selection survives context outage with backend authorization unchanged');
+  queueBefore=queues.length;
+  rejectContext=false;
+  await page.locator('[data-card-select-open="A01"]').click();
   rejectMachines=true;
   await page.locator(`#machtileCardSelection [data-card-select-process="${id(303)}"]`).click();
-  await page.waitForFunction(()=>document.querySelector('[data-card-selection-error]')?.textContent.includes('機台資料讀取失敗'));
+  await page.waitForFunction(()=>/機台(資料|清單)讀取失敗/.test(document.querySelector('[data-card-selection-error]')?.textContent||''));
   ok(queues.length===queueBefore,'failed machine metadata cannot use local demo fallback to assign');
   rejectMachines=false;
   await page.locator('[data-close-card-selection]').click();
@@ -271,10 +290,15 @@ try{
   await page.evaluate(async pid=>{await Promise.all([machtileCommitCardSelection('A01',pid),machtileCommitCardSelection('A01',pid)]);},id(303));
   ok(queues.length===beforeDouble+1,'double submission writes the queue only once');
   await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  await page.evaluate(()=>machtileOpenProcessFlow('TEST-MULTI',state.workOrders.find(o=>o.id==='TEST-MULTI'&&o.stationStep===3)?.processId));
   let appendButton=page.locator(`[data-flow-append="${id(304)}"]`).first();
   await appendButton.scrollIntoViewIfNeeded();
   let picker=appendButton.locator('..').locator('[data-flow-machine]');
   ok(await picker.locator('option').count()===3,'preplan offers only available same-department machines');
+  const writesBeforeContextFailure=preplans.length;rejectContext=true;
+  await page.evaluate(()=>machtileLoadDepartmentAccess({readOnly:true,force:true}));
+  ok(preplans.length===writesBeforeContextFailure&&await page.locator('#machtileFullProcessFlow').count()===1&&await page.evaluate(()=>machtileDepartmentUnrestricted()),'planner context outage preserves full-route form and does not apply operator write gate');
+  rejectContext=false;
   await picker.selectOption(id(101));rejectPreplan=true;
   const beforePreplan=procs.find(p=>p.id===id(304)).machine_id;
   await appendButton.click();
@@ -298,6 +322,7 @@ try{
   rejectAudit=false;
   // Synthetic long route; actual app card and scheduling renderers share the same strip.
   await page.evaluate(()=>{
+    machtileCloseProcessFlow();
     machtileCloseCardSelection();
     const order=state.workOrders.find(o=>o.processId);
     const route=Array.from({length:8},(_,i)=>({id:i===2?order.processId:`fixture-route-${i}`,process_order:i+1,
@@ -307,29 +332,51 @@ try{
     const preview=document.createElement('section');preview.id='processFlowPreview';preview.style.cssText='width:100%;max-width:700px;margin:auto';
     preview.innerHTML=renderMachineCard({name:'A01',code:'A01',type:'lathe',department:'車床課',status:'running',order})
       +machtileScheduleCard(order,0,1,'A01',false,null);
-    document.body.replaceChildren(preview);
+    // Keep the real app shell mounted for the logout/authorization regression.
+    const savedShell=document.createElement('div');savedShell.id='processFlowSavedShell';savedShell.hidden=true;
+    savedShell.append(...document.body.children);
+    document.body.replaceChildren(preview,savedShell);
   });
   ok(await page.locator('#processFlowPreview .process-flow').count()===2,'machine and schedule cards use common flow component');
-  ok(await page.locator('#processFlowPreview .process-flow-step').count()===16,'both cards retain all eight real steps');
+  ok(await page.locator('#processFlowPreview .process-flow-step').count()===6,'machine and schedule cards each show only three preview steps');
   ok(await page.locator('#processFlowPreview [aria-current=step]').count()===2,'current process highlighted on each card');
-  ok((await page.locator('#processFlowPreview').innerText()).includes('TEST-VENDOR')&&(await page.locator('#processFlowPreview').innerText()).includes('已完成'),'outsourced vendor and completed states retained');
+  ok((await page.locator('#processFlowPreview').innerText()).includes('共 8 道')&&(await page.locator('#processFlowPreview').innerText()).includes('上一道 ✓'),'preview shows full count and real completed previous step');
+  const flowWrites=queues.length+upserts.length;
   for(const width of [1440,390]) {
     await page.setViewportSize({width,height:1000});
     ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px page has no horizontal overflow`);
-    const flowGeometry=await page.locator('.process-flow').first().evaluate(el=>({scroll:el.scrollWidth,client:el.clientWidth,overflow:getComputedStyle(el).overflowX,display:getComputedStyle(el.querySelector('ol')).display}));
-    ok(flowGeometry.scroll>flowGeometry.client,`long route contained in scroll region ${JSON.stringify(flowGeometry)}`);
-    await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft=el.scrollWidth);
-    ok(await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft>0),'flow can scroll to downstream steps');
-    await page.locator('.process-flow').evaluateAll(els=>els.forEach(el=>{const current=el.querySelector('[aria-current=step]');if(current)el.scrollLeft+=current.getBoundingClientRect().left-el.getBoundingClientRect().left-8;}));
+    ok(await page.locator('.process-flow-compact').first().evaluate(el=>el.scrollWidth<=el.clientWidth),`${width}px three-step preview needs no horizontal scroll`);
     await page.screenshot({path:path.join(out,`process-flow-${width}.png`),fullPage:true});
+    await page.locator('.process-flow-compact').first().click();
+    ok(await page.locator('#machtileFullProcessFlow .process-flow-step').count()===8,`${width}px preview click opens all eight steps`);
+    ok((await page.locator('#machtileFullProcessFlow').innerText()).includes('TEST-VENDOR')&&(await page.locator('#machtileFullProcessFlow').innerText()).includes('已完成'),`${width}px full route retains outsource vendor and completed states`);
+    ok(await page.locator('#machtileFullProcessFlow [aria-current=step]').count()===1,`${width}px complete route highlights exact current step`);
+    ok(await page.locator('#machtileFullProcessFlow .process-flow').evaluate(el=>el.scrollLeft===0),`${width}px full route starts at N1`);
+    await page.locator('#machtileFullProcessFlow .process-flow').evaluate(el=>el.scrollLeft=el.scrollWidth);
+    ok(await page.locator('#machtileFullProcessFlow .process-flow').evaluate(el=>el.scrollLeft>0),`${width}px long route scrolls within dialog`);
+    ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px open dialog has no page overflow`);
+    await page.locator('#machtileFullProcessFlow .process-flow').evaluate(el=>el.scrollLeft=0);
+    await page.screenshot({path:path.join(out,`process-flow-full-${width}.png`)});
+    await page.keyboard.press('Escape');
+    ok(await page.locator('#machtileFullProcessFlow').count()===0,`${width}px Escape closes full route`);
+    await page.locator('#processFlowPreview .machine-open-link').click();
+    ok(await page.locator('#machtileFullProcessFlow .process-flow-step').count()===8,`${width}px 完整單 opens complete route`);
+    await page.locator('[data-close-flow]').click();
   }
-  const flowWrites=queues.length+upserts.length;
-  await page.locator('.process-flow').first().focus();
-  await page.keyboard.press('ArrowRight');
+  await page.locator('.process-flow-compact').first().focus();
+  await page.keyboard.press('Enter');
+  ok(await page.locator('#machtileFullProcessFlow .process-flow-step').count()===8,'keyboard opens full route');
+  await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
+  ok(await page.evaluate(()=>!!document.activeElement.closest('#machtileFullProcessFlow')),'dialog keyboard focus stays within route');
+  await page.keyboard.press('Escape');
+  ok(await page.locator('.process-flow-compact').first().evaluate(el=>el===document.activeElement),'closing restores opener focus');
   ok(queues.length+upserts.length===flowWrites,'viewing and scrolling flow creates no writes');
+  await page.locator('.process-flow-compact').first().click();
+  await page.evaluate(()=>machtileClearSession());
+  ok(await page.locator('#machtileFullProcessFlow').count()===0&&await page.evaluate(()=>machtileProcessFlows.size)===0,'logout closes full route and clears cached process data');
   ok(errors.filter(e=>!e.includes('CATALOG_ENDPOINT_INVALID')).length===0,'no app JS errors');
   ok(!blocked.some(u=>/machtile\.com|muditjubqflrqofbkmav/.test(u)),'no production-domain requests');
-  const allowed=new Set(['batch_report_progress','work_order_upsert','machine_queue_reorder','machine_queue_append','schedule_calendar_snapshot','attention_case_snapshot','hmc_runtime_snapshot','unified_event_list']);
+  const allowed=new Set(['machine_department_context','batch_report_progress','work_order_upsert','machine_queue_reorder','machine_queue_append','schedule_calendar_snapshot','attention_case_snapshot','hmc_runtime_snapshot','unified_event_list']);
   ok(rpcCalls.every(p=>allowed.has(p.replace('/rest/v1/rpc/',''))),'no unrelated mutation or auth endpoints called');
   console.log(`${checks} passed; screenshots=${out}`);
 }finally{await ctx.close();await browser.close();await new Promise(resolve=>server.close(resolve))}
