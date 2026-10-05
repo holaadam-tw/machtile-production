@@ -14389,12 +14389,9 @@ function machtileWoMachineLabel(machine) {
 
 async function machtileWoMachines() {
   if (machtileWoMachinesCache) return machtileWoMachinesCache;
-  try {
-    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code,name,location&order=machine_code");
-  } catch (error) {
-    console.warn("machines lookup failed", error);
-    machtileWoMachinesCache = [];
-  }
+  const rows = await supabaseFetch("machines?select=id,machine_code,name,location&order=machine_code");
+  if (!Array.isArray(rows) || !rows.length || rows.some(m => !m.id || !m.machine_code)) throw new Error("機台清單讀取失敗，暫不能送出；請重新開啟工單管理。");
+  machtileWoMachinesCache = rows;
   return machtileWoMachinesCache;
 }
 
@@ -14410,6 +14407,7 @@ async function machtileWoFetchByNo(workOrderNo) {
     .sort((a, b) => Number(a.process_order || 0) - Number(b.process_order || 0));
   const machines = await machtileWoMachines();
   const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+  if (procs.some(p => p.machine_id && !codeById.has(p.machine_id))) throw new Error("工序原機台不在清單中，暫不能送出；請重新開啟工單管理。");
   const progressById = new Map();
   const ids = procs.map(p => p.id).filter(isUuid);
   for (let i = 0; i < ids.length; i += MACHTILE_CARD_PROGRESS_CHUNK) {
@@ -14689,7 +14687,17 @@ function machtileWoErrorText(error) {
 async function machtileInitWorkOrderModule() {
   const form = document.getElementById("machtileWoForm");
   if (!form) return;
-  const machines = await machtileWoMachines();
+  let machines;
+  try { machines = await machtileWoMachines(); }
+  catch (error) {
+    if (!form.isConnected) return;
+    form.querySelectorAll('button[type="submit"], select').forEach(el => { el.disabled = true; });
+    document.getElementById('machtileWoSteps').textContent = `機台清單讀取失敗，無法確認原指派：${machtileWoErrorText(error)}`;
+    const note = document.getElementById('machtileWoPrefillNote');
+    if (note) { note.textContent = '送出已停用，請重新開啟工單管理重試。'; note.hidden = false; }
+    return;
+  }
+  if (!form.isConnected) return;
   const select = document.getElementById("machtileWoMachine");
   if (select) {
     select.innerHTML = `<option value="">暫不指派</option>` +
@@ -14760,10 +14768,13 @@ async function machtileInitWorkOrderModule() {
   let stepRecord = null;
   let stepRecordNo = "";
   let stepsLoaded = false;
+  let lookupFailed = false;
   const renderSteps = (record, normalized) => {
     stepRecord = record;
     stepRecordNo = normalized;
     stepsLoaded = true;
+    lookupFailed = false;
+    form.querySelector('button[type="submit"]').disabled = false;
     const procs = record?.processes || [];
     const isNew = !record || procs.length === 0;
     stepSelect.disabled = isNew;
@@ -14798,15 +14809,18 @@ async function machtileInitWorkOrderModule() {
     showPrefillNote("查詢中…");
     try {
       const record = await machtileWoFetchByNo(normalized);
-      if (seq !== prefillSeq) return;   // 使用者已改成別的單號，丟掉這個舊回應
+      if (seq !== prefillSeq || !form.isConnected) return;   // 舊單號或已關閉的表單不能覆寫新表單
       applyPrefill(core.planPrefill({ record, current: readPrefillCurrent(), edited: prefillEdited }));
       renderSteps(record, normalized);
     } catch (error) {
-      if (seq !== prefillSeq) return;
+      if (seq !== prefillSeq || !form.isConnected) return;
       stepsLoaded = false;
+      lookupFailed = true;
+      form.querySelector('button[type="submit"]').disabled = true;
       select.disabled = true;
       stepSelect.innerHTML = '<option value="">讀取失敗，請重新查詢</option>';
-      showPrefillNote(`帶入失敗，請手動填寫：${machtileWoErrorText(error)}`);
+      document.getElementById('machtileWoSteps').textContent = `工序／機台資料讀取失敗：${machtileWoErrorText(error)}；不能確認原指派，送出已停用。`;
+      showPrefillNote(`帶入失敗，送出已停用：${machtileWoErrorText(error)}`);
     }
   };
   if (noInput) {
@@ -14930,7 +14944,7 @@ async function machtileInitWorkOrderModule() {
         quantity: Number(document.getElementById("machtileWoQty").value),
         due_date: document.getElementById("machtileWoDue").value,
         machine_code: document.getElementById("machtileWoMachine").value || null,
-        process_name: document.getElementById("machtileWoProcess").value.trim() || null,
+        process_name: document.getElementById("machtileWoProcess").value.trim() || selectedProcess?.process_name || null,
         process_order: processOrder,
         ...(selectedProcess ? { process_id: selectedProcess.id } : {}),
       };
@@ -14962,7 +14976,7 @@ async function machtileInitWorkOrderModule() {
     } catch (error) {
       showToast(`工單儲存失敗：${machtileWoErrorText(error)}`);
     } finally {
-      button.disabled = false;
+      button.disabled = lookupFailed;
     }
   });
 }
