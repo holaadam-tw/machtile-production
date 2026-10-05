@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { assignedCardFixture } from "./assignedCardFixture.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = process.env.CARD_E2E_OUT || path.join(root, ".e2e-out", "analytics");
@@ -123,6 +124,12 @@ function makeBackend({ rows = fullRows, failAnalytics = false, failCycle = false
     if (req.method() !== "GET") b.writes.push(`${req.method()} ${p}`);
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "pl@test.invalid" });
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
+    if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
+      return json(200, assignedCardFixture(cards, machines));
+    }
+    if (p === "/rest/v1/rpc/machine_department_context") {
+      return json(200, { tenant_id: T, all_departments: true, department_codes: ["LATHE", "MILL"] });
+    }
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/machines") return json(200, machines.map((m) => ({ id: m.id, machine_code: m.machine_code })));
     if (p === "/rest/v1/app_users") {
