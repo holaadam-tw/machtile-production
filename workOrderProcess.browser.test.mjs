@@ -15,7 +15,8 @@ machineRows[0].department_name='車床課'; machineRows[0].machine_type='mill';
 machineRows.push({id:id(123),machine_code:'B03',name:'B03',status:'idle',machine_type:'lathe',department_name:'銑床課',display_order:23});
 const orders = [{id:id(201),work_order_no:'TEST-MULTI',part_no:'TEST-PART',part_name:'測試零件',quantity:5000,due_date:'2026-10-20',status:'in_progress',source_system:'app_manual',created_by:actor},
   {id:id(202),work_order_no:'TEST-OTHER',part_no:'TEST-OTHER-PART',part_name:'另一個測試零件',quantity:100,due_date:'2026-10-21',status:'not_started',source_system:'app_manual',created_by:actor}];
-const procs = [{id:id(303),work_order_id:id(201),process_order:3,process_name:'車削',process_type:'cnc',machine_id:id(101),status:'running',qty_completed:10,qty_defect:0},
+const operationName = 'CNC車床加工-1/2';
+const procs = [{id:id(303),work_order_id:id(201),process_order:3,process_name:operationName,process_type:'cnc',machine_id:id(101),status:'running',qty_completed:10,qty_defect:0},
   {id:id(304),work_order_id:id(201),process_order:4,process_name:'第二次車削',process_type:'cnc',machine_id:id(103),status:'pending',qty_completed:0,qty_defect:0},
   {id:id(305),work_order_id:id(201),process_order:5,process_name:'測試委外',process_type:'outsourced',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(309),work_order_id:id(202),process_order:2,process_name:'車削',process_type:'cnc',machine_id:id(101),status:'pending',qty_completed:0,qty_defect:0}];
@@ -82,6 +83,10 @@ try{
   await page.locator('[data-wo-edit="TEST-MULTI"]').click();
   await page.waitForFunction(()=>document.querySelectorAll('#machtileWoSteps .wo-step-row').length===3);
   ok((await page.locator('#machtileWoSteps').innerText()).includes('N3')&&(await page.locator('#machtileWoSteps').innerText()).includes('N4'),'all existing steps N3/N4/N5 shown, no invented N1');
+  ok((await page.locator('#machtileWoStep option').allTextContents()).includes(`N3 ${operationName}`),'step selector displays N3 plus operation name, not route name');
+  ok((await page.locator('#machtileWoSteps .wo-step-row').first().innerText()).replace(/\s+/g,' ').includes(`N3 ${operationName}`),'management process list displays step and operation name');
+  ok(await page.evaluate(()=>machtileOperationLabel({process:'原製程'})==='原製程'),'missing step is not guessed as N1');
+  ok(await page.evaluate(()=>machtileOperationLabel({stationStep:3,process:'工'.repeat(255)}).length===258),'255-character source name is not truncated');
   ok((await page.locator('#machtileWoSteps').innerText()).includes('3460'),'reported quantity=legacy 3440+pending 20, not App 10 again');
   ok((await page.locator('#machtileWoSteps').innerText()).includes('委外'),'outsource step is explicit');
   await page.locator('#machtileWoForm button[type=submit]').click();
@@ -92,7 +97,7 @@ try{
   await page.locator('#machtileWoForm button[type=submit]').click();
   await page.waitForFunction(()=>document.getElementById('toast')?.textContent.includes('已更新工單'));
   ok(upserts.at(-1).process_order===3&&upserts.at(-1).process_id===id(303)&&upserts.at(-1).machine_code==='A01','same reported step update carries explicit identity');
-  ok(upserts.at(-1).process_name==='車削','blank process name preserves existing reported step name');
+  ok(upserts.at(-1).process_name===operationName,'blank process name preserves existing reported step name without N prefix');
   await page.locator('#machtileWoStep').selectOption(id(304));
   ok(await page.locator('#machtileWoMachine').isEnabled(),'unreported N4 may change machine');
   await page.locator('#machtileWoMachine').selectOption('A01');
@@ -150,6 +155,7 @@ try{
   ok(queues.at(-1)?.process_ids[0]===id(303)&&queues.at(-1)?.process_ids[1]===id(309),'selecting reported N3 saves it as queue first without moving other work');
   await page.evaluate(async()=>{await loadFromSupabase(); deriveMachines(); renderAll();});
   const chosen=await page.evaluate(()=>machtileCardOrderForMachine('A01'));
+  ok((await page.locator('.machine-tile-card').filter({has:page.locator('[data-card-select-open="A01"]')}).locator('.job-order-subline').innerText()).includes(`N3 ${operationName}`),'machine card displays N3 actual operation name');
   ok(chosen?.order?.processId===id(303)||chosen?.processId===id(303),'selected current process persists after refreshed data');
   ok(procs.find(p=>p.id===id(303)).qty_completed===10&&progress(procs.find(p=>p.id===id(303))).legacy_output===3440,'queue selection does not reset reported quantities');
   await page.locator('[data-card-select-open="A01"]').click();

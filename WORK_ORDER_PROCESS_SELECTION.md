@@ -18,10 +18,18 @@
 - 選取前重新讀資料並確認仍可派；只送選定工序＋這台原有未完成工序，不把其餘未排機一起派過來。
 - `machine_queue_reorder` 第①張成為卡片目前工單；刷新仍保留。舊「切換顯示」仍只影響當次畫面，不寫入。
 - 機台／工序資料讀取失敗不可當作可派；後端拒絕已有報工搬移時，顯示保護原因。
-- app.js／styles.css URL 版本更新為 `20261005-process-identity-r2`。
+- app.js／styles.css URL 版本更新為 `20261005-operation-name`。
 - 本輪審查修正：空白製程名稱沿用所選工序原名；機台清單失敗／原 machine_id 對不到清單時，顯示讀取錯誤且停用送出，不當作未排機、不取消指派。舊表單遲到回應不能覆寫新表單。
 
 ## 本機驗證
+
+### 2026-10-05 工序名串接（本輪追加）
+
+橋接來源改為舊 MES BOM.StationNO_Custom_DisplayName，四鍵 ServerId／Apply_PartNO／Apply_PP_Name／IndexSN；空白退 PP_Name。SoftNet 的 `codex/dispatch-operation-name-20261005` PR 負責 SQL／兩條 RPC payload，人工舊資料對照與回填／復原腳本也在該 PR；工廠橋部署交 owner／Claude。本前端只取收到的 process_name，不自行讀／推測舊 MES 路線。
+
+卡片、卡片選取清單、工單管理的工序選項顯示 `N{process_order} {工序名}`；工序列保留步序與名稱兩欄。N 前綴只在顯示層，不寫 payload，缺步序不猜 N1。DB 欄位為 text、沒有長度截斷；測試驗 255 中文字。課別過濾使用原始 process name，未被 N 前綴干擾。不改報工／進度／queue／auth／schema。
+
+本輪相對前 head `94b967753a5b71c3455221e0f68fb3af160e1de9` 只改 app.js、index.html、workOrderProcess.browser.test.mjs 與本文件；styles.css 本輪未改，資產 cache URL 兩者仍一起 bump。新增畫面只有 TEST-* 假資料，留本機 output，不進 PR。若未來要回退本輪，另開 revert PR 回復此輪前端 commit；橋需同時還原原成對腳本，回填用原先保存的 RollbackSql，不刪任何工序或報工。
 
 ```powershell
 $env:MACHTILE_PLAYWRIGHT_MODULE='<existing-playwright-install>\index.mjs'
@@ -33,7 +41,7 @@ Get-ChildItem -File *Core.test.js | ForEach-Object { node $_.Name; if ($LASTEXIT
 git diff --check
 ```
 
-- 新工序／卡片整合：38 PASS、0 FAIL（含原名稱保留、機台讀取失敗、整頁重載保持、連點不重送）。
+- 新工序／卡片整合：43 PASS、0 FAIL（含 N3 工序名顯示、255 中文字不截斷、原名稱保留、機台讀取失敗、整頁重載保持、連點不重送）。
 - 更新舊工單測試：91 PASS、0 FAIL。原自動帶第一台的斷言改為先選工序；已報 N1 鎖定、未報 N2 改派、取消確認不送出；瀏覽與查詢不寫入。
 - 原卡片測試：77 PASS、0 FAIL；main #59 已移除今日開工首件檢查，對應舊測試同步改驗不渲染該欄位。
 - 11 支 Core 測試：655 PASS、0 FAIL；app.js 語法與 diff check 通過。

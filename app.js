@@ -10487,6 +10487,13 @@ function machtileCardOrdersMarkup(machine) {
 // Persistent selection is distinct from the older temporary "切換顯示" control.
 // Owner: same schedule-board unassigned pool, excluding outsource/completed/unknown departments.
 // Use machine department/type and explicit process wording; never infer department from A/B codes.
+// Display only: never prefix the persisted process_name or infer a missing step.
+function machtileOperationLabel(order) {
+  const step = Number(order.stationStep ?? order.process_order);
+  const name = order.process || order.process_name || "未命名";
+  return Number.isInteger(step) && step > 0 ? `N${step} ${name}` : String(name);
+}
+
 function machtileCardSelectionCandidates(machine) {
   const assigned = state.workOrders.filter(order => order.machine === machine.name
     && machtileIsCardCandidateOrder(order) && isUuid(String(order.processId || "")))
@@ -10510,7 +10517,7 @@ function machtileOpenCardSelection(machineCode) {
   if (!machtileCanEditSchedule() || !machine || !machtileCanAssignToMachine(machineCode)) return;
   machtileCloseCardSelection();
   const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
-  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)} · N${escapeHtml(order.stationStep || "?")}</strong><span>${escapeHtml(order.process)} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button></li>`).join("") || `<li>${empty}</li>`;
+  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button></li>`).join("") || `<li>${empty}</li>`;
   const holder = document.createElement("div");
   holder.id = "machtileCardSelection";
   holder.className = "card-selection-overlay";
@@ -12639,7 +12646,7 @@ function renderMachineCard(machine) {
         <span>目前工單</span>
         ${order ? `
           <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>${isOver ? machtileOverQtyTag(order) : ""}
-          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
+          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(machtileOperationLabel(order))}</small>
         ` : `
           <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
@@ -14794,7 +14801,7 @@ async function machtileInitWorkOrderModule() {
     stepSelect.disabled = isNew;
     stepSelect.required = !isNew;
     stepSelect.innerHTML = '<option value="">請選擇要更新哪一道</option>' + procs.map(p =>
-      `<option value="${escapeHtml(p.id)}">N${p.process_order} · ${escapeHtml(p.process_name || "未命名")}</option>`).join("");
+      `<option value="${escapeHtml(p.id)}">${escapeHtml(machtileOperationLabel(p))}</option>`).join("");
     document.getElementById("machtileWoNewStepField").hidden = !isNew;
     document.getElementById("machtileWoNewStep").required = isNew;
     document.getElementById("machtileWoSteps").innerHTML = isNew
