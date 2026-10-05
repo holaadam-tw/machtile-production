@@ -27,7 +27,8 @@ procs.push(...[
 ].map(([n,name,type,status,qty])=>({id:id(n),work_order_id:id(202),process_order:n-300,process_name:name,process_type:type,machine_id:null,status,qty_completed:qty,qty_defect:0})));
 const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?3440:null,legacy_input:5000,legacy_fail:0,pending_output:p.id===id(303)?20:0,pending_fail:0,pending_count:0,
   last_report_at:p.id===id(303)?'2026-10-01T00:00:00Z':p.id===id(309)?'2026-10-04T00:00:00Z':null,legacy_updated_at:null});
-let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false;
+let checks=0, rejectProgress=false, rejectMachines=false, rejectMetadata=false, rejectQueue=false,rejectPreplan=false,rejectAudit=false;
+const preplans=[],assignmentEvents=[];
 const upserts=[], queues=[], blocked=[], errors=[], rpcCalls=[];
 const ok=(value,label)=>{assert(value,label); checks++; console.log('PASS '+label);};
 const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json'};
@@ -54,9 +55,19 @@ await ctx.route('**/*',async route=>{
   if(p==='/rest/v1/machines'||p==='/rest/v1/v_machine_management_cards')return rejectMachines?json(503,{message:'fixture machines unavailable'}):json(200,machineRows);
   if(p==='/rest/v1/work_orders'){
     const eq=u.searchParams.get('work_order_no');
-    return json(200,orders.filter(o=>!eq||o.work_order_no===eq.slice(3)).map(o=>({...o,work_order_processes:procs.filter(p=>p.work_order_id===o.id)})));
+    return json(200,orders.filter(o=>!eq||eq.startsWith('in.')||o.work_order_no===eq.slice(3)).map(o=>({...o,work_order_processes:procs.filter(p=>p.work_order_id===o.id)})));
   }
   if(p==='/rest/v1/work_order_processes')return rejectMetadata?json(503,{message:'fixture process metadata unavailable'}):json(200,procs);
+  if(p==='/rest/v1/process_assignment_events')return rejectAudit?json(404,{message:'fixture audit migration missing'}):json(200,[...assignmentEvents].reverse());
+  if(p==='/rest/v1/rpc/machine_queue_append') {
+    preplans.push(body.p_payload);
+    if(rejectPreplan)return json(400,{code:'P0001',message:'PROCESS_HAS_REPORTS'});
+    const x=body.p_payload,target=procs.find(p=>p.id===x.process_id);
+    const rank=Math.max(0,...procs.filter(p=>p.machine_id===x.machine_id).map(p=>p.queue_order||0))+1;
+    target.machine_id=x.machine_id;target.queue_order=rank;
+    assignmentEvents.push({id:assignmentEvents.length+1,process_id:target.id,kind:'preplan',machine_code:machineRows.find(m=>m.id===x.machine_id).machine_code});
+    return json(200,{event_id:assignmentEvents.length,queue_order:rank,replayed:false});
+  }
   if(p==='/rest/v1/v_work_order_cards')return json(200,procs.map(p=>{const o=orders.find(o=>o.id===p.work_order_id);return {id:o.id,tenant_id:tenant,work_order_no:o.work_order_no,part_name:o.part_name,quantity:o.quantity,due_date:o.due_date,work_order_status:o.status,current_process_id:p.id,current_process_name:p.process_name,current_process_status:p.status,machine_name:machineRows.find(m=>m.id===p.machine_id)?.machine_code||null,qty_completed:p.qty_completed,qty_defect:0,current_process_off_station:false}}));
   if(p==='/rest/v1/rpc/batch_report_progress')return rejectProgress?json(503,{message:'fixture progress unavailable'}):json(200,procs.filter(p=>(body.p_process_ids||[]).includes(p.id)).map(progress));
   if(p==='/rest/v1/rpc/work_order_upsert'){
@@ -84,7 +95,7 @@ try{
   await page.waitForFunction(()=>document.querySelectorAll('#machtileWoSteps .wo-step-row').length===3);
   ok((await page.locator('#machtileWoSteps').innerText()).includes('N3')&&(await page.locator('#machtileWoSteps').innerText()).includes('N4'),'all existing steps N3/N4/N5 shown, no invented N1');
   ok((await page.locator('#machtileWoStep option').allTextContents()).includes(`N3 ${operationName}`),'step selector displays N3 plus operation name, not route name');
-  ok((await page.locator('#machtileWoSteps .wo-step-row').first().innerText()).replace(/\s+/g,' ').includes(`N3 ${operationName}`),'management process list displays step and operation name');
+  ok((await page.locator('#machtileWoSteps .wo-step-row').first().innerText()).includes('N3')&&(await page.locator('#machtileWoSteps .wo-step-row').first().innerText()).includes(operationName),'management process list displays step and operation name');
   ok(await page.evaluate(()=>machtileOperationLabel({process:'原製程'})==='原製程'),'missing step is not guessed as N1');
   ok(await page.evaluate(()=>machtileOperationLabel({stationStep:3,process:'工'.repeat(255)}).length===258),'255-character source name is not truncated');
   ok((await page.locator('#machtileWoSteps').innerText()).includes('3460'),'reported quantity=legacy 3440+pending 20, not App 10 again');
@@ -209,9 +220,65 @@ try{
   const beforeDouble=queues.length;
   await page.evaluate(async pid=>{await Promise.all([machtileCommitCardSelection('A01',pid),machtileCommitCardSelection('A01',pid)]);},id(303));
   ok(queues.length===beforeDouble+1,'double submission writes the queue only once');
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  let appendButton=page.locator(`[data-flow-append="${id(304)}"]`).first();
+  await appendButton.scrollIntoViewIfNeeded();
+  let picker=appendButton.locator('..').locator('[data-flow-machine]');
+  ok(await picker.locator('option').count()===3,'preplan offers only available same-department machines');
+  await picker.selectOption(id(101));rejectPreplan=true;
+  const beforePreplan=procs.find(p=>p.id===id(304)).machine_id;
+  await appendButton.click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('[data-flow-result]')].some(el=>el.textContent.includes('PROCESS_HAS_REPORTS')));
+  ok(procs.find(p=>p.id===id(304)).machine_id===beforePreplan,'rejected preplan shows server reason and leaves assignment unchanged');
+  const retryId=preplans.at(-1).request_id;rejectPreplan=false;
+  const beforeAppendCalls=preplans.length;
+  await appendButton.evaluate(el=>{el.click();el.click();});
+  await page.waitForFunction(pid=>machtilePreplanBusy.size===0&&machtileProcessFlows.get('TEST-MULTI')?.processes.find(p=>p.id===pid)?.assignmentEvent?.kind==='preplan',id(304));
+  ok(preplans.length===beforeAppendCalls+1,'double click sends a single atomic append request');
+  ok(preplans.at(-1).request_id===retryId,'failed/uncertain request retry keeps idempotency key');
+  ok(preplans.at(-1).process_id===id(304)&&preplans.at(-1).current_process_id===id(303),'preplan sends exact current and next identities');
+  ok(procs.find(p=>p.id===id(304)).machine_id===id(101)&&procs.find(p=>p.id===id(304)).queue_order>procs.find(p=>p.id===id(303)).queue_order,'preplan appends after current without resetting its progress');
+  ok((await page.locator('body').innerText()).includes('已預排，等待舊 MES 派工確認'),'unconfirmed plan is not presented as legacy assignment');
+  procs.find(p=>p.id===id(304)).machine_id=id(103);
+  assignmentEvents.push({id:2,process_id:id(304),kind:'legacy_reassigned',machine_code:'A03'});
+  await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok((await page.locator('body').innerText()).includes('已依舊 MES 改派'),'recorded legacy override is visible after refresh');
+  rejectAudit=true;await page.evaluate(async()=>{await loadFromSupabase();deriveMachines();renderAll();});
+  ok(await page.locator('[data-flow-append]').count()===0,'missing audit migration disables all preplan controls');
+  rejectAudit=false;
+  // Synthetic long route; actual app card and scheduling renderers share the same strip.
+  await page.evaluate(()=>{
+    machtileCloseCardSelection();
+    const order=state.workOrders.find(o=>o.processId);
+    const route=Array.from({length:8},(_,i)=>({id:i===2?order.processId:`fixture-route-${i}`,process_order:i+1,
+      process_name:`測試工序${i+1}`,process_type:i===4?'outsourced':'cnc',supplier_code:i===4?'TEST-VENDOR':null,
+      machine_code:'A01',status:i<2?'completed':i===2?'running':'pending',reported:i<2?order.qty:i===2?order.done:0}));
+    machtileProcessFlows.set(order.id,{quantity:order.qty,processes:route});
+    const preview=document.createElement('section');preview.id='processFlowPreview';preview.style.cssText='width:100%;max-width:700px;margin:auto';
+    preview.innerHTML=renderMachineCard({name:'A01',code:'A01',type:'lathe',department:'車床課',status:'running',order})
+      +machtileScheduleCard(order,0,1,'A01',false,null);
+    document.body.replaceChildren(preview);
+  });
+  ok(await page.locator('#processFlowPreview .process-flow').count()===2,'machine and schedule cards use common flow component');
+  ok(await page.locator('#processFlowPreview .process-flow-step').count()===16,'both cards retain all eight real steps');
+  ok(await page.locator('#processFlowPreview [aria-current=step]').count()===2,'current process highlighted on each card');
+  ok((await page.locator('#processFlowPreview').innerText()).includes('TEST-VENDOR')&&(await page.locator('#processFlowPreview').innerText()).includes('已完成'),'outsourced vendor and completed states retained');
+  for(const width of [1440,390]) {
+    await page.setViewportSize({width,height:1000});
+    ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px page has no horizontal overflow`);
+    ok(await page.locator('.process-flow').first().evaluate(el=>el.scrollWidth>el.clientWidth),'long route contained in scroll region');
+    await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft=el.scrollWidth);
+    ok(await page.locator('.process-flow').first().evaluate(el=>el.scrollLeft>0),'flow can scroll to downstream steps');
+    await page.locator('.process-flow').evaluateAll(els=>els.forEach(el=>{const current=el.querySelector('[aria-current=step]');if(current)el.scrollLeft+=current.getBoundingClientRect().left-el.getBoundingClientRect().left-8;}));
+    await page.screenshot({path:path.join(out,`process-flow-${width}.png`),fullPage:true});
+  }
+  const flowWrites=queues.length+upserts.length;
+  await page.locator('.process-flow').first().focus();
+  await page.keyboard.press('ArrowRight');
+  ok(queues.length+upserts.length===flowWrites,'viewing and scrolling flow creates no writes');
   ok(errors.filter(e=>!e.includes('CATALOG_ENDPOINT_INVALID')).length===0,'no app JS errors');
   ok(!blocked.some(u=>/machtile\.com|muditjubqflrqofbkmav/.test(u)),'no production-domain requests');
-  const allowed=new Set(['batch_report_progress','work_order_upsert','machine_queue_reorder','schedule_calendar_snapshot','attention_case_snapshot','hmc_runtime_snapshot','unified_event_list']);
+  const allowed=new Set(['batch_report_progress','work_order_upsert','machine_queue_reorder','machine_queue_append','schedule_calendar_snapshot','attention_case_snapshot','hmc_runtime_snapshot','unified_event_list']);
   ok(rpcCalls.every(p=>allowed.has(p.replace('/rest/v1/rpc/',''))),'no unrelated mutation or auth endpoints called');
   console.log(`${checks} passed; screenshots=${out}`);
 }finally{await ctx.close();await browser.close();await new Promise(resolve=>server.close(resolve))}
