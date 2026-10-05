@@ -108,7 +108,7 @@ eq("名稱照單台 reportTypeMeta", c.MODE_ORDER.map((k) => [c.MODES[k].label, 
 function singleScreenPayload(type, order, { completed = 0, defects = 0, cycle = null, overtime = "", startedAt = null, endedAt, uuid, actor }) {
   const label = { dailyStart: "今日開工", noon: "中午報工", finish: "收工 / 完工" }[type];
   const parts = [`[${label}]`];
-  if (type === "dailyStart") { parts.push(`機台已加工數量 ${order.done || 0}`); parts.push("首件檢查完成"); }
+  if (type === "dailyStart") { parts.push(`機台已加工數量 ${order.done || 0}`); }
   if (type === "finish") parts.push(overtime === "2030" ? "加班收工 20:30" : "一般下班 17:00");
   const reportPayload = {
     report_type: type, work_total_qty: Number(order.total || 0) || null, cycle_time_seconds: cycle,
@@ -135,7 +135,7 @@ const cmp = (name, built, ref) => {
 
 const ds = c.buildReportPayload({ row: { ...base, mode: "dailyStart", selected: true, startedAt: null }, actorAppUserId: "actor", endedAt: END, reportUuid: "u-ds", tenantId: "t" });
 cmp("今日開工（第一次、沒有上一筆）＝單台今日開工逐欄相同（不帶 started_at）", ds, singleScreenPayload("dailyStart", ord, { endedAt: END, uuid: "u-ds", actor: "actor" }));
-eq("今日開工：0／0、remark 帶機台已加工數量", [ds.payload.completed_qty, ds.payload.defect_qty, ds.payload.remark], [0, 0, "[今日開工]；機台已加工數量 3440；首件檢查完成"]);
+eq("今日開工：0／0、remark 帶機台已加工數量", [ds.payload.completed_qty, ds.payload.defect_qty, ds.payload.remark], [0, 0, "[今日開工]；機台已加工數量 3440"]);
 const ds2 = c.buildReportPayload({ row: { ...base, mode: "dailyStart", selected: true, startedAt: "2026-10-01T09:00:00.000Z" }, actorAppUserId: "actor", endedAt: END, reportUuid: "u-ds2", tenantId: "t" });
 cmp("今日開工（有昨天收工）＝單台：started_at＝上一筆", ds2, singleScreenPayload("dailyStart", ord, { startedAt: "2026-10-01T09:00:00.000Z", endedAt: END, uuid: "u-ds2", actor: "actor" }));
 eq("今日開工 operators＝這列報工人", ds.operators, ["u1"]);

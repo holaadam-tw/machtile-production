@@ -19083,8 +19083,6 @@ const machtileBatchState = {
   machineTimeByProcess: new Map(),
   users: [],
   actorId: "",
-  // 今日開工：勾選的機台都已完成當日首件檢查（單台今日開工的必填檢查表，remark 會寫「首件檢查完成」）
-  firstArticleOk: false,
   // 收工：是否加班（單台收工的必填單選，套用到這次送出的每一台）
   overtime: "",
   rows: new Map(),       // machineCode → { processId, good, bad, operatorId, selected, ctMinutes, ctSeconds, error, result }
@@ -19415,9 +19413,8 @@ function machtileRenderBatchReport() {
   const modeHint = isStart
     ? `勾選要記下<strong>今日開工</strong>的機台（預設勾有派工的），一次送出＝每台各記一筆開工（數量 0）。之後的中午報工、收工，工時從開工這一刻起算。`
     : `只填<strong>這次做的數量</strong>（不是累計）。空白的機台不會送。已報＝舊 MES 累計＋App 已送出、還沒寫回舊 MES 的「待回寫」。機台加工時間有變才改，只改時間不填數量也可以送。`;
-  const modeExtra = isStart
-    ? `<label class="batch-form-check"><input type="checkbox" data-batch-first-article${machtileBatchState.firstArticleOk ? " checked" : ""}${busy ? " disabled" : ""}><span>勾選的機台都已完成<strong>當日首件檢查</strong>（主要尺寸符合圖面、外觀 / 毛邊確認、刀具與程式版本確認）</span></label>`
-    : mode === "finish"
+  // 2026-10-05 owner：首件檢查只在首次開工做，批次今日開工不再要求勾「當日首件檢查」。
+  const modeExtra = mode === "finish"
       ? `<fieldset class="batch-form-radio"><legend>是否加班 <small>必填</small></legend>
           <label><input type="radio" name="batchOvertime-${group.key}" value="none" data-batch-overtime${machtileBatchState.overtime === "none" ? " checked" : ""}${busy ? " disabled" : ""}> 一般下班 17:00</label>
           <label><input type="radio" name="batchOvertime-${group.key}" value="2030" data-batch-overtime${machtileBatchState.overtime === "2030" ? " checked" : ""}${busy ? " disabled" : ""}> 加班收工 20:30</label>
@@ -19490,9 +19487,8 @@ async function machtileSubmitBatchReport() {
   });
   const toSend = checks.filter(({ v }) => v.send);
   const bad = checks.filter(({ v }) => v.error);
-  // 整張表單的必填（同單台）：今日開工要首件檢查、收工要選是否加班
+  // 整張表單的必填（同單台）：收工要選是否加班（首件檢查已移到首次開工，2026-10-05）
   machtileBatchState.formError = "";
-  if (toSend.length && mode === "dailyStart" && !machtileBatchState.firstArticleOk) machtileBatchState.formError = "請先確認勾選的機台都已完成當日首件檢查。";
   if (toSend.length && mode === "finish" && !machtileBatchState.overtime) machtileBatchState.formError = "請確認是否加班。";
   if (bad.length || machtileBatchState.formError) {
     machtileRenderBatchReport();
@@ -19596,7 +19592,6 @@ async function machtileSubmitBatchReport() {
     try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("monitor re-render after machine time failed", error); }
   }
   machtileBatchState.submitting = false;
-  if (mode === "dailyStart") machtileBatchState.firstArticleOk = false;
   const tally = core.summarizeResults(results.map((r) => ({ status: r.failed ? "failed" : machtileBatchRow(r.item.model.machineCode).result?.status })));
   showToast(`${meta.label}：已送出 ${tally.sent}、待送 ${tally.queued}、失敗 ${tally.failed}`);
   await machtileLoadBatchReport(group.key);
@@ -19653,11 +19648,6 @@ function machtileHandleBatchInput(event) {
     const core = machtileBatchCore();
     core?.groupFor(machtileBatchState.group)?.machines.forEach((c) => { machtileBatchRow(c).operatorId = t.value; });
     machtileRenderBatchReport();
-    return true;
-  }
-  if (t.hasAttribute("data-batch-first-article")) {
-    machtileBatchState.firstArticleOk = t.checked;
-    machtileBatchState.formError = "";
     return true;
   }
   if (t.hasAttribute("data-batch-overtime")) {

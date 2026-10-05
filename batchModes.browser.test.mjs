@@ -277,12 +277,8 @@ try {
   ok(overflow0 <= 1, `手機沒有橫向捲動（${overflow0}px）`);
   await page.screenshot({ path: path.join(outDir, "m1-phone-dailyStart.png"), fullPage: true });
 
-  // 首件檢查沒勾 → 整批不送
-  await root.locator("[data-batch-submit]").click();
-  await page.waitForTimeout(300);
-  ok(calls.length === 0, "首件檢查沒確認 → 一筆都不送");
-  ok((await root.locator(".batch-notice.is-error").innerText()).includes("首件檢查"), "提示條說明要先確認首件檢查");
-  await root.locator("[data-batch-first-article]").check();
+  // 2026-10-05：批次今日開工不再有「當日首件檢查」勾選（首件只在首次開工）
+  ok(await root.locator("[data-batch-first-article]").count() === 0, "批次今日開工沒有首件檢查勾選");
   await root.locator('[data-batch-select="A02"]').uncheck();   // A02 留給下面跟單台比對
   await page.evaluate(() => { const b = document.querySelector('[data-batch-root="lathe"] [data-batch-submit]'); b.click(); b.click(); });
   await waitBatchDone(page);
@@ -291,7 +287,7 @@ try {
   ok(dA01 && dA01.report_type === "dailyStart" && dA01.completed_qty === 0 && dA01.defect_qty === 0, "今日開工：report_type=dailyStart、0／0");
   ok(dA01 && !("started_at" in dA01) && !("started_at" in dA04), "A01、A04 第一次在 App 開工：不帶 started_at（同單台）");
   ok(dA05 && dA05.started_at === baseProgress[id(305)].last_report_at, "A05 有上一筆：started_at＝上一筆（同單台規則）");
-  ok(dA01 && dA01.remark === "[今日開工]；機台已加工數量 3440；首件檢查完成", "remark 同單台（機台已加工數量＝卡片完成數）", dA01?.remark);
+  ok(dA01 && dA01.remark === "[今日開工]；機台已加工數量 3440", "remark 同單台（機台已加工數量＝卡片完成數）", dA01?.remark);
   ok(dA01 && JSON.stringify(dA01.operators) === JSON.stringify([users[0].id]) && dA01.user_id === users[0].id, "operators＝這列報工人、user_id＝按送出的人");
   ok(dA01 && dA01.cycle_time_seconds === null, "今日開工不寫機台加工時間");
   ok(await root.locator('[data-batch-select="A01"]').isChecked() === false, "送出成功的機台取消勾選（再按不會再記一次）");
@@ -368,14 +364,11 @@ try {
   await root2.locator('[data-batch-mode="dailyStart"]').click();
   for (const c of ["A01", "A04", "A05"]) await root2.locator(`[data-batch-select="${c}"]`).uncheck().catch(() => {});
   await root2.locator('[data-batch-select="A02"]').check();
-  await root2.locator("[data-batch-first-article]").check();
   await root2.locator("[data-batch-submit]").click();
   await waitBatchDone(page);
   const batchDaily = byMachine("A02", "dailyStart").at(-1);
-  ok(batchDaily.p_payload.remark === `${sDaily.p_payload.remark}；首件檢查完成`, "批次仍保留原首件規則，單台今日開工不再宣告首件完成");
-  parity("今日開工（扣除明確保留的批次首件註記）", sDaily, {
-    ...batchDaily, p_payload: { ...batchDaily.p_payload, remark: sDaily.p_payload.remark },
-  });
+  ok(batchDaily.p_payload.remark === sDaily.p_payload.remark, "批次與單台今日開工都不再宣告首件完成（remark 相同）");
+  parity("今日開工", sDaily, batchDaily);
   await root2.locator('[data-batch-mode="noon"]').click();
   await root2.locator('[data-batch-good="A02"]').fill("7");
   await root2.locator('[data-batch-bad="A02"]').fill("1");
