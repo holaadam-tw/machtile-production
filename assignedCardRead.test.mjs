@@ -28,10 +28,15 @@ check(calls[1].path.endsWith('offset=200'),'stable ID order / correct second pag
 response=[row('P1','pending'),row('P2','running'),row('P3','abnormal'),row('P4','waiting_inspection'),row('P5','completed'),row('P6','pending','completed'),row('P7','pending','shipped'),row('P8','pending','cancelled'),{...row('P9'),off_station_at:'2026-10-01'}];
 await call();check(state.assignedCardOrders.length===4,'only four allowed statuses and unclosed/unoffstation rows');
 check(state.assignedCardOrders[0].stationStep===4&&state.assignedCardOrders[0].done===12,'actual process order and quantities preserved');
-failure=Error('403 forbidden');await call();check(state.assignedCardOrders.length===0&&state.cardProcessError,'authorization failure clears stale pool, not silently empty');
-failure=Error('network unavailable');await call();check(state.assignedCardOrders.length===0&&state.cardProcessError,'network failure clears stale pool');
-failure=Error('AbortError');await call();check(state.assignedCardOrders.length===0&&state.cardProcessError,'timeout clears stale pool');
-failure=null;response=[{...row('BAD'),machines:null}];await call();check(state.assignedCardOrders.length===0&&state.cardProcessError,'missing embedded machine fails closed');
+state.workOrders=[{id:'CURRENT-VIEW',processId:'CURRENT-PROCESS',machine:'A01'}];
+const fallsBack=()=>state.assignedCardOrders===null&&state.cardProcessError==='工序清單讀取失敗，暫以工單目前道顯示'
+  &&vm.runInContext('machtileMachineCardOrders()',context)===state.workOrders;
+failure=Error('403 forbidden');await call();check(fallsBack(),'authorization failure falls back to original view, not silently empty');
+failure=Error('network unavailable');await call();check(fallsBack(),'network failure clears stale pool and falls back');
+failure=Error('AbortError');await call();check(fallsBack(),'timeout clears stale pool and falls back');
+failure=null;response=[{...row('BAD'),machines:null}];await call();check(fallsBack(),'missing embedded machine falls back without publishing invalid rows');
+response=Array.from({length:10000},(_,n)=>row('LIMIT-'+n));calls.length=0;
+await call();check(fallsBack()&&calls.length===50,'10,000-row cap discards partial pages and falls back');
 response=[];await call();check(!state.cardProcessError,'successful reload clears old read error');
 check(!source.slice(start,end).includes('method: "POST"'),'new REST read adds no mutation');
 console.log(`${checks} passed`);
