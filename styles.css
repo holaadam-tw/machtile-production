@@ -12783,3 +12783,53 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
   .tv-alert strong { font-size: 17px; }
   .tv-alert small { font-size: 13px; }
 }
+/* Process identity is explicit: one displayed row per stored step. */
+.wo-step-list { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid #d7dde4; border-radius: 10px; background: #f8fafc; }
+.wo-step-row { display: grid; grid-template-columns: 40px minmax(100px, 1fr) repeat(3, minmax(70px, auto)); gap: 8px; padding: 8px 0; border-bottom: 1px solid #d7dde4; overflow-wrap: anywhere; }
+.wo-step-row:last-child { border-bottom: 0; }
+@media (max-width: 600px) { .wo-step-row { grid-template-columns: 40px 1fr; } .wo-step-row span:nth-child(n+3) { grid-column: 2; } }
+.card-select-entry { margin: 8px 0; padding: 9px 12px; border: 1px solid #d7dde4; border-radius: 8px; background: #e3edf8; color: #1f5fa8; font: inherit; cursor: pointer; }
+.card-selection-overlay { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; background: #0007; padding: 12px; }
+.card-selection-panel { width: min(620px, 100%); max-height: 90dvh; overflow: auto; border-radius: 12px; padding: 16px; background: white; color: #17232f; }
+.card-selection-panel header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card-selection-panel ul { list-style: none; padding: 0; }
+.card-selection-panel li { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid #d7dde4; overflow-wrap: anywhere; }
+.card-selection-panel button { min-height: 44px; padding: 8px 12px; cursor: pointer; }
+.card-selection-panel [role="alert"] { color: #be342a; }
+
+/* Process route: neutral states, steel-blue current step, contained horizontal scroll. */
+.process-flow { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 10px 0; border: 1px solid #d7dde4; border-radius: 8px; background: #f5f7f9; }
+.process-flow:focus-visible { outline: 2px solid #1f5fa8; outline-offset: 2px; }
+.process-flow ol { display: flex; list-style: none; width: max-content; padding: 8px; margin: 0; gap: 20px; }
+.process-flow .process-flow-step { position: relative; display: flex; flex-direction: column; gap: 5px; width: 176px; padding: 10px; border: 1px solid #d7dde4; border-radius: 6px; background: white; color: #263545; font-size: 12px; }
+.process-flow-step:not(:last-child)::after { content: '→'; position: absolute; left: calc(100% + 3px); top: 40%; color: #687583; }
+.process-flow .is-current { border: 2px solid #1f5fa8; background: #e3edf8; padding: 9px; }
+.process-flow-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.process-flow-head strong,.process-flow-quantity { font-family: ui-monospace,Consolas,monospace; font-variant-numeric: tabular-nums; }
+.process-flow-status { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.process-flow-status i { width: 5px; height: 5px; border-radius: 50%; background: #687583; }
+.process-flow .is-current .process-flow-status i { background: #1f5fa8; }
+.process-flow-name { white-space: normal; overflow-wrap: anywhere; }
+.process-flow-empty { color: #687583; font-size: 12px; }
+.schedule-card-body,.machine-tile-card { min-width: 0; }
+.process-flow-preplan{display:grid;gap:6px;margin-top:8px;font-size:12px}
+.process-flow-preplan label{display:grid;gap:4px}
+.process-flow-preplan select,.process-flow-preplan button{max-width:100%;min-width:0;font:inherit;padding:6px;border:1px solid #d7dde4;border-radius:5px;background:#fff;color:#1f5fa8}
+.process-flow-preplan small{white-space:normal;color:#63717e}
+.process-flow-reassigned{color:#986821}
+.process-flow-compact { cursor: pointer; overflow: visible; }
+.process-flow-count { display: block; padding: 8px 8px 0; color: #63717e; font-size: 11px; }
+.process-flow-compact ol { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: auto; gap: 10px; }
+.process-flow-compact .process-flow-step { min-width: 0; width: auto; padding: 6px; font-size: 11px; }
+.process-flow-compact .is-current { padding: 5px; }
+.process-flow-compact .process-flow-head { flex-wrap: wrap; gap: 3px; }
+.process-flow-kind { color: #63717e; font-size: 10px; }
+.process-flow-compact .process-flow-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.process-flow-compact .process-flow-quantity { overflow-wrap: anywhere; }
+.process-flow-compact .process-flow-step:not(:last-child)::after { left: calc(100% + 1px); font-size: 10px; }
+.process-flow-overlay { position: fixed; inset: 0; z-index: 1700; display: grid; place-items: center; padding: 16px; background: rgba(25,35,45,.5); }
+.process-flow-dialog { box-sizing: border-box; width: min(1100px,100%); max-height: calc(100dvh - 32px); overflow-y: auto; min-width: 0; padding: 16px; background: #fff; color: #263545; border: 1px solid #d7dde4; border-radius: 10px; }
+.process-flow-dialog header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.process-flow-dialog h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.process-flow-dialog p { color: #63717e; font-size: 12px; }
+.process-flow-dialog header button { flex-shrink: 0; padding: 6px 10px; border: 1px solid #d7dde4; border-radius: 5px; background: #fff; color: #1f5fa8; }

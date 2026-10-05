@@ -265,6 +265,8 @@ function machtileAvailableDepartments() {
 }
 
 function machtileClearDepartmentData() {
+  machtileCloseProcessFlow();
+  machtileProcessFlows = new Map();
   state.machineMasters = []; state.machines = []; state.workOrders = [];
   state.extraStationOrders = [];
   selectedOrder = null;
@@ -284,7 +286,7 @@ function machtileClearDepartmentData() {
   machtileTvState.model = null;
 }
 
-async function machtileLoadDepartmentAccess() {
+async function machtileLoadDepartmentAccess({ preserveOnFailure = false } = {}) {
   if (!machtileStrictMode()) return;
   if (machtileDepartmentAccessPending) return machtileDepartmentAccessPending;
   const generation = machtileDepartmentGeneration;
@@ -304,11 +306,12 @@ async function machtileLoadDepartmentAccess() {
       const choices = machtileAvailableDepartments();
       if (!choices.includes(activeDepartmentFilter)) activeDepartmentFilter = choices[0] || "";
     } catch (error) {
-      if (generation === machtileDepartmentGeneration) {
+      if (!preserveOnFailure && generation === machtileDepartmentGeneration) {
         machtileDepartmentAccess = null; activeDepartmentFilter = "";
         machtileClearDepartmentData();
       }
-      throw new Error("課別權限讀取失敗，已停用機台操作；請重新整理。");
+      throw new Error(preserveOnFailure ? "課別權限確認失敗，本次未送出；已保留表單，請重試。"
+        : "課別權限讀取失敗，已停用機台操作；請重新整理。");
     }
   })().finally(() => { if (machtileDepartmentAccessPending === pending) machtileDepartmentAccessPending = null; });
   machtileDepartmentAccessPending = pending;
@@ -9859,7 +9862,7 @@ function supabaseHeaders() {
 async function supabaseFetch(path, options = {}) {
   if (machtileStrictMode() && path !== "rpc/machine_department_context"
       && !["GET", "HEAD"].includes(String(options.method || "GET").toUpperCase())) {
-    await machtileLoadDepartmentAccess();
+    await machtileLoadDepartmentAccess({ preserveOnFailure: true });
     if (!machtileDepartmentAccess.all_departments && machtileDepartmentAccess.department_codes.length === 0) {
       throw new Error("此帳號沒有任何課別，請管理員設定");
     }
@@ -9937,7 +9940,7 @@ function normalizeOrder(row) {
 
 function normalizeMachineMaster(row) {
   return {
-    id: row.id || "",
+    id: row.machine_id || row.id || "",
     name: row.machine_name || row.machine_code,
     code: row.machine_code || row.machine_name,
     type: row.machine_type || "other",
@@ -9961,8 +9964,8 @@ function normalizeMachineMaster(row) {
   };
 }
 
-async function loadFromSupabase() {
-  await machtileLoadDepartmentAccess();
+async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
+  await machtileLoadDepartmentAccess({ preserveOnFailure: preserveDepartmentOnFailure });
   machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
   if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
@@ -9995,7 +9998,152 @@ async function loadFromSupabase() {
     // 卡片「目前工單」＝這台最近有活動的那張（只讀；讀不到退回原本規則）
     machtileLoadCardActivity(),
   ]);
+  await machtileLoadProcessFlows();
 }
+
+// Full routing is independent of the cards view (which only contains active station rows).
+// Refresh atomically per order and clear stale routes before every load. No assignment writes.
+let machtileProcessFlows = new Map();
+async function machtileLoadProcessFlows() {
+  const next = new Map();
+  machtileProcessFlows = next;
+  const nos = [...new Set(state.workOrders.map(o => o.id).filter(Boolean))];
+  for (let i = 0; i < nos.length; i += 50) {
+    const chunk = nos.slice(i, i + 50);
+    try {
+      const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
+      const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
+      if (!Array.isArray(rows)) throw new Error("invalid route response");
+      const ids = rows.flatMap(o => (o.work_order_processes || []).map(p => p.id));
+      const progress = await machtileWoFetchProgress(ids);
+      let auditAvailable=false;
+      const assignments=new Map();
+      try {
+        for(let offset=0;offset<ids.length;offset+=100) {
+          const batch=ids.slice(offset,offset+100);
+          const history=await supabaseFetch(`process_assignment_events?select=id,process_id,kind,machine_code,happened_at,actor_auth_id&process_id=in.(${batch.join(',')})&order=id.desc&limit=1000`);
+          if(!Array.isArray(history))throw new Error('invalid assignment history');
+          if(history.length>=1000)throw new Error('assignment history truncated; reload requires bounded latest-history endpoint');
+          for(const item of history)if(!assignments.has(item.process_id))assignments.set(item.process_id,item);
+        }
+        auditAvailable=true;
+      } catch(error) { console.warn('preplan audit unavailable; controls disabled',error); }
+      const byMachine = new Map((state.machineMasters || []).map(m => [m.id, m.code]));
+      const departmentByMachine = new Map((state.machineMasters || []).map(m => [m.id, m.department]));
+      for (const row of rows) {
+        const processes = (row.work_order_processes || []).map(p => {
+          const report = progress.get(String(p.id));
+          return {...p, machine_department: p.machine_id ? departmentByMachine.get(p.machine_id) || null : null,
+            assignmentEvent:assignments.get(p.id),machine_code: p.machine_id ? byMachine.get(p.machine_id) || "機台無資料" : "",
+            reported: report ? machtileBatchCore().cardProgress(Number(p.qty_completed || 0), report, Date.now()).done : null,
+            hasReports: Boolean(report?.last_report_at || Number(report?.legacy_output) > 0 || Number(p.qty_completed) > 0 || Number(p.qty_defect) > 0)};
+        });
+        next.set(row.work_order_no, {quantity: row.quantity, processes,auditAvailable});
+      }
+    } catch (error) {
+      console.warn("process flow unavailable; no guessed route/progress", error);
+    }
+  }
+  machtileRefreshOpenProcessFlow();
+}
+
+function machtileProcessFlowMarkup(order, { compact = true } = {}) {
+  if (!order) return "";
+  const route = machtileProcessFlows.get(order.id);
+  if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
+  return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
+    compact,
+    ...machtileProcessFlowOptions(order.id,route.auditAvailable)});
+}
+
+let machtileFlowReturnFocus = null;
+function machtileCloseProcessFlow() {
+  document.getElementById('machtileFullProcessFlow')?.remove();
+  if (machtileFlowReturnFocus?.isConnected) machtileFlowReturnFocus.focus();
+  machtileFlowReturnFocus = null;
+}
+function machtileOpenProcessFlow(orderNo,currentId) {
+  if (machtileStrictMode() && !machtileDepartmentAccess) return;
+  const route=machtileProcessFlows.get(orderNo);
+  if (!route || !window.MachTileProcessFlow) { showToast('製程路線尚未驗證，請重新整理。'); return; }
+  machtileCloseProcessFlow();
+  machtileFlowReturnFocus=document.activeElement;
+  const dialog=document.createElement('div');dialog.id='machtileFullProcessFlow';dialog.className='process-flow-overlay';
+  dialog.dataset.orderNo=orderNo;dialog.dataset.currentId=currentId||'';
+  dialog.innerHTML=`<section class="process-flow-dialog" role="dialog" aria-modal="true" aria-labelledby="machtileFlowTitle">
+    <header><h2 id="machtileFlowTitle">${escapeHtml(orderNo)} · 完整製程路線</h2><button type="button" data-close-flow aria-label="關閉完整製程路線">關閉</button></header>
+    <p>共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。</p>
+    ${window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId,alignCurrent:false,
+      ...machtileProcessFlowOptions(orderNo,route.auditAvailable)})}</section>`;
+  document.body.append(dialog);dialog.querySelector('[data-close-flow]').focus();
+}
+function machtileRefreshOpenProcessFlow() {
+  const dialog=document.getElementById('machtileFullProcessFlow');
+  if(!dialog)return;
+  const route=machtileProcessFlows.get(dialog.dataset.orderNo);
+  const old=dialog.querySelector('.process-flow,.process-flow-empty');
+  if(!old)return;
+  dialog.querySelector('.process-flow-dialog > p').textContent=route
+    ?`共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。`:'製程路線尚未驗證。';
+  const hadFocus=old.contains(document.activeElement);
+  old.outerHTML=route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
+    ...machtileProcessFlowOptions(dialog.dataset.orderNo,route.auditAvailable)}):'<p class="process-flow-empty">製程路線讀取失敗；不顯示舊資料，請重新整理。</p>';
+  if(hadFocus)dialog.querySelector('[data-close-flow]').focus();
+}
+document.addEventListener('click',event=>{
+  if(event.target.closest('[data-close-flow]') || event.target.id==='machtileFullProcessFlow') {
+    event.preventDefault();event.stopImmediatePropagation();machtileCloseProcessFlow();return;
+  }
+  const opener=event.target.closest('[data-flow-open]');
+  if(!opener || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();event.stopImmediatePropagation();
+  machtileOpenProcessFlow(opener.dataset.flowOpen,opener.dataset.flowCurrent||null);
+},true);
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&document.getElementById('machtileFullProcessFlow')) {event.preventDefault();machtileCloseProcessFlow();return;}
+  const opener=event.target.closest('[data-flow-open][role="button"]');
+  if(opener&&(event.key==='Enter'||event.key===' ')) {event.preventDefault();machtileOpenProcessFlow(opener.dataset.flowOpen,opener.dataset.flowCurrent||null);}
+  const dialog=document.getElementById('machtileFullProcessFlow');
+  if(event.key==='Tab'&&dialog) {
+    const focusable=[...dialog.querySelectorAll('button:not([disabled]),select:not([disabled]),[tabindex="0"]')];
+    const first=focusable[0],last=focusable.at(-1);
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
+});
+
+function machtileProcessFlowOptions(orderNo,auditAvailable) {
+  return {orderNo,auditAvailable,canPreplan:state.source==='supabase'&&machtileCanEditSchedule(),machines:state.machineMasters};
+}
+const machtilePreplanRequests=new Map();
+const machtilePreplanBusy=new Set();
+// Capture prevents surrounding machine-card/detail and schedule-drag handlers taking this click.
+document.addEventListener('click',async event=>{
+  const control=event.target.closest('[data-flow-append]');
+  if(!control)return;
+  event.preventDefault();event.stopImmediatePropagation();
+  const holder=control.closest('.process-flow-preplan'),result=holder.querySelector('[data-flow-result]');
+  const target=control.dataset.flowAppend,current=control.dataset.flowCurrent,machine=holder.querySelector('[data-flow-machine]').value;
+  if(!machine){result.textContent='請先選擇同課機台。';return;}
+  if(!machtileCanEditSchedule()||state.source!=='supabase'){result.textContent='目前沒有預排權限。';return;}
+  if(machtilePreplanBusy.has(target))return;
+  const key=`${target}:${current}:${machine}`;
+  if(!machtilePreplanRequests.has(key))machtilePreplanRequests.set(key,crypto.randomUUID());
+  machtilePreplanBusy.add(target);control.disabled=true;holder.querySelector('select').disabled=true;
+  let committed=false;
+  try {
+    await supabaseFetch('rpc/machine_queue_append',{method:'POST',body:JSON.stringify({p_payload:{
+      request_id:machtilePreplanRequests.get(key),process_id:target,current_process_id:current,machine_id:machine}})});
+    committed=true;
+    result.textContent='已預排到佇列末端；舊 MES 派工為準。';
+    await loadFromSupabase();deriveMachines();renderAll();
+    machtilePreplanRequests.delete(key);
+    showToast('已預排下一站（不寫舊 MES）');
+  } catch(error) {
+    // Retain request_id on uncertain network outcome. Retry cannot duplicate/replay a move.
+    result.textContent=committed?'已預排，但畫面更新失敗；請重新整理確認，不要重送。':`預排未完成：${error?.message||'請重試'}。重新載入可確認目前指派。`;
+  } finally {machtilePreplanBusy.delete(target);if(control.isConnected){control.disabled=committed;holder.querySelector('select').disabled=committed;}}
+},true);
 
 // Monitor 機台卡片的完成數（owner 2026-10-02）：原本只算 App 自己的報工（v_work_order_cards.qty_completed），
 // 舊 MES 已報的看不到（例：A01 舊 MES 良品 3440，卡片卻 0/5000）。改成跟批次報工同一套口徑：
@@ -10302,8 +10450,7 @@ function deriveMachines() {
     ordersByMachine.get(name).push(order);
   });
 
-  // 監控卡的「目前工單」（owner 2026-10-02）：這台機台上「最近有活動」的那一道在站工序（見 cardActiveOrderCore.js）。
-  // 沒有任何活動時間（Dev 示範資料、讀取失敗）才退回原本的規則：排程佇列 → 製程狀態 → 交期 → 單號。
+  // 監控卡目前工單：有儲存佇列先取第①張；沒有佇列才依最近活動及原本後備規則。
   // 單台報工（QR 只帶機台）、批次報工的預設工單也用這裡挑出來的同一張。排程板的順序不受影響。
   ordersByMachine.forEach((orders, name) => {
     const machine = machines.get(name);
@@ -10361,11 +10508,15 @@ function machtileCardPickForMachine(name, orders) {
     const ranked = [...list].sort(machtileCompareScheduleOrders).map((order) => ({ order, latest: null }));
     return { order: ranked[0]?.order || null, latest: null, basis: ranked.length ? "fallback" : "none", ranked, others: Math.max(0, ranked.length - 1), autoKey: "" };
   }
-  return machtileCardActiveCore.pickActiveOrder(list, {
+  const queued = list.filter(order => Number.isFinite(machtileQueuePosition(order)))
+    .sort(machtileCompareScheduleOrders)[0] || null;
+  const pick = machtileCardActiveCore.pickActiveOrder(list, {
     activityOf: machtileCardActivityOf,
     fallbackCompare: machtileCompareScheduleOrders,
-    overrideKey: machtileCardPickState.overrideByMachine.get(name) || "",
+    overrideKey: machtileCardPickState.overrideByMachine.get(name) || (queued ? machtileCardActiveCore.orderKey(queued) : ""),
   });
+  if (queued && !machtileCardPickState.overrideByMachine.has(name)) pick.basis = "queue";
+  return pick;
 }
 
 // 卡片目前顯示的那張（state.machines 已算好）；機台不在畫面上 → null
@@ -10387,7 +10538,7 @@ async function machtileLoadCardActivity() {
   if (state.source !== "supabase" || !machtileCardActiveCore) { machtileCardPickState.status = "idle"; return; }
   // 逐工序卡片（#45）合併後會有 machtileStationOrders()；沒有就用一單一筆的 workOrders
   const pool = (typeof machtileStationOrders === "function" ? machtileStationOrders() : state.workOrders) || [];
-  const orders = pool.filter((order) => order && order.offStation !== true && isUuid(String(order.processId || "")) && isReportableMachineName(order.machine));
+  const orders = pool.filter((order) => order && order.offStation !== true && isUuid(String(order.processId || "")));
   if (!orders.length) { machtileCardPickState.status = "ready"; return; }
   machtileCardPickState.status = "loading";
   const ids = [...new Set(orders.map((order) => String(order.processId)))];
@@ -10404,7 +10555,7 @@ async function machtileLoadCardActivity() {
   await Promise.all([
     ...chunks.map(async (chunk) => {
       try {
-        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,actual_start_at&id=in.(${chunk.join(",")})`);
+        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_type,actual_start_at&id=in.(${chunk.join(",")})`);
         (Array.isArray(rows) ? rows : []).forEach((row) => { if (row && row.id) procById.set(String(row.id), row); });
       } catch (error) {
         console.warn("card activity: work_order_processes unavailable", error);
@@ -10443,6 +10594,8 @@ async function machtileLoadCardActivity() {
     const proc = procById.get(pid) || null;
     const progress = progressById.get(pid) || null;
     const step = Number(proc?.process_order || order.stationStep || progress?.process_order || 0) || null;
+    order.stationStep = step;
+    order.processType = proc?.process_type || "";
     next.set(machtileCardActiveCore.orderKey(order), {
       lastReportAt: progress?.last_report_at || null,
       legacyUpdatedAt: machtileCardActiveCore.legacyUpdatedAtFor(legacyRows, { workOrderNo: order.id, machineCode: codeOf(order), step })
@@ -10565,8 +10718,86 @@ function machtileCardOrdersMarkup(machine) {
     <details class="machine-card-orders${manual ? " is-manual" : ""}" data-no-detail data-card-orders="${escapeHtml(machineKey)}"${open ? " open" : ""}>
       <summary data-card-orders-summary><span class="card-orders-label">${escapeHtml(label)}</span><span class="card-orders-caret" aria-hidden="true"></span>${manual ? `<span class="card-orders-manual">手動切換中</span>` : ""}</summary>
       <ol class="card-order-list">${items}</ol>
-      <p class="card-order-note"><span>依最近活動自動挑選；切換只影響這個畫面</span>${manual ? `<button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
+      <p class="card-order-note"><span>${machine.cardPickBasis === "queue" ? "依排程第①張顯示；切換只影響這個畫面" : "依最近活動自動挑選；切換只影響這個畫面"}</span>${manual ? `<button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machineKey)}" data-card-pick-key="">恢復自動</button>` : ""}</p>
     </details>`;
+}
+
+// Persistent selection is distinct from the older temporary "切換顯示" control.
+// Owner: same schedule-board unassigned pool, excluding outsource/completed/unknown departments.
+// Use machine department/type and explicit process wording; never infer department from A/B codes.
+// Display only: never prefix the persisted process_name or infer a missing step.
+function machtileOperationLabel(order) {
+  const step = Number(order.stationStep ?? order.process_order);
+  const name = order.process || order.process_name || "未命名";
+  return Number.isInteger(step) && step > 0 ? `N${step} ${name}` : String(name);
+}
+
+function machtileCardSelectionCandidates(machine) {
+  const assigned = state.workOrders.filter(order => order.machine === machine.name
+    && machtileIsCardCandidateOrder(order) && isUuid(String(order.processId || "")))
+    .sort(machtileCompareScheduleOrders);
+  const department = normalizedMachineDepartment(machine);
+  const unassigned = state.workOrders.filter(order => !order.machine
+    && machtileIsSchedulableOrder(order) && isUuid(String(order.processId || ""))
+    && order.processType && !["outsourced", "outsource"].includes(order.processType)
+    && ["車床課", "銑床課"].includes(department)
+    && normalizedMachineDepartment({ processName: order.process }) === department)
+    .sort(machtileCompareScheduleOrders);
+  return { assigned, unassigned };
+}
+
+function machtileCloseCardSelection() {
+  document.getElementById("machtileCardSelection")?.remove();
+}
+
+function machtileOpenCardSelection(machineCode) {
+  const machine = machtileScheduleMachine(machineCode);
+  if (!machtileCanEditSchedule() || !machine || !machtileCanAssignToMachine(machineCode)) return;
+  machtileCloseCardSelection();
+  const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
+  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button></li>`).join("") || `<li>${empty}</li>`;
+  const holder = document.createElement("div");
+  holder.id = "machtileCardSelection";
+  holder.className = "card-selection-overlay";
+  holder.innerHTML = `<section class="card-selection-panel" role="dialog" aria-modal="true" aria-labelledby="cardSelectionTitle">
+    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} 選擇工單</h2><button type="button" data-close-card-selection aria-label="關閉">✕</button></header>
+    <p>選取後儲存為排程佇列第①張，成為這台目前工單；不重建工序、不清除已報數量。</p>
+    <h3>這台身上的工序</h3><ul data-card-selection-assigned>${listMarkup(assigned, "這台沒有未完成的工序。")}</ul>
+    <h3>未排機（同課）</h3><p>依機台課別與工序名稱判斷；委外、已完成及課別不明的工序不列入。</p><ul data-card-selection-unassigned>${listMarkup(unassigned, "沒有同課可派的未排機工序。")}</ul>
+    <p data-card-selection-error role="alert"></p>
+  </section>`;
+  document.body.appendChild(holder);
+  holder.querySelector("button")?.focus();
+}
+
+async function machtileCommitCardSelection(machineCode, processId) {
+  const holder = document.getElementById("machtileCardSelection");
+  if (!holder || holder.dataset.pending === "true") return;
+  const errorBox = holder.querySelector("[data-card-selection-error]");
+  holder.dataset.pending = "true";
+  holder.querySelectorAll("button").forEach(button => { button.disabled = true; });
+  try {
+    if (!machtileCanEditSchedule()) throw new Error("FORBIDDEN");
+    // Re-read before writing: a stale card must not pull a step back from another machine.
+    if (machtileStrictMode()) { await loadFromSupabase({ preserveDepartmentOnFailure: true }); deriveMachines(); }
+    const machine = machtileScheduleMachine(machineCode);
+    if (!machine || !machtileCanAssignToMachine(machineCode)) throw new Error("MACHINE_UNAVAILABLE");
+    if (machtileStrictMode() && !state.machineMasters.some(m => m.name === machine.name)) throw new Error("機台資料讀取失敗，請重新整理後再選工單");
+    const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
+    const chosen = [...assigned, ...unassigned].find(order => order.processId === processId);
+    if (!chosen) throw new Error("PROCESS_NOT_FOUND");
+    await machtileApplyQueue(machineCode, [chosen, ...assigned.filter(order => order.processId !== processId)]);
+    machtileCardPickState.overrideByMachine.delete(machine.name);
+    if (machtileStrictMode()) await loadFromSupabase();
+    renderAll();
+    machtileCloseCardSelection();
+    showToast(`已儲存 ${machine.name} 目前工單：${chosen.id} N${chosen.stationStep || "?"}`);
+  } catch (error) {
+    errorBox.textContent = machtileWoErrorText(error);
+  } finally {
+    holder.dataset.pending = "false";
+    holder.querySelectorAll("button").forEach(button => { button.disabled = false; });
+  }
 }
 
 // 排程板（2026-07-14，SB1 頂層分頁/SB2 拖拉+按鈕/SB3 佇列第一張=機台卡目前工單）。
@@ -11498,6 +11729,7 @@ function machtileScheduleCard(order, index, total, colKey, canEdit, forecast) {
         </div>
         <p>${escapeHtml(order.part)}</p>
         <small>${order.done}/${order.total} 件 · 交期 ${escapeHtml(order.dueDate || "-")}</small>
+        ${machtileProcessFlowMarkup(order)}
         ${machtileScheduleForecastMarkup(order, forecast)}
         ${canEdit ? `
         <div class="schedule-card-tools">
@@ -12649,7 +12881,7 @@ function renderMachineCard(machine) {
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
           ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
-          ${order ? `<a class="machine-open-link" data-no-detail href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
+          ${order ? `<a class="machine-open-link" data-no-detail data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
         </div>
       </header>
 
@@ -12657,13 +12889,16 @@ function renderMachineCard(machine) {
         <span>目前工單</span>
         ${order ? `
           <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>${isOver ? machtileOverQtyTag(order) : ""}
-          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(order.process)}</small>
+          <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(machtileOperationLabel(order))}</small>
         ` : `
           <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
         `}
       </div>
       ${machtileCardOrdersMarkup(machine)}
+      ${machtileProcessFlowMarkup(order)}
+      ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}
 
       ${order ? `
         <div class="program-strip">
@@ -14383,13 +14618,18 @@ function renderWorkOrderModule() {
           <datalist id="machtileWoRecentQty"></datalist></label>
         <label class="admin-field"><span>交期 *</span>
           <input id="machtileWoDue" type="date" required></label>
+        <div id="machtileWoSteps" class="wo-step-list" aria-live="polite">選工單後列出現有工序；不推測舊 MES 未同步的路線。</div>
+        <label class="admin-field"><span>要更新哪一道 *</span>
+          <select id="machtileWoStep" required><option value="">請先查詢工單</option></select></label>
+        <label class="admin-field" id="machtileWoNewStepField" hidden><span>新工單步序 *</span>
+          <input id="machtileWoNewStep" type="number" min="1" step="1" value="1"></label>
         <label class="admin-field"><span>指派機台</span>
           <select id="machtileWoMachine"><option value="">暫不指派</option></select></label>
         <label class="admin-field"><span>製程名稱</span>
           <input id="machtileWoProcess" type="text" list="machtileWoRecentProcess" autocomplete="off" placeholder="CNC 加工">
           <datalist id="machtileWoRecentProcess"></datalist></label>
         <button class="admin-save-button" type="submit">建立／更新工單</button>
-        <p class="admin-module-note">同單號再次送出＝更新內容或改派機台；選「暫不指派」＝取消指派。</p>
+        <p class="admin-module-note">更新既有工單必須選一道現有工序；已報工不可改機台或步序，完成數不會歸零。</p>
       </form>
     </section>
   `;
@@ -14414,37 +14654,52 @@ function machtileWoMachineLabel(machine) {
 
 async function machtileWoMachines() {
   if (machtileWoMachinesCache) return machtileWoMachinesCache;
-  try {
-    machtileWoMachinesCache = await supabaseFetch("machines?select=id,machine_code,name,location&order=machine_code");
-  } catch (error) {
-    console.warn("machines lookup failed", error);
-    machtileWoMachinesCache = [];
-  }
+  const rows = await supabaseFetch("machines?select=id,machine_code,name,location&order=machine_code");
+  if (!Array.isArray(rows) || !rows.length || rows.some(m => !m.id || !m.machine_code)) throw new Error("機台清單讀取失敗，暫不能送出；請重新開啟工單管理。");
+  machtileWoMachinesCache = rows;
   return machtileWoMachinesCache;
 }
 
-// 依單號取單。機台與製程掛在 work_order_processes，取 process_order 最小的那關
-// 當代表（建單表單只有一組機台/製程欄位）。
+// 依單號取全部真實工序；不再把第一道當成建單表單的唯一工序。
 async function machtileWoFetchByNo(workOrderNo) {
   const rows = await supabaseFetch(
-    `work_orders?select=work_order_no,part_no,part_name,quantity,due_date,work_order_processes(machine_id,process_name,process_order)&work_order_no=eq.${encodeURIComponent(workOrderNo)}&limit=1`
+    `work_orders?select=id,work_order_no,part_no,part_name,quantity,due_date,work_order_processes(id,machine_id,process_name,process_order,process_type,status,qty_completed,qty_defect)&work_order_no=eq.${encodeURIComponent(workOrderNo)}&limit=1`
   );
   const row = (rows || [])[0];
   if (!row) return null;
   const procs = (row.work_order_processes || [])
     .slice()
     .sort((a, b) => Number(a.process_order || 0) - Number(b.process_order || 0));
-  const first = procs[0] || {};
   const machines = await machtileWoMachines();
   const codeById = new Map(machines.map((m) => [m.id, m.machine_code]));
+  const departmentById = new Map((state.machineMasters || []).map(m => [m.id, m.department]));
+  if (procs.some(p => p.machine_id && !codeById.has(p.machine_id))) throw new Error("工序原機台不在清單中，暫不能送出；請重新開啟工單管理。");
+  const progressById = new Map();
+  const ids = procs.map(p => p.id).filter(isUuid);
+  for (let i = 0; i < ids.length; i += MACHTILE_CARD_PROGRESS_CHUNK) {
+    const progress = await supabaseFetch("rpc/batch_report_progress", {
+      method: "POST", body: JSON.stringify({ p_process_ids: ids.slice(i, i + MACHTILE_CARD_PROGRESS_CHUNK), p_pending_since: config.batchReportPendingSince || null }),
+    });
+    if (!Array.isArray(progress)) throw new Error("工序報工資料未驗證，暫不能改派");
+    progress.forEach(p => progressById.set(p.process_id, p));
+  }
   return {
     work_order_no: row.work_order_no,
     part_no: row.part_no,
     part_name: row.part_name,
     quantity: row.quantity,
     due_date: row.due_date,
-    process_name: first.process_name || "",
-    machine_code: first.machine_id ? (codeById.get(first.machine_id) || "") : "",
+    process_name: "",
+    machine_code: "",
+    processes: procs.map(p => {
+      const progress = progressById.get(p.id);
+      const done = progress && window.MachTileBatchReportCore?.cardProgress
+        ? window.MachTileBatchReportCore.cardProgress(Number(p.qty_completed || 0), progress, Date.now()).done : null;
+      return { ...p, machine_department: p.machine_id ? departmentById.get(p.machine_id) || null : null,
+        machine_code: p.machine_id ? codeById.get(p.machine_id) || "" : "",
+        reported: done, progressVerified: Boolean(progress),
+        hasReports: Boolean(progress?.last_report_at || Number(progress?.legacy_output) > 0 || Number(p.qty_completed) > 0 || Number(p.qty_defect) > 0) };
+    }),
   };
 }
 
@@ -14660,11 +14915,11 @@ function machtileWoBindListControls() {
 
 // 送出前查「這張單現在是什麼來源、第一道工序掛哪台」：先用清單快取，沒有（例：超過清單上限）再唯讀查一次。
 // 查不到＝新單（不跳確認）。查詢失敗時當作舊 MES 單、機台未知 → 會跳確認（寧可多問一次）。
-async function machtileWoExistingForConfirm(workOrderNo) {
+async function machtileWoExistingForConfirm(workOrderNo, selectedProcess = null) {
   const core = machtileWoListCore();
   if (!core || !workOrderNo) return null;
   const cached = machtileWoListState.byNo.get(workOrderNo);
-  if (cached) return { source: cached.source, machine_code: cached.firstMachineCode || "" };
+  if (cached) return { source: cached.source, machine_code: selectedProcess?.machine_code ?? cached.firstMachineCode ?? "" };
   try {
     const no = encodeURIComponent(workOrderNo);
     let rows;
@@ -14676,7 +14931,7 @@ async function machtileWoExistingForConfirm(workOrderNo) {
     const row = (rows || [])[0];
     if (!row) return null;
     const record = await machtileWoFetchByNo(workOrderNo);
-    return { source: core.sourceOf(row), machine_code: record?.machine_code || "" };
+    return { source: core.sourceOf(row), machine_code: selectedProcess?.machine_code ?? record?.machine_code ?? "" };
   } catch (error) {
     console.warn("work order source lookup failed; asking for confirmation anyway", error);
     return { source: core.sourceOf({}), machine_code: "（讀取失敗）" };
@@ -14685,6 +14940,11 @@ async function machtileWoExistingForConfirm(workOrderNo) {
 
 function machtileWoErrorText(error) {
   const msg = String(error?.message || error || "");
+  if (msg.includes("PROCESS_ORDER_REQUIRED")) return "這張工單有多道工序，請先選擇要更新哪一道。";
+  if (msg.includes("PROCESS_HAS_REPORTS")) return "這道工序已有報工（含舊 MES 數量），不能改機台或步序；報工數量已保留。";
+  if (msg.includes("PROCESS_NOT_FOUND")) return "所選工序不存在或不屬於這張工單，請重新查詢並選擇。";
+  if (msg.includes("PROCESS_ORDER_CONFLICT")) return "目標步序已有另一道工序，不可覆蓋。";
+  if (msg.includes("MACHINE_UNAVAILABLE")) return "維修或停用機台不可接受派工。";
   if (msg.includes("FORBIDDEN")) return "此帳號沒有建單權限（需排程以上）。";
   if (msg.includes("machine_code not found")) return "找不到這台機台，請重新選擇。";
   if (msg.includes("quantity must be")) return "數量必須大於 0。";
@@ -14694,7 +14954,17 @@ function machtileWoErrorText(error) {
 async function machtileInitWorkOrderModule() {
   const form = document.getElementById("machtileWoForm");
   if (!form) return;
-  const machines = await machtileWoMachines();
+  let machines;
+  try { machines = await machtileWoMachines(); }
+  catch (error) {
+    if (!form.isConnected) return;
+    form.querySelectorAll('button[type="submit"], select').forEach(el => { el.disabled = true; });
+    document.getElementById('machtileWoSteps').textContent = `機台清單讀取失敗，無法確認原指派：${machtileWoErrorText(error)}`;
+    const note = document.getElementById('machtileWoPrefillNote');
+    if (note) { note.textContent = '送出已停用，請重新開啟工單管理重試。'; note.hidden = false; }
+    return;
+  }
+  if (!form.isConnected) return;
   const select = document.getElementById("machtileWoMachine");
   if (select) {
     select.innerHTML = `<option value="">暫不指派</option>` +
@@ -14761,6 +15031,40 @@ async function machtileInitWorkOrderModule() {
   };
 
   const noInput = document.getElementById("machtileWoNo");
+  const stepSelect = document.getElementById("machtileWoStep");
+  let stepRecord = null;
+  let stepRecordNo = "";
+  let stepsLoaded = false;
+  let lookupFailed = false;
+  const renderSteps = (record, normalized) => {
+    stepRecord = record;
+    stepRecordNo = normalized;
+    stepsLoaded = true;
+    lookupFailed = false;
+    form.querySelector('button[type="submit"]').disabled = false;
+    const procs = record?.processes || [];
+    const isNew = !record || procs.length === 0;
+    stepSelect.disabled = isNew;
+    stepSelect.required = !isNew;
+    stepSelect.innerHTML = '<option value="">請選擇要更新哪一道</option>' + procs.map(p =>
+      `<option value="${escapeHtml(p.id)}">${escapeHtml(machtileOperationLabel(p))}</option>`).join("");
+    document.getElementById("machtileWoNewStepField").hidden = !isNew;
+    document.getElementById("machtileWoNewStep").required = isNew;
+    document.getElementById("machtileWoSteps").innerHTML = isNew
+      ? "沒有現有工序；新增時請明確指定步序，不推測舊 MES 路線。"
+      : window.MachTileProcessFlow.render(procs, {quantity: record.quantity,
+          ...machtileProcessFlowOptions(normalized,machtileProcessFlows.get(normalized)?.auditAvailable)});
+    select.disabled = !isNew;
+    document.getElementById("machtileWoProcess").value = "";
+  };
+  stepSelect.addEventListener("change", () => {
+    const p = stepRecord?.processes?.find(p => p.id === stepSelect.value);
+    select.value = p?.machine_code || "";
+    select.disabled = !p || p.hasReports || !p.progressVerified;
+    document.getElementById("machtileWoProcess").value = p?.process_name || "";
+    if (p?.hasReports) showPrefillNote(`N${p.process_order} 已報工，機台／步序鎖定；仍可更新工單表頭。`);
+  });
+  select.disabled = true;
   let prefillSeq = 0;
   let prefillTimer = null;
   const lookupAndPrefill = async () => {
@@ -14773,15 +15077,25 @@ async function machtileInitWorkOrderModule() {
     showPrefillNote("查詢中…");
     try {
       const record = await machtileWoFetchByNo(normalized);
-      if (seq !== prefillSeq) return;   // 使用者已改成別的單號，丟掉這個舊回應
+      if (seq !== prefillSeq || !form.isConnected) return;   // 舊單號或已關閉的表單不能覆寫新表單
       applyPrefill(core.planPrefill({ record, current: readPrefillCurrent(), edited: prefillEdited }));
+      renderSteps(record, normalized);
     } catch (error) {
-      if (seq !== prefillSeq) return;
-      showPrefillNote(`帶入失敗，請手動填寫：${machtileWoErrorText(error)}`);
+      if (seq !== prefillSeq || !form.isConnected) return;
+      stepsLoaded = false;
+      lookupFailed = true;
+      form.querySelector('button[type="submit"]').disabled = true;
+      select.disabled = true;
+      stepSelect.innerHTML = '<option value="">讀取失敗，請重新查詢</option>';
+      document.getElementById('machtileWoSteps').textContent = `工序／機台資料讀取失敗：${machtileWoErrorText(error)}；不能確認原指派，送出已停用。`;
+      showPrefillNote(`帶入失敗，送出已停用：${machtileWoErrorText(error)}`);
     }
   };
   if (noInput) {
     noInput.addEventListener("input", () => {
+      stepsLoaded = false;
+      select.disabled = true;
+      stepSelect.value = "";
       clearTimeout(prefillTimer);
       prefillTimer = setTimeout(lookupAndPrefill, 400);
     });
@@ -14860,7 +15174,7 @@ async function machtileInitWorkOrderModule() {
   // 不用滑鼠也能整張填完。跳轉順序＝表單裡的視覺順序。
   const enterOrder = [
     "machtileWoNo", "machtileWoPartNo", "machtileWoPartName", "machtileWoQty",
-    "machtileWoDue", "machtileWoMachine", "machtileWoProcess",
+    "machtileWoDue", "machtileWoStep", "machtileWoMachine", "machtileWoProcess",
   ];
   enterOrder.forEach((id, index) => {
     const el = document.getElementById(id);
@@ -14883,6 +15197,14 @@ async function machtileInitWorkOrderModule() {
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     try {
+      const requestedNo = prefillCore().normalizeWorkOrderNo(document.getElementById("machtileWoNo").value);
+      if (!stepsLoaded || stepRecordNo !== requestedNo) await lookupAndPrefill();
+      if (!stepsLoaded || stepRecordNo !== requestedNo) throw new Error("工序資料未確認，請重新查詢工單。");
+      const selectedProcess = stepRecord?.processes?.find(p => p.id === stepSelect.value) || null;
+      if (stepRecord?.processes?.length && !selectedProcess) throw new Error("請先選擇要更新哪一道工序。");
+      if (selectedProcess && !selectedProcess.progressVerified) throw new Error("這道工序報工資料無法讀取，暫不能更新。");
+      const processOrder = selectedProcess ? Number(selectedProcess.process_order) : Number(document.getElementById("machtileWoNewStep").value);
+      if (!Number.isInteger(processOrder) || processOrder < 1) throw new Error("請填寫大於 0 的整數步序。");
       const payload = {
         work_order_no: document.getElementById("machtileWoNo").value.trim(),
         part_no: document.getElementById("machtileWoPartNo").value.trim(),
@@ -14890,10 +15212,12 @@ async function machtileInitWorkOrderModule() {
         quantity: Number(document.getElementById("machtileWoQty").value),
         due_date: document.getElementById("machtileWoDue").value,
         machine_code: document.getElementById("machtileWoMachine").value || null,
-        process_name: document.getElementById("machtileWoProcess").value.trim() || null,
+        process_name: document.getElementById("machtileWoProcess").value.trim() || selectedProcess?.process_name || null,
+        process_order: processOrder,
+        ...(selectedProcess ? { process_id: selectedProcess.id } : {}),
       };
       // 舊 MES 派工來的單要改派機台 → 先講清楚會被同步蓋回去；按取消就不送。
-      const existing = await machtileWoExistingForConfirm(payload.work_order_no);
+      const existing = await machtileWoExistingForConfirm(payload.work_order_no, selectedProcess);
       if (machtileWoListCore()?.needsReassignConfirm(existing, payload.machine_code || "")) {
         const from = existing.machine_code || "未指派";
         const to = payload.machine_code || "暫不指派";
@@ -14920,7 +15244,7 @@ async function machtileInitWorkOrderModule() {
     } catch (error) {
       showToast(`工單儲存失敗：${machtileWoErrorText(error)}`);
     } finally {
-      button.disabled = false;
+      button.disabled = lookupFailed;
     }
   });
 }
@@ -20295,6 +20619,14 @@ function bindEvents() {
     const cardPickButton = event.target.closest("[data-card-pick]");
     if (cardPickButton) {
       machtileSetCardPick(cardPickButton.dataset.cardPick, cardPickButton.dataset.cardPickKey || "");
+      return;
+    }
+    if (event.target.closest("[data-close-card-selection]")) { machtileCloseCardSelection(); return; }
+    const cardSelectOpen = event.target.closest("[data-card-select-open]");
+    if (cardSelectOpen) { machtileOpenCardSelection(cardSelectOpen.dataset.cardSelectOpen); return; }
+    const cardSelectProcess = event.target.closest("[data-card-select-process]");
+    if (cardSelectProcess) {
+      machtileCommitCardSelection(cardSelectProcess.dataset.cardSelectMachine, cardSelectProcess.dataset.cardSelectProcess);
       return;
     }
 

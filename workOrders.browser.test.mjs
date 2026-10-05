@@ -63,11 +63,11 @@ const proc = (n, code, extra = {}) => ({ id: id(300 + n), machine_id: code ? mid
 // 刻意打亂順序：畫面要自己依交期排
 const workOrders = [
   { id: id(104), work_order_no: "XX01202609200002", part_no: "CPDF-20-01", part_name: "CPDF-20閥體", quantity: 300, due_date: dayOffset(20), status: "not_started", created_by: null, work_order_processes: [] },
-  { id: id(103), work_order_no: "WO-GATE-P3-001", part_no: null, part_name: "P3 Gate 驗證件", quantity: 10, due_date: dayOffset(10), status: "in_progress", created_by: id(950), work_order_processes: [proc(3, "A02", { qty_completed: 4 })] },
+  { id: id(103), work_order_no: "WO-GATE-P3-001", part_no: null, part_name: "P3 Gate 驗證件", quantity: 10, due_date: dayOffset(10), status: "in_progress", created_by: id(950), work_order_processes: [proc(3, "A02", { qty_completed: 4 }), proc(8, "A02", { process_order: 2 })] },
   { id: id(105), work_order_no: "XX01202605010001", part_no: "A37-01", part_name: "A37九孔座", quantity: 165, due_date: dayOffset(-60), status: "completed", created_by: null, work_order_processes: [proc(5, "A03", { off_station_at: new Date(now - 86400000).toISOString(), qty_completed: 165 })] },
   { id: id(101), work_order_no: "XX01202609100001", part_no: "MPW-01-02", part_name: "MPW-01止油閥座", quantity: 500, due_date: dayOffset(-5), status: "in_progress", created_by: null, work_order_processes: [proc(1, "A01", { qty_completed: 12 })] },
   { id: id(106), work_order_no: "XX01202609250003", part_no: "HCG-06-02", part_name: "HCG-06蓋板", quantity: 80, due_date: dayOffset(30), status: "not_started", created_by: null, work_order_processes: [proc(6, "B01", { off_station_at: new Date(now - 3600000).toISOString() })] },
-  { id: id(102), work_order_no: "XX01202609290006", part_no: "HCG-06-01", part_name: "HCG-06本體（長品名測試：雙面加工含攻牙與去毛邊）", quantity: 120, due_date: dayOffset(2), status: "in_progress", created_by: null, work_order_processes: [proc(2, "B04", { qty_completed: 30 })] },
+  { id: id(102), work_order_no: "XX01202609290006", part_no: "HCG-06-01", part_name: "HCG-06本體（長品名測試：雙面加工含攻牙與去毛邊）", quantity: 120, due_date: dayOffset(2), status: "in_progress", created_by: null, work_order_processes: [proc(2, "B04", { qty_completed: 30 }), proc(7, "B04", { process_order: 2 })] },
 ];
 const expectedOrder = ["XX01202609100001", "XX01202609290006", "WO-GATE-P3-001", "XX01202609200002", "XX01202609250003", "XX01202605010001"];
 // 舊 MES 結算：第 1 張有（舊 MES 300＋待回寫 20 → 320）；其他沒有 → 照 App 累計
@@ -105,6 +105,7 @@ function makeBackend() {
     const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (recording && req.method() !== "GET" && req.method() !== "HEAD") writes.push({ method: req.method(), path: p, body: req.postData() || "" });
     if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "planner@test.invalid" });
+    if (p === "/rest/v1/rpc/machine_department_context") return json(200, { tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, cardMachines);
     if (p === "/rest/v1/machines") return json(200, machineRows);
@@ -127,7 +128,7 @@ function makeBackend() {
     }
     if (p === "/rest/v1/rpc/batch_report_progress") {
       const body = JSON.parse(req.postData() || "{}");
-      return json(200, (body.p_process_ids || []).filter((pid) => progress[pid]).map((pid) => ({ process_id: pid, ...progress[pid] })));
+      return json(200, (body.p_process_ids || []).map((pid) => ({ process_id: pid, legacy_output: null, pending_output: 0, last_report_at: null, ...progress[pid] })));
     }
     if (p === "/rest/v1/rpc/work_order_upsert") {
       const body = JSON.parse(req.postData() || "{}");
@@ -303,14 +304,17 @@ for (const [label, device, name] of [["平板（810×1080）", tabletDevice, "ta
   ok(await page.locator("#machtileWoForm").isVisible() && await page.locator("#machtileWoForm button[type=submit]").isVisible(), `${label}：建單表單保留`);
 
   // ---- 開模組到現在：只有讀取 ----
-  const nonReadSoFar = backend.writes.filter((w) => w.path !== "/rest/v1/rpc/batch_report_progress");
+  const nonReadSoFar = backend.writes.filter((w) => !["/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/machine_department_context"].includes(w.path));
   ok(nonReadSoFar.length === 0, `${label}：瀏覽／搜尋／篩選沒有任何寫入`, JSON.stringify(nonReadSoFar));
 
   // ---- 改派確認：舊 MES 派工單 ----
   await rowLoc(page, "XX01202609290006").locator("[data-wo-edit]").click();
-  await page.waitForFunction(() => document.getElementById("machtileWoMachine")?.value === "B04", null, { timeout: 5000 }).catch(() => {});
-  ok(await page.locator("#machtileWoNo").inputValue() === "XX01202609290006" && await page.locator("#machtileWoMachine").inputValue() === "B04", `${label}：點單號帶入表單（機台 B04）`);
+  await page.waitForFunction(() => document.querySelectorAll('#machtileWoStep option').length === 3);
+  ok(await page.locator("#machtileWoNo").inputValue() === "XX01202609290006" && await page.locator("#machtileWoStep").inputValue() === "" && await page.locator("#machtileWoMachine").isDisabled(), `${label}：點單號先選工序，不自動挑第一台`);
   ok(backend.upserts.length === 0, `${label}：點單號只帶入、不送出`);
+  await page.locator('#machtileWoStep').selectOption(id(302));
+  ok(await page.locator('#machtileWoMachine').isDisabled(), `${label}：已報工 N1 不可改派`);
+  await page.locator('#machtileWoStep').selectOption(id(307));
   if (name === "phone360") await page.locator("#machtileWoFormSection").screenshot({ path: shot(`${name}-form`) });
   await page.locator("#machtileWoMachine").selectOption("A05");
   setDialogAnswer(false);
@@ -322,26 +326,28 @@ for (const [label, device, name] of [["平板（810×1080）", tabletDevice, "ta
   setDialogAnswer(true);
   await page.locator("#machtileWoForm button[type=submit]").click();
   await page.waitForTimeout(500);
-  ok(dialogs.length === 2 && backend.upserts.length === 1 && backend.upserts[0].machine_code === "A05" && backend.upserts[0].work_order_no === "XX01202609290006", `${label}：按確定＝照常送出一次（A05）`, JSON.stringify(backend.upserts));
+  ok(dialogs.length === 2 && backend.upserts.length === 1 && backend.upserts[0].machine_code === "A05" && backend.upserts[0].process_order === 2 && backend.upserts[0].process_id === id(307), `${label}：按確定＝只改選定 N2，一次送出（A05）`, JSON.stringify(backend.upserts));
 
   // ---- 舊 MES 單、機台不變 → 不跳 ----
   await rowLoc(page, "XX01202609100001").locator("[data-wo-edit]").click();
-  await page.waitForFunction(() => document.getElementById("machtileWoMachine")?.value === "A01", null, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelectorAll('#machtileWoStep option').length === 2);
+  await page.locator('#machtileWoStep').selectOption(id(301));
   await page.locator("#machtileWoForm button[type=submit]").click();
   await page.waitForTimeout(500);
   ok(dialogs.length === 2 && backend.upserts.length === 2, `${label}：舊 MES 單機台沒改 → 不跳確認`, JSON.stringify(dialogs.slice(2)));
 
   // ---- App 手動單改派 → 不跳 ----
   await rowLoc(page, "WO-GATE-P3-001").locator("[data-wo-edit]").click();
-  await page.waitForFunction(() => document.getElementById("machtileWoMachine")?.value === "A02", null, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelectorAll('#machtileWoStep option').length === 3);
+  await page.locator('#machtileWoStep').selectOption(id(308));
   await page.locator("#machtileWoMachine").selectOption("A04");
   await page.locator("#machtileWoForm button[type=submit]").click();
   await page.waitForTimeout(500);
-  ok(dialogs.length === 2 && backend.upserts.length === 3 && backend.upserts[2].machine_code === "A04", `${label}：App 手動單改派 → 不跳確認`);
+  ok(dialogs.length === 2 && backend.upserts.length === 3 && backend.upserts[2].machine_code === "A04" && backend.upserts[2].process_order === 2, `${label}：App 手動單未報工 N2 改派 → 不跳確認`);
 
   // ---- 全程寫入只有建單送出 ----
   // 送出後卡片牆會重新載入（原本就有的行為），那幾支是唯讀快照 RPC（POST 但不寫入），列在這裡、其餘一律算寫入
-  const readOnlyRpc = new Set(["/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
+  const readOnlyRpc = new Set(["/rest/v1/rpc/machine_department_context", "/rest/v1/rpc/batch_report_progress", "/rest/v1/rpc/schedule_calendar_snapshot", "/rest/v1/rpc/attention_case_snapshot", "/rest/v1/rpc/hmc_runtime_snapshot", "/rest/v1/rpc/unified_event_list"]);
   const nonRead = backend.writes.filter((w) => !readOnlyRpc.has(w.path));
   ok(nonRead.length === 3 && nonRead.every((w) => w.path === "/rest/v1/rpc/work_order_upsert" && w.method === "POST"), `${label}：除了 3 次建單送出（rpc/work_order_upsert）之外沒有其他寫入`, JSON.stringify(nonRead.map((w) => w.method + " " + w.path)));
   ok(realErrors(errors).length === 0, `${label}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
@@ -357,6 +363,7 @@ console.log("== 權限：作業員打不開工單管理 ==");
   await page.evaluate(() => openAdminModule("workOrders"));
   const txt = await page.locator("#adminModuleContent").innerText();
   ok(txt.includes("需要排程以上權限") && await page.locator("#machtileWoList").count() === 0, "作業員：只看到權限說明，沒有清單／表單");
+  ok(await page.locator('[data-card-select-open]').count() === 0, '作業員：沒有機台佇列選取入口');
   await context.close();
 }
 

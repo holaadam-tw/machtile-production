@@ -66,6 +66,21 @@ try{
     await page.waitForFunction(()=>document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
     check(await page.locator('.machine-tile-card').filter({hasText:'A99'}).getByText('未設定課別',{exact:true}).count()===1,`${width}: NULL department visibly labeled, no type fallback`);
     check(await page.evaluate(()=>normalizedMachineDepartment(normalizeMachineMaster({machine_type:'車床',department_name:null})))==='未設定課別',`${width}: actual normalizer ignores type as authority`);
+    await page.evaluate(()=>openReport(state.workOrders[0].id));
+    accessFail=true;
+    const postBefore=posts.length;
+    const retrySafe=await page.evaluate(async()=>{
+      const before={orders:JSON.stringify(state.workOrders),machines:JSON.stringify(state.machines),
+        selected:JSON.stringify(selectedOrder),access:JSON.stringify(machtileDepartmentAccess),
+        open:document.getElementById('reportSheet').classList.contains('is-open')};
+      try{await supabaseFetch('rpc/machine_upsert',{method:'POST',body:'{}'});return false;}
+      catch(e){return e.message.includes('已保留表單')&&before.orders===JSON.stringify(state.workOrders)
+        &&before.machines===JSON.stringify(state.machines)&&before.selected===JSON.stringify(selectedOrder)
+        &&before.access===JSON.stringify(machtileDepartmentAccess)&&before.open
+        &&document.getElementById('reportSheet').classList.contains('is-open');}
+    });
+    check(retrySafe&&posts.length===postBefore,`${width}: pre-POST context 503 preserves cards/selection/open report; sends no write`);
+    accessFail=false;await page.evaluate(()=>closeReport());
     await page.evaluate(()=>openAdminModule('add'));
     await page.locator('#machtileMcDepartment:not([disabled])').waitFor();
     await page.locator('#machtileMcCode').fill('A06');await page.locator('#machtileMcName').fill('TEST NEW');

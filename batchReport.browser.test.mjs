@@ -108,6 +108,7 @@ async function handleFake(route) {
   const p = url.pathname;
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   if (p.startsWith("/auth/v1/user")) return json(200, { id: users[0].auth, email: "op@test.invalid" });
+  if (p === "/rest/v1/rpc/machine_department_context") return json(200, { tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
   if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
   if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
   if (p === "/rest/v1/app_users") {
