@@ -352,7 +352,7 @@ console.log("== 手機（Pixel 7）：正式庫 10-02 狀態 ==");
     const box = mill.locator(`[data-batch-select="${code}"]`);
     if (await box.count() && await box.isEnabled() && await box.isChecked()) await box.uncheck();
   }
-  await mill.locator("[data-batch-first-article]").check();
+  ok(await mill.locator("[data-batch-first-article]").count() === 0, "今日開工不再要求首件檢查（沿用 main #59）");
   await page.screenshot({ path: path.join(outDir, "04-phone-mill-default.png"), fullPage: true });
   await mill.locator("[data-batch-submit]").click();
   for (let i = 0; i < 80 && be.calls.length === 0; i++) await page.waitForTimeout(100);
