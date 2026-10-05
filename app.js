@@ -277,6 +277,7 @@ function machtileAvailableDepartments() {
 function machtileClearDepartmentData() {
   machtileCloseProcessFlow();
   machtileProcessFlows = new Map();
+  machtileFlowVisibilityState.byRole = null; machtileFlowVisibilityState.status = "default";
   state.machineMasters = []; state.machines = []; state.workOrders = [];
   state.extraStationOrders = [];
   state.assignedCardOrders = null; state.cardProcessError = "";
@@ -10050,6 +10051,8 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
     machtileLoadHmcRuntime(),
     // 卡片「目前工單」＝這台最近有活動的那張（只讀；讀不到退回原本規則）
     machtileLoadCardActivity(),
+    // 製程路線顯示層級（只讀；讀不到＝每個角色都「完整」）
+    machtileLoadFlowVisibility(),
   ]);
   await machtileLoadProcessFlows();
 }
@@ -10068,7 +10071,10 @@ async function machtileLoadProcessFlows() {
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
       if (!Array.isArray(rows)) throw new Error("invalid route response");
       const ids = rows.flatMap(o => (o.work_order_processes || []).map(p => p.id));
-      const progress = await machtileWoFetchProgress(ids);
+      // Same snapshot as the card's 完成進度: reuse rows the card already loaded; fetch only the rest.
+      const cardRows = machtileCardPickState.progressByProcess || new Map();
+      const progress = await machtileWoFetchProgress(ids.filter(pid => !cardRows.has(String(pid))));
+      ids.forEach(pid => { if (cardRows.has(String(pid))) progress.set(String(pid), cardRows.get(String(pid))); });
       let auditAvailable=false;
       const assignments=new Map();
       try {
@@ -10100,12 +10106,59 @@ async function machtileLoadProcessFlows() {
   machtileRefreshOpenProcessFlow();
 }
 
-function machtileProcessFlowMarkup(order, { compact = true } = {}) {
-  if (!order) return "";
+// 製程路線顯示層級（owner 2026-10-06）：每個角色在「機台卡片」上看得到多少製程路線。
+//   full＝三格預覽＋點開完整路線（原本行為）／adjacent＝只有三格預覽／next_only＝本單下一道＋本機下一張／hidden＝不顯示
+// 只控制畫面，不是資料權限：作業員報工本來就要讀工序列，資料層不擋。工單管理、排程看板（排程以上頁面）一律完整。
+// 設定存在 tenant_display_settings.settings.flow_visibility（每租戶一列）；表不存在或讀不到 → 每個角色都 full。
+const machtileFlowVisibilityState = { status: "default", byRole: null, error: "" };
+const MACHTILE_FLOW_LEVEL_LABELS = {
+  full: "完整：三格預覽＋點開完整路線",
+  adjacent: "前後道：只有三格預覽",
+  next_only: "只看下一步：本單下一道＋本機下一張",
+  hidden: "不顯示",
+};
+async function machtileLoadFlowVisibility() {
+  try {
+    const tenantFilter = isUuid(String(config.tenantId || "")) ? `&tenant_id=eq.${config.tenantId}` : "";
+    const rows = await supabaseFetch(`tenant_display_settings?select=settings${tenantFilter}&limit=1`);
+    if (!Array.isArray(rows)) throw new Error("invalid display settings response");
+    const byRole = rows[0]?.settings?.flow_visibility;
+    machtileFlowVisibilityState.byRole = byRole && typeof byRole === "object" && !Array.isArray(byRole) ? byRole : null;
+    machtileFlowVisibilityState.status = "loaded";
+    machtileFlowVisibilityState.error = "";
+  } catch (error) {
+    machtileFlowVisibilityState.byRole = null;
+    machtileFlowVisibilityState.status = "unavailable";
+    machtileFlowVisibilityState.error = String(error?.message || error || "");
+    console.warn("flow visibility settings unavailable; every role uses full", error);
+  }
+}
+function machtileFlowVisibilityRole() {
+  return String(machtileDepartmentAccess?.role || machtileAuthState.role || "").toLowerCase();
+}
+function machtileFlowVisibilityLevel(role = machtileFlowVisibilityRole()) {
+  const core = window.MachTileProcessFlow;
+  return core?.visibilityLevel ? core.visibilityLevel(machtileFlowVisibilityState.byRole, role) : "full";
+}
+// next_only 用：這台佇列（queue_order → 狀態 → 交期，同排程看板）裡排在目前這張後面的那一張。
+function machtileCardNextQueued(machine, order) {
+  if (!machine || machine.isUnassignedBucket) return { status: "unknown" };
+  if (state.source === "supabase" && !Array.isArray(state.assignedCardOrders)) return { status: "unknown" };
+  const list = machtileMachineCardOrders().filter(o => o.machine === machine.name && machtileIsCardCandidateOrder(o))
+    .sort(machtileCompareScheduleOrders);
+  const key = order?.processId ? String(order.processId) : "";
+  const index = key ? list.findIndex(o => String(o.processId || "") === key) : -1;
+  const next = index >= 0 ? list[index + 1] : list.find(o => !key || String(o.processId || "") !== key);
+  return next ? { status: "ok", orderNo: next.id, operation: machtileOperationLabel(next), part: next.part } : { status: "none" };
+}
+
+function machtileProcessFlowMarkup(order, { compact = true, level = "full", machine = null } = {}) {
+  if (!order || level === "hidden") return "";
   const route = machtileProcessFlows.get(order.id);
   if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
   return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
-    compact,
+    compact, visibility: level,
+    nextQueued: level === "next_only" ? machtileCardNextQueued(machine, order) : null,
     ...machtileProcessFlowOptions(order.id,route.auditAvailable)});
 }
 
@@ -12990,6 +13043,7 @@ function renderMachineCard(machine) {
     ? `${machine.code || machine.name} · 已帶 ${order.id} 報工連結`
     : `${machine.code || machine.name} · ${qrReportUrl}`;
   const detailUrl = order ? workOrderDetailUrl(order.id) : "";
+  const flowLevel = machtileFlowVisibilityLevel();
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
 
@@ -13008,7 +13062,7 @@ function renderMachineCard(machine) {
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
           ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
-          ${order ? `<a class="machine-open-link" data-no-detail data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
+          ${order ? `<a class="machine-open-link" data-no-detail ${flowLevel === "full" ? `data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" ` : ""}href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
         </div>
       </header>
 
@@ -13023,7 +13077,7 @@ function renderMachineCard(machine) {
         `}
       </div>
       ${machtileCardOrdersMarkup(machine)}
-      ${machtileProcessFlowMarkup(order)}
+      ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
         ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}
 
@@ -15393,6 +15447,7 @@ function renderSettings() {
         ${renderAdminActionCard("list", "機台列表管理", "編輯機台資料、狀態與 QR Code", "blue", "list")}
         ${renderAdminActionCard("time", "產能日曆與保養", "日班、午休、例外加班、假日與機台不可排時段", "green", "calendar")}
         ${renderAdminActionCard("alarm", "警報參數設定", "LINE 通知的開關與門檻（交期/未回報/複核/開工）", "blue", "alarm")}
+        ${machtileFlowVisibilityCanEdit() ? renderAdminActionCard("list", "製程路線顯示", "各角色在機台卡片上看得到多少製程路線", "blue", "flowVisibility") : ""}
         ${renderAdminActionCard("users", "員工帳號管理", "主管、排程、師傅、品檢角色權限", "green", "users")}
         ${renderAdminActionCard("company", "公司資料", "公司基本資料與廠區名稱（頁首品牌）", "amber", "company")}
         ${renderAdminActionCard("program", `CNC 程式與加工${machtileStrictMode() && machtileSessionActive() ? "" : "（規劃中）"}`, "O 檔拖放上傳、版本比對、工件時間表", "purple", "program")}
@@ -15442,6 +15497,7 @@ function adminModuleMeta(moduleKey) {
     add: ["Machine Create", "新增機台"],
     list: ["Machine List", "機台列表管理"],
     alarm: ["Alarm Rules", "警報參數設定"],
+    flowVisibility: ["Flow Visibility", "製程路線顯示"],
     calendar: ["Capacity Calendar", "產能日曆與保養"],
     users: ["User Accounts", "員工帳號管理"],
     platform: ["Platform Admin", "平台管理"],
@@ -15494,6 +15550,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderMachineListModule();
     case "alarm":
       return renderAlarmRulesModule();
+    case "flowVisibility":
+      return renderFlowVisibilityModule();
     case "calendar":
       return renderCapacityCalendarModule();
     case "users":
@@ -15938,6 +15996,81 @@ async function machtileInitAlarmModule() {
     } catch (error) {
       const msg = String(error?.message || error || "");
       showToast(`儲存失敗：${msg.includes("FORBIDDEN") ? "此帳號沒有警報設定權限（需管理者/主管）。" : msg}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function machtileFlowVisibilityCanEdit() {
+  return !machtileStrictMode() || machtileCanManageWorkOrders();
+}
+
+function renderFlowVisibilityModule() {
+  const core = window.MachTileProcessFlow;
+  if (!machtileFlowVisibilityCanEdit() || !core?.ROLES) return '<p class="empty-note">只有管理者／主管／排程可以設定製程路線顯示。</p>';
+  const labels = amAccountCore?.ROLE_LABELS || {};
+  return `
+    <form id="machtileFlowVisForm" class="admin-form">
+      <p class="admin-module-note">設定各角色在<strong>機台卡片</strong>上看到多少製程路線。工單管理、排程看板一律顯示完整路線。預設每個角色都是「完整」。</p>
+      <p class="admin-module-note">這只控制畫面顯示，不是資料權限：作業員報工仍需要讀工序資料。</p>
+      <p class="admin-module-note" id="machtileFlowVisStatus" role="status">讀取中…</p>
+      <div class="admin-form-grid">
+        ${core.ROLES.map((role) => `
+          <label class="admin-field">
+            <span>${escapeHtml(labels[role] || role)}（${escapeHtml(role)}）</span>
+            <select data-flow-vis-role="${escapeHtml(role)}">
+              ${core.LEVELS.map((level) => `<option value="${escapeHtml(level)}">${escapeHtml(MACHTILE_FLOW_LEVEL_LABELS[level] || level)}</option>`).join("")}
+            </select>
+          </label>`).join("")}
+      </div>
+      <button class="admin-save-button" type="submit" disabled>儲存</button>
+    </form>
+  `;
+}
+
+async function machtileInitFlowVisibilityModule() {
+  const form = document.getElementById("machtileFlowVisForm");
+  const core = window.MachTileProcessFlow;
+  if (!form || !core) return;
+  const status = document.getElementById("machtileFlowVisStatus");
+  const button = form.querySelector("button[type=submit]");
+  const live = state.source === "supabase";
+  if (live) await machtileLoadFlowVisibility();
+  const current = core.normalizeVisibility(machtileFlowVisibilityState.byRole);
+  form.querySelectorAll("[data-flow-vis-role]").forEach((select) => { select.value = current[select.dataset.flowVisRole]; });
+  if (live && machtileFlowVisibilityState.status !== "loaded") {
+    status.textContent = "設定表尚未建立或讀取失敗；目前所有角色都顯示完整路線（預設）。需要後端 migration 才能儲存。";
+    form.querySelectorAll("select").forEach((select) => { select.disabled = true; });
+    return;
+  }
+  status.textContent = live ? "已讀取目前設定。" : "示範模式：只影響這個畫面，不會儲存。";
+  button.disabled = false;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const next = {};
+    form.querySelectorAll("[data-flow-vis-role]").forEach((select) => {
+      next[select.dataset.flowVisRole] = core.visibilityLevel({ x: select.value }, "x");
+    });
+    button.disabled = true;
+    try {
+      if (live) {
+        await supabaseFetch("rpc/tenant_display_settings_upsert", {
+          method: "POST",
+          body: JSON.stringify({ p_payload: { flow_visibility: next } }),
+        });
+        await machtileLoadFlowVisibility();
+        if (machtileFlowVisibilityState.status !== "loaded") throw new Error("已送出，但重新讀取失敗；請重新整理確認");
+      } else {
+        machtileFlowVisibilityState.byRole = next;
+        machtileFlowVisibilityState.status = "loaded";
+      }
+      status.textContent = "已儲存。";
+      renderAll();
+      showToast("製程路線顯示已儲存");
+    } catch (error) {
+      const msg = String(error?.message || error || "");
+      status.textContent = `儲存失敗：${msg.includes("FORBIDDEN") ? "此帳號沒有設定權限（需管理者／主管／排程）。" : msg}`;
     } finally {
       button.disabled = false;
     }
@@ -18663,6 +18796,7 @@ function openAdminModule(moduleKey) {
   if (moduleKey === "company") machtileInitCompanyModule().catch(() => {});
   if (moduleKey === "export") machtileInitExportModule();
   if (moduleKey === "alarm") machtileInitAlarmModule().catch(() => {});
+  if (moduleKey === "flowVisibility") machtileInitFlowVisibilityModule().catch(() => {});
   if (moduleKey === "calendar") machtileInitCapacityCalendarModule().catch(() => {});
   if (moduleKey === "program") machtileInitCncModule().catch(() => {});
   if (moduleKey === "inspection") machtileInitInspectionModule();
@@ -19147,9 +19281,9 @@ function renderDetail(order, detail) {
     <section class="detail-section">
       <div class="detail-section-title">
         <h3>製程進度</h3>
-        <span>${processes.length} 道製程</span>
+        <span>${machtileFlowVisibilityLevel() === "full" ? `${processes.length} 道製程` : "依角色設定"}</span>
       </div>
-      <div class="process-timeline">
+      ${machtileFlowVisibilityLevel() !== "full" ? '<p class="empty-note" data-flow-detail-restricted>此角色不顯示完整製程路線（由管理者／主管／排程在「製程路線顯示」設定）。</p>' : `<div class="process-timeline">
         ${processes.map((process) => `
           <article class="process-row ${processClass(process.status)}">
             <div class="process-index">${escapeHtml(process.process_order || "-")}</div>
@@ -19168,7 +19302,7 @@ function renderDetail(order, detail) {
             </div>
           </article>
         `).join("")}
-      </div>
+      </div>`}
     </section>
 
     <div class="detail-two-column">
