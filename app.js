@@ -8865,6 +8865,11 @@ async function machtileRestoreSession() {
 }
 
 function machtileSetSession(authResponse, email, persistence = null) {
+  // A fresh login may reuse the same account; its route-table verdict must not.
+  if (persistence) {
+    machtileMissingRouteSession = "";
+    machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  }
   const accessToken = authResponse?.access_token || "";
   const jwtPayload = hmcDecodeJwtPayload(accessToken);
   const appMetadata = jwtPayload.app_metadata || {};
@@ -8911,6 +8916,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
 
 function machtileClearSession(message = "") {
   machtileMissingRouteSession = "";
+  machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
   machtileDepartmentGeneration += 1;
   machtileDepartmentAccess = null; machtileDepartmentAccessPending = null;
   machtileDepartmentAccessFetchedAt = 0; machtileDepartmentAccessError = "";
@@ -10061,13 +10067,18 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
 // Full routing is independent of the cards view (which only contains active station rows).
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
+const MACHTILE_ROUTE_MISSING_STORAGE_KEY = "machtileRouteMissingSession";
 let machtileMissingRouteSession = "";
 function machtileRouteSessionKey() {
-  return `${machtileAuthState.userId}:${machtileAuthState.persistenceCreatedAt}`;
+  return `${machtileAuthState.tenantId}:${machtileAuthState.userId}`;
 }
 async function machtileReadRouteSteps(orderNos) {
   const sessionKey = machtileRouteSessionKey();
-  if (machtileMissingRouteSession === sessionKey) return [];
+  if (machtileMissingRouteSession === sessionKey
+      || machtileReadStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY) === sessionKey) {
+    machtileMissingRouteSession = sessionKey;
+    return [];
+  }
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
     const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
@@ -10076,6 +10087,8 @@ async function machtileReadRouteSteps(orderNos) {
   } catch (error) {
     if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
       machtileMissingRouteSession = sessionKey;
+      try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, sessionKey); }
+      catch (storageError) { /* Private-mode fallback remains in memory. */ }
       console.warn('display route table unavailable for this login; use existing process records only');
       return [];
     }

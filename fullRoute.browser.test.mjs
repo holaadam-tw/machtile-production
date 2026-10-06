@@ -28,7 +28,7 @@ const routeRows=Array.from({length:9},(_,i)=>({work_order_no:'TEST-SAME',step_no
 let n3Legacy = 4690, settingsMode = 'missing', settings = {}, role = 'operator';
 const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?n3Legacy:p.id===id(302)?5000:null,legacy_input:5000,legacy_fail:0,pending_output:0,pending_fail:0,pending_count:0,last_report_at:null,legacy_updated_at:null});
 let checks = 0;
-const blocked=[], errors=[], rpcCalls=[], upserts=[];
+const blocked=[], errors=[], rpcCalls=[], upserts=[], routeWarnings=[];
 const ok=(value,label)=>{assert(value,label); checks++; console.log('PASS '+label);};
 const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json'};
 const server=createServer(async(req,res)=>{if(req.method!=='GET'){res.writeHead(405);res.end();return}const u=new URL(req.url,'http://localhost');const file=path.resolve(root,'.'+(u.pathname==='/'?'/index.html':decodeURIComponent(u.pathname)));if(!file.startsWith(root+path.sep)){res.writeHead(403);res.end();return}try{res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream'});res.end(await readFile(file))}catch{res.writeHead(404);res.end()}});
@@ -38,7 +38,7 @@ const browser=await chromium.launch();
 async function openAs(who) {
   role = who;
   const ctx=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
-  await ctx.addInitScript(token=>sessionStorage.setItem('machtileAuthSession',JSON.stringify({version:1,accessToken:token,refreshToken:'',email:'flow@test.invalid',authMethod:'password',mode:'session',createdAt:Date.now(),rememberUntil:0})),
+  await ctx.addInitScript(token=>{if(!sessionStorage.getItem('machtileAuthSession'))sessionStorage.setItem('machtileAuthSession',JSON.stringify({version:1,accessToken:token,refreshToken:'',email:'flow@test.invalid',authMethod:'password',mode:'session',createdAt:Date.now(),rememberUntil:0}));},
     'eyJhbGciOiJub25lIn0.'+Buffer.from(JSON.stringify({sub:auth,exp:Math.floor(Date.now()/1000)+3600,app_metadata:{tenant_id:tenant,role:who},role:'authenticated'})).toString('base64url')+'.test');
   await ctx.route('**/*',async route=>{
     const req=route.request(),u=new URL(req.url());
@@ -84,6 +84,7 @@ async function openAs(who) {
     return json(200,[]);
   });
   const page=await ctx.newPage();page.on('pageerror',e=>errors.push(String(e)));
+  page.on('console',message=>{if(message.text().includes('display route table unavailable for this login'))routeWarnings.push(message.text())});
   await page.goto(base,{waitUntil:'domcontentloaded'});
   await page.waitForFunction(()=>document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
   await page.waitForFunction(()=>machtileProcessFlows.get('TEST-SAME')?.processes.length===9);
@@ -120,10 +121,18 @@ try {
   ok(await card(page,'A01').locator('[data-flow-open]').count()===0,'adjacent route-data has no full opener');
   settings={operator:'hidden'};await reload(page);ok(await card(page,'A01').locator('.process-flow').count()===0,'hidden remains hidden');
   settings={operator:'full'};
+  const warningsBeforeMissing=routeWarnings.length;
   for(const mode of ['failed','duplicate','missing']){routeMode=mode;await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===5,mode+' falls back, no stale full route');}
   const readsAfterMissing=routeGets;await reload(page);
   ok(routeGets===readsAfterMissing,'missing table is not retried by later dashboard batches or refresh in this login');
-  routeMode='full';await reload(page);ok(routeGets===readsAfterMissing,'table appearance does not bypass login-session cache');await ctx.close();
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForFunction(()=>machtileProcessFlows.get('TEST-SAME')?.processes.length===5);
+  ok(routeGets===readsAfterMissing,'missing table is not retried after full page reload in this login');
+  ok(routeWarnings.length===warningsBeforeMissing+1,'missing table warns once across refresh and full page reload');
+  routeMode='full';await reload(page);ok(routeGets===readsAfterMissing,'table appearance does not bypass login-session cache');
+  await page.evaluate(()=>machtileSetSession({access_token:machtileAuthState.accessToken,refresh_token:''},machtileAuthState.email,{mode:'session',createdAt:Date.now(),authMethod:'password'}));
+  await reload(page);
+  ok(routeGets>readsAfterMissing&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'fresh login by the same account clears missing-table cache');await ctx.close();
   ({ctx,page}=await openAs('operator'));
   ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'new login session retries and recovers route table');await ctx.close();
   ({ctx,page}=await openAs('planner'));
