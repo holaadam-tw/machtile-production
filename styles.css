@@ -12837,3 +12837,16 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .process-flow-dialog h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
 .process-flow-dialog p { color: #63717e; font-size: 12px; }
 .process-flow-dialog header button { flex-shrink: 0; padding: 6px 10px; border: 1px solid #d7dde4; border-radius: 5px; background: #fff; color: #1f5fa8; }
+/* 員工帳號管理：所屬課別（2026-10-06） */
+.am-dept-badge { border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 800; white-space: nowrap; cursor: help; background: var(--brand-blue-soft); color: var(--brand-blue); }
+.am-dept-badge.is-mill { background: var(--green-soft); color: var(--green-strong); }
+.am-dept-badge.is-both { background: var(--gray-soft); color: var(--gray); }
+.am-dept-badge.is-none { background: var(--red-soft); color: #b42318; }
+.am-dept-badge.is-bridge { background: var(--amber-soft); color: #b54708; }
+.am-dept-row { background: var(--surface); }
+.am-dept-title { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.am-dept-checks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.am-dept-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; font-weight: 700; cursor: pointer; }
+.am-dept-check input { width: 18px; height: 18px; margin: 0; }
+.am-dept-hint { display: block; margin-top: 4px; color: var(--subtle); font-size: 11px; }
+.am-dept-note { margin: 0; color: var(--muted); font-size: 12px; }

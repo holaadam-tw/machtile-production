@@ -399,7 +399,7 @@
   // ---- 修改紀錄（owner 2026-09-30：主管的每個修改都要留紀錄、看得出是哪位主管改的）----
   // 資料來自 Edge Function am-list-user-audit（admin 看全部；主管只看自己做過的）。這裡只負責排版。
   const SYSTEM_LABELS = Object.freeze({ cloud: "MachTile Cloud", factory: "工廠站", staging: "測試站" });
-  const FIELD_LABELS = Object.freeze({ name: "姓名", account: "登入帳號", role: "角色", is_active: "狀態", systems: "可用系統" });
+  const FIELD_LABELS = Object.freeze({ name: "姓名", account: "登入帳號", role: "角色", is_active: "狀態", systems: "可用系統", department_codes: "所屬課別" });
 
   function systemLabel(code) {
     return SYSTEM_LABELS[String(code)] || String(code);
@@ -418,6 +418,7 @@
   }
 
   function auditValue(field, value) {
+    if (field === "department_codes" && Array.isArray(value)) return departmentText(value);
     if (value === null || value === undefined || value === "") return "（空）";
     if (field === "account") return loginLabel(value);
     if (field === "role") return ROLE_LABELS[String(value)] || String(value);
@@ -443,6 +444,7 @@
       case "account.enable": return "啟用";
       case "account.delete": return "刪除帳號";
       case "account.delete.auth_kept": return "刪除帳號（登入身分改為永久停用）";
+      case "account.machine_departments": return "修改所屬課別";
       default: return String(entry?.action || "其他");
     }
   }
@@ -469,6 +471,79 @@
       fields,
       warn: entry?.action === "account.reset_password" && entry.affectsOtherSystems === true,
     };
+  }
+
+  // ---- 所屬課別（owner 2026-10-06：管理者／主管在帳號管理設定車床課／銑床課）----
+  // 資料來自 SQL RPC machine_departments_admin_list／_set（machtile-mini-mes migration
+  // 20261006120000）。真正的權限與驗證在伺服器；這裡只排版、整理勾選值。
+  const DEPARTMENT_CODES = Object.freeze(["LATHE", "MILL"]);
+  const DEPARTMENT_LABELS = Object.freeze({ LATHE: "車床課", MILL: "銑床課" });
+  const DEPARTMENT_ERRORS = Object.freeze({
+    FORBIDDEN: "沒有權限修改這個帳號的課別（主管只能改作業員）。",
+    USER_NOT_FOUND: "找不到這個帳號的登入身分（或不在本公司），課別沒有變動。",
+    BRIDGE_DEPARTMENTS_IMMUTABLE: "橋接帳號固定兩課，不能修改。",
+    INVALID_DEPARTMENTS: "課別只能勾車床課／銑床課。",
+    AUTH_REQUIRED: "登入已過期，請重新登入。",
+  });
+
+  // 勾選值 → 伺服器格式（只留 LATHE／MILL、去重、固定順序）。都不勾＝[]（明確無課別）。
+  function departmentSelection(values) {
+    const picked = new Set((Array.isArray(values) ? values : []).map(String));
+    return DEPARTMENT_CODES.filter((code) => picked.has(code));
+  }
+
+  // entry＝machine_departments_admin_list 的一列；沒有 entry＝不顯示徽章。
+  // department_codes=null（還沒有資料列）伺服器當兩課看待，所以顯示「兩課」。
+  function departmentBadge(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    if (entry.is_bridge === true) {
+      return { text: "🔒 兩課（橋接）", kind: "bridge", title: "橋接／回寫帳號固定兩課，不能修改。" };
+    }
+    const codes = entry.department_codes === null || entry.department_codes === undefined
+      ? DEPARTMENT_CODES.slice()
+      : departmentSelection(entry.department_codes);
+    if (!codes.length) {
+      return { text: "無課別⚠", kind: "none", title: "沒有任何課別：作業員在現場看不到機台、不能報工。" };
+    }
+    if (codes.length === 2) {
+      return { text: "兩課", kind: "both", title: entry.configured === false ? "尚未設定，預設車床課＋銑床課。" : "車床課＋銑床課。" };
+    }
+    return { text: codes[0] === "LATHE" ? "車床" : "銑床", kind: codes[0].toLowerCase(), title: `只看得到${DEPARTMENT_LABELS[codes[0]]}的機台。` };
+  }
+
+  // 編輯表單的勾選初值（null＝預設兩課）。
+  function departmentChecked(entry) {
+    if (!entry || entry.department_codes === null || entry.department_codes === undefined) return DEPARTMENT_CODES.slice();
+    return departmentSelection(entry.department_codes);
+  }
+
+  function departmentText(codes) {
+    const list = departmentSelection(codes);
+    return list.length ? list.map((code) => DEPARTMENT_LABELS[code]).join("、") : "無課別";
+  }
+
+  // PostgREST 錯誤（"400 {\"message\":\"FORBIDDEN\"…}"）→ { status, code }。
+  function departmentErrorInfo(error) {
+    const text = String(error && error.message !== undefined ? error.message : error || "");
+    const match = text.match(/^(\d{3})\s*([\s\S]*)$/);
+    const status = match ? Number(match[1]) : 0;
+    let code = "";
+    if (match) {
+      try {
+        const body = JSON.parse(match[2]);
+        code = String(body && (body.message || body.code) || "");
+      } catch (parseError) {
+        code = match[2].trim();
+      }
+    }
+    const known = Object.keys(DEPARTMENT_ERRORS).find((key) => code === key || code.startsWith(`${key} `));
+    return { status, code: known || code, missing: status === 404 };
+  }
+
+  function departmentErrorText(error) {
+    const info = departmentErrorInfo(error);
+    if (info.missing) return "課別設定尚未開通（伺服器還沒有這個功能）。";
+    return DEPARTMENT_ERRORS[info.code] || "課別儲存失敗，請稍後再試。";
   }
 
   // 重設密碼成功後的訊息（伺服器回 affectsOtherSystems / otherSystems）。
@@ -513,5 +588,13 @@
     auditTime,
     auditEntryView,
     resetDoneMessage,
+    DEPARTMENT_CODES,
+    DEPARTMENT_LABELS,
+    departmentSelection,
+    departmentBadge,
+    departmentChecked,
+    departmentText,
+    departmentErrorInfo,
+    departmentErrorText,
   };
 });

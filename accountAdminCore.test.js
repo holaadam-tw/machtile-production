@@ -216,5 +216,31 @@ console.log("== 修改紀錄排版（owner 2026-09-30）==");
   eq("重設成功訊息：舊伺服器沒回欄位", c.resetDoneMessage({ status: "ok" }), "密碼已重設。");
 }
 
+console.log("== 所屬課別 ==");
+{
+  eq("勾選整理：去重、固定順序、丟掉未知值", c.departmentSelection(["MILL", "LATHE", "MILL", "X", null]), ["LATHE", "MILL"]);
+  eq("都不勾＝明確空陣列", c.departmentSelection([]), []);
+  eq("非陣列＝空", c.departmentSelection(undefined), []);
+  eq("徽章：只有車床", c.departmentBadge({ department_codes: ["LATHE"], configured: true }).text, "車床");
+  eq("徽章：只有銑床", c.departmentBadge({ department_codes: ["MILL"], configured: true }).text, "銑床");
+  eq("徽章：兩課", c.departmentBadge({ department_codes: ["LATHE", "MILL"], configured: true }).kind, "both");
+  eq("徽章：沒有資料列＝預設兩課", c.departmentBadge({ department_codes: null, configured: false }), { text: "兩課", kind: "both", title: "尚未設定，預設車床課＋銑床課。" });
+  eq("徽章：明確空＝無課別⚠", c.departmentBadge({ department_codes: [], configured: true }).text, "無課別⚠");
+  eq("徽章：橋接帳號鎖住", c.departmentBadge({ department_codes: ["LATHE"], is_bridge: true }).kind, "bridge");
+  eq("徽章：沒有資料＝不顯示", c.departmentBadge(undefined), null);
+  eq("勾選初值：沒資料列＝兩課都勾", c.departmentChecked({ department_codes: null }), ["LATHE", "MILL"]);
+  eq("勾選初值：空", c.departmentChecked({ department_codes: [] }), []);
+  eq("文字：無課別", c.departmentText([]), "無課別");
+  eq("錯誤：PostgREST 404＝尚未部署", c.departmentErrorInfo(new Error('404 {"code":"PGRST202","message":"Could not find the function"}')).missing, true);
+  eq("錯誤：FORBIDDEN 白話", c.departmentErrorText(new Error('400 {"code":"P0001","message":"FORBIDDEN"}')), "沒有權限修改這個帳號的課別（主管只能改作業員）。");
+  eq("錯誤：橋接", c.departmentErrorInfo(new Error('400 {"message":"BRIDGE_DEPARTMENTS_IMMUTABLE"}')).code, "BRIDGE_DEPARTMENTS_IMMUTABLE");
+  eq("錯誤：非 JSON", c.departmentErrorText(new Error("500 gateway")), "課別儲存失敗，請稍後再試。");
+  eq("修改紀錄：課別新舊值", c.auditEntryView({ at: "2026-10-06T07:04:00Z", action: "account.machine_departments", actorRole: "manager", actor: { name: "黃主管" },
+    changes: { department_codes: { old: ["LATHE", "MILL"], new: ["LATHE"] } } }),
+    { when: "2026-10-06 15:04", who: "黃主管（主管）", what: "修改所屬課別", fields: ["所屬課別：車床課、銑床課 → 車床課"], warn: false });
+  eq("修改紀錄：改成無課別、原本沒資料列", c.auditEntryView({ at: "2026-10-06T07:04:00Z", action: "account.machine_departments",
+    changes: { department_codes: { old: null, new: [] } } }).fields, ["所屬課別：無課別"]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
