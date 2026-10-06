@@ -8865,6 +8865,11 @@ async function machtileRestoreSession() {
 }
 
 function machtileSetSession(authResponse, email, persistence = null) {
+  // A fresh login may reuse the same account; its route-table verdict must not.
+  if (persistence) {
+    machtileMissingRouteSession = null;
+    machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  }
   const accessToken = authResponse?.access_token || "";
   const jwtPayload = hmcDecodeJwtPayload(accessToken);
   const appMetadata = jwtPayload.app_metadata || {};
@@ -8910,6 +8915,8 @@ function machtileSetSession(authResponse, email, persistence = null) {
 }
 
 function machtileClearSession(message = "") {
+  machtileMissingRouteSession = null;
+  machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
   machtileDepartmentGeneration += 1;
   machtileDepartmentAccess = null; machtileDepartmentAccessPending = null;
   machtileDepartmentAccessFetchedAt = 0; machtileDepartmentAccessError = "";
@@ -10060,6 +10067,54 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
 // Full routing is independent of the cards view (which only contains active station rows).
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
+const MACHTILE_ROUTE_MISSING_STORAGE_KEY = "machtileRouteMissingSession";
+const MACHTILE_ROUTE_MISSING_TTL_MS = 10 * 60 * 1000;
+const MACHTILE_ROUTE_ASSET_VERSION = new URL(
+  document.querySelector('script[src*="app.js?v="]')?.src || document.currentScript?.src || 'app.js',
+  window.location.href,
+).searchParams.get('v') || '';
+let machtileMissingRouteSession = null;
+function machtileRouteSessionKey() {
+  return `${machtileAuthState.tenantId}:${machtileAuthState.userId}`;
+}
+function machtileRouteMissingValid(record, sessionKey) {
+  const age = Date.now() - Number(record?.at);
+  return Boolean(MACHTILE_ROUTE_ASSET_VERSION && record?.sessionKey === sessionKey
+    && record.version === MACHTILE_ROUTE_ASSET_VERSION && Number.isFinite(age)
+    && age >= 0 && age <= MACHTILE_ROUTE_MISSING_TTL_MS);
+}
+async function machtileReadRouteSteps(orderNos) {
+  const sessionKey = machtileRouteSessionKey();
+  const stored = machtileReadStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  if (stored) {
+    let record = null;
+    try { record = JSON.parse(stored); } catch (error) { /* Old or corrupt cache expires. */ }
+    if (machtileRouteMissingValid(record, sessionKey)) {
+      machtileMissingRouteSession = record;
+      return [];
+    }
+    machtileMissingRouteSession = null;
+    machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  } else if (machtileRouteMissingValid(machtileMissingRouteSession, sessionKey)) {
+    return []; // Storage unavailable: keep the same bounded in-memory fallback.
+  }
+  const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
+  try {
+    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+    if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
+    return rows;
+  } catch (error) {
+    if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
+      machtileMissingRouteSession = {sessionKey, version:MACHTILE_ROUTE_ASSET_VERSION, at:Date.now()};
+      try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, JSON.stringify(machtileMissingRouteSession)); }
+      catch (storageError) { /* Private-mode fallback remains in memory. */ }
+      console.warn('display route table unavailable for this login; use existing process records only');
+      return [];
+    }
+    console.warn('display route unavailable; use existing process records only',error);
+    return []; // Never preserve stale display metadata after a failed refresh.
+  }
+}
 async function machtileLoadProcessFlows() {
   const next = new Map();
   machtileProcessFlows = next;
@@ -10070,6 +10125,7 @@ async function machtileLoadProcessFlows() {
       const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
       if (!Array.isArray(rows)) throw new Error("invalid route response");
+      const displayRoutes = await machtileReadRouteSteps(chunk);
       const ids = rows.flatMap(o => (o.work_order_processes || []).map(p => p.id));
       // Same snapshot as the card's 完成進度: reuse rows the card already loaded; fetch only the rest.
       const cardRows = machtileCardPickState.progressByProcess || new Map();
@@ -10097,7 +10153,10 @@ async function machtileLoadProcessFlows() {
             reported: report ? machtileBatchCore().cardProgress(Number(p.qty_completed || 0), report, Date.now()).done : null,
             hasReports: Boolean(report?.last_report_at || Number(report?.legacy_output) > 0 || Number(p.qty_completed) > 0 || Number(p.qty_defect) > 0)};
         });
-        next.set(row.work_order_no, {quantity: row.quantity, processes,auditAvailable});
+        let merged=processes;
+        try { merged=window.MachTileProcessFlow.mergeRoute(displayRoutes.filter(r=>r.work_order_no===row.work_order_no),processes,row.work_order_no); }
+        catch(error) { console.warn('invalid display route; existing process fallback',error); }
+        next.set(row.work_order_no, {quantity: row.quantity, processes:merged,auditAvailable});
       }
     } catch (error) {
       console.warn("process flow unavailable; no guessed route/progress", error);
@@ -15233,7 +15292,7 @@ async function machtileInitWorkOrderModule() {
     document.getElementById("machtileWoNewStep").required = isNew;
     document.getElementById("machtileWoSteps").innerHTML = isNew
       ? "沒有現有工序；新增時請明確指定步序，不推測舊 MES 路線。"
-      : window.MachTileProcessFlow.render(procs, {quantity: record.quantity,
+      : window.MachTileProcessFlow.render(record.displayProcesses || procs, {quantity: record.quantity,
           ...machtileProcessFlowOptions(normalized,machtileProcessFlows.get(normalized)?.auditAvailable)});
     select.disabled = !isNew;
     document.getElementById("machtileWoProcess").value = "";
@@ -15258,6 +15317,11 @@ async function machtileInitWorkOrderModule() {
     showPrefillNote("查詢中…");
     try {
       const record = await machtileWoFetchByNo(normalized);
+      const displayRoutes = await machtileReadRouteSteps([normalized]);
+      if (record) {
+        try { record.displayProcesses=window.MachTileProcessFlow.mergeRoute(displayRoutes,record.processes,normalized); }
+        catch(error) { console.warn('management route fallback',error);record.displayProcesses=record.processes; }
+      }
       if (seq !== prefillSeq || !form.isConnected) return;   // 舊單號或已關閉的表單不能覆寫新表單
       applyPrefill(core.planPrefill({ record, current: readPrefillCurrent(), edited: prefillEdited }));
       renderSteps(record, normalized);
