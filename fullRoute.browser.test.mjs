@@ -23,7 +23,7 @@ const procs = [
   {id:id(305),work_order_id:id(201),process_order:5,process_name:'測試委外',process_type:'outsourced',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(306),work_order_id:id(201),process_order:6,process_name:'包裝',process_type:'cnc',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(309),work_order_id:id(202),process_order:2,process_name:'車削',process_type:'cnc',machine_id:id(101),status:'pending',qty_completed:0,qty_defect:0,queue_order:2}];
-let routeMode='full';
+let routeMode='full', routeGets=0;
 const routeRows=Array.from({length:9},(_,i)=>({work_order_no:'TEST-SAME',step_no:i+1,operation_name:'TEST-BOM-'+(i+1),station_no:'TEST-STATION-'+(i+1),station_codes:i===2?'B03,B04,B05,B06':'TEST-STATION-'+(i+1),is_outsourced:i===0||i===4,is_confirmed:i!==0,supplier_name:i===0?'測試委外廠商':'',supplier_no:'',source_updated_at:null}));
 let n3Legacy = 4690, settingsMode = 'missing', settings = {}, role = 'operator';
 const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?n3Legacy:p.id===id(302)?5000:null,legacy_input:5000,legacy_fail:0,pending_output:0,pending_fail:0,pending_count:0,last_report_at:null,legacy_updated_at:null});
@@ -61,6 +61,7 @@ async function openAs(who) {
     }
     if(p==='/rest/v1/rpc/tenant_display_settings_upsert'){upserts.push(body.p_payload);settings={...body.p_payload.flow_visibility};settingsMode='row';return json(200,{settings:{flow_visibility:settings}});}
     if(p==='/rest/v1/work_order_route_steps'){
+      routeGets++;
       const scoped=u.searchParams.get('work_order_no');
       ok(/^in\.\([^)]+\)$/.test(scoped||'') && scoped.slice(4,-1).split(',').length<=50,'every route GET is work-order scoped');
       if(routeMode==='failed')return json(503,{message:'TEST route outage'});
@@ -114,15 +115,29 @@ try {
   settingsMode='row';settings={operator:'next_only'};await reload(page);
   ok(await card(page,'A01').locator('[data-flow-level="next_only"] [data-flow-process="'+id(304)+'"]').count()===1,'next_only authorized next step');
   ok(await card(page,'A01').locator('[data-flow-open]').count()===0,'next_only no full opener');
+  settings={operator:'adjacent'};await reload(page);
+  ok(await card(page,'A01').locator('[data-flow-level="adjacent"] .process-flow-step').count()===3,'adjacent route-data renders only previous/current/next');
+  ok(await card(page,'A01').locator('[data-flow-open]').count()===0,'adjacent route-data has no full opener');
   settings={operator:'hidden'};await reload(page);ok(await card(page,'A01').locator('.process-flow').count()===0,'hidden remains hidden');
   settings={operator:'full'};
   for(const mode of ['failed','duplicate','missing']){routeMode=mode;await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===5,mode+' falls back, no stale full route');}
-  routeMode='full';await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'recovery on refresh');await ctx.close();
+  const readsAfterMissing=routeGets;await reload(page);
+  ok(routeGets===readsAfterMissing,'missing table is not retried by later dashboard batches or refresh in this login');
+  routeMode='full';await reload(page);ok(routeGets===readsAfterMissing,'table appearance does not bypass login-session cache');await ctx.close();
+  ({ctx,page}=await openAs('operator'));
+  ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'new login session retries and recovers route table');await ctx.close();
   ({ctx,page}=await openAs('planner'));
   await page.evaluate(()=>openAdminModule('workOrders'));await page.locator('[data-wo-edit="TEST-SAME"]').click();
   await page.waitForFunction(()=>document.querySelectorAll('#machtileWoSteps .wo-step-row').length===9);
   ok(await page.locator('#machtileWoStep option').count()===6,'management only actual processes in assignment dropdown');
   ok((await page.locator('#machtileWoSteps').innerText()).includes('委外：測試委外廠商'),'management full outsource display');
+  routeMode='missing';await reload(page);
+  const plannerReadsAfterMissing=routeGets;
+  await page.evaluate(()=>openAdminModule('workOrders'));await page.locator('[data-wo-edit="TEST-SAME"]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#machtileWoSteps .wo-step-row').length===5);
+  ok(routeGets===plannerReadsAfterMissing,'management order lookup shares the missing-table login cache');
+  routeMode='full';await ctx.close();
+  ({ctx,page}=await openAs('planner'));
   ok(await page.evaluate(()=>machtileScheduleCard(state.workOrders.find(o=>o.id==='TEST-SAME'),0,1,'A01',false,null)).then(h=>h.includes('共 9 道')),'schedule card merged route');
   ok(errors.length===0,'zero app JS errors');ok(upserts.length===0,'no upsert writes');
   const allowed=new Set(['machine_department_context','batch_report_progress','schedule_calendar_snapshot','attention_case_snapshot','hmc_runtime_snapshot','unified_event_list']);

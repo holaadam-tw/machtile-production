@@ -26,6 +26,9 @@ const machines=[{id:'a',code:'A01',department:'車床課',status:'idle'},
  {id:'bad',code:'A02',department:'車床課',status:'maintenance'},
  {id:'mill',code:'B01',department:'銑床課',status:'idle'}];
 check(flow.preplanTarget(latheRows,'p2')?.id==='p3','only immediate next existing step can be preplanned');
+const bomOnlyOutsource = {id:'route:TEST-ORDER:1',process_order:1,process_name:'委外',process_type:'outsourced',status:'',routeOnly:true,reported:null};
+check(flow.preplanTarget([bomOnlyOutsource,...latheRows],'p2')?.id==='p3','upstream BOM-only outsource without status does not block the next actual step');
+check(flow.render([bomOnlyOutsource,...latheRows],{currentId:'p2',canPreplan:true,auditAvailable:true,machines}).includes('data-flow-append="p3"'),'upstream BOM-only outsource still renders authorized preplan control');
 check(flow.candidateMachines(flow.preplanTarget(latheRows,'p2'),machines).map(x=>x.id).join()==='a','same department only, maintenance excluded');
 check(flow.preplanTarget(latheRows.map(p=>p.id==='p3'?{...p,hasReports:true}:p),'p2')===null,'reported next step not editable');
 check(flow.preplanTarget(latheRows.map(p=>p.id==='p3'?{...p,reported:null}:p),'p2')===null,'failed progress source disables preplan');

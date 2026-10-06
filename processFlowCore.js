@@ -41,7 +41,8 @@
     return /車|lathe/.test(s)?'lathe':/銑|五軸|mill|加工中心|machining/.test(s)?'mill':null;
   }
   function preplanTarget(rows,currentId) {
-    const list=steps(rows,currentId),index=list.findIndex(p=>p.current);
+    // BOM-only rows are display metadata, not unfinished dispatch records.
+    const list=steps((rows||[]).filter(p=>!p.routeOnly),currentId),index=list.findIndex(p=>p.current);
     if(index<0||list.slice(0,index).some(p=>p.status!=='completed'))return null;
     const target=list[index+1];
     return target&&!target.outsourced&&['pending','paused'].includes(target.status)

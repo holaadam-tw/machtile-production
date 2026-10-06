@@ -8910,6 +8910,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
 }
 
 function machtileClearSession(message = "") {
+  machtileMissingRouteSession = "";
   machtileDepartmentGeneration += 1;
   machtileDepartmentAccess = null; machtileDepartmentAccessPending = null;
   machtileDepartmentAccessFetchedAt = 0; machtileDepartmentAccessError = "";
@@ -10060,13 +10061,24 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
 // Full routing is independent of the cards view (which only contains active station rows).
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
+let machtileMissingRouteSession = "";
+function machtileRouteSessionKey() {
+  return `${machtileAuthState.userId}:${machtileAuthState.persistenceCreatedAt}`;
+}
 async function machtileReadRouteSteps(orderNos) {
+  const sessionKey = machtileRouteSessionKey();
+  if (machtileMissingRouteSession === sessionKey) return [];
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
     const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
     if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
     return rows;
   } catch (error) {
+    if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
+      machtileMissingRouteSession = sessionKey;
+      console.warn('display route table unavailable for this login; use existing process records only');
+      return [];
+    }
     console.warn('display route unavailable; use existing process records only',error);
     return []; // Never preserve stale display metadata after a failed refresh.
   }
