@@ -16234,6 +16234,11 @@ const amUsersState = {
   // 修改紀錄（am-list-user-audit）：展開中的帳號，與每個帳號最近 20 筆的載入結果。
   auditOpenId: "",
   auditById: {},
+  // 所屬課別（owner 2026-10-06）：SQL RPC machine_departments_admin_list 的結果，key=auth_user_id。
+  // deptStatus: idle｜ready｜missing（RPC 尚未部署→藏起課別區）｜error。
+  deptById: {},
+  deptStatus: "idle",
+  deptSavingId: "",
 };
 
 // Pure rules (sorting / delete verdict / face entry) live in accountAdminCore.js.
@@ -16278,7 +16283,7 @@ async function amCallFunction(fnName, payload, options = {}) {
 }
 
 async function amFetchUsers() {
-  const rows = await supabaseFetch("app_users?select=id,name,account,role,is_active&order=created_at.asc");
+  const rows = await supabaseFetch("app_users?select=id,name,account,role,is_active,auth_user_id&order=created_at.asc");
   // Display order (self pinned, role order, disabled last) is decided at render time by
   // accountAdminCore.sortAccounts.
   return Array.isArray(rows) ? rows : [];
@@ -16311,6 +16316,34 @@ async function amFetchUsage() {
   }
 }
 
+// 所屬課別（車床課／銑床課）：一次讀完畫面上所有帳號（machine_departments_admin_list）。
+// 權限、租戶、橋接帳號判斷都在伺服器；讀不到不擋帳號管理，只藏起課別。404＝RPC 還沒部署。
+async function amFetchDepartments(users) {
+  const ids = [...new Set((users || []).map((user) => user && user.auth_user_id).filter(Boolean))];
+  if (!ids.length) return { status: "ready", byId: {} };
+  try {
+    const rows = await supabaseFetch("rpc/machine_departments_admin_list", {
+      method: "POST",
+      body: JSON.stringify({ p_auth_user_ids: ids }),
+    });
+    const byId = {};
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (row && row.auth_user_id) byId[row.auth_user_id] = row;
+    });
+    return { status: "ready", byId };
+  } catch (error) {
+    const missing = amAccountCore
+      ? amAccountCore.departmentErrorInfo(error).missing
+      : /^404\b/.test(String(error?.message || ""));
+    return { status: missing ? "missing" : "error", byId: {} };
+  }
+}
+
+function amApplyDepartments(result) {
+  amUsersState.deptById = result.byId;
+  amUsersState.deptStatus = result.status;
+}
+
 async function amInitUsersModule() {
   const root = document.querySelector("[data-am-users-root]");
   if (!root) return;
@@ -16333,6 +16366,7 @@ async function amInitUsersModule() {
     const [users, usageById] = await Promise.all([amFetchUsers(), amFetchUsage()]);
     amUsersState.users = users;
     amUsersState.usageById = usageById;
+    amApplyDepartments(await amFetchDepartments(users));
     amUsersState.status = "ready";
   } catch (error) {
     amUsersState.status = "error";
@@ -16381,6 +16415,8 @@ function amRenderUserRow(user, selfId) {
     : { show: false };
   const id = escapeHtml(user.id);
   const display = machtileAccountDisplay(user.account) || "-";
+  const deptEntry = user.auth_user_id ? amUsersState.deptById[user.auth_user_id] : undefined;
+  const deptBadge = amUsersState.deptStatus === "ready" && amAccountCore ? amAccountCore.departmentBadge(deptEntry) : null;
   const rowClass = ["admin-data-row", "am-user-row", active ? "is-active" : "is-inactive", isSelf ? "is-self" : ""]
     .filter(Boolean)
     .join(" ");
@@ -16420,6 +16456,7 @@ function amRenderUserRow(user, selfId) {
       <div class="am-user-main">
         <strong>${escapeHtml(user.name || "-")}</strong>${isSelf ? `<span class="am-self-tag">👑 你</span>` : ""}
         <span class="am-user-account">${escapeHtml(display)}</span>
+        ${deptBadge ? `<small class="am-dept-badge is-${escapeHtml(deptBadge.kind)}" title="${escapeHtml(deptBadge.title)}" data-am-dept-badge="${id}">${escapeHtml(deptBadge.text)}</small>` : ""}
         ${impact ? `<small class="am-impact">${escapeHtml(impact.purpose)}<span>⚠ ${escapeHtml(impact.impact)}</span></small>` : ""}
       </div>
       <span class="am-user-role">${escapeHtml(amRoleText(user, usage))}</span>
@@ -16455,6 +16492,7 @@ function amRenderUserRow(user, selfId) {
         </label>
         <button type="button" data-am-edit-confirm="${id}">確認修改</button>
       </div>
+      ${amRenderDepartmentField(user, deptEntry)}
     ` : ""}
     ${resetOpen ? `
       <div class="admin-data-row am-sub-row" data-am-reset-row="${id}">
@@ -16546,6 +16584,97 @@ function amRenderUsersModule() {
   amBindUsersModuleEvents();
 }
 
+// 所屬課別區（在「編輯」展開的表單下面，獨立的「儲存課別」按鈕，不跟姓名／帳號一起送）。
+// RPC 未部署（404）或讀取失敗：只留一行說明，其他欄位照常可改。橋接帳號：鎖住不給改。
+function amRenderDepartmentField(user, entry) {
+  const id = escapeHtml(user.id);
+  const status = amUsersState.deptStatus;
+  const note = (text, attr = "") => `<p class="am-dept-note"${attr}>${escapeHtml(text)}</p>`;
+  let body;
+  let action = "";
+  if (!amAccountCore || status === "missing") {
+    body = note("課別設定尚未開通（伺服器還沒有這個功能），其他欄位照常可改。", " data-am-dept-unavailable");
+  } else if (status !== "ready") {
+    body = note("課別暫時讀不到，請稍後重新整理再試。", " data-am-dept-unavailable");
+  } else if (!user.auth_user_id || !entry) {
+    body = note("這個帳號沒有連結登入身分，不能設定課別。", ` data-am-dept-nologin="${id}"`);
+  } else if (entry.is_bridge === true) {
+    body = note("🔒 橋接／回寫帳號固定兩課，不能修改。", ` data-am-dept-locked="${id}"`);
+  } else {
+    const checked = amAccountCore.departmentChecked(entry);
+    const saving = amUsersState.deptSavingId === user.id;
+    const boxes = amAccountCore.DEPARTMENT_CODES.map((code) => `
+          <label class="am-dept-check">
+            <input type="checkbox" value="${code}" data-am-dept-check="${id}"${checked.includes(code) ? " checked" : ""}${saving ? " disabled" : ""}>
+            <span>${escapeHtml(amAccountCore.DEPARTMENT_LABELS[code])}</span>
+          </label>`).join("");
+    const roleHint = ["admin", "manager", "planner"].includes(String(user.role))
+      ? `<small class="am-dept-hint">管理者／主管／排程本來就看得到全部課別；這個設定只在作業員身上生效。</small>`
+      : "";
+    body = `
+        <div class="am-dept-checks" role="group" aria-label="所屬課別">${boxes}</div>
+        <small class="am-dept-hint">都不勾＝無課別：作業員在現場看不到任何機台。${entry.configured === false ? "目前尚未設定（預設兩課）。" : ""}</small>
+        ${roleHint}`;
+    action = `<button type="button" data-am-dept-save="${id}"${saving ? " disabled" : ""}>${saving ? "儲存中…" : "儲存課別"}</button>`;
+  }
+  return `
+      <div class="admin-data-row am-sub-row am-dept-row" data-am-dept-row="${id}">
+        <div class="am-sub-wide">
+          <span class="am-dept-title">所屬課別（MachTile 機台）</span>
+          ${body}
+        </div>
+        ${action}
+      </div>`;
+}
+
+// Re-render while keeping what was typed (but not yet saved) in the name/account fields.
+function amRenderKeepingEditDraft(id) {
+  const root = document.querySelector("[data-am-users-root]");
+  const name = root?.querySelector(`[data-am-edit-name="${id}"]`)?.value;
+  const email = root?.querySelector(`[data-am-edit-email="${id}"]`)?.value;
+  amRenderUsersModule();
+  const nameInput = root?.querySelector(`[data-am-edit-name="${id}"]`);
+  const emailInput = root?.querySelector(`[data-am-edit-email="${id}"]`);
+  if (nameInput && name !== undefined) nameInput.value = name;
+  if (emailInput && email !== undefined) emailInput.value = email;
+}
+
+async function amSaveDepartments(id) {
+  const root = document.querySelector("[data-am-users-root]");
+  const user = amUsersState.users.find((row) => row.id === id);
+  if (!root || !user || !user.auth_user_id || !amAccountCore || amUsersState.deptSavingId) return;
+  const codes = amAccountCore.departmentSelection(
+    [...root.querySelectorAll(`[data-am-dept-check="${id}"]`)].filter((box) => box.checked).map((box) => box.value),
+  );
+  const name = user.name || machtileAccountDisplay(user.account);
+  amUsersState.deptSavingId = id;
+  amSetMessage("", "");
+  amRenderKeepingEditDraft(id);
+  try {
+    const result = await supabaseFetch("rpc/machine_departments_admin_set", {
+      method: "POST",
+      body: JSON.stringify({ p_auth_user_id: user.auth_user_id, p_department_codes: codes }),
+    });
+    const saved = Array.isArray(result?.department_codes) ? result.department_codes : codes;
+    amUsersState.deptById[user.auth_user_id] = {
+      ...(amUsersState.deptById[user.auth_user_id] || {}),
+      auth_user_id: user.auth_user_id,
+      department_codes: saved,
+      configured: true,
+    };
+    const text = amAccountCore.departmentText(saved);
+    amSetMessage(result?.changed === false
+      ? `「${name}」的課別沒有變動（${text}）。`
+      : `已儲存「${name}」的課別：${text}。已留下修改紀錄。`, "ok");
+    if (amUsersState.auditOpenId === id) amLoadAudit(id);
+  } catch (error) {
+    if (amAccountCore.departmentErrorInfo(error).missing) amUsersState.deptStatus = "missing";
+    amSetMessage(amAccountCore.departmentErrorText(error), "error");
+  }
+  amUsersState.deptSavingId = "";
+  amRenderKeepingEditDraft(id);
+}
+
 // 修改紀錄 panel under a row (最近 20 筆). Manager: the server only returns rows the manager wrote.
 function amRenderAuditPanel(appUserId) {
   const slot = amUsersState.auditById[appUserId] || { status: "loading" };
@@ -16623,6 +16752,7 @@ async function amReloadUsers() {
     const [users, usageById] = await Promise.all([amFetchUsers(), amFetchUsage()]);
     amUsersState.users = users;
     amUsersState.usageById = usageById;
+    amApplyDepartments(await amFetchDepartments(users));
   } catch (error) {
     amSetMessage(`重新載入失敗：${error.message}`, "error");
   }
@@ -16785,6 +16915,10 @@ function amBindUsersModuleEvents() {
         amRenderUsersModule();
       }
     });
+  });
+
+  root.querySelectorAll("[data-am-dept-save]").forEach((button) => {
+    button.addEventListener("click", () => amSaveDepartments(button.getAttribute("data-am-dept-save")));
   });
 
   root.querySelectorAll("[data-am-reset-confirm]").forEach((button) => {
