@@ -130,9 +130,31 @@ try {
   ok(routeGets===readsAfterMissing,'missing table is not retried after full page reload in this login');
   ok(routeWarnings.length===warningsBeforeMissing+1,'missing table warns once across refresh and full page reload');
   routeMode='full';await reload(page);ok(routeGets===readsAfterMissing,'table appearance does not bypass login-session cache');
+  ok(await page.evaluate(()=>{
+    const record=JSON.parse(sessionStorage.getItem('machtileRouteMissingSession'));
+    return record.version===new URL(document.querySelector('script[src*="app.js?v="]').src).searchParams.get('v')
+      && Number.isFinite(record.at)&&Date.now()-record.at<600000;
+  }),'missing-table marker contains current asset version and timestamp');
+  await page.evaluate(()=>{
+    const record=JSON.parse(sessionStorage.getItem('machtileRouteMissingSession'));
+    record.at=Date.now()-600001;
+    sessionStorage.setItem('machtileRouteMissingSession',JSON.stringify(record));
+  });
+  const readsBeforeExpiry=routeGets;await reload(page);
+  ok(routeGets>readsBeforeExpiry&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'expired marker retries route and recovers without new login');
+  routeMode='missing';await reload(page);
+  routeMode='full';await page.evaluate(()=>{
+    const record=JSON.parse(sessionStorage.getItem('machtileRouteMissingSession'));
+    record.version='previous-deployment';
+    sessionStorage.setItem('machtileRouteMissingSession',JSON.stringify(record));
+  });
+  const readsBeforeVersionChange=routeGets;await reload(page);
+  ok(routeGets>readsBeforeVersionChange&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'old asset version marker retries route and recovers');
+  routeMode='missing';await reload(page);
+  routeMode='full';const readsBeforeNewLogin=routeGets;
   await page.evaluate(()=>machtileSetSession({access_token:machtileAuthState.accessToken,refresh_token:''},machtileAuthState.email,{mode:'session',createdAt:Date.now(),authMethod:'password'}));
   await reload(page);
-  ok(routeGets>readsAfterMissing&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'fresh login by the same account clears missing-table cache');await ctx.close();
+  ok(routeGets>readsBeforeNewLogin&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'fresh login by the same account clears missing-table cache');await ctx.close();
   ({ctx,page}=await openAs('operator'));
   ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'new login session retries and recovers route table');await ctx.close();
   ({ctx,page}=await openAs('planner'));

@@ -55,7 +55,7 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | cardPick | 77 PASS |
 | cardTidy | 67 PASS |
 | firstArticle | 40 PASS |
-| fullRoute | 45 PASS |
+| fullRoute | 52 PASS |
 | machineDepartments | 106 PASS |
 | monitorEntry | 42 PASS |
 | navTrim | 79 PASS |
@@ -67,11 +67,13 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | workOrderProcess | 99 PASS |
 | workOrders | 91 PASS |
 
-fullRoute 45 項包含每次路線 GET 必帶最多 50 張單的 `work_order_no=in.(...)` 篩選、
+fullRoute 52 項包含每次路線 GET 必帶最多 50 張單的 `work_order_no=in.(...)` 篩選、
 9 道（7+）、已完成、同張卡片 4690 的快照一致、委外廠商／
 缺狀態、不具備機台控制、1440/390、條內橫捲但整頁不溢出、hidden/next_only、
 503／缺表／重複路線退回原工序；缺表 404/PGRST205 在本次登入快取，
-同次登入的刷新、整頁重載與管理頁不再重試或重複警告，同帳號重新登入才恢復查詢；管理選單僅原工序、排程卡片、
+同次登入的刷新、整頁重載與管理頁不再重試或重複警告；記號綁目前 `app.js?v=`
+並在 10 分鐘後到期，版本變更或到期都會重新查詢，同帳號重新登入也會清除；
+管理選單僅原工序、排程卡片、
 adjacent 加路線資料仍只顯示前後道；BOM-only 委外上游不阻擋實際下一道預排，
 0 JS errors／0 upsert／只呼叫既有唯讀 RPC／無正式網域。
 

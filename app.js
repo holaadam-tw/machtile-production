@@ -8867,7 +8867,7 @@ async function machtileRestoreSession() {
 function machtileSetSession(authResponse, email, persistence = null) {
   // A fresh login may reuse the same account; its route-table verdict must not.
   if (persistence) {
-    machtileMissingRouteSession = "";
+    machtileMissingRouteSession = null;
     machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
   }
   const accessToken = authResponse?.access_token || "";
@@ -8915,7 +8915,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
 }
 
 function machtileClearSession(message = "") {
-  machtileMissingRouteSession = "";
+  machtileMissingRouteSession = null;
   machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
   machtileDepartmentGeneration += 1;
   machtileDepartmentAccess = null; machtileDepartmentAccessPending = null;
@@ -10068,16 +10068,35 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
 const MACHTILE_ROUTE_MISSING_STORAGE_KEY = "machtileRouteMissingSession";
-let machtileMissingRouteSession = "";
+const MACHTILE_ROUTE_MISSING_TTL_MS = 10 * 60 * 1000;
+const MACHTILE_ROUTE_ASSET_VERSION = new URL(
+  document.querySelector('script[src*="app.js?v="]')?.src || document.currentScript?.src || 'app.js',
+  window.location.href,
+).searchParams.get('v') || '';
+let machtileMissingRouteSession = null;
 function machtileRouteSessionKey() {
   return `${machtileAuthState.tenantId}:${machtileAuthState.userId}`;
 }
+function machtileRouteMissingValid(record, sessionKey) {
+  const age = Date.now() - Number(record?.at);
+  return Boolean(MACHTILE_ROUTE_ASSET_VERSION && record?.sessionKey === sessionKey
+    && record.version === MACHTILE_ROUTE_ASSET_VERSION && Number.isFinite(age)
+    && age >= 0 && age <= MACHTILE_ROUTE_MISSING_TTL_MS);
+}
 async function machtileReadRouteSteps(orderNos) {
   const sessionKey = machtileRouteSessionKey();
-  if (machtileMissingRouteSession === sessionKey
-      || machtileReadStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY) === sessionKey) {
-    machtileMissingRouteSession = sessionKey;
-    return [];
+  const stored = machtileReadStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  if (stored) {
+    let record = null;
+    try { record = JSON.parse(stored); } catch (error) { /* Old or corrupt cache expires. */ }
+    if (machtileRouteMissingValid(record, sessionKey)) {
+      machtileMissingRouteSession = record;
+      return [];
+    }
+    machtileMissingRouteSession = null;
+    machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
+  } else if (machtileRouteMissingValid(machtileMissingRouteSession, sessionKey)) {
+    return []; // Storage unavailable: keep the same bounded in-memory fallback.
   }
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
@@ -10086,8 +10105,8 @@ async function machtileReadRouteSteps(orderNos) {
     return rows;
   } catch (error) {
     if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
-      machtileMissingRouteSession = sessionKey;
-      try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, sessionKey); }
+      machtileMissingRouteSession = {sessionKey, version:MACHTILE_ROUTE_ASSET_VERSION, at:Date.now()};
+      try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, JSON.stringify(machtileMissingRouteSession)); }
       catch (storageError) { /* Private-mode fallback remains in memory. */ }
       console.warn('display route table unavailable for this login; use existing process records only');
       return [];
