@@ -13,6 +13,10 @@ SQL／正式DB套用、PR合併與部署都要 owner 另行核准，這次沒執
 超限／非陣列／重複步序／跨工單資料失敗就退回原工序，不保留上次的路線 metadata。
 原工序來源失敗仍沿用既有「未驗證」提示，不能拿 BOM 推算報工數或機台。
 
+#770 審查後，同步讀 `station_codes` 與 `is_confirmed`：共用站如 B03–B06
+全部以「對應機台」列出；未發行 BOM 仍可顯示，但每道明確標「BOM 未發行」。
+這兩欄只作顯示，不給機台操作權，也不改流程狀態或已報數。
+
 每格：BOM 工序名＋N步序；廠內以 process_order 對現有 work_order_processes，
 保留 ID、status、原 cardProgress 已報快照、機台與改派 audit；委外顯示
 「委外：廠商名」（缺名退實際廠商代號，皆缺則無資料），不具備機台或预排控制。
@@ -35,7 +39,7 @@ APP 使用 #64 visibilityLevel() 控制卡片，資料庫只回該角色允許�
 ## 驗證與重跑
 
 Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
-核心 `node processFlowCore.test.js`：66/66 PASS；另 12 支既有非 browser 測試 PASS。
+核心 `node processFlowCore.test.js`：68/68 PASS；另 12 支既有非 browser 測試先前 PASS。
 設 `MACHTILE_PLAYWRIGHT_MODULE` 指向筆電既有 playwright/index.mjs，逐支執行
 `node <檔名>.browser.test.mjs`，使用 localhost 靜態伺服器＋攔截的假後端。
 只有假資料 TEST-SAME／TEST-BOM／測試廠商，沒有正式帳號、單號或庫存數字。
@@ -51,7 +55,7 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | cardPick | 77 PASS |
 | cardTidy | 67 PASS |
 | firstArticle | 40 PASS |
-| fullRoute | 23 PASS |
+| fullRoute | 24 PASS |
 | machineDepartments | 106 PASS |
 | monitorEntry | 42 PASS |
 | navTrim | 79 PASS |
@@ -63,7 +67,7 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | workOrderProcess | 99 PASS |
 | workOrders | 91 PASS |
 
-fullRoute 23 項包含 9 道（7+）、已完成、同張卡片 4690 的快照一致、委外廠商／
+fullRoute 24 項包含 9 道（7+）、已完成、同張卡片 4690 的快照一致、委外廠商／
 缺狀態、不具備機台控制、1440/390、條內橫捲但整頁不溢出、hidden/next_only、
 503／缺表／重複路線退回原工序、恢復後完整、管理選單僅原工序、排程卡片、
 0 JS errors／0 upsert／只呼叫既有唯讀 RPC／無正式網域。

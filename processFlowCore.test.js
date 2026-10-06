@@ -70,13 +70,15 @@ check(nextOnly.includes('本機下一張')&&nextOnly.includes('NEXT-ORDER')&&!ne
 check(lv('next_only',{nextQueued:{status:'none'}}).includes('本機佇列沒有下一張')&&lv('next_only').includes('佇列資料無法確認'),'next_only queue empty vs unknown are distinct');
 check(flow.render(rows,{currentId:'p8',compact:true,visibility:'next_only',nextQueued:{status:'none'}}).includes('最後一道'),'next_only last step never invents a next step');
 check(lv('hidden')===''&&flow.render([],{visibility:'hidden'})==='','hidden renders no flow strip');
-const metadata=Array.from({length:8},(_,i)=>({step_no:i+1,operation_name:`BOM-${i+1}`,is_outsourced:i===0||i===3,supplier_name:i===0?'測試廠商':'',supplier_no:i===0?'TEST-V':'',station_no:'TEST'}));
+const metadata=Array.from({length:8},(_,i)=>({step_no:i+1,operation_name:`BOM-${i+1}`,is_outsourced:i===0||i===3,is_confirmed:i!==0,station_codes:i===1?'B03,B04,B05,B06':'TEST',supplier_name:i===0?'測試廠商':'',supplier_no:i===0?'TEST-V':'',station_no:'TEST'}));
 const actual=[{...rows[1],process_name:'old',process_order:2,reported:48},{...rows[2],process_order:3,reported:100,status:'completed'}];
 const merged=flow.mergeRoute(metadata,actual,'TEST-ORDER');
 check(merged.length===8&&merged[0].routeOnly,'all BOM steps retained without dispatch rows');
 check(merged[1].id===actual[0].id&&merged[1].reported===48&&merged[1].process_name==='BOM-2','actual ID/progress retained, operation name from BOM');
 check(flow.steps(merged,actual[0].id,100)[2].label==='已完成','actual completed status preserved');
 check(flow.steps(merged)[0].resource==='委外：測試廠商'&&flow.steps(merged)[0].label==='委外狀態無資料','display-only outsource has vendor but no invented status');
+check(flow.render(merged,{visibility:'full'}).includes('BOM 未發行'),'unpublished route remains visible with warning');
+check(flow.steps(merged)[1].resource.includes('B03、B04、B05、B06'),'shared station lists all candidate machines');
 check(!flow.render(merged,{currentId:actual[0].id,canPreplan:true,auditAvailable:true,machines}).includes('data-flow-append'),'outsource or missing actual process cannot be preplanned');
 check(flow.mergeRoute([],actual,'TEST-ORDER').length===2,'missing route retains old processes');
 check(flow.steps(merged)[7].resource==='機台無資料'&&flow.steps(merged)[7].done===null,'unassigned metadata does not invent assignment/zero output');

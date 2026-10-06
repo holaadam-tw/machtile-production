@@ -10063,7 +10063,7 @@ let machtileProcessFlows = new Map();
 async function machtileReadRouteSteps(orderNos) {
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
-    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,is_outsourced,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
     if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
     return rows;
   } catch (error) {

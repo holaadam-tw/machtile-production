@@ -24,7 +24,7 @@ const procs = [
   {id:id(306),work_order_id:id(201),process_order:6,process_name:'包裝',process_type:'cnc',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(309),work_order_id:id(202),process_order:2,process_name:'車削',process_type:'cnc',machine_id:id(101),status:'pending',qty_completed:0,qty_defect:0,queue_order:2}];
 let routeMode='full';
-const routeRows=Array.from({length:9},(_,i)=>({work_order_no:'TEST-SAME',step_no:i+1,operation_name:'TEST-BOM-'+(i+1),station_no:'TEST-STATION-'+(i+1),is_outsourced:i===0||i===4,supplier_name:i===0?'測試委外廠商':'',supplier_no:'',source_updated_at:null}));
+const routeRows=Array.from({length:9},(_,i)=>({work_order_no:'TEST-SAME',step_no:i+1,operation_name:'TEST-BOM-'+(i+1),station_no:'TEST-STATION-'+(i+1),station_codes:i===2?'B03,B04,B05,B06':'TEST-STATION-'+(i+1),is_outsourced:i===0||i===4,is_confirmed:i!==0,supplier_name:i===0?'測試委外廠商':'',supplier_no:'',source_updated_at:null}));
 let n3Legacy = 4690, settingsMode = 'missing', settings = {}, role = 'operator';
 const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?n3Legacy:p.id===id(302)?5000:null,legacy_input:5000,legacy_fail:0,pending_output:0,pending_fail:0,pending_count:0,last_report_at:null,legacy_updated_at:null});
 let checks = 0;
@@ -100,6 +100,7 @@ try {
   const dialog=page.locator('#machtileFullProcessFlow');
   ok(await dialog.locator('.process-flow-step').count()===9,'full dialog retains 7+ steps');
   ok((await dialog.innerText()).includes('委外：測試委外廠商')&&(await dialog.innerText()).includes('委外狀態無資料'),'vendor but no invented outsource status');
+  ok((await dialog.innerText()).includes('B03、B04、B05、B06')&&(await dialog.innerText()).includes('BOM 未發行'),'shared machines and unpublished BOM warning render');
   ok((await dialog.locator('[data-flow-process="'+id(302)+'"]').innerText()).includes('已完成'),'actual completed status retained');
   ok((await dialog.locator('[data-flow-process="'+id(303)+'"]').innerText()).includes('已報 4690 / 5000'),'same card/flow quantity snapshot');
   ok(await dialog.locator('[data-flow-process="route:TEST-SAME:5"] select,[data-flow-process="route:TEST-SAME:5"] button').count()===0,'outsource has no assignment controls');
