@@ -10060,6 +10060,17 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
 // Full routing is independent of the cards view (which only contains active station rows).
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
+async function machtileReadRouteSteps(orderNos) {
+  const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
+  try {
+    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,is_outsourced,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+    if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
+    return rows;
+  } catch (error) {
+    console.warn('display route unavailable; use existing process records only',error);
+    return []; // Never preserve stale display metadata after a failed refresh.
+  }
+}
 async function machtileLoadProcessFlows() {
   const next = new Map();
   machtileProcessFlows = next;
@@ -10070,6 +10081,7 @@ async function machtileLoadProcessFlows() {
       const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
       if (!Array.isArray(rows)) throw new Error("invalid route response");
+      const displayRoutes = await machtileReadRouteSteps(chunk);
       const ids = rows.flatMap(o => (o.work_order_processes || []).map(p => p.id));
       // Same snapshot as the card's 完成進度: reuse rows the card already loaded; fetch only the rest.
       const cardRows = machtileCardPickState.progressByProcess || new Map();
@@ -10097,7 +10109,10 @@ async function machtileLoadProcessFlows() {
             reported: report ? machtileBatchCore().cardProgress(Number(p.qty_completed || 0), report, Date.now()).done : null,
             hasReports: Boolean(report?.last_report_at || Number(report?.legacy_output) > 0 || Number(p.qty_completed) > 0 || Number(p.qty_defect) > 0)};
         });
-        next.set(row.work_order_no, {quantity: row.quantity, processes,auditAvailable});
+        let merged=processes;
+        try { merged=window.MachTileProcessFlow.mergeRoute(displayRoutes.filter(r=>r.work_order_no===row.work_order_no),processes,row.work_order_no); }
+        catch(error) { console.warn('invalid display route; existing process fallback',error); }
+        next.set(row.work_order_no, {quantity: row.quantity, processes:merged,auditAvailable});
       }
     } catch (error) {
       console.warn("process flow unavailable; no guessed route/progress", error);
@@ -15233,7 +15248,7 @@ async function machtileInitWorkOrderModule() {
     document.getElementById("machtileWoNewStep").required = isNew;
     document.getElementById("machtileWoSteps").innerHTML = isNew
       ? "沒有現有工序；新增時請明確指定步序，不推測舊 MES 路線。"
-      : window.MachTileProcessFlow.render(procs, {quantity: record.quantity,
+      : window.MachTileProcessFlow.render(record.displayProcesses || procs, {quantity: record.quantity,
           ...machtileProcessFlowOptions(normalized,machtileProcessFlows.get(normalized)?.auditAvailable)});
     select.disabled = !isNew;
     document.getElementById("machtileWoProcess").value = "";
@@ -15258,6 +15273,11 @@ async function machtileInitWorkOrderModule() {
     showPrefillNote("查詢中…");
     try {
       const record = await machtileWoFetchByNo(normalized);
+      const displayRoutes = await machtileReadRouteSteps([normalized]);
+      if (record) {
+        try { record.displayProcesses=window.MachTileProcessFlow.mergeRoute(displayRoutes,record.processes,normalized); }
+        catch(error) { console.warn('management route fallback',error);record.displayProcesses=record.processes; }
+      }
       if (seq !== prefillSeq || !form.isConnected) return;   // 舊單號或已關閉的表單不能覆寫新表單
       applyPrefill(core.planPrefill({ record, current: readPrefillCurrent(), edited: prefillEdited }));
       renderSteps(record, normalized);

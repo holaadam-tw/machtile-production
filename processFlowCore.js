@@ -8,6 +8,31 @@
   const text = v => v == null ? "" : String(v).trim();
   const escape = v => text(v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const numeric = v => v != null && text(v) !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null;
+  // Display metadata cannot create a dispatchable process, progress, status or assignment.
+  function mergeRoute(routeRows, processes, orderNo) {
+    const actual = Array.isArray(processes) ? processes : [];
+    if (!Array.isArray(routeRows) || !routeRows.length) return actual.slice();
+    const seen = new Set(), byStep = new Map();
+    for (const p of actual) {
+      const n = Number(p.process_order);
+      if (byStep.has(n)) throw new Error('ambiguous actual process step');
+      byStep.set(n,p);
+    }
+    const result = routeRows.map(r => {
+      const n = Number(r.step_no);
+      if (!Number.isInteger(n) || n<=0 || seen.has(n) || typeof r.is_outsourced !== 'boolean'
+        || (r.work_order_no != null && text(r.work_order_no)!==text(orderNo))) throw new Error('invalid display route');
+      seen.add(n);
+      const p = byStep.get(n);
+      if (r.is_outsourced) return {id:p?.id||`route:${orderNo}:${n}`,process_order:n,process_name:text(r.operation_name),
+        process_type:'outsourced',supplier_name:text(r.supplier_name),supplier_code:text(r.supplier_no),
+        status:p?.status||'',reported:p?.reported??null,routeOnly:!p,hasReports:p?.hasReports||false};
+      return {...(p || {id:`route:${orderNo}:${n}`,process_order:n,status:'',reported:null,routeOnly:true}),
+        process_name:text(r.operation_name)||text(p?.process_name),process_type:p?.process_type||'cnc'};
+    });
+    // Old dispatch records remain real data; metadata cannot delete them or hide stale assignment conflicts.
+    return result.concat(actual.filter(p=>!seen.has(Number(p.process_order)))).sort((a,b)=>Number(a.process_order)-Number(b.process_order));
+  }
   function department(value) {
     const s=text(value).toLowerCase();
     return /車|lathe/.test(s)?'lathe':/銑|五軸|mill|加工中心|machining/.test(s)?'mill':null;
@@ -55,13 +80,13 @@
       const state = text(p.status);
       const done = numeric(p.reported);
       const label = state === "completed" ? "已完成"
-        : outsourced ? (["running", "in_progress"].includes(state) ? "委外中" : state === "pending" ? "待發包" : "狀態待確認")
+        : outsourced ? (["running", "in_progress"].includes(state) ? "委外中" : state === "pending" ? "待發包" : "委外狀態無資料")
         : ["running", "in_progress"].includes(state) ? "進行中"
         : state === "pending" ? quantityLabel(done, qty) : "狀態待確認";
       return {...p, label, outsourced, current: Boolean(currentId && String(p.id) === String(currentId)),
         number: Number.isInteger(Number(p.process_order)) && Number(p.process_order)>0 ? `N${p.process_order}` : "步序無資料",
         name: text(p.process_name) || text(p.PP_Name) || "工序名無資料",
-        resource: outsourced ? text(p.supplier_code) || "委外廠商無資料" : text(p.machine_code) || "未排機",
+        resource: outsourced ? `委外：${text(p.supplier_name) || text(p.supplier_code) || "廠商無資料"}` : text(p.machine_code) || (p.routeOnly ? "機台無資料" : "未排機"),
         done};
     });
   }
@@ -108,6 +133,6 @@
     return `<div class="process-flow${compact?' process-flow-compact':''}${compact&&!opener?' process-flow-static':''}" data-flow-level="${level}" ${opener?`data-flow-open="${escape(orderNo)}" data-flow-current="${escape(currentId)}"`:''} ${!alignCurrent||compact?'data-flow-aligned="true"':''} data-no-detail ${opener||!compact?'tabindex="0" ':''}role="${opener?'button':compact?'group':'region'}" aria-label="${escape(label)}（${opener?'點開完整路線':compact?'前後道預覽':'可橫向捲動'}）">${countText?`<span class="process-flow-count">${countText}</span>`:''}<ol>${visible.map(p =>
       `<li class="process-flow-step wo-step-row${p.current ? " is-current" : ""}"${p.current ? ' aria-current="step"' : ""} data-flow-process="${escape(p.id)}">${compact?`<span class="process-flow-kind">${p.current?'目前道':list.indexOf(p)<currentIndex?'上一道'+(p.status==='completed'?' ✓':''):'下一道'}</span>`:''}<div class="process-flow-head"><strong>${escape(p.number)}</strong><span class="process-flow-status"><i aria-hidden="true"></i>${escape(p.label)}</span></div><b class="process-flow-name">${escape(p.name)}</b><span>${escape(p.resource)}</span><span class="process-flow-quantity">${p.done === null ? "已報無資料" : `已報 ${escape(p.done)}`} / ${qty === null ? "工單量無資料" : escape(qty)}${p.hasReports ? ' <small>已鎖定</small>' : ""}</span>${p.assignmentEvent?.kind==='legacy_reassigned'?'<small class="process-flow-reassigned">已依舊 MES 改派</small>':p.assignmentEvent?.kind==='preplan'?'<small>已預排，等待舊 MES 派工確認</small>':p.assignmentEvent?.kind==='legacy_confirmed'?'<small>舊 MES 已確認同台</small>':''}${controls(p)}</li>`).join("")}</ol></div>`;
   }
-  return {steps, render,department,operationDepartment,preplanTarget,candidateMachines,
+  return {steps, render,mergeRoute,department,operationDepartment,preplanTarget,candidateMachines,
     LEVELS,ROLES,visibilityLevel,normalizeVisibility,quantityLabel};
 });
