@@ -55,7 +55,7 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | cardPick | 77 PASS |
 | cardTidy | 67 PASS |
 | firstArticle | 40 PASS |
-| fullRoute | 24 PASS |
+| fullRoute | 33 PASS |
 | machineDepartments | 106 PASS |
 | monitorEntry | 42 PASS |
 | navTrim | 79 PASS |
@@ -67,7 +67,8 @@ Node syntax：`node --check app.js`、`node --check processFlowCore.js`。
 | workOrderProcess | 99 PASS |
 | workOrders | 91 PASS |
 
-fullRoute 24 項包含 9 道（7+）、已完成、同張卡片 4690 的快照一致、委外廠商／
+fullRoute 33 項包含每次路線 GET 必帶最多 50 張單的 `work_order_no=in.(...)` 篩選、
+9 道（7+）、已完成、同張卡片 4690 的快照一致、委外廠商／
 缺狀態、不具備機台控制、1440/390、條內橫捲但整頁不溢出、hidden/next_only、
 503／缺表／重複路線退回原工序、恢復後完整、管理選單僅原工序、排程卡片、
 0 JS errors／0 upsert／只呼叫既有唯讀 RPC／無正式網域。

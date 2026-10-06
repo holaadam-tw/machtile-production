@@ -61,6 +61,8 @@ async function openAs(who) {
     }
     if(p==='/rest/v1/rpc/tenant_display_settings_upsert'){upserts.push(body.p_payload);settings={...body.p_payload.flow_visibility};settingsMode='row';return json(200,{settings:{flow_visibility:settings}});}
     if(p==='/rest/v1/work_order_route_steps'){
+      const scoped=u.searchParams.get('work_order_no');
+      ok(/^in\.\([^)]+\)$/.test(scoped||'') && scoped.slice(4,-1).split(',').length<=50,'every route GET is work-order scoped');
       if(routeMode==='failed')return json(503,{message:'TEST route outage'});
       if(routeMode==='missing')return json(404,{code:'PGRST205'});
       if(routeMode==='duplicate')return json(200,[routeRows[0],routeRows[0]]);
