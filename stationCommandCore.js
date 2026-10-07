@@ -330,11 +330,25 @@
     APS_SIM_NOT_FOUND: "舊 MES 找不到這張單的排程資料，請找生管。",
     STALE_COMMAND: "太久沒套用，舊 MES 沒動，請重按",
     LEGACY_APPLIED_LATE: "舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對",
+    // 套用端 #785 新增：NEED_PAUSED、OPERATOR_LIST_TOO_LONG＝舊 MES 沒動；LEGACY_PARTIAL_WRITE、ORDER_CHANGED_DURING_APPLY＝舊 MES 已改（不可說沒生效）
+    NEED_PAUSED: "這張單暫停中，請問生管",
+    OPERATOR_LIST_TOO_LONG: "這台的作業員名單太長，請生管先整理名單",
+    LEGACY_PARTIAL_WRITE: "舊 MES 已經改了一部分，請看機台電子紙或問生管核對",
+    ORDER_CHANGED_DURING_APPLY: "套用時機台上的單剛好被換了，舊 MES 已經改了，請問生管核對",
     MANUAL_RELEASED: "主管已取消這筆；舊 MES 是否已改變不確定，請先看機台電子紙或問生管，再決定要不要重按",
     EXPIRED: "超過 10 分鐘工廠都沒有接手，這次沒有生效（舊 MES 沒動）。要的話請重新按一次。",
   });
-  // 這些代碼不是一般的「沒有開工／停工」：LEGACY_APPLIED_LATE 舊 MES 其實已經改了；MANUAL_RELEASED 不確定
-  const REJECT_TITLE = Object.freeze({ STALE_COMMAND: "已作廢", MANUAL_RELEASED: "主管已取消", LEGACY_APPLIED_LATE: "舊 MES 已改（回報太晚）" });
+  // 這些代碼不是一般的「沒有開工／停工」：LEGACY_APPLIED_LATE／LEGACY_PARTIAL_WRITE／ORDER_CHANGED_DURING_APPLY
+  // 舊 MES 其實已經改了；MANUAL_RELEASED 不確定。標題不能寫「沒有開工／停工」。
+  const REJECT_TITLE = Object.freeze({
+    STALE_COMMAND: "已作廢",
+    MANUAL_RELEASED: "主管已取消",
+    LEGACY_APPLIED_LATE: "舊 MES 已改（回報太晚）",
+    LEGACY_PARTIAL_WRITE: "舊 MES 已改一部分",
+    ORDER_CHANGED_DURING_APPLY: "舊 MES 已改（單剛好被換）",
+  });
+  // 舊 MES 已經被改過（全部或部分）的代碼
+  const LEGACY_CHANGED_CODES = Object.freeze(["LEGACY_APPLIED_LATE", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY"]);
 
   function rejectText(code, message) {
     const key = text(code).toUpperCase();
@@ -439,7 +453,7 @@
 
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
-    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, SUBMIT_ERROR_TEXT,
+    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, SUBMIT_ERROR_TEXT,
     parseFlag, flagIsOn, enabledForMachine, isMultiStation, roleAllowed, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,

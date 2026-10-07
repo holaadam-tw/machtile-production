@@ -145,6 +145,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       else if (be.mode === "lease") { row.status = "claimed"; row.claimed_at = new Date(Date.now() - be.serverSkewMs - 10000).toISOString(); row.requested_at = new Date(Date.now() - be.serverSkewMs - 5 * 60000).toISOString(); }   // 合約 r2：租約過了被重領，仍 claimed、claimed_at 更新
       else if (be.mode === "staleReject") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "STALE_COMMAND"; row.reject_message = "not applied within 180s"; }
       else if (be.mode === "released") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "MANUAL_RELEASED"; row.reject_message = "舊 MES 狀態未知，請人工核對"; }
+      else if (be.mode.startsWith("code:")) { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = be.mode.slice(5); row.reject_message = "applier detail"; }   // #785 代碼
       else if (be.mode === "lateApplied") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "LEGACY_APPLIED_LATE"; row.reject_message = "ChangeStatus ok, finish(applied) got STALE_COMMAND"; }
       return json(200, [row]);
     }
@@ -538,6 +539,24 @@ console.log("\n== 390px：合約 r3 時間規則（App 不自己判結果）==")
   ok(la.includes("舊 MES 已改（回報太晚）") && la.includes("舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對"), "LEGACY_APPLIED_LATE → 「舊 MES 已經改了，但回報太晚…」", la);
   ok(!/沒有生效|沒生效|沒有停工/.test(la), "LEGACY_APPLIED_LATE 沒有說「沒生效」", la);
   await page.screenshot({ path: path.join(outDir, "phone-11-legacy-applied-late.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+
+  // 套用端 #785 的代碼：LEGACY_PARTIAL_WRITE（舊 MES 已改）、NEED_PAUSED（沒動）
+  be.mode = "hold";
+  await openAndSend("start");
+  be.mode = "code:LEGACY_PARTIAL_WRITE";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const pw = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(pw.includes("舊 MES 已改一部分") && pw.includes("舊 MES 已經改了一部分，請看機台電子紙或問生管核對") && !/沒有生效|沒生效|沒有開工/.test(pw), "LEGACY_PARTIAL_WRITE → 「舊 MES 已經改了一部分…」，不說沒生效", pw);
+  await page.screenshot({ path: path.join(outDir, "phone-16-legacy-partial-write.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("舊 MES 已改一部分"), "卡片也顯示舊 MES 已改一部分");
+  be.mode = "hold";
+  await openAndSend("start");
+  be.mode = "code:NEED_PAUSED";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const np = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(np.includes("沒有開工") && np.includes("這張單暫停中，請問生管"), "NEED_PAUSED → 沒有開工＋「這張單暫停中，請問生管」", np);
   await sheet(page).locator("[data-station-cmd-close]").click();
 
   // MANUAL_RELEASED（status=rejected）

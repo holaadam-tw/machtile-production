@@ -144,7 +144,19 @@ const lateApplied = c.statusView({ status: "rejected", reject_code: "LEGACY_APPL
 eq("rejected/LEGACY_APPLIED_LATE → 舊 MES 已改（不說沒生效）", [lateApplied.title, lateApplied.text, lateApplied.tone], ["舊 MES 已改（回報太晚）", "舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對", "warn"]);
 eq("LEGACY_APPLIED_LATE 文案沒有「沒有生效」", /沒有生效|沒生效|沒有開工/.test(lateApplied.title + lateApplied.text), false);
 eq("rejected 未知代碼 → 通用", c.statusView({ status: "rejected", reject_code: "WEIRD" }, "stop").text, "舊 MES 沒有套用這次指令。");
-eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED"].every((k) => c.REJECT_TEXT[k]), true);
+eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED",
+  "NEED_PAUSED", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY", "OPERATOR_LIST_TOO_LONG"].every((k) => c.REJECT_TEXT[k]), true);
+const rv = (code) => c.statusView({ status: "rejected", reject_code: code, reject_message: "detail-" + code }, "start");
+const needPaused = rv("NEED_PAUSED");
+eq("#785 NEED_PAUSED（舊 MES 沒動）→ 沒有開工＋「這張單暫停中，請問生管」", [needPaused.title, needPaused.text, needPaused.tone, needPaused.detail], ["沒有開工", "這張單暫停中，請問生管", "bad", "detail-NEED_PAUSED"]);
+const tooLong = rv("OPERATOR_LIST_TOO_LONG");
+eq("#785 OPERATOR_LIST_TOO_LONG（舊 MES 沒動）→ 沒有開工＋白話", [tooLong.title, tooLong.text], ["沒有開工", "這台的作業員名單太長，請生管先整理名單"]);
+const partial = rv("LEGACY_PARTIAL_WRITE");
+eq("#785 LEGACY_PARTIAL_WRITE（舊 MES 已改）→ 舊 MES 已改一部分＋白話", [partial.title, partial.text, partial.tone], ["舊 MES 已改一部分", "舊 MES 已經改了一部分，請看機台電子紙或問生管核對", "warn"]);
+const swapped = rv("ORDER_CHANGED_DURING_APPLY");
+eq("#785 ORDER_CHANGED_DURING_APPLY（舊 MES 已改）→ 白話", [swapped.title, swapped.text, swapped.tone], ["舊 MES 已改（單剛好被換）", "套用時機台上的單剛好被換了，舊 MES 已經改了，請問生管核對", "warn"]);
+eq("舊 MES 已改的代碼（3 個）標題與內文都不說「沒生效／沒有開工」", c.LEGACY_CHANGED_CODES.filter((k) => { const v = rv(k); return /沒有生效|沒生效|沒有開工|沒有停工|沒動/.test(v.title + v.text); }), []);
+eq("舊 MES 已改的代碼都有專用標題", c.LEGACY_CHANGED_CODES.every((k) => c.REJECT_TITLE[k]), true);
 const lateP = c.statusView({ status: "pending" }, "start", 4 * 60000);
 eq("pending 超過 3 分鐘（伺服器時間）→ 仍是等待中（不是結果），加提示", [lateP.phase, lateP.terminal, lateP.late, lateP.text], ["pending", false, true, "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管"]);
 const lateC = c.statusView({ status: "claimed" }, "start", 30 * 60000);
