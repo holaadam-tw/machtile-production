@@ -83,7 +83,7 @@ const machines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04",
   location: "", status: "idle", display_order: i,
 }));
 const cards = procs.map((p) => ({
-  id: id(100 + p.n), tenant_id: T, work_order_no: p.wo, customer_name: "測試客戶", part_name: p.part, drawing_no: p.partNo,
+  id: id(100 + p.n), tenant_id: T, work_order_no: p.wo, customer_name: "測試客戶", part_name: p.part, drawing_no: `DRW-${p.n}`,   // 圖號故意跟料號不同：確認卡只能顯示 part_no
   quantity: p.qty, due_date: "2026-10-30", priority: "normal", work_order_status: "in_progress",
   current_process_id: id(300 + p.n), current_process_name: p.proc, current_process_status: "pending",
   machine_name: p.machine, qty_completed: 0, qty_defect: 0, progress_percent: 0,
@@ -115,6 +115,9 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     mode: "hold",             // 輪詢回覆：hold（pending→claimed）／applied／rejected／expired
     reject: { code: "ORDER_MISMATCH", message: "Manufacture.OrderNO=XX01202509300001 IndexSN=2" },
     abortNextSubmit: false,
+    hangSubmit: false,        // 送出的 RPC 不回（測逾時）
+    serverSkewMs: 0,          // 伺服器時間＝真實時間－這個值（模擬平板時鐘快）
+    procOverride: {},         // 開卡重讀工序時改寫某台的列（例：已離站、沒有料號）
     otherWrites: [],
   };
   be.handle = async (route) => {
@@ -130,6 +133,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       be.stationReads++;
       if (be.tableMissing) return json(404, { code: "PGRST205", message: "Could not find the table 'public.station_commands' in the schema cache" });
       const m = q.match(/command_uuid=eq\.([0-9a-f-]+)/);
+      if (m && be.failCommandPolls) return route.abort("failed");
       if (!m) return json(200, []);
       const row = be.commands.get(m[1]);
       if (!row) return json(200, []);
@@ -137,10 +141,11 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       else if (be.mode === "applied") { row.status = "applied"; row.applied_at = new Date().toISOString(); }
       else if (be.mode === "rejected") { row.status = "rejected"; row.reject_code = be.reject.code; row.reject_message = be.reject.message; }
       else if (be.mode === "expired") { row.status = "expired"; row.reject_code = "EXPIRED"; }
-      else if (be.mode === "stale") { row.status = "pending"; row.requested_at = new Date(Date.now() - 4 * 60000).toISOString(); }   // 伺服器還沒落地 expired（合約 §3）
-      else if (be.mode === "lease") { row.status = "claimed"; row.claimed_at = new Date(Date.now() - 2.5 * 60000).toISOString(); row.requested_at = new Date(Date.now() - 5 * 60000).toISOString(); }   // 合約 r2：租約（2 分鐘）已過、等重新領取，狀態仍 claimed
+      else if (be.mode === "stale") { row.status = "pending"; row.requested_at = new Date(Date.now() - be.serverSkewMs - 4 * 60000).toISOString(); }   // 已 4 分鐘還沒人領（伺服器 10 分鐘才落地 expired）
+      else if (be.mode === "lease") { row.status = "claimed"; row.claimed_at = new Date(Date.now() - be.serverSkewMs - 10000).toISOString(); row.requested_at = new Date(Date.now() - be.serverSkewMs - 5 * 60000).toISOString(); }   // 合約 r2：租約過了被重領，仍 claimed、claimed_at 更新
       else if (be.mode === "staleReject") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "STALE_COMMAND"; row.reject_message = "not applied within 180s"; }
-      else if (be.mode === "released") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "MANUAL_RELEASED"; row.reject_message = "released by manager"; }
+      else if (be.mode === "released") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "MANUAL_RELEASED"; row.reject_message = "舊 MES 狀態未知，請人工核對"; }
+      else if (be.mode === "lateApplied") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "LEGACY_APPLIED_LATE"; row.reject_message = "ChangeStatus ok, finish(applied) got STALE_COMMAND"; }
       return json(200, [row]);
     }
     if (p === "/rest/v1/rpc/machtile_submit_station_command") {
@@ -150,13 +155,25 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (be.rpcMissing) return json(404, { code: "PGRST202", message: "Could not find the function public.machtile_submit_station_command" });
       if (be.abortNextSubmit) { be.abortNextSubmit = false; return route.abort("failed"); }
       if (be.submitError) return json(400, { code: "P0001", message: be.submitError, details: null, hint: null });
+      if (be.hangSubmit) { be.hangSubmit = false; await new Promise((r) => setTimeout(r, 4000)); return route.abort("failed").catch(() => {}); }
       let row = be.commands.get(body.p_command_uuid);
       if (!row) {
         row = { id: id(9000 + be.commands.size), command_uuid: body.p_command_uuid, command_type: body.p_command_type, machine_code: body.p_machine_code,
-          expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, requested_at: new Date().toISOString(), status: "pending", reject_code: null, reject_message: null, applied_at: null };
+          expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, requested_at: new Date(Date.now() - be.serverSkewMs).toISOString(), status: "pending", reject_code: null, reject_message: null, applied_at: null };
         be.commands.set(body.p_command_uuid, row);
       }
       return json(200, row);
+    }
+    // 開卡時重讀單一工序（id=eq.）
+    if (p === "/rest/v1/work_order_processes" && /(^|[?&])id=eq\./.test(q)) {
+      be.freshReads = (be.freshReads || 0) + 1;
+      const pid = (q.match(/id=eq\.([0-9a-f-]+)/) || [])[1];
+      const x = procs.find((k) => id(300 + k.n) === pid);
+      if (!x) return json(200, []);
+      const o = be.procOverride[x.machine] || {};
+      return json(200, [{ id: pid, process_order: o.step ?? x.step, process_name: x.proc, status: o.status || "pending", off_station_at: o.off_station_at ?? null,
+        work_orders: { work_order_no: x.wo, part_no: "part_no" in o ? o.part_no : x.partNo, part_name: x.part, status: "in_progress" },
+        machines: { machine_code: o.machine || x.machine } }]);
     }
     if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
       return json(200, procs.map((x) => {
@@ -201,7 +218,7 @@ const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 };
 
-async function newPage(browser, vp, { backend, configExtra = "", baseline = false }) {
+async function newPage(browser, vp, { backend, configExtra = "", baseline = false, noRandomUuid = false }) {
   const context = await browser.newContext({ ...VIEWPORTS[vp], serviceWorkers: "block", timezoneId: "Asia/Taipei", locale: "zh-TW" });
   const token = jwtFor(backend.role || "operator");
   await context.addInitScript(([token]) => {
@@ -209,6 +226,7 @@ async function newPage(browser, vp, { backend, configExtra = "", baseline = fals
       sessionStorage.setItem("machtileAuthSession", JSON.stringify({ version: 1, accessToken: token, refreshToken: "", email: "op@test.invalid", authMethod: "password", mode: "session", createdAt: Date.now(), rememberUntil: 0 }));
     } catch {}
   }, [token]);
+  if (noRandomUuid) await context.addInitScript(() => { try { Object.defineProperty(Crypto.prototype, "randomUUID", { value: undefined, configurable: true, writable: true }); } catch {} });
   const appBase = baseline ? `${base}__baseline/` : base;
   await context.route("**/*", async (route) => {
     const u = route.request().url();
@@ -262,6 +280,10 @@ for (const vp of ["desktop", "phone"]) {
     ok(be.stationReads === 0, `${W}：旗標關 → 完全沒讀 station_commands／沒呼叫 RPC（${be.stationReads}）`);
     if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：旗標關 → Monitor 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
     else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過一字不差比對`); }
+    await page.evaluate(() => openReport("", { machine: "A04" }));
+    ok(await page.locator('.report-type-tab[data-report-type="dailyStart"] [data-station-cmd-recordonly]').count() === 0
+      && (await page.locator('.report-type-tab[data-report-type="dailyStart"]').innerText()).trim() === "今日開工", `${W}：旗標關 → 報工「今日開工」分頁字樣不變`);
+    await page.evaluate(() => closeReport());
     ok(be.otherWrites.length === 0, `${W}：旗標關 → 沒有任何寫入`, be.otherWrites.join(" "));
     ok(realErrors(errors).length === 0, `${W}：旗標關 → 沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
@@ -299,9 +321,22 @@ for (const vp of ["desktop", "phone"]) {
     ok(await fieldText(page, "part") === "HCG-06-01　HCG-06本體", `${W}：料號＋品名`, await fieldText(page, "part"));
     ok(await fieldText(page, "step") === "第 5 道　CNC車床二序", `${W}：第幾道＋工序名`, await fieldText(page, "step"));
     const legacyText = (await sheet(page).locator("[data-station-cmd-legacy]").innerText()).replace(/\s+/g, " ");
-    ok(legacyText.includes("舊 MES 已報：良品 208、不良 2") && legacyText.includes("舊 MES 最後報工：2026-10-07 09:30") && legacyText.includes("派工橋同步時間：2026-10-07 09:35"),
+    ok(/畫面資料（(10\/7 )?09:35）顯示：舊 MES 這台掛的是這張單的第 5 道，工廠套用前會再核對/.test(legacyText),`${W}：畫面資料（legacy_snapshot_at）顯示…，工廠套用前會再核對`, legacyText);
+    ok(legacyText.includes("顯示：舊 MES 已報 良品 208、不良 2") && legacyText.includes("舊 MES 最後報工：2026-10-07 09:30") && !legacyText.includes("09:35:10"),
       `${W}：舊 MES 現況＝第 5 道那列（不是第 4 道）`, legacyText);
     ok(legacyText.includes("派工橋沒有同步") , `${W}：照實說開停狀態沒有同步`);
+    ok(be.freshReads >= 1, `${W}：開卡時重讀這一道（work_order_processes id=eq.）`);
+    // 無障礙：初始焦點在「取消」、Tab 轉不出去、Esc 關閉、焦點回到開工鈕
+    ok(await page.evaluate(() => document.activeElement?.hasAttribute("data-station-cmd-close")), `${W}：初始焦點在「取消」（不是確認）`);
+    for (let i = 0; i < 6; i++) await page.keyboard.press("Tab");
+    ok(await page.evaluate(() => Boolean(document.activeElement?.closest("#machtileStationCmdSheet"))), `${W}：Tab 六次焦點仍在確認卡裡（focus trap）`);
+    await page.keyboard.press("Shift+Tab");
+    ok(await page.evaluate(() => Boolean(document.activeElement?.closest("#machtileStationCmdSheet"))), `${W}：Shift+Tab 也轉不出去`);
+    await page.keyboard.press("Escape");
+    ok(await sheet(page).count() === 0 && be.submits.length === 0, `${W}：Esc 關閉、沒送`);
+    ok(await page.evaluate(() => document.activeElement?.matches('[data-station-cmd="start"][data-station-cmd-machine="A04"]')), `${W}：關閉後焦點回到 A04「開工」`);
+    await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+    await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
     const fontPx = await sheet(page).locator('[data-station-cmd-field="order"]').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     ok(fontPx >= 22, `${W}：工單號是大字（${fontPx}px）`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -330,13 +365,13 @@ for (const vp of ["desktop", "phone"]) {
     ok(sent.p_command_type === "start" && sent.p_machine_code === "A04" && sent.p_expected_order_no === "XX01202502050012" && sent.p_expected_index_sn === 5 && sent.p_expected_part_no === "HCG-06-01" && sent.p_manufacture_ii_id === null,
       `${W}：送出內容＝合約欄位`, JSON.stringify(sent));
     ok((await sheet(page).locator("[data-station-cmd-result]").innerText()).includes("不要重按"), `${W}：等待中提示不要重按`);
-    await page.waitForTimeout(2600);   // 至少一次輪詢 → claimed
+    await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-result] strong")?.textContent.includes("工廠處理中"), null, { timeout: 10000 }).catch(() => {});   // 輪詢 → claimed
     ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…", `${W}：輪詢到 claimed → 工廠處理中`);
     await page.screenshot({ path: path.join(outDir, `${vp}-04-pending.png`) });
     await sheet(page).locator("[data-station-cmd-close]").click();
     const disabled = await cardOf(page, "A04").locator("[data-station-cmd]").evaluateAll((els) => els.map((e) => e.disabled));
     ok(disabled.length === 2 && disabled.every(Boolean), `${W}：等待中 A04 兩個按鈕都鎖住`, JSON.stringify(disabled));
-    ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("等待工廠套用"), `${W}：卡片顯示等待中`);
+    ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("開工：工廠處理中"), `${W}：卡片顯示等待中（開工：工廠處理中）`);
     await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click({ force: true }).catch(() => {});
     ok(await sheet(page).count() === 0 && be.submits.length === 1, `${W}：等待中按停工沒反應`);
 
@@ -388,9 +423,18 @@ for (const vp of ["desktop", "phone"]) {
     be.mode = "expired";
     await sheet(page).locator('[data-station-cmd-result="expired"]').waitFor({ timeout: 15000 });
     const exp = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-    ok(exp.includes("已過期") && exp.includes("超過 3 分鐘工廠都沒有處理") && exp.includes("沒有生效"), `${W}：過期 → 白話`, exp);
+    ok(exp.includes("已過期") && exp.includes("超過 10 分鐘工廠都沒有接手") && exp.includes("沒有生效"), `${W}：伺服器 expired → 白話`, exp);
     await page.screenshot({ path: path.join(outDir, `${vp}-08-expired.png`) });
     await sheet(page).locator("[data-station-cmd-close]").click();
+
+    // 單台報工：A04 的「今日開工」分頁標「只記錄（不改舊 MES）」，A01 沒有
+    await page.evaluate(() => openReport("", { machine: "A04" }));
+    const tabA04 = (await page.locator('.report-type-tab[data-report-type="dailyStart"]').innerText()).replace(/\s+/g, " ");
+    ok(tabA04.includes("今日開工") && tabA04.includes("只記錄（不改舊 MES）"), `${W}：A04 報工「今日開工」標只記錄`, tabA04);
+    await page.evaluate(() => closeReport());
+    await page.evaluate(() => openReport("", { machine: "A01" }));
+    ok(await page.locator('.report-type-tab[data-report-type="dailyStart"] [data-station-cmd-recordonly]').count() === 0, `${W}：A01（沒開）報工「今日開工」不加標示`);
+    await page.evaluate(() => closeReport());
 
     ok(be.otherWrites.length === 0, `${W}：除了指令 RPC 沒有任何其他寫入`, be.otherWrites.join(" "));
     ok(realErrors(errors).length === 0, `${W}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
@@ -444,58 +488,198 @@ console.log("\n== 1440px：旗標開但登入的是生管（planner）→ 不出
   await context.close();
 }
 
-console.log("\n== 390px：pending 超過 3 分鐘（伺服器還沒落地）→ 直接顯示已過期 ==");
+console.log("\n== 390px：合約 r3 時間規則（App 不自己判結果）==");
 {
   const be = makeBackend();
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
-  be.mode = "stale";
-  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
-  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
-  await sheet(page).locator("[data-station-cmd-confirm]").click();
-  await sheet(page).locator('[data-station-cmd-result="expired"]').waitFor({ timeout: 15000 });
-  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "已過期", "requested_at 超過 3 分鐘的 pending → 已過期");
-  await sheet(page).locator("[data-station-cmd-close]").click();
-  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "過期後解鎖、可以再按");
-  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
-  await context.close();
-}
+  const openAndSend = async (type) => {
+    await cardOf(page, "A04").locator(`[data-station-cmd="${type}"]`).click();
+    await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+    await sheet(page).locator("[data-station-cmd-confirm]").click();
+    await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  };
 
-console.log("\n== 390px：租約逾期（claimed 2 分鐘到期、等重新領取）→ 仍顯示工廠處理中；STALE_COMMAND／MANUAL_RELEASED 白話 ==");
-{
-  const be = makeBackend();
-  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  // pending 已 4 分鐘（伺服器時間）→ 只加提示，仍是等待中、按鈕仍鎖、繼續輪詢
   be.mode = "hold";
-  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
-  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
-  await sheet(page).locator("[data-station-cmd-confirm]").click();
-  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
-  await page.waitForTimeout(2600);
+  await openAndSend("start");
+  be.mode = "stale";
+  await sheet(page).locator("[data-station-cmd-late]").waitFor({ timeout: 15000 });
+  const lateText = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(lateText.includes("工廠還沒處理，這筆應該不會生效；請等最終結果或問生管") && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1,
+    "pending 超過 3 分鐘 → 提示「應該不會生效」，但仍是等待中（不是結果）", lateText);
+  ok(!/已過期|沒有生效|已作廢/.test((await sheet(page).locator("[data-station-cmd-result] strong").innerText())), "伺服器還是 pending → 標題不出現最終結果");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "伺服器還是 pending → 按鈕仍鎖住");
+  await page.screenshot({ path: path.join(outDir, "phone-09-late-pending.png") });
+  const pollsBefore = be.stationReads;
+  await page.waitForTimeout(5500);
+  ok(be.stationReads > pollsBefore, "超過 3 分鐘仍持續輪詢等伺服器結果");
+  // 租約過了被重領：仍 claimed → 工廠處理中＋提示
   be.mode = "lease";
-  await page.waitForTimeout(4600);
-  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…" && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約逾期（claimed 2.5 分鐘、送出已 5 分鐘）→ 仍是工廠處理中，不判過期");
-  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "租約逾期期間按鈕仍鎖住");
+  await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-result] strong")?.textContent.includes("工廠處理中"), null, { timeout: 15000 });
+  ok(await sheet(page).locator("[data-station-cmd-late]").count() === 1 && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約過了被重領（仍 claimed）→ 工廠處理中＋提示，不是結果");
+  // 伺服器給最終結果 STALE_COMMAND
   be.mode = "staleReject";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
   const st = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-  ok(st.includes("已作廢") && st.includes("太久沒處理，已作廢，請確認機台狀態後重按"), "STALE_COMMAND → 「太久沒處理，已作廢，請確認機台狀態後重按」", st);
-  await page.screenshot({ path: path.join(outDir, "phone-09-stale-command.png") });
+  ok(st.includes("已作廢") && st.includes("太久沒處理，已作廢，請確認機台狀態後重按"), "rejected/STALE_COMMAND → 「太久沒處理，已作廢，請確認機台狀態後重按」", st);
+  await page.screenshot({ path: path.join(outDir, "phone-10-stale-command.png") });
   await sheet(page).locator("[data-station-cmd-close]").click();
-  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "作廢後可以重按");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "伺服器給結果後才解鎖");
 
+  // LEGACY_APPLIED_LATE：舊 MES 其實改了，不能說沒生效
   be.mode = "hold";
-  await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click();
-  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
-  await sheet(page).locator("[data-station-cmd-confirm]").click();
-  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  await openAndSend("stop");
+  be.mode = "lateApplied";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const la = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(la.includes("舊 MES 已改（回報太晚）") && la.includes("舊 MES 已經改了，但回報太晚；請看機台電子紙或問生管核對"), "LEGACY_APPLIED_LATE → 「舊 MES 已經改了，但回報太晚…」", la);
+  ok(!/沒有生效|沒生效|沒有停工/.test(la), "LEGACY_APPLIED_LATE 沒有說「沒生效」", la);
+  await page.screenshot({ path: path.join(outDir, "phone-11-legacy-applied-late.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+
+  // MANUAL_RELEASED（status=rejected）
+  be.mode = "hold";
+  await openAndSend("start");
   be.mode = "released";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
   const rl = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-  ok(rl.includes("主管已取消") && rl.includes("主管已取消這筆，請重按"), "MANUAL_RELEASED → 「主管已取消這筆，請重按」", rl);
-  await page.screenshot({ path: path.join(outDir, "phone-10-manual-released.png") });
+  ok(rl.includes("主管已取消") && rl.includes("主管已取消這筆；舊 MES 是否已改變不確定，請先看機台電子紙或問生管，再決定要不要重按") && rl.includes("舊 MES 狀態未知，請人工核對"),
+    "rejected/MANUAL_RELEASED → 新文案＋伺服器說明", rl);
+  await page.screenshot({ path: path.join(outDir, "phone-12-manual-released.png") });
   await sheet(page).locator("[data-station-cmd-close]").click();
   ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("主管已取消"), "卡片也顯示主管已取消");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
+}
+
+console.log("\n== 390px：平板時鐘快 5 分鐘 → 用伺服器時鐘差，不誤判超過 3 分鐘 ==");
+{
+  const be = makeBackend();
+  be.serverSkewMs = 5 * 60000;     // 伺服器時間比平板慢 5 分鐘
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  be.mode = "hold";
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  await page.waitForTimeout(4500);
+  ok(await sheet(page).locator("[data-station-cmd-late]").count() === 0 && (await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…",
+    "剛送出 4 秒 → 沒有「應該不會生效」提示（平板快 5 分鐘也不誤判）");
+  be.mode = "applied";
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  ok(true, "伺服器 applied → 已開工");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：開卡重讀 → 這一道已不在這台 → 不給送 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  be.procOverride.A04 = { off_station_at: new Date().toISOString() };
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-stale]").waitFor({ timeout: 10000 });
+  ok((await sheet(page).locator("[data-station-cmd-stale]").innerText()).includes("請重新整理畫面"), "已離站 → 提示重新整理");
+  ok(await sheet(page).locator("[data-station-cmd-confirm]").isDisabled(), "已離站 → 確認鈕不能按");
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  be.procOverride.A04 = { step: 6 };
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-stale]").waitFor({ timeout: 10000 });
+  ok(await sheet(page).locator("[data-station-cmd-confirm]").isDisabled(), "道次變了 → 確認鈕不能按");
+  await page.screenshot({ path: path.join(outDir, "phone-13-stale-card-data.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  // 料號沒有 → 顯示「未提供」、送 null（不拿圖號）
+  be.procOverride.A04 = { part_no: null };
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  ok(await fieldText(page, "part") === "未提供　HCG-06本體", "沒有料號 → 「未提供」（不顯示圖號 DRW-4）", await fieldText(page, "part"));
+  be.mode = "applied";
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  ok(be.submits.length === 1 && be.submits[0].p_expected_part_no === null, "沒有料號 → 送 null", JSON.stringify(be.submits[0]));
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：送出時網路斷 → 重新整理後還記得，立刻可用同一個 uuid 重送 ==");
+{
+  const be = makeBackend();
+  be.abortNextSubmit = true;
+  be.failCommandPolls = true;     // 查結果也一直失敗（網路差）→ 紀錄保持「不確定」
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+  const firstUuid = be.submits[0].p_command_uuid;
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("machtile.stationCmdPending.v1") || "{}"));
+  ok(stored.A04 && stored.A04.unconfirmed === true && stored.A04.commandUuid === firstUuid, "unconfirmed 有存進 localStorage", JSON.stringify(stored));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
+  await page.locator("#workOrderGrid [data-station-cmd-retry]").waitFor({ timeout: 15000 });
+  ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("網路斷了"), "重新整理後卡片顯示「上次送出時網路斷了」");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "重新整理後先鎖開工／停工（只能用同一筆重送）");
+  await page.screenshot({ path: path.join(outDir, "phone-14-unconfirmed-after-reload.png") });
+  be.mode = "applied";
+  be.failCommandPolls = false;
+  await cardOf(page, "A04").locator("[data-station-cmd-retry]").click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "重送", "從卡片立刻可以重送（不用等 12 分鐘）");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  ok(be.submits.length === 2 && be.submits[1].p_command_uuid === firstUuid && be.commands.size === 1, "重新整理後重送用同一個 uuid、伺服器只有一筆", JSON.stringify(be.submits.map((s) => s.p_command_uuid)));
+  ok(be.submits[1].p_expected_part_no === "HCG-06-01" && be.submits[1].p_expected_index_sn === 5, "重送內容跟第一次一樣（料號、道次）");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：送出時網路斷、伺服器確實沒收到 → 約 10 秒後解鎖 ==");
+{
+  const be = makeBackend();
+  be.abortNextSubmit = true;
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-error]")?.textContent.includes("伺服器沒有收到"), null, { timeout: 20000 });
+  ok(true, "連續查不到 → 「確認過伺服器沒有收到這筆」");
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="stop"]').isEnabled() && await cardOf(page, "A04").locator("[data-station-cmd-retry]").count() === 0, "解鎖、沒有殘留的重送鈕");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：送出逾時 → 走「不知道有沒有送到」、可重送 ==");
+{
+  const be = makeBackend();
+  be.hangSubmit = true;
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await page.evaluate(() => { window.MachTileStationCommandCore.SUBMIT_TIMEOUT_MS = 1500; });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "送出中…", "送出中…");
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 4000 });
+  ok((await sheet(page).locator("[data-station-cmd-error]").innerText()).includes("不會重複"), "逾時 → 「還不知道有沒有送到…不會重複」（沒卡在送出中）");
+  ok(await sheet(page).locator("[data-station-cmd-confirm]").isEnabled(), "逾時後馬上可以重送");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：舊 WebView 沒有 crypto.randomUUID → 用 getRandomValues ==");
+{
+  const be = makeBackend();
+  const r = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],', noRandomUuid: true });
+  ok((await r.page.evaluate(() => typeof crypto.randomUUID)) === "undefined", "（前提）頁面上沒有 crypto.randomUUID");
+  be.mode = "applied";
+  await cardOf(r.page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(r.page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(r.page).locator("[data-station-cmd-confirm]").click();
+  await sheet(r.page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(be.submits[0]?.p_command_uuid || ""), "fallback 產生合法 v4 uuid", be.submits[0]?.p_command_uuid);
+  ok(realErrors(r.errors).length === 0, "沒有 JS 錯誤", realErrors(r.errors).join(" | "));
+  await r.context.close();
 }
 
 console.log("\n== 390px：同一台已有指令在途（別台平板按的）→ 白話、不鎖 ==");

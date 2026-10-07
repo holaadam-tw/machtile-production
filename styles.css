@@ -12858,6 +12858,8 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-cmd-button.is-start { background: var(--green-strong); }
 .station-cmd-button.is-stop { background: #b42318; }
 .station-cmd-button:disabled { background: var(--gray); cursor: not-allowed; opacity: .7; }
+.station-cmd-retry { min-height: 44px; padding: 8px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-weight: 800; cursor: pointer; }
+.station-cmd-recordonly { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .station-cmd-status { flex: 1 1 100%; margin: 0; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .station-cmd-status.is-wait { color: var(--blue); }
 .station-cmd-status.is-ok { color: var(--green-strong); }
