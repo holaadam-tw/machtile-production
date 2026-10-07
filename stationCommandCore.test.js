@@ -149,6 +149,7 @@ const lateP = c.statusView({ status: "pending" }, "start", 4 * 60000);
 eq("pending 超過 3 分鐘（伺服器時間）→ 仍是等待中（不是結果），加提示", [lateP.phase, lateP.terminal, lateP.late, lateP.text], ["pending", false, true, "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管"]);
 const lateC = c.statusView({ status: "claimed" }, "start", 30 * 60000);
 eq("claimed 超過 3 分鐘 → 仍是工廠處理中＋提示", [lateC.title, lateC.terminal, lateC.late], ["工廠處理中…", false, true]);
+eq("claimed 超過 3 分鐘 → 不說「不會生效」（工廠可能已經動了舊 MES）", lateC.text, "工廠正在處理，結果還沒回來；請等最終結果或問生管");
 eq("沒有年齡 → 不加提示", c.statusView({ status: "pending" }, "start", null).late, false);
 eq("3 分鐘內 → 不加提示", c.statusView({ status: "pending" }, "start", 170000).late, false);
 
@@ -183,8 +184,13 @@ eq("超過一天 → 丟掉", c.restorePending({ A04: { ...rec, startedAt: now -
 eq("十幾分鐘前的還在（不再 12 分鐘就丟）", Object.keys(c.restorePending({ A04: { ...rec, startedAt: now - 20 * 60000 } }, now)), ["A04"]);
 eq("壞 JSON → 空", c.restorePending("{oops", now), {});
 eq("壞資料 → 丟掉", c.restorePending({ A04: { commandUuid: "x", commandType: "start" } }, now), {});
-eq("unconfirmed：查不到 3 次且過 10 秒＝沒送到", c.unconfirmedNotSent({ unconfirmed: true, emptyPolls: 3, startedAt: 0 }, 10000), true);
-eq("unconfirmed：查不到 2 次還不能下結論", c.unconfirmedNotSent({ unconfirmed: true, emptyPolls: 2, startedAt: 0 }, 60000), false);
+eq("unconfirmed：查不到 3 次但才 10 秒 → 還不解鎖", c.unconfirmedNotSent({ unconfirmed: true, emptyPolls: 3, startedAt: 0 }, 10000), false);
+eq("unconfirmed：查不到 3 次且過 30 秒 → 解鎖", c.unconfirmedNotSent({ unconfirmed: true, emptyPolls: 3, startedAt: 0 }, 30000), true);
+eq("unconfirmed：過 60 秒但只查不到 2 次 → 還不解鎖", c.unconfirmedNotSent({ unconfirmed: true, emptyPolls: 2, startedAt: 0 }, 60000), false);
+eq("解鎖後最後狀態 pending → 可以再按", c.releasedNote("pending"), { unlock: true, text: "可以再按；伺服器會先把太舊的這筆作廢" });
+eq("解鎖後最後狀態不明 → 當 pending", c.releasedNote(null).unlock, true);
+eq("解鎖後最後狀態 claimed → 工廠還在處理上一筆、不解鎖", c.releasedNote("claimed"), { unlock: false, text: "工廠還在處理上一筆，請等結果或問生管" });
+eq("lastStatus 會存（pending／claimed）", [c.pendingRecord({ ...rec, lastStatus: "claimed" }).lastStatus, c.pendingRecord({ ...rec, lastStatus: "weird" }).lastStatus], ["claimed", null]);
 eq("已確認的紀錄不適用", c.unconfirmedNotSent({ unconfirmed: false, emptyPolls: 9, startedAt: 0 }, 60000), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);

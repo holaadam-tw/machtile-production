@@ -218,7 +218,7 @@ const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 };
 
-async function newPage(browser, vp, { backend, configExtra = "", baseline = false, noRandomUuid = false }) {
+async function newPage(browser, vp, { backend, configExtra = "", baseline = false, noRandomUuid = false, preload = null }) {
   const context = await browser.newContext({ ...VIEWPORTS[vp], serviceWorkers: "block", timezoneId: "Asia/Taipei", locale: "zh-TW" });
   const token = jwtFor(backend.role || "operator");
   await context.addInitScript(([token]) => {
@@ -227,6 +227,7 @@ async function newPage(browser, vp, { backend, configExtra = "", baseline = fals
     } catch {}
   }, [token]);
   if (noRandomUuid) await context.addInitScript(() => { try { Object.defineProperty(Crypto.prototype, "randomUUID", { value: undefined, configurable: true, writable: true }); } catch {} });
+  if (preload) await context.addInitScript((items) => { try { if (!sessionStorage.getItem("__preloaded")) { Object.entries(items).forEach(([k, v]) => localStorage.setItem(k, v)); sessionStorage.setItem("__preloaded", "1"); } } catch {} }, preload);
   const appBase = baseline ? `${base}__baseline/` : base;
   await context.route("**/*", async (route) => {
     const u = route.request().url();
@@ -517,6 +518,8 @@ console.log("\n== 390px：合約 r3 時間規則（App 不自己判結果）==")
   be.mode = "lease";
   await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-result] strong")?.textContent.includes("工廠處理中"), null, { timeout: 15000 });
   ok(await sheet(page).locator("[data-station-cmd-late]").count() === 1 && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約過了被重領（仍 claimed）→ 工廠處理中＋提示，不是結果");
+  const claimedLate = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(claimedLate.includes("工廠正在處理，結果還沒回來；請等最終結果或問生管") && !claimedLate.includes("不會生效"), "claimed 超過 3 分鐘 → 「工廠正在處理，結果還沒回來…」，不說不會生效", claimedLate);
   // 伺服器給最終結果 STALE_COMMAND
   be.mode = "staleReject";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
@@ -633,7 +636,7 @@ console.log("\n== 390px：送出時網路斷 → 重新整理後還記得，立�
   await context.close();
 }
 
-console.log("\n== 390px：送出時網路斷、伺服器確實沒收到 → 約 10 秒後解鎖 ==");
+console.log("\n== 390px：送出時網路斷、一直查不到 → 至少 30 秒＋3 次查不到才解鎖 ==");
 {
   const be = makeBackend();
   be.abortNextSubmit = true;
@@ -642,8 +645,13 @@ console.log("\n== 390px：送出時網路斷、伺服器確實沒收到 → 約 
   await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
   await sheet(page).locator("[data-station-cmd-confirm]").click();
   await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
-  await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-error]")?.textContent.includes("伺服器沒有收到"), null, { timeout: 20000 });
-  ok(true, "連續查不到 → 「確認過伺服器沒有收到這筆」");
+  const t0 = Date.now();
+  await page.waitForTimeout(12000);
+  ok(!(await sheet(page).locator("[data-station-cmd-error]").innerText()).includes("目前查不到") && await page.locator('#workOrderGrid [data-station-cmd="stop"]').isDisabled(), "12 秒（已查不到多次）→ 還不解鎖");
+  await page.waitForFunction(() => document.querySelector("#machtileStationCmdSheet [data-station-cmd-error]")?.textContent.includes("目前查不到"), null, { timeout: 45000 });
+  const waited = Date.now() - t0 + 1000;
+  const unlockText = await sheet(page).locator("[data-station-cmd-error]").innerText();
+  ok(waited >= 29000 && !unlockText.includes("沒有收到"), `至少 30 秒才出現「目前查不到」（${Math.round(waited / 1000)} 秒），不宣稱伺服器沒收到`, unlockText);
   await sheet(page).locator("[data-station-cmd-close]").click();
   ok(await cardOf(page, "A04").locator('[data-station-cmd="stop"]').isEnabled() && await cardOf(page, "A04").locator("[data-station-cmd-retry]").count() === 0, "解鎖、沒有殘留的重送鈕");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
@@ -678,6 +686,28 @@ console.log("\n== 390px：舊 WebView 沒有 crypto.randomUUID → 用 getRandom
   await sheet(r.page).locator("[data-station-cmd-confirm]").click();
   await sheet(r.page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
   ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(be.submits[0]?.p_command_uuid || ""), "fallback 產生合法 v4 uuid", be.submits[0]?.p_command_uuid);
+  ok(realErrors(r.errors).length === 0, "沒有 JS 錯誤", realErrors(r.errors).join(" | "));
+  await r.context.close();
+}
+
+console.log("\n== 390px：本機 11 分鐘解鎖後的說明依最後狀態（pending 可再按／claimed 繼續鎖）==");
+for (const last of ["pending", "claimed"]) {
+  const be = makeBackend();
+  be.mode = "frozen";       // 伺服器狀態不變
+  const uuid = "5b1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5" + (last === "pending" ? "1" : "2");
+  const requested = new Date(Date.now() - 12 * 60000).toISOString();
+  be.commands.set(uuid, { id: id(9500), command_uuid: uuid, command_type: "start", machine_code: "A04", status: last, requested_at: requested,
+    claimed_at: last === "claimed" ? new Date(Date.now() - 30000).toISOString() : null, reject_code: null, reject_message: null, applied_at: null });
+  const rec = { commandUuid: uuid, commandType: "start", machineCode: "A04", orderNo: "XX01202502050012", step: 5, partNo: "HCG-06-01",
+    startedAt: Date.now() - 12 * 60000, unconfirmed: false, serverOffset: 0, lastStatus: last };
+  const r = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],', preload: { "machtile.stationCmdPending.v1": JSON.stringify({ A04: rec }) } });
+  await r.page.waitForFunction(() => document.querySelector('#workOrderGrid [data-station-cmd-status]'), null, { timeout: 15000 });
+  await r.page.evaluate(() => { deriveMachines(); renderWorkOrders(); });
+  const txt = await cardOf(r.page, "A04").locator("[data-station-cmd-status]").innerText();
+  const startEnabled = await cardOf(r.page, "A04").locator('[data-station-cmd="start"]').isEnabled();
+  if (last === "pending") ok(txt.includes("可以再按") && startEnabled, "最後狀態 pending → 「可以再按」、按鈕解鎖", txt);
+  else ok(txt.includes("工廠還在處理上一筆，請等結果或問生管") && !txt.includes("可以再按") && !startEnabled, "最後狀態 claimed → 「工廠還在處理上一筆…」、按鈕仍鎖", txt);
+  if (last === "claimed") await cardOf(r.page, "A04").screenshot({ path: path.join(outDir, "phone-15-released-claimed.png") });
   ok(realErrors(r.errors).length === 0, "沒有 JS 錯誤", realErrors(r.errors).join(" | "));
   await r.context.close();
 }

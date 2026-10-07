@@ -4,12 +4,13 @@
 // App 只送一筆「指令」到 Supabase station_commands（machtile_submit_station_command），工廠端
 // （Factory 背景服務）核對舊 MES 現況後才套用，結果寫回同一列；App 輪詢那一列顯示結果。
 //
-// 合約：ops/factory-deploy/2026-10-07-cnc-writeback/CONTRACT_station_commands.md r2（mini-mes #103 head bb64a8c3）。
+// 合約：ops/factory-deploy/2026-10-07-cnc-writeback/CONTRACT_station_commands.md r3（mini-mes #103 head 72728385）。
 //   狀態形狀（DB CHECK）：pending＝claimed_*／reject_* 全空；claimed＝有 claimed_at/by；
 //   applied／rejected＝有 claimed；expired＝沒有 claimed、reject_code 只能是 EXPIRED。
 //   時間：pending 10 分鐘沒人領 → expired（只在下一次 submit/claim 才落地）；claimed 租約 2 分鐘，逾期仍是
 //   claimed、會被重新領走；requested_at 起 3 分鐘（max_apply_age）後不能 applied，套用端只能 rejected STALE_COMMAND。
 //   MANUAL_RELEASED＝rejected（主管釋放租約已過的 claimed，舊 MES 狀態未知）。
+//   LEGACY_APPLIED_LATE＝rejected（r3：舊 MES 其實已改，只是回報太晚）。
 //   → App 只依伺服器 status 顯示結果（applied／rejected／expired），自己絕不判「過期／沒生效」。
 //     年齡只用伺服器的 requested_at 加「伺服器時鐘差」算，且只拿來加一句提示，不當結果。
 //
@@ -361,12 +362,12 @@
       return { phase: "expired", terminal: true, tone: "warn", title: "已過期", text: r.text, code: "EXPIRED", detail: r.detail };
     }
     const late = ageMs !== null && ageMs !== undefined && Number(ageMs) > MAX_APPLY_AGE_MS;
-    // 合約 r2：伺服器時間超過 3 分鐘的指令不會再被套用（除非最後回 LEGACY_APPLIED_LATE）→ 只加提示，照樣等伺服器結果
-    const lateHint = "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管";
+    // 合約 r3：伺服器時間超過 3 分鐘的指令不會再變成 applied（可能是 STALE_COMMAND，也可能是 LEGACY_APPLIED_LATE）
+    // → 只加提示，照樣等伺服器結果。claimed 時工廠可能已經動了舊 MES，所以不說「不會生效」。
     if (status === "claimed") {
-      return { phase: "pending", terminal: false, tone: "wait", title: "工廠處理中…", text: late ? lateHint : "工廠已收到，正在核對舊 MES。請稍等，不要重按。", late };
+      return { phase: "pending", terminal: false, tone: "wait", title: "工廠處理中…", text: late ? "工廠正在處理，結果還沒回來；請等最終結果或問生管" : "工廠已收到，正在核對舊 MES。請稍等，不要重按。", late };
     }
-    return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: late ? lateHint : "已送出，等工廠接手。請稍等，不要重按。", late };
+    return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: late ? "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管" : "已送出，等工廠接手。請稍等，不要重按。", late };
   }
 
   // 輪詢間隔：前 30 秒每 2 秒，之後每 5 秒，解鎖後每 15 秒
@@ -403,6 +404,7 @@
       manufactureIiId: text(rec.manufactureIiId) || null,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
+      lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
       serverOffset: Number.isFinite(Number(rec.serverOffset)) && rec.serverOffset !== null ? Number(rec.serverOffset) : null,
     };
     return out;
@@ -422,9 +424,17 @@
     return out;
   }
 
-  // 送出時網路斷 → 輪詢查不到這筆的次數夠了＝確定沒送到（解鎖）
+  // 送出時網路斷或逾時 → 至少 30 秒、而且連續 3 次都查不到這筆 → 解鎖（文案只說「目前查不到」，不宣稱伺服器沒收到）
+  const UNCONFIRMED_MIN_MS = 30 * 1000;
   function unconfirmedNotSent(record, nowMs) {
-    return Boolean(record && record.unconfirmed && (record.emptyPolls || 0) >= 3 && Number(nowMs) - Number(record.startedAt) >= 10000);
+    return Boolean(record && record.unconfirmed && (record.emptyPolls || 0) >= 3 && Number(nowMs) - Number(record.startedAt) >= UNCONFIRMED_MIN_MS);
+  }
+
+  // 本機 11 分鐘解鎖後卡片的說明：最後看到的伺服器狀態是 pending 才能再按（伺服器下一次 submit 會把它轉 expired）；
+  // 是 claimed → 工廠還在處理，按鈕繼續鎖住（再按也只會得到 MACHINE_COMMAND_IN_FLIGHT）。
+  function releasedNote(lastStatus) {
+    if (String(lastStatus || "").toLowerCase() === "claimed") return { unlock: false, text: "工廠還在處理上一筆，請等結果或問生管" };
+    return { unlock: true, text: "可以再按；伺服器會先把太舊的這筆作廢" };
   }
 
   return {
@@ -434,6 +444,6 @@
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,
-    statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent,
+    statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
   };
 });

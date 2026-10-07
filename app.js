@@ -13155,6 +13155,12 @@ async function machtileLoadStationCommandAvailability() {
   }
 }
 
+// 等待中的這筆是否已經可以讓作業員再按（本機 11 分鐘＋最後看到的伺服器狀態是 pending）
+function machtileStationCmdUnlocked(rec) {
+  const core = machtileStationCmdCore;
+  return Boolean(core && rec && core.lockReleased(rec.startedAt, Date.now()) && core.releasedNote(rec.lastStatus).unlock);
+}
+
 function machtileStationCmdMachineCode(machine) {
   return String(machine?.code || machine?.name || "").trim().toUpperCase();
 }
@@ -13177,14 +13183,15 @@ function machtileStationCmdMarkup(machine) {
   const last = machtileStationCmd.lastResult[code];
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
-  const locked = Boolean(pending) && !released;
+  const releaseNote = released ? machtileStationCmdCore.releasedNote(pending.lastStatus) : null;
+  const locked = Boolean(pending) && !(releaseNote && releaseNote.unlock);
   let status = "";
   if (pending && pending.unconfirmed) {
     status = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>
       <button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
   } else if (pending) {
     const view = pending.view || machtileStationCmdCore.statusView({ status: "pending" }, pending.commandType, null);
-    status = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${released ? "　（可以再按；伺服器會先把太舊的這筆作廢）" : ""}</p>`;
+    status = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
   } else if (last) {
     status = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
@@ -13316,7 +13323,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket });
   const pending = machtileStationCmd.pending[code];
-  if (!gate.ok || (pending && !core.lockReleased(pending.startedAt, Date.now()))) return;
+  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending))) return;
   let uuid;
   try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
   const others = Number(machine?.cardOtherCount || 0);
@@ -13392,7 +13399,7 @@ async function machtileStationCmdSubmit() {
   if (sheet.phase === "sendError" && !sheet.canRetry) return;
   if (!sheet.fresh || !sheet.fresh.ok) return;
   const existing = machtileStationCmd.pending[sheet.code];
-  if (existing && existing.commandUuid !== sheet.uuid && !core.lockReleased(existing.startedAt, Date.now())) return;
+  if (existing && existing.commandUuid !== sheet.uuid && !machtileStationCmdUnlocked(existing)) return;
   sheet.phase = "sending";
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
@@ -13435,6 +13442,7 @@ async function machtileStationCmdSubmit() {
   delete machtileStationCmd.lastResult[sheet.code];
   const view = core.statusView(row || { status: "pending" }, sheet.type, core.ageForHint(record, row?.requested_at, now));
   record.view = view;
+  record.lastStatus = String(row?.status || "pending");
   machtileStationCmdSavePending();
   if (machtileStationCmd.sheet === sheet) {
     sheet.phase = "status";
@@ -13485,7 +13493,9 @@ function machtileStationCmdPoll(code) {
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
         current.view = view;
-        if (wasUnconfirmed) machtileStationCmdSavePending();
+        const statusChanged = current.lastStatus !== String(row.status || "");
+        current.lastStatus = String(row.status || "");
+        if (wasUnconfirmed || statusChanged) machtileStationCmdSavePending();
         const sheet = machtileStationCmd.sheet;
         if (sheet && sheet.code === code && sheet.uuid === current.commandUuid) {
           if (sheet.phase === "sendError") sheet.phase = "status";
@@ -13501,7 +13511,7 @@ function machtileStationCmdPoll(code) {
           machtileStationCmdSavePending();
           const sheet = machtileStationCmd.sheet;
           if (sheet && sheet.code === code && sheet.uuid === current.commandUuid && sheet.phase === "sendError") {
-            sheet.errorText = "確認過伺服器沒有收到這筆，舊 MES 沒有改。可以按「重送」。";
+            sheet.errorText = "目前查不到這筆（已等 30 秒、查了 3 次）。可以按「重送」，會用同一筆指令，不會重複。";
             sheet.canRetry = true;
             machtileStationCmdRenderSheet();
           }
