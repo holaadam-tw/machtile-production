@@ -327,8 +327,8 @@
     ALREADY_STOPPED: "舊 MES 這台已經是停工中（或還沒開工），不用再停工。",
     RMS_UNAVAILABLE: "工廠的機台服務沒有回應，請找生管確認舊 MES 狀態。",
     APS_SIM_NOT_FOUND: "舊 MES 找不到這張單的排程資料，請找生管。",
-    STALE_COMMAND: "太久沒處理，已作廢，請確認機台狀態後重按",
-    LEGACY_APPLIED_LATE: "舊 MES 已經改了，但回報太晚；請看機台電子紙或問生管核對",
+    STALE_COMMAND: "太久沒套用，舊 MES 沒動，請重按",
+    LEGACY_APPLIED_LATE: "舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對",
     MANUAL_RELEASED: "主管已取消這筆；舊 MES 是否已改變不確定，請先看機台電子紙或問生管，再決定要不要重按",
     EXPIRED: "超過 10 分鐘工廠都沒有接手，這次沒有生效（舊 MES 沒動）。要的話請重新按一次。",
   });

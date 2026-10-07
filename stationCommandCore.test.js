@@ -137,11 +137,11 @@ eq("rejected 工單不符 → 白話＋原因", [rej.phase, rej.terminal, rej.ti
 const exp = c.statusView({ status: "expired", reject_code: "EXPIRED" }, "start");
 eq("expired（伺服器給的）→ 已過期", [exp.phase, exp.terminal, exp.title], ["expired", true, "已過期"]);
 const stale = c.statusView({ status: "rejected", reject_code: "STALE_COMMAND", reject_message: "not applied within 180s" }, "start");
-eq("rejected/STALE_COMMAND → 已作廢＋指定白話", [stale.terminal, stale.title, stale.text], [true, "已作廢", "太久沒處理，已作廢，請確認機台狀態後重按"]);
+eq("rejected/STALE_COMMAND → 已作廢＋指定白話", [stale.terminal, stale.title, stale.text], [true, "已作廢", "太久沒套用，舊 MES 沒動，請重按"]);
 const rel = c.statusView({ status: "rejected", reject_code: "MANUAL_RELEASED", reject_message: "舊 MES 狀態未知，請人工核對" }, "stop");
 eq("rejected/MANUAL_RELEASED → 主管已取消＋不確定舊 MES", [rel.title, rel.text, rel.detail], ["主管已取消", "主管已取消這筆；舊 MES 是否已改變不確定，請先看機台電子紙或問生管，再決定要不要重按", "舊 MES 狀態未知，請人工核對"]);
 const lateApplied = c.statusView({ status: "rejected", reject_code: "LEGACY_APPLIED_LATE", reject_message: "ChangeStatus ok at 09:03:10" }, "start");
-eq("rejected/LEGACY_APPLIED_LATE → 舊 MES 已改（不說沒生效）", [lateApplied.title, lateApplied.text, lateApplied.tone], ["舊 MES 已改（回報太晚）", "舊 MES 已經改了，但回報太晚；請看機台電子紙或問生管核對", "warn"]);
+eq("rejected/LEGACY_APPLIED_LATE → 舊 MES 已改（不說沒生效）", [lateApplied.title, lateApplied.text, lateApplied.tone], ["舊 MES 已改（回報太晚）", "舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對", "warn"]);
 eq("LEGACY_APPLIED_LATE 文案沒有「沒有生效」", /沒有生效|沒生效|沒有開工/.test(lateApplied.title + lateApplied.text), false);
 eq("rejected 未知代碼 → 通用", c.statusView({ status: "rejected", reject_code: "WEIRD" }, "stop").text, "舊 MES 沒有套用這次指令。");
 eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED"].every((k) => c.REJECT_TEXT[k]), true);

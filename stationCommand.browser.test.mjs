@@ -521,7 +521,7 @@ console.log("\n== 390px：合約 r3 時間規則（App 不自己判結果）==")
   be.mode = "staleReject";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
   const st = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-  ok(st.includes("已作廢") && st.includes("太久沒處理，已作廢，請確認機台狀態後重按"), "rejected/STALE_COMMAND → 「太久沒處理，已作廢，請確認機台狀態後重按」", st);
+  ok(st.includes("已作廢") && st.includes("太久沒套用，舊 MES 沒動，請重按"), "rejected/STALE_COMMAND → 「太久沒套用，舊 MES 沒動，請重按」", st);
   await page.screenshot({ path: path.join(outDir, "phone-10-stale-command.png") });
   await sheet(page).locator("[data-station-cmd-close]").click();
   ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "伺服器給結果後才解鎖");
@@ -532,7 +532,7 @@ console.log("\n== 390px：合約 r3 時間規則（App 不自己判結果）==")
   be.mode = "lateApplied";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
   const la = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-  ok(la.includes("舊 MES 已改（回報太晚）") && la.includes("舊 MES 已經改了，但回報太晚；請看機台電子紙或問生管核對"), "LEGACY_APPLIED_LATE → 「舊 MES 已經改了，但回報太晚…」", la);
+  ok(la.includes("舊 MES 已改（回報太晚）") && la.includes("舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對"), "LEGACY_APPLIED_LATE → 「舊 MES 已經改了，但回報太晚…」", la);
   ok(!/沒有生效|沒生效|沒有停工/.test(la), "LEGACY_APPLIED_LATE 沒有說「沒生效」", la);
   await page.screenshot({ path: path.join(outDir, "phone-11-legacy-applied-late.png") });
   await sheet(page).locator("[data-station-cmd-close]").click();
