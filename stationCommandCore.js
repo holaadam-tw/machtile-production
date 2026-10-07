@@ -208,6 +208,8 @@
     TENANT_INACTIVE: "工廠帳戶目前停用，請找管理員。",
     APP_USER_REQUIRED: "這個帳號沒有對到作業員資料，請找管理員。",
     OPERATOR_LEGACY_ID_MISSING: "你的帳號還沒對到舊 MES 工號，請找生管或管理員設定。",
+    OPERATOR_LEGACY_ID_INVALID: "你的帳號對到的舊 MES 工號格式不對，請找管理員修正。",
+    APPLIER_CANNOT_SUBMIT: "這是工廠套用帳號，不能按開工／停工，請用作業員帳號登入。",
     MACHINE_NOT_ALLOWED: "你的帳號不能操作這台機台（課別不符），請找生管。",
     COMMAND_UUID_CONFLICT: "這筆指令跟之前送過的內容不一樣，請關掉重新按一次。",
     MACHINE_COMMAND_IN_FLIGHT: "這台已經有一筆開工／停工在等工廠處理（可能是別台平板按的），請等它有結果再按。",
@@ -235,8 +237,10 @@
     return { missing: false, retry: status >= 500, text: msg ? `送出失敗：${msg}` : "送出失敗，請稍後再試或找生管。" };
   }
 
-  // 伺服器的指令最長壽命（合約 L3 修訂：送出後約 3 分鐘沒套用 → STALE_COMMAND／expired）。
-  // App 端看到 pending 超過這個時間就直接顯示已過期（伺服器下一輪才落地）。
+  // 伺服器 max_apply_age()（合約 r2 §2：從 requested_at 算 3 分鐘）。超過就不可能被套用：
+  // 套用端碰舊 MES 前必須先 reject STALE_COMMAND，finish(applied) 也會被擋。
+  // 所以 App 看到 pending 超過 3 分鐘就顯示已過期（伺服器要到 10 分鐘才把 pending 落地成 expired，
+  // 在那之前同一台重按會得到 MACHINE_COMMAND_IN_FLIGHT，白話已說明）。
   const SERVER_MAX_AGE_MS = 3 * 60 * 1000;
   const SERVER_MAX_AGE_LABEL = "3 分鐘";
 
@@ -248,7 +252,7 @@
     ALREADY_STOPPED: "舊 MES 這台已經是停工中（或還沒開工），不用再停工。",
     RMS_UNAVAILABLE: "工廠的機台服務沒有回應，請找生管確認舊 MES 狀態。",
     APS_SIM_NOT_FOUND: "舊 MES 找不到這張單的排程資料，請找生管。",
-    EXPIRED: `超過 ${SERVER_MAX_AGE_LABEL}工廠都沒有處理，這次沒有生效。要的話請重新按一次。`,
+    EXPIRED: `超過 ${SERVER_MAX_AGE_LABEL}工廠都沒有處理，這次沒有生效（舊 MES 沒動）。工廠端可能沒在運作，請找生管或改用電子紙。`,
     STALE_COMMAND: "太久沒處理，已作廢，請確認機台狀態後重按",
     MANUAL_RELEASED: "主管已取消這筆，請重按",
   });
@@ -276,8 +280,7 @@
     const type = COMMAND_TYPES.includes(commandType) ? commandType : (row && row.command_type) || "";
     const action = TYPE_LABEL[type] || "指令";
     let status = text(row && row.status).toLowerCase();
-    const claimedBefore = Boolean(text(row && row.claimed_at));
-    if (status === "pending" && !claimedBefore && nowMs !== undefined && pendingTooOld(row, nowMs)) status = "expired";
+    if (status === "pending" && nowMs !== undefined && pendingTooOld(row, nowMs)) status = "expired";
     const special = text(row && row.reject_code).toUpperCase();
     if ((status === "rejected" || status === "expired") && SPECIAL_REJECT_TITLE[special]) {
       const r = rejectText(special, row.reject_message);
@@ -294,8 +297,9 @@
       const r = rejectText("EXPIRED", row.reject_message);
       return { phase: "expired", terminal: true, tone: "warn", title: "已過期", text: r.text, code: "EXPIRED", detail: r.detail };
     }
-    // 租約逾期後回到可重新領取（pending 但領過）也照樣是「工廠處理中」
-    if (status === "claimed" || (status === "pending" && claimedBefore)) {
+    // 合約 r2 §3.2：claimed 有 2 分鐘租約，逾期後狀態仍是 claimed、會被重新領走（claimed_at 更新）。
+    // App 不判斷租約，claimed 一律顯示「工廠處理中」，直到伺服器給 applied／rejected。
+    if (status === "claimed") {
       return { phase: "pending", terminal: false, tone: "wait", title: "工廠處理中…", text: "工廠已收到，正在核對舊 MES。請稍等，不要重按。" };
     }
     return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: "已送出，等工廠接手。請稍等，不要重按。" };

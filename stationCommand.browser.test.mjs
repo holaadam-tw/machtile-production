@@ -138,7 +138,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       else if (be.mode === "rejected") { row.status = "rejected"; row.reject_code = be.reject.code; row.reject_message = be.reject.message; }
       else if (be.mode === "expired") { row.status = "expired"; row.reject_code = "EXPIRED"; }
       else if (be.mode === "stale") { row.status = "pending"; row.requested_at = new Date(Date.now() - 4 * 60000).toISOString(); }   // 伺服器還沒落地 expired（合約 §3）
-      else if (be.mode === "lease") { row.status = "pending"; row.claimed_at = new Date(Date.now() - 5 * 60000).toISOString(); row.requested_at = new Date(Date.now() - 5 * 60000).toISOString(); }   // 租約逾期、等重新領取
+      else if (be.mode === "lease") { row.status = "claimed"; row.claimed_at = new Date(Date.now() - 2.5 * 60000).toISOString(); row.requested_at = new Date(Date.now() - 5 * 60000).toISOString(); }   // 合約 r2：租約（2 分鐘）已過、等重新領取，狀態仍 claimed
       else if (be.mode === "staleReject") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "STALE_COMMAND"; row.reject_message = "not applied within 180s"; }
       else if (be.mode === "released") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "MANUAL_RELEASED"; row.reject_message = "released by manager"; }
       return json(200, [row]);
@@ -472,7 +472,7 @@ console.log("\n== 390px：租約逾期（claimed 2 分鐘到期、等重新領�
   await page.waitForTimeout(2600);
   be.mode = "lease";
   await page.waitForTimeout(4600);
-  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…" && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約逾期回到 pending（領過、已 5 分鐘）→ 仍是工廠處理中，不判過期");
+  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…" && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約逾期（claimed 2.5 分鐘、送出已 5 分鐘）→ 仍是工廠處理中，不判過期");
   ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "租約逾期期間按鈕仍鎖住");
   be.mode = "staleReject";
   await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
