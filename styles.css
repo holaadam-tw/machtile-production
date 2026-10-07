@@ -12796,6 +12796,19 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .card-selection-panel li { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid #d7dde4; overflow-wrap: anywhere; }
 .card-selection-panel button { min-height: 44px; padding: 8px 12px; cursor: pointer; }
 .card-selection-panel [role="alert"] { color: #be342a; }
+/* 派工待做池第 2 步（只讀）：緊急程度徽章、本機不在可做清單時淡化、接單按鈕停用 */
+.card-selection-panel .pool-note { color: #4b5a68; font-size: 0.92em; }
+.card-selection-panel .pool-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pool-urgency { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.85em; font-weight: 700; border: 1px solid transparent; }
+.pool-urgency.is-u1 { background: #be342a; color: #fff; }
+.pool-urgency.is-u2 { background: #f6d7b8; color: #8a3b00; border-color: #e3a56b; }
+.pool-urgency.is-u3 { background: #e3edf8; color: #1f5fa8; border-color: #b9cfe8; }
+.pool-urgency.is-u4, .pool-urgency.is-u0 { background: #eef1f4; color: #4b5a68; border-color: #d7dde4; }
+.pool-returned { font-size: 0.85em; color: #8a3b00; }
+.card-selection-panel .pool-item.is-not-eligible { opacity: 0.7; }
+.card-selection-panel .pool-eligible { color: #4b5a68; }
+.card-selection-panel button[data-pool-claim]:disabled { cursor: not-allowed; opacity: 0.6; }
+.card-pool-entry { background: #f6efe3; color: #8a3b00; }
 
 /* Process route: neutral states, steel-blue current step, contained horizontal scroll. */
 .process-flow { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 10px 0; border: 1px solid #d7dde4; border-radius: 8px; background: #f5f7f9; }

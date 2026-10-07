@@ -148,6 +148,8 @@ eq("rejected 未知代碼 → 保守：不說沒生效，請核對", [weird.titl
 eq("rejected 沒動清單內但沒專用文案（LOCK_TIMEOUT）→ 沒有停工＋通用沒套用", (() => { const v = c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "stop"); return [v.title, v.text, v.tone]; })(), ["沒有停工", "舊 MES 沒有套用這次指令。", "bad"]);
 eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED",
   "NEED_PAUSED", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY", "OPERATOR_LIST_TOO_LONG"].every((k) => c.REJECT_TEXT[k]), true);
+const opNotSet = c.statusView({ status: "rejected", reject_code: "OPERATOR_NOT_SET" }, "start");
+eq("P3-b OPERATOR_NOT_SET → 「這台還沒設定好作業員」，不說「你還沒掛在名單」", [opNotSet.title, opNotSet.text, /你還沒掛/.test(opNotSet.text)], ["沒有開工", "舊 MES 這台還沒設定好作業員，請找生管。", false]);
 const rv = (code) => c.statusView({ status: "rejected", reject_code: code, reject_message: "detail-" + code }, "start");
 const needPaused = rv("NEED_PAUSED");
 eq("#785 NEED_PAUSED（舊 MES 沒動）→ 沒有開工＋「這張單暫停中，請問生管」", [needPaused.title, needPaused.text, needPaused.tone, needPaused.detail], ["沒有開工", "這張單暫停中，請問生管", "bad", "detail-NEED_PAUSED"]);

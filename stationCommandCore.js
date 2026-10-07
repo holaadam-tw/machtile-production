@@ -323,7 +323,7 @@
   const REJECT_TEXT = Object.freeze({
     ORDER_MISMATCH: "舊 MES 這台現在不是這張工單（或不是這一道）。請找生管確認；App 不會幫你換單。",
     STATION_NOT_SET: "舊 MES 這台還沒設定工單，請找生管。",
-    OPERATOR_NOT_SET: "你還沒掛在舊 MES 這台的作業員名單，請找生管。",
+    OPERATOR_NOT_SET: "舊 MES 這台還沒設定好作業員，請找生管。",
     ALREADY_RUNNING: "舊 MES 這台已經是開工中，不用再開工。",
     ALREADY_STOPPED: "舊 MES 這台已經是停工中（或還沒開工），不用再停工。",
     RMS_UNAVAILABLE: "工廠的機台服務沒有回應，請找生管確認舊 MES 狀態。",
