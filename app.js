@@ -13355,7 +13355,7 @@ function machtileStationCmdPoll(code) {
       return;
     }
     try {
-      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,reject_code,reject_message,applied_at&command_uuid=eq.${current.commandUuid}`);
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,applied_at&command_uuid=eq.${current.commandUuid}`);
       const row = Array.isArray(rows) ? rows[0] : null;
       if (row) {
         current.unconfirmed = false;

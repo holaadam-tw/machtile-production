@@ -235,6 +235,11 @@
     return { missing: false, retry: status >= 500, text: msg ? `送出失敗：${msg}` : "送出失敗，請稍後再試或找生管。" };
   }
 
+  // 伺服器的指令最長壽命（合約 L3 修訂：送出後約 3 分鐘沒套用 → STALE_COMMAND／expired）。
+  // App 端看到 pending 超過這個時間就直接顯示已過期（伺服器下一輪才落地）。
+  const SERVER_MAX_AGE_MS = 3 * 60 * 1000;
+  const SERVER_MAX_AGE_LABEL = "3 分鐘";
+
   const REJECT_TEXT = Object.freeze({
     ORDER_MISMATCH: "舊 MES 這台現在不是這張工單（或不是這一道）。請找生管確認；App 不會幫你換單。",
     STATION_NOT_SET: "舊 MES 這台還沒設定工單，請找生管。",
@@ -243,8 +248,12 @@
     ALREADY_STOPPED: "舊 MES 這台已經是停工中（或還沒開工），不用再停工。",
     RMS_UNAVAILABLE: "工廠的機台服務沒有回應，請找生管確認舊 MES 狀態。",
     APS_SIM_NOT_FOUND: "舊 MES 找不到這張單的排程資料，請找生管。",
-    EXPIRED: "超過 10 分鐘工廠都沒有處理，這次沒有生效。要的話請重新按一次。",
+    EXPIRED: `超過 ${SERVER_MAX_AGE_LABEL}工廠都沒有處理，這次沒有生效。要的話請重新按一次。`,
+    STALE_COMMAND: "太久沒處理，已作廢，請確認機台狀態後重按",
+    MANUAL_RELEASED: "主管已取消這筆，請重按",
   });
+  // 這兩個代碼不論伺服器把狀態記成 rejected 還是 expired，畫面都用自己的標題
+  const SPECIAL_REJECT_TITLE = Object.freeze({ STALE_COMMAND: "已作廢", MANUAL_RELEASED: "主管已取消" });
 
   function rejectText(code, message) {
     const key = text(code).toUpperCase();
@@ -255,8 +264,9 @@
 
   // ---------------------------------------------------------------- 狀態
   // row：station_commands 讀回來的那一列。回傳畫面要的一切（phase／tone／白話）。
-  // 合約 §3：過期只在下一次 submit/claim 才落地；pending 且 requested_at 超過 10 分鐘 → 直接當已過期。
-  const EXPIRE_AFTER_MS = 10 * 60 * 1000;
+  // 合約 §3：過期只在下一次 submit/claim 才落地；pending 且 requested_at 超過伺服器最長壽命 → 直接當已過期。
+  // claimed（工廠租約 2 分鐘，逾期可被重新領走）不由 App 判過期，一律顯示「工廠處理中」直到伺服器給結果。
+  const EXPIRE_AFTER_MS = SERVER_MAX_AGE_MS;
   function pendingTooOld(row, nowMs) {
     const at = Date.parse(row && row.requested_at);
     return Number.isFinite(at) && Number.isFinite(Number(nowMs)) && Number(nowMs) - at > EXPIRE_AFTER_MS;
@@ -266,7 +276,13 @@
     const type = COMMAND_TYPES.includes(commandType) ? commandType : (row && row.command_type) || "";
     const action = TYPE_LABEL[type] || "指令";
     let status = text(row && row.status).toLowerCase();
-    if (status === "pending" && nowMs !== undefined && pendingTooOld(row, nowMs)) status = "expired";
+    const claimedBefore = Boolean(text(row && row.claimed_at));
+    if (status === "pending" && !claimedBefore && nowMs !== undefined && pendingTooOld(row, nowMs)) status = "expired";
+    const special = text(row && row.reject_code).toUpperCase();
+    if ((status === "rejected" || status === "expired") && SPECIAL_REJECT_TITLE[special]) {
+      const r = rejectText(special, row.reject_message);
+      return { phase: status, terminal: true, tone: "warn", title: SPECIAL_REJECT_TITLE[special], text: r.text, code: special, detail: r.detail };
+    }
     if (status === "applied") {
       return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : "已套用", text: `舊 MES 已${action}。` };
     }
@@ -278,7 +294,8 @@
       const r = rejectText("EXPIRED", row.reject_message);
       return { phase: "expired", terminal: true, tone: "warn", title: "已過期", text: r.text, code: "EXPIRED", detail: r.detail };
     }
-    if (status === "claimed") {
+    // 租約逾期後回到可重新領取（pending 但領過）也照樣是「工廠處理中」
+    if (status === "claimed" || (status === "pending" && claimedBefore)) {
       return { phase: "pending", terminal: false, tone: "wait", title: "工廠處理中…", text: "工廠已收到，正在核對舊 MES。請稍等，不要重按。" };
     }
     return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: "已送出，等工廠接手。請稍等，不要重按。" };
@@ -323,7 +340,7 @@
     partNoOf, formatTime, legacyRowFor, legacyStateLines, confirmModel,
     isUuid, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, SUBMIT_ERROR_TEXT, rejectText,
-    EXPIRE_AFTER_MS, pendingTooOld, statusView, pollDelay, shouldGiveUp, giveUpView,
+    SERVER_MAX_AGE_MS, EXPIRE_AFTER_MS, pendingTooOld, statusView, pollDelay, shouldGiveUp, giveUpView,
     pendingRecord, restorePending,
   };
 });

@@ -121,9 +121,17 @@ eq("每個合約拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET",
 const exp = c.statusView({ status: "expired" }, "start");
 eq("expired → 過期白話", [exp.phase, exp.terminal, exp.title, exp.text], ["expired", true, "已過期", c.REJECT_TEXT.EXPIRED]);
 const reqAt = "2026-10-07T02:00:00Z";
-eq("pending 未滿 10 分鐘 → 還在等", c.statusView({ status: "pending", requested_at: reqAt }, "start", Date.parse(reqAt) + 9 * 60000).phase, "pending");
-eq("pending 超過 10 分鐘 → 直接顯示已過期（合約 §3）", c.statusView({ status: "pending", requested_at: reqAt }, "start", Date.parse(reqAt) + 11 * 60000).phase, "expired");
-eq("claimed 超過 10 分鐘 → 不算過期（claimed 不會過期）", c.statusView({ status: "claimed", requested_at: reqAt }, "start", Date.parse(reqAt) + 30 * 60000).phase, "pending");
+eq("伺服器最長壽命＝3 分鐘", c.SERVER_MAX_AGE_MS, 180000);
+eq("pending 未滿 3 分鐘 → 還在等", c.statusView({ status: "pending", requested_at: reqAt }, "start", Date.parse(reqAt) + 170000).phase, "pending");
+eq("pending 超過 3 分鐘 → 直接顯示已過期（不再等 10 分鐘）", c.statusView({ status: "pending", requested_at: reqAt }, "start", Date.parse(reqAt) + 190000).phase, "expired");
+eq("過期白話寫 3 分鐘", c.REJECT_TEXT.EXPIRED.startsWith("超過 3 分鐘工廠都沒有處理"), true);
+eq("claimed（租約中）超過 3 分鐘 → 仍是工廠處理中，由伺服器決定", c.statusView({ status: "claimed", requested_at: reqAt, claimed_at: reqAt }, "start", Date.parse(reqAt) + 30 * 60000).title, "工廠處理中…");
+eq("租約逾期回到 pending（領過）→ 仍顯示工廠處理中、不判過期", [c.statusView({ status: "pending", requested_at: reqAt, claimed_at: reqAt }, "start", Date.parse(reqAt) + 5 * 60000).phase, c.statusView({ status: "pending", requested_at: reqAt, claimed_at: reqAt }, "start", Date.parse(reqAt) + 5 * 60000).title], ["pending", "工廠處理中…"]);
+const stale = c.statusView({ status: "rejected", reject_code: "STALE_COMMAND", reject_message: "not applied within 180s" }, "start", Date.parse(reqAt));
+eq("STALE_COMMAND → 已作廢＋指定白話", [stale.terminal, stale.title, stale.text, stale.code], [true, "已作廢", "太久沒處理，已作廢，請確認機台狀態後重按", "STALE_COMMAND"]);
+eq("STALE_COMMAND 記成 expired 也一樣", c.statusView({ status: "expired", reject_code: "STALE_COMMAND" }, "stop").text, "太久沒處理，已作廢，請確認機台狀態後重按");
+const rel = c.statusView({ status: "rejected", reject_code: "MANUAL_RELEASED", reject_message: "released by manager" }, "stop");
+eq("MANUAL_RELEASED → 主管已取消＋指定白話", [rel.terminal, rel.title, rel.text, rel.detail], [true, "主管已取消", "主管已取消這筆，請重按", "released by manager"]);
 eq("沒給現在時間 → 不判過期", c.statusView({ status: "pending", requested_at: reqAt }, "start").phase, "pending");
 eq("沒有 status → 當等待", c.statusView({}, "start").phase, "pending");
 

@@ -133,11 +133,14 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (!m) return json(200, []);
       const row = be.commands.get(m[1]);
       if (!row) return json(200, []);
-      if (be.mode === "hold") { row.status = row.status === "pending" ? "claimed" : row.status; }
+      if (be.mode === "hold") { if (row.status === "pending") { row.status = "claimed"; row.claimed_at = new Date().toISOString(); } }
       else if (be.mode === "applied") { row.status = "applied"; row.applied_at = new Date().toISOString(); }
       else if (be.mode === "rejected") { row.status = "rejected"; row.reject_code = be.reject.code; row.reject_message = be.reject.message; }
       else if (be.mode === "expired") { row.status = "expired"; row.reject_code = "EXPIRED"; }
-      else if (be.mode === "stale") { row.status = "pending"; row.requested_at = new Date(Date.now() - 11 * 60000).toISOString(); }   // 伺服器還沒落地 expired（合約 §3）
+      else if (be.mode === "stale") { row.status = "pending"; row.requested_at = new Date(Date.now() - 4 * 60000).toISOString(); }   // 伺服器還沒落地 expired（合約 §3）
+      else if (be.mode === "lease") { row.status = "pending"; row.claimed_at = new Date(Date.now() - 5 * 60000).toISOString(); row.requested_at = new Date(Date.now() - 5 * 60000).toISOString(); }   // 租約逾期、等重新領取
+      else if (be.mode === "staleReject") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "STALE_COMMAND"; row.reject_message = "not applied within 180s"; }
+      else if (be.mode === "released") { row.status = "rejected"; row.claimed_at = row.claimed_at || new Date().toISOString(); row.reject_code = "MANUAL_RELEASED"; row.reject_message = "released by manager"; }
       return json(200, [row]);
     }
     if (p === "/rest/v1/rpc/machtile_submit_station_command") {
@@ -385,7 +388,7 @@ for (const vp of ["desktop", "phone"]) {
     be.mode = "expired";
     await sheet(page).locator('[data-station-cmd-result="expired"]').waitFor({ timeout: 15000 });
     const exp = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
-    ok(exp.includes("已過期") && exp.includes("超過 10 分鐘工廠都沒有處理") && exp.includes("沒有生效"), `${W}：過期 → 白話`, exp);
+    ok(exp.includes("已過期") && exp.includes("超過 3 分鐘工廠都沒有處理") && exp.includes("沒有生效"), `${W}：過期 → 白話`, exp);
     await page.screenshot({ path: path.join(outDir, `${vp}-08-expired.png`) });
     await sheet(page).locator("[data-station-cmd-close]").click();
 
@@ -441,7 +444,7 @@ console.log("\n== 1440px：旗標開但登入的是生管（planner）→ 不出
   await context.close();
 }
 
-console.log("\n== 390px：pending 超過 10 分鐘（伺服器還沒落地）→ 直接顯示已過期 ==");
+console.log("\n== 390px：pending 超過 3 分鐘（伺服器還沒落地）→ 直接顯示已過期 ==");
 {
   const be = makeBackend();
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
@@ -450,9 +453,47 @@ console.log("\n== 390px：pending 超過 10 分鐘（伺服器還沒落地）→
   await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
   await sheet(page).locator("[data-station-cmd-confirm]").click();
   await sheet(page).locator('[data-station-cmd-result="expired"]').waitFor({ timeout: 15000 });
-  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "已過期", "requested_at 超過 10 分鐘的 pending → 已過期");
+  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "已過期", "requested_at 超過 3 分鐘的 pending → 已過期");
   await sheet(page).locator("[data-station-cmd-close]").click();
   ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "過期後解鎖、可以再按");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：租約逾期（claimed 2 分鐘到期、等重新領取）→ 仍顯示工廠處理中；STALE_COMMAND／MANUAL_RELEASED 白話 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  be.mode = "hold";
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  await page.waitForTimeout(2600);
+  be.mode = "lease";
+  await page.waitForTimeout(4600);
+  ok((await sheet(page).locator("[data-station-cmd-result] strong").innerText()).trim() === "工廠處理中…" && await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "租約逾期回到 pending（領過、已 5 分鐘）→ 仍是工廠處理中，不判過期");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "租約逾期期間按鈕仍鎖住");
+  be.mode = "staleReject";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const st = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(st.includes("已作廢") && st.includes("太久沒處理，已作廢，請確認機台狀態後重按"), "STALE_COMMAND → 「太久沒處理，已作廢，請確認機台狀態後重按」", st);
+  await page.screenshot({ path: path.join(outDir, "phone-09-stale-command.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "作廢後可以重按");
+
+  be.mode = "hold";
+  await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  be.mode = "released";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const rl = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(rl.includes("主管已取消") && rl.includes("主管已取消這筆，請重按"), "MANUAL_RELEASED → 「主管已取消這筆，請重按」", rl);
+  await page.screenshot({ path: path.join(outDir, "phone-10-manual-released.png") });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("主管已取消"), "卡片也顯示主管已取消");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
