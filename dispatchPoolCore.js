@@ -54,7 +54,9 @@
   }
 
   // 機台卡的「待做池（同課）」：只有機台課別明確是車床課／銑床課才列；eligibleHere＝這台在不在可做機台清單。
-  function itemsForMachine(items, machine) {
+  // hideNotEligible（owner 2026-10-07：作業員）＝這台不在可做機台清單的工序不列；生管／主管照列（畫面淡化＋標註）。
+  function itemsForMachine(items, machine, options) {
+    const hideNotEligible = Boolean(options && options.hideNotEligible);
     const department = departmentCodeOf(machine && machine.departmentName);
     const code = text(machine && machine.machineCode);
     if (!department) return { department: "", items: [] };
@@ -62,7 +64,7 @@
       .map((item) => Object.assign({}, item, {
         eligibleHere: Boolean(code) && (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).map(text).includes(code),
       }));
-    return { department, items: list };
+    return { department, items: hideNotEligible ? list.filter((item) => item.eligibleHere) : list };
   }
 
   function urgencyLabel(item) {
