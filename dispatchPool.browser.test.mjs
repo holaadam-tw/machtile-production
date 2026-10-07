@@ -123,6 +123,11 @@ try {
     const { ctx, page } = await openApp('operator', 390);
     ok(await page.locator('[data-card-select-open]').count() === 0, 'operator: no 選擇工單 (cannot schedule)');
     ok(await page.locator('[data-card-pool-open="B03"]').count() === 0, 'operator: no foreign-department card/entry');
+    const entryA01 = page.locator('[data-card-pool-open="A01"]');
+    ok(await entryA01.count() === 1 && (await entryA01.innerText()).includes('待做池（同課）1 張'), 'operator: A01 count excludes the step A01 is not eligible for');
+    await entryA01.click();
+    ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0001|TEST-SIM-1']) && await page.locator('#machtileCardSelection .is-not-eligible').count() === 0, 'operator: steps this machine cannot take are hidden (planner still sees them dimmed)');
+    await page.locator('[data-close-card-selection]').click();
     const entry = page.locator('[data-card-pool-open="A02"]');
     ok(await entry.count() === 1 && (await entry.innerText()).includes('待做池（同課）2 張'), 'operator: same-department pool entry with count');
     await entry.click();
