@@ -143,7 +143,9 @@ eq("rejected/MANUAL_RELEASED → 主管已取消＋不確定舊 MES", [rel.title
 const lateApplied = c.statusView({ status: "rejected", reject_code: "LEGACY_APPLIED_LATE", reject_message: "ChangeStatus ok at 09:03:10" }, "start");
 eq("rejected/LEGACY_APPLIED_LATE → 舊 MES 已改（不說沒生效）", [lateApplied.title, lateApplied.text, lateApplied.tone], ["舊 MES 已改（回報太晚）", "舊 MES 已經改了，但回報太晚；不要再按，請看機台電子紙或問生管核對", "warn"]);
 eq("LEGACY_APPLIED_LATE 文案沒有「沒有生效」", /沒有生效|沒生效|沒有開工/.test(lateApplied.title + lateApplied.text), false);
-eq("rejected 未知代碼 → 通用", c.statusView({ status: "rejected", reject_code: "WEIRD" }, "stop").text, "舊 MES 沒有套用這次指令。");
+const weird = c.statusView({ status: "rejected", reject_code: "WEIRD" }, "stop");
+eq("rejected 未知代碼 → 保守：不說沒生效，請核對", [weird.title, weird.text, weird.tone], ["結果待核對", "沒有完成，舊 MES 狀態請核對", "warn"]);
+eq("rejected 沒動清單內但沒專用文案（LOCK_TIMEOUT）→ 沒有停工＋通用沒套用", (() => { const v = c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "stop"); return [v.title, v.text, v.tone]; })(), ["沒有停工", "舊 MES 沒有套用這次指令。", "bad"]);
 eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED",
   "NEED_PAUSED", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY", "OPERATOR_LIST_TOO_LONG"].every((k) => c.REJECT_TEXT[k]), true);
 const rv = (code) => c.statusView({ status: "rejected", reject_code: code, reject_message: "detail-" + code }, "start");
@@ -157,6 +159,30 @@ const swapped = rv("ORDER_CHANGED_DURING_APPLY");
 eq("#785 ORDER_CHANGED_DURING_APPLY（舊 MES 已改）→ 白話", [swapped.title, swapped.text, swapped.tone], ["舊 MES 已改（單剛好被換）", "套用時機台上的單剛好被換了，舊 MES 已經改了，請問生管核對", "warn"]);
 eq("舊 MES 已改的代碼（3 個）標題與內文都不說「沒生效／沒有開工」", c.LEGACY_CHANGED_CODES.filter((k) => { const v = rv(k); return /沒有生效|沒生效|沒有開工|沒有停工|沒動/.test(v.title + v.text); }), []);
 eq("舊 MES 已改的代碼都有專用標題", c.LEGACY_CHANGED_CODES.every((k) => c.REJECT_TITLE[k]), true);
+// L3 P2-1：OUTCOME_UNKNOWN／INTERNAL_ERROR＝不確定 → 標題「結果不確定」，內文叫人先看電子紙或問生管，不說沒生效
+["OUTCOME_UNKNOWN", "INTERNAL_ERROR"].forEach((k) => {
+  for (const type of ["start", "stop"]) {
+    const v = c.statusView({ status: "rejected", reject_code: k, reject_message: "detail-" + k }, type);
+    eq(`${k}（${type}）→ 結果不確定、warn`, [v.title, v.tone], ["結果不確定", "warn"]);
+    eq(`${k}（${type}）→ 內文叫人看電子紙或問生管`, /電子紙/.test(v.text) && /生管/.test(v.text) && /不確定/.test(v.text), true);
+    eq(`${k}（${type}）→ 不說沒生效／沒有開工停工／沒動`, /沒有生效|沒生效|沒有開工|沒有停工|沒動|沒有套用/.test(v.title + v.text), false);
+  }
+});
+// L3 P2-1：不在「舊 MES 沒動」清單的代碼，標題不可以用「沒有」開頭（含未知代碼、伺服器保留碼）
+{
+  const probe = [...new Set([...Object.keys(c.REJECT_TEXT), ...Object.keys(c.REJECT_TITLE), ...c.LEGACY_CHANGED_CODES, ...c.LEGACY_UNTOUCHED_CODES,
+    "OUTCOME_UNKNOWN", "INTERNAL_ERROR", "WEIRD", "SOME_FUTURE_CODE", ""])];
+  const bad = [];
+  for (const k of probe) for (const type of ["start", "stop"]) {
+    const v = c.statusView({ status: "rejected", reject_code: k }, type);
+    if (!c.LEGACY_UNTOUCHED_CODES.includes(v.code) && /^沒有/.test(v.title)) bad.push(`${k}/${type}:${v.title}`);
+  }
+  eq("不在沒動清單的代碼，標題都不以「沒有」開頭", bad, []);
+  eq("沒動清單和已改清單沒有交集", c.LEGACY_UNTOUCHED_CODES.filter((k) => c.LEGACY_CHANGED_CODES.includes(k)), []);
+  eq("沒動清單不含不確定代碼", ["OUTCOME_UNKNOWN", "INTERNAL_ERROR", "MANUAL_RELEASED", "EXPIRED"].filter((k) => c.LEGACY_UNTOUCHED_CODES.includes(k)), []);
+  eq("L3 列的沒動代碼都在清單內", ["ORDER_MISMATCH", "ALREADY_RUNNING", "ALREADY_STOPPED", "STALE_COMMAND", "RMS_UNAVAILABLE", "NEED_PAUSED", "OPERATOR_LIST_TOO_LONG",
+    "STATION_NOT_SET", "OPERATOR_NOT_SET", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT"].every((k) => c.LEGACY_UNTOUCHED_CODES.includes(k)), true);
+}
 const lateP = c.statusView({ status: "pending" }, "start", 4 * 60000);
 eq("pending 超過 3 分鐘（伺服器時間）→ 仍是等待中（不是結果），加提示", [lateP.phase, lateP.terminal, lateP.late, lateP.text], ["pending", false, true, "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管"]);
 const lateC = c.statusView({ status: "claimed" }, "start", 30 * 60000);

@@ -337,6 +337,9 @@
     ORDER_CHANGED_DURING_APPLY: "套用時機台上的單剛好被換了，舊 MES 已經改了，請問生管核對",
     MANUAL_RELEASED: "主管已取消這筆；舊 MES 是否已改變不確定，請先看機台電子紙或問生管，再決定要不要重按",
     EXPIRED: "超過 10 分鐘工廠都沒有接手，這次沒有生效（舊 MES 沒動）。要的話請重新按一次。",
+    // 套用端速查表（#785 runbook）：OUTCOME_UNKNOWN／INTERNAL_ERROR＝舊 MES 有沒有改「不確定」，不能說沒生效
+    OUTCOME_UNKNOWN: "舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
+    INTERNAL_ERROR: "工廠套用時出錯，舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
   });
   // 這些代碼不是一般的「沒有開工／停工」：LEGACY_APPLIED_LATE／LEGACY_PARTIAL_WRITE／ORDER_CHANGED_DURING_APPLY
   // 舊 MES 其實已經改了；MANUAL_RELEASED 不確定。標題不能寫「沒有開工／停工」。
@@ -346,13 +349,26 @@
     LEGACY_APPLIED_LATE: "舊 MES 已改（回報太晚）",
     LEGACY_PARTIAL_WRITE: "舊 MES 已改一部分",
     ORDER_CHANGED_DURING_APPLY: "舊 MES 已改（單剛好被換）",
+    OUTCOME_UNKNOWN: "結果不確定",
+    INTERNAL_ERROR: "結果不確定",
   });
   // 舊 MES 已經被改過（全部或部分）的代碼
   const LEGACY_CHANGED_CODES = Object.freeze(["LEGACY_APPLIED_LATE", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY"]);
+  // 舊 MES 確定「沒動」的代碼（套用端 StationCommandRejectCodes 扣掉上面 3 個已改＋OUTCOME_UNKNOWN／INTERNAL_ERROR 不確定）。
+  // 只有這些代碼可以用「沒有開工／停工」這種肯定標題；清單外的（含套用端以後新加、App 還沒跟上的）一律保守寫「請核對」。
+  const LEGACY_UNTOUCHED_CODES = Object.freeze([
+    "COMMAND_INVALID", "STALE_COMMAND", "STATION_NOT_ENABLED", "STATION_NOT_FOUND", "STATION_TYPE_MISMATCH", "STATION_NOT_SET",
+    "ORDER_MISMATCH", "INDEX_SN_MISMATCH", "PART_NO_MISMATCH", "MII_NOT_FOUND", "MII_CLOSED", "OPERATOR_NOT_SET", "OPERATOR_UNKNOWN",
+    "ALREADY_RUNNING", "ALREADY_STOPPED", "NOT_STARTED", "WORK_ORDER_NOT_FOUND", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID",
+    "RMS_UNAVAILABLE", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT", "OPERATOR_LIST_TOO_LONG", "NEED_PAUSED",
+  ]);
+  const UNTOUCHED_FALLBACK_TEXT = "舊 MES 沒有套用這次指令。";
+  const UNKNOWN_CODE_TEXT = "沒有完成，舊 MES 狀態請核對";
+  const UNKNOWN_CODE_TITLE = "結果待核對";
 
   function rejectText(code, message) {
     const key = text(code).toUpperCase();
-    const base = REJECT_TEXT[key] || "舊 MES 沒有套用這次指令。";
+    const base = REJECT_TEXT[key] || (LEGACY_UNTOUCHED_CODES.includes(key) ? UNTOUCHED_FALLBACK_TEXT : UNKNOWN_CODE_TEXT);
     const detail = text(message);
     return { text: base, code: key, detail: detail && detail !== base ? detail : "" };
   }
@@ -369,7 +385,9 @@
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
       const special = REJECT_TITLE[r.code];
-      return { phase: "rejected", terminal: true, tone: special ? "warn" : "bad", title: special || `沒有${action}`, text: r.text, code: r.code, detail: r.detail };
+      const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
+      const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
+      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: r.text, code: r.code, detail: r.detail };
     }
     if (status === "expired") {
       const r = rejectText("EXPIRED", row.reject_message);
@@ -453,7 +471,7 @@
 
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
-    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, SUBMIT_ERROR_TEXT,
+    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
     parseFlag, flagIsOn, enabledForMachine, isMultiStation, roleAllowed, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
