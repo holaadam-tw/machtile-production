@@ -11017,10 +11017,11 @@ async function machtileLoadDispatchPool() {
 
 function machtileDispatchPoolForMachine(machine) {
   if (!machtileDispatchPoolCore || machtileDispatchPoolState.status !== "ready") return { department: "", items: [] };
+  // owner 2026-10-07：作業員看不到「這台不在可做機台清單」的工序；生管／主管照列（淡化＋標註）。
   return machtileDispatchPoolCore.itemsForMachine(machtileDispatchPoolState.items, {
     departmentName: normalizedMachineDepartment(machine),
     machineCode: machine?.code || machine?.name || "",
-  });
+  }, { hideNotEligible: !machtileCanEditSchedule() });
 }
 
 function machtileDispatchPoolSectionMarkup(machine) {
