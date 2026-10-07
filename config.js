@@ -60,4 +60,8 @@ window.MACHTILE_CONFIG = {
   // enableAccountDelete. true = ask the read-only am-list-user-usage Edge Function for the counts.
   // Not deployed / fails → the badge shows 「—」 (tooltip: 狀態暫時讀不到); nothing else changes.
   enableFaceStatus: true,
+  // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
+  // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
+  // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
+  stationCommandMachines: [],
 };
