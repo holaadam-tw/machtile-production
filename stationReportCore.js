@@ -61,13 +61,13 @@
 
   function legacyIdentityFromProjection(row) {
     if (!isPlainObject(row) || !Number.isInteger(row.legacy_index_sn) || row.legacy_index_sn < 1 ||
-        typeof row.manufacture_ii_id !== "string" || !row.manufacture_ii_id.trim() || row.manufacture_ii_id.length > 100 ||
+        (row.manufacture_ii_id != null && (typeof row.manufacture_ii_id !== "string" || !row.manufacture_ii_id.trim() || row.manufacture_ii_id.length > 100)) ||
         typeof row.simulation_id !== "string" || !row.simulation_id.trim() || row.simulation_id.length > 20) {
       throw new ContractError("REPORT_CONTEXT_REQUIRED", "舊 MES IndexSN、ManufactureII Id 或 SimulationId 不完整；已阻擋送出。");
     }
     return {
       expectedIndexSn: row.legacy_index_sn,
-      manufactureIiId: row.manufacture_ii_id.trim(),
+      manufactureIiId: row.manufacture_ii_id == null ? null : row.manufacture_ii_id.trim(),
       expectedSimulationId: row.simulation_id.trim(),
     };
   }
@@ -106,8 +106,8 @@
     const simulation = x.expectedSimulationId == null ? null : String(x.expectedSimulationId).trim() || null;
     const index = Number(x.expectedIndexSn);
     if (!machine || machine.length > 30 || !order || order.length > 100 || !Number.isInteger(index) || index < 1 ||
-        !mii || mii.length > 100 || !simulation || simulation.length > 20 ||
-        (part && part.length > 200)) {
+        (mii && mii.length > 100) || !simulation || simulation.length > 20 ||
+        !part || part.length > 200) {
       throw new ContractError("REPORT_CONTEXT_REQUIRED", "工單、工序或機台資料不完整，無法送出智慧報工。");
     }
     const form = validateReportInput(x, failReasonCodes);

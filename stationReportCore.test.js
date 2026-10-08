@@ -76,11 +76,12 @@ check("legacy report identity maps only explicit bridge projection fields", () =
   assert.deepEqual(core.legacyIdentityFromProjection(projected), {
     expectedIndexSn: 2, manufactureIiId: "MII-00042", expectedSimulationId: "Y011BG35APT0",
   });
-  for (const key of ["legacy_index_sn", "manufacture_ii_id", "simulation_id"]) {
+  for (const key of ["legacy_index_sn", "simulation_id"]) {
     const missing = { ...projected };
     delete missing[key];
     assert.throws(() => core.legacyIdentityFromProjection(missing), { code: "REPORT_CONTEXT_REQUIRED" }, `missing ${key}`);
   }
+  assert.equal(core.legacyIdentityFromProjection({ ...projected, manufacture_ii_id: null }).manufactureIiId, null);
 });
 
 check("submit payload follows the named report RPC contract exactly", () => {
@@ -119,8 +120,9 @@ check("invalid quantities, unknown reason, invalid ack and missing G4 note fail 
 check("missing legacy identity fields block submit rather than guessing mappings", () => {
   assert.throws(() => core.buildSubmitArgs(validInput({ expectedIndexSn: null }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
   assert.throws(() => core.buildSubmitArgs(validInput({ expectedOrderNo: "" }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
-  assert.throws(() => core.buildSubmitArgs(validInput({ manufactureIiId: null }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
-  assert.throws(() => core.buildSubmitArgs(validInput({ manufactureIiId: "" }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
+  assert.equal(core.buildSubmitArgs(validInput({ manufactureIiId: null }), UUID_PREVIEW).p_manufacture_ii_id, null);
+  assert.equal(core.buildSubmitArgs(validInput({ manufactureIiId: "" }), UUID_PREVIEW).p_manufacture_ii_id, null);
+  assert.throws(() => core.buildSubmitArgs(validInput({ expectedPartNo: null }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
   assert.throws(() => core.buildSubmitArgs(validInput({ expectedSimulationId: null }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
   assert.throws(() => core.buildSubmitArgs(validInput({ expectedSimulationId: "" }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });
   assert.throws(() => core.buildSubmitArgs(validInput({ expectedSimulationId: "X".repeat(21) }), UUID_PREVIEW), { code: "REPORT_CONTEXT_REQUIRED" });

@@ -20578,22 +20578,24 @@ const machtileBatchState = {
 };
 
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
+const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
 
 async function machtileLoadStationReportSettings(machineCodes) {
   const core = machtileStationReportCore();
   machtileBatchState.stationReportSettings = { status: "unavailable", machines: {}, failReasonCodesByMachine: {}, error: "" };
-  if (!core || state.source !== "supabase" || !Array.isArray(machineCodes) || !machineCodes.length) return;
+  if (!machtileStationReportEnabled() || !core || state.source !== "supabase" || !Array.isArray(machineCodes) || !machineCodes.length) return;
   try {
     const client = machtileStationReportCreateClient();
-    const configs = await Promise.all(machineCodes.map((code) => client.getGuardConfig(code)));
+    const allowed = window.MACHTILE_CONFIG.stationReportMachines || [];
+    const enabledCodes = machineCodes.filter((code) => allowed.includes(code) || allowed.includes("*"));
+    const configs = await Promise.all(enabledCodes.map((code) => client.getGuardConfig(code)));
     const machines = {};
     const failReasonCodesByMachine = {};
     configs.forEach((configRow, index) => {
-      const code = String(machineCodes[index]).trim().toUpperCase();
+      const code = String(enabledCodes[index]).trim().toUpperCase();
       if (!core.isGuardConfig(configRow, code)) throw new Error(`invalid guard config for ${code}`);
-      machines[code] = core.reportMachineEnabled(configRow.report_enabled_machines, code);
-      if (machines[code] !== configRow.report_enabled) throw new Error(`guard config disagreement for ${code}`);
+      machines[code] = true;
       failReasonCodesByMachine[code] = configRow.fail_reason_codes;
     });
     machtileBatchState.stationReportSettings = { status: "loaded", machines, failReasonCodesByMachine, error: "" };
@@ -20620,7 +20622,7 @@ async function machtileLoadStationReportIdentity(machineCodes) {
     const rows = [];
     for (let i = 0; i < processIds.length; i += 80) {
       const chunk = processIds.slice(i, i + 80).map(encodeURIComponent).join(",");
-      const result = await supabaseFetch(`work_order_processes?select=id,legacy_index_sn,manufacture_ii_id,simulation_id&id=in.(${chunk})`);
+      const result = await supabaseFetch(`work_order_processes?select=id,legacy_index_sn,manufacture_ii_id,simulation_id,work_orders!inner(part_no)&id=in.(${chunk})`);
       if (!Array.isArray(result)) throw new Error("工序舊 MES 識別資料格式不正確");
       rows.push(...result);
     }
@@ -20629,6 +20631,7 @@ async function machtileLoadStationReportIdentity(machineCodes) {
         legacy_index_sn: row.legacy_index_sn,
         manufacture_ii_id: row.manufacture_ii_id,
         simulation_id: row.simulation_id,
+        part_no: row.work_orders?.part_no,
       });
     });
   } catch (error) {
@@ -20647,6 +20650,14 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
+  const operatorName = machtileBatchState.users.find((user) => String(user.id) === String(row.operatorId))?.name || row.operatorId || "未選報工人";
+  const confirmCard = `<div class="station-report-confirm-card" role="group" aria-label="報工確認資訊">
+    <strong>${escapeHtml(machtileBatchMachineLabel(code))}・${escapeHtml(operatorName)}</strong>
+    <div>工單尾碼 <b>${escapeHtml(String(order?.id || "").slice(-4))}</b>・${escapeHtml(order?.partNo || context?.expectedPartNo || "")}
+      ${escapeHtml(order?.partName || "")}</div>
+    <div>第 ${escapeHtml(context?.expectedIndexSn || "?")} 道・${escapeHtml(order?.process || "")}</div>
+    <div>本次良 <b>${escapeHtml(row.good || 0)}</b>／不良 <b>${escapeHtml(row.bad || 0)}</b>；目前可報
+      <b>${escapeHtml(result?.values?.available ?? "—")}</b></div></div>`;
   let resultHtml = "";
   if (result) {
     const resultTone = result.kind === "applied" || result.kind === "previewed" ? "success"
@@ -20661,11 +20672,11 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     resultHtml = `<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
     if (result.kind === "previewed") {
       resultHtml += snapshotReady
-        ? `<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}>依 guard 結果繼續報工</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認報工</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">預覽回傳 guard 欄位不完整；已阻擋正式送出。</p>`;
     } else if (result.kind === "preview-soft") {
       resultHtml += snapshotReady
-        ? `<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>我了解，仍照送（${escapeHtml(result.guardCode)}）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認照送（${escapeHtml(result.guardCode)}）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">軟性 guard 預覽資料不完整；已阻擋送出。</p>`;
     } else if (result.kind === "preview-blocked" || result.kind === "preview-invalid") {
       resultHtml += `<p class="batch-notice is-error" role="alert">${escapeHtml(result.guardCode ? `Guard ${result.guardCode}：` : "")}${escapeHtml(result.kind === "preview-invalid" ? "預覽 guard 資料不完整；已阻擋正式送出。" : "已阻擋確認送出；可修改數量後重新預覽。")}</p><div class="station-report-actions"><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`;
@@ -20826,7 +20837,7 @@ function machtileStationReportContext(order, machineCode) {
     machineCode: String(machineCode || "").trim().toUpperCase(),
     expectedOrderNo: String(order.id),
     ...identity,
-    expectedPartNo: null,
+    expectedPartNo: String(legacy.part_no || "").trim(),
   };
   try {
     // The three legacy identity values come only from factory-bridge fields.
@@ -20845,7 +20856,8 @@ function machtileStationReportMissingContext(order, machineCode) {
   if (!String(order?.id || "").trim()) missing.push("expected_order_no（舊 MES 工單號）");
   if (!String(machineCode || "").trim()) missing.push("p_machine_code");
   if (!Number.isInteger(legacy?.legacy_index_sn) || legacy.legacy_index_sn < 1) missing.push("legacy_index_sn（舊 MES IndexSN）");
-  if (typeof legacy?.manufacture_ii_id !== "string" || !legacy.manufacture_ii_id.trim()) missing.push("manufacture_ii_id（舊 MES ManufactureII Id）");
+  if (!String(legacy?.part_no || "").trim()) missing.push("part_no（工單投影料號）");
+  if (legacy?.manufacture_ii_id != null && (typeof legacy.manufacture_ii_id !== "string" || !legacy.manufacture_ii_id.trim())) missing.push("manufacture_ii_id（舊 MES ManufactureII Id）");
   if (typeof legacy?.simulation_id !== "string" || !legacy.simulation_id.trim() || legacy.simulation_id.length > 20) missing.push("simulation_id（舊 MES SimulationId）");
   return missing;
 }
@@ -21258,7 +21270,7 @@ function machtileRenderBatchReport() {
     ${demo ? `<p class="batch-notice" role="note">示範模式：不會寫入任何資料。</p>` : ""}
     ${machtileBatchState.error ? `<p class="batch-notice is-error" role="alert">${escapeHtml(machtileBatchState.error)}</p>` : ""}
     ${machtileBatchState.progressError ? `<p class="batch-notice" role="note">${escapeHtml(machtileBatchState.progressError)}</p>` : ""}
-    ${!demo && machtileBatchState.stationReportSettings.status !== "loaded" ? `<p class="batch-notice is-error" role="status">${escapeHtml(machtileBatchState.stationReportSettings.error || "智慧報工設定尚未同步；本功能目前關閉。")}</p>` : ""}
+    ${machtileStationReportEnabled() && !demo && machtileBatchState.stationReportSettings.status !== "loaded" ? `<p class="batch-notice is-error" role="status">${escapeHtml(machtileBatchState.stationReportSettings.error || "智慧報工設定尚未同步；本功能目前關閉。")}</p>` : ""}
     ${!demo && !machtileBatchState.loading && !machtileBatchState.users.length ? `<p class="batch-notice is-error" role="alert">還沒有任何人員對照到舊 MES 工號，請管理者先補上工號對照。</p>` : ""}
     <p class="batch-hint">${modeHint}</p>
     ${modeExtra}
@@ -21303,7 +21315,7 @@ async function machtileSubmitBatchReport() {
   const group = core?.groupFor(machtileBatchState.group);
   if (!core || !group || machtileBatchState.submitting) return;
   const mode = machtileBatchState.mode;
-  if (state.source === "supabase" && mode !== "dailyStart" && machtileBatchState.stationReportSettings.status !== "loaded") {
+  if (machtileStationReportEnabled() && state.source === "supabase" && mode !== "dailyStart" && machtileBatchState.stationReportSettings.status !== "loaded") {
     machtileBatchState.formError = "無法確認哪些機台已啟用智慧報工；本次未送出任何報工。請重新整理設定後再試。";
     machtileRenderBatchReport();
     showToast("報工設定尚未確認，本次沒有送出。");
@@ -21329,7 +21341,7 @@ async function machtileSubmitBatchReport() {
     return;
   }
   if (!toSend.length) { showToast(mode === "dailyStart" ? "沒有勾選要開工的機台。" : "沒有要送的機台（良品、不良都空白，機台加工時間也沒改）。"); return; }
-  if (mode !== "dailyStart" && machtileBatchState.stationReportSettings.status === "loaded") {
+  if (machtileStationReportEnabled() && mode !== "dailyStart" && machtileBatchState.stationReportSettings.status === "loaded") {
     const enabled = toSend.map(({ model }) => model.machineCode)
       .filter((code) => machtileStationReportCore()?.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code));
     if (enabled.length) {
@@ -21444,11 +21456,11 @@ function machtileHandleBatchClick(event) {
   const previewButton = event.target.closest("[data-station-report-preview]");
   if (previewButton) { machtileStationReportSubmitPreview(previewButton.dataset.stationReportPreview); return true; }
   const confirmButton = event.target.closest("[data-station-report-confirm]");
-  if (confirmButton) { machtileStationReportSubmitFinal(confirmButton.dataset.stationReportConfirm); return true; }
+  if (confirmButton) return true;
   const ackButton = event.target.closest("[data-station-report-ack]");
   if (ackButton) { machtileStationReportRetryAck(ackButton.dataset.stationReportAck); return true; }
   const previewAckButton = event.target.closest("[data-station-report-preview-ack]");
-  if (previewAckButton) { machtileStationReportRetryPreviewAck(previewAckButton.dataset.stationReportPreviewAck); return true; }
+  if (previewAckButton) return true;
   const reconcileButton = event.target.closest("[data-station-report-reconcile]");
   if (reconcileButton) { machtileStationReportReconcile(reconcileButton.dataset.stationReportReconcile); return true; }
   const cancelPreviewButton = event.target.closest("[data-station-report-cancel-preview]");
@@ -21557,6 +21569,42 @@ function machtileHandleBatchInput(event) {
   return true;
 }
 
+let machtileStationReportHoldTimer = null;
+function machtileCancelStationReportHold() {
+  if (machtileStationReportHoldTimer) clearTimeout(machtileStationReportHoldTimer);
+  machtileStationReportHoldTimer = null;
+}
+document.addEventListener("pointerdown", (event) => {
+  const button = event.target.closest?.("[data-station-report-confirm],[data-station-report-preview-ack]");
+  if (!button || button.disabled) return;
+  machtileCancelStationReportHold();
+  machtileStationReportHoldTimer = setTimeout(() => {
+    machtileStationReportHoldTimer = null;
+    if (!button.isConnected || button.disabled) return;
+    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
+    else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
+  }, 1000);
+});
+for (const eventName of ["pointerup", "pointercancel"]) {
+  document.addEventListener(eventName, machtileCancelStationReportHold, true);
+}
+window.addEventListener("blur", machtileCancelStationReportHold);
+document.addEventListener("keydown", (event) => {
+  if (event.repeat || !["Enter", " "].includes(event.key)) return;
+  const button = event.target.closest?.("[data-station-report-confirm],[data-station-report-preview-ack]");
+  if (!button || button.disabled) return;
+  event.preventDefault();
+  machtileCancelStationReportHold();
+  machtileStationReportHoldTimer = setTimeout(() => {
+    machtileStationReportHoldTimer = null;
+    if (!button.isConnected || button.disabled) return;
+    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
+    else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
+  }, 1000);
+});
+document.addEventListener("keyup", (event) => {
+  if (["Enter", " "].includes(event.key)) machtileCancelStationReportHold();
+});
 document.addEventListener("input", (event) => { machtileHandleBatchInput(event); });
 document.addEventListener("change", (event) => { machtileHandleBatchInput(event); });
 
