@@ -53,6 +53,22 @@ eq("沒有第幾道 → 不顯示", c.eligibility({ ...base, order: { ...order, 
 eq("多工站沒有 ManufactureII Id → 不顯示", c.eligibility({ ...base, flag: c.parseFlag("*"), machineCode: "B03" }).reason, "multi_station_unsupported");
 eq("多工站有 Id → 顯示", c.eligibility({ ...base, flag: c.parseFlag("*"), machineCode: "B03", order: { ...order, manufactureIiId: "123" } }).ok, true);
 
+console.log("== 管理員也能按（owner 2026-10-08 方案 C）==");
+eq("admin → 顯示", c.eligibility({ ...base, role: "admin" }), { ok: true, reason: "" });
+eq("admin 大小寫／空白不影響", c.eligibility({ ...base, role: " Admin " }).ok, true);
+eq("admin＋橋接 → 不顯示", c.eligibility({ ...base, role: "admin", isBridge: true }).reason, "not_operator");
+eq("operator＋橋接 → 不顯示", c.roleAllowed("operator", true), false);
+eq("manager → 不顯示（D4b 先只開 admin）", c.eligibility({ ...base, role: "manager" }).reason, "not_operator");
+eq("planner → 不顯示", c.roleAllowed("planner", false), false);
+eq("roleAllowed：admin／operator 可，manager／planner／空／supervisor 不可", ["admin", "operator", "manager", "planner", "", "supervisor"].map((r) => c.roleAllowed(r, false)), [true, true, false, false, false, false]);
+eq("SUBMIT_ROLES 恰好 operator＋admin", c.SUBMIT_ROLES, ["operator", "admin"]);
+eq("isAdminActor：admin 是、橋接 admin 不是、operator 不是", [c.isAdminActor("admin", false), c.isAdminActor("admin", true), c.isAdminActor("operator", false)], [true, false, false]);
+eq("admin 也要旗標開", c.eligibility({ ...base, role: "admin", flag: c.parseFlag([]) }).reason, "flag_off");
+eq("admin 也要功能可用", c.eligibility({ ...base, role: "admin", availability: "missing" }).reason, "unavailable");
+eq("actorLines：管理員兩行", c.actorLines("admin", "Adam"), ["你是管理員 Adam，這筆會記成你按的", "你不在機台旁，請先確認現場狀況"]);
+eq("actorLines：沒有名字也不寫空白", c.actorLines("admin", " ")[0], "你是管理員，這筆會記成你按的");
+eq("actorLines：作業員沒有", c.actorLines("operator", "王小明"), []);
+
 console.log("== newUuid ==");
 eq("有 randomUUID 就用它", c.newUuid({ randomUUID: () => UUID }), UUID);
 const fake = { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = (i * 37 + 11) & 255; return a; } };
@@ -99,6 +115,11 @@ eq("沒有料號 → 顯示「未提供」、送 null", [noPart.partNoDisplay, n
 eq("讀不到 → 照實說", c.confirmModel({ commandType: "stop", machineCode: "A04", order, legacyError: true }).legacyLines[1], "舊 MES 報工數字暫時讀不到");
 eq("legacyRowFor 挑同單同機台同一道", c.legacyRowFor([{ ...legacy, process_order: 4 }, legacy], { workOrderNo: order.id, machineCode: "a04", step: 5 }).process_order, 5);
 
+const adminModel = c.confirmModel({ commandType: "start", machineCode: "A04", order, fresh: fr, legacy, nowMs: now, actorRole: "admin", actorName: "Adam" });
+eq("confirmModel 管理員 → isAdmin＋兩行", [adminModel.isAdmin, adminModel.adminLines], [true, ["你是管理員 Adam，這筆會記成你按的", "你不在機台旁，請先確認現場狀況"]]);
+eq("confirmModel 作業員（沒傳角色）→ 沒有管理員字樣", [m.isAdmin, m.adminLines], [false, []]);
+eq("confirmModel 管理員：其他欄位跟作業員一樣", (({ isAdmin, adminLines, ...rest }) => rest)(adminModel), (({ isAdmin, adminLines, ...rest }) => rest)(c.confirmModel({ commandType: "start", machineCode: "A04", order, fresh: fr, legacy, nowMs: now })));
+
 console.log("== submitPayload ==");
 eq("合約欄位齊全", c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "a04", orderNo: order.id, step: 5, partNo: "HCG-06-01" }), {
   p_command_uuid: UUID, p_command_type: "start", p_machine_code: "A04", p_expected_order_no: "XX01202502050012",
@@ -126,6 +147,9 @@ eq("MACHINE_COMMAND_IN_FLIGHT → 白話", c.submitErrorText(rpcErr("MACHINE_COM
 eq("APPLIER_CANNOT_SUBMIT → 用作業員帳號", c.submitErrorText(rpcErr("APPLIER_CANNOT_SUBMIT")).text.includes("作業員帳號"), true);
 eq("錯誤碼要整個字（OPERATOR_REQUIREDX 不算）", c.errorCodeOf("OPERATOR_REQUIRED: x"), "OPERATOR_REQUIRED");
 eq("其他 → 帶伺服器訊息", c.submitErrorText(new Error('400 {"message":"machine A09 unknown"}')).text, "送出失敗：machine A09 unknown");
+
+eq("ADMIN_LEGACY_ID_MISSING → 白話、不可重送", (({ retry, code, text }) => ({ retry, code, text }))(c.submitErrorText(rpcErr("ADMIN_LEGACY_ID_MISSING"))), { retry: false, code: "ADMIN_LEGACY_ID_MISSING", text: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定" });
+eq("ADMIN_SUBMIT_DISABLED → 白話、不可重送", (({ retry, code, text }) => ({ retry, code, text }))(c.submitErrorText(rpcErr("ADMIN_SUBMIT_DISABLED"))), { retry: false, code: "ADMIN_SUBMIT_DISABLED", text: "管理員開工／停工尚未開放" });
 
 console.log("== statusView（結果只看伺服器 status）==");
 eq("pending → 等待", c.statusView({ status: "pending" }, "start", null), { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: "已送出，等工廠接手。請稍等，不要重按。", late: false });
@@ -185,6 +209,14 @@ eq("舊 MES 已改的代碼都有專用標題", c.LEGACY_CHANGED_CODES.every((k)
   eq("L3 列的沒動代碼都在清單內", ["ORDER_MISMATCH", "ALREADY_RUNNING", "ALREADY_STOPPED", "STALE_COMMAND", "RMS_UNAVAILABLE", "NEED_PAUSED", "OPERATOR_LIST_TOO_LONG",
     "STATION_NOT_SET", "OPERATOR_NOT_SET", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT"].every((k) => c.LEGACY_UNTOUCHED_CODES.includes(k)), true);
 }
+// 管理員新代碼：寫入前就拒絕＝舊 MES 沒動 → 在沒動清單、不在已改／不確定清單
+for (const k of ["ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED"]) {
+  eq(`${k} 在沒動清單`, c.LEGACY_UNTOUCHED_CODES.includes(k), true);
+  eq(`${k} 不在已改清單`, c.LEGACY_CHANGED_CODES.includes(k), false);
+  const v = c.statusView({ status: "rejected", reject_code: k }, "start");
+  eq(`${k} 萬一出現在 reject_code → 沒有開工＋同一句白話`, [v.title, v.text, v.tone], ["沒有開工", c.SUBMIT_ERROR_TEXT[k], "bad"]);
+}
+eq("REJECT_TEXT 與 SUBMIT_ERROR_TEXT 的管理員文字一致", ["ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED"].every((k) => c.REJECT_TEXT[k] === c.SUBMIT_ERROR_TEXT[k]), true);
 const lateP = c.statusView({ status: "pending" }, "start", 4 * 60000);
 eq("pending 超過 3 分鐘（伺服器時間）→ 仍是等待中（不是結果），加提示", [lateP.phase, lateP.terminal, lateP.late, lateP.text], ["pending", false, true, "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管"]);
 const lateC = c.statusView({ status: "claimed" }, "start", 30 * 60000);
