@@ -11,6 +11,8 @@
 //   8. 開工時一起填今日開工數量（owner 2026-10-08）：作業員＋今天這道還沒今日開工 → 確認卡多一格必填數量，
 //      確認後開工指令與今日開工（field_report_upsert）各送一次；已有今日開工／管理員 → 沒有這格；
 //      今日開工沒存到 → 提示到報工補填，開工指令照樣只送一次。
+//      L3 修正：開工指令被伺服器接受後才寫今日開工（送出被拒／沒收到回覆 → 不寫、數量留著）；
+//      直接 POST 回退一定帶計數器，沒回列 id 就當沒存到。
 //      假後端預設「A04 今天已經有今日開工」（1–7 項的確認卡因此跟以前一樣）；第 8 項才用「今天還沒有」。
 // 不會碰任何真的後端：config.js 換成指向假專案網域的測試設定，Supabase 請求全部由這支腳本用假資料回應；
 // 其他對外請求一律擋掉（最後斷言沒有打到正式專案）。
@@ -112,10 +114,12 @@ const testConfig = (extra) => `window.MACHTILE_CONFIG = {
 };`;
 
 // ---------- fake backend（每個情境一份） ----------
-function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false } = {}) {
+function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false, directMode = "ok" } = {}) {
   const be = {
     tableMissing, rpcMissing, role, submitError, appUserName, dailyStartDone, dailyStartFail,
     reportUpserts: [],        // field_report_upsert 的 body（今日開工等報工）
+    directMode,               // outbox 關掉時直接 POST production_reports：ok（回列）／noRow（201 但沒列）／structRejected（結構化欄位被拒）
+    directPosts: [],          // 直接 POST production_reports 的 body
     todayRows: dailyStartDone ? [{ process_id: id(304), report_type: "dailyStart", created_at: ago(30), started_at: null, ended_at: ago(30), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }] : [],
     stationReads: 0,          // 任何對 station_commands 的請求
     submits: [],              // RPC body
@@ -197,6 +201,15 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     }
     // 卡片底部「今日已開工／尚未開工」與總覽三格那一份查詢
     if (p === "/rest/v1/production_reports" && method === "GET" && q.includes("report_type=in.(dailyStart,noon,finish)")) return json(200, be.todayRows);
+    if (p === "/rest/v1/production_reports" && method === "POST") {
+      const body = JSON.parse(req.postData() || "{}");
+      be.directPosts.push(body);
+      if (be.directMode === "structRejected" && ("report_type" in body || "report_payload" in body)) return json(400, { code: "PGRST204", message: "Could not find the 'report_payload' column of 'production_reports' in the schema cache" });
+      if (be.directMode === "noRow") return json(201, []);
+      be.todayRows = [{ process_id: body.process_id, report_type: body.report_type || null, created_at: new Date().toISOString(), started_at: null, ended_at: null,
+        completed_qty: body.completed_qty, defect_qty: body.defect_qty, user_id: body.user_id || null, operator_ids: [] }, ...be.todayRows];
+      return json(201, [{ id: id(8000 + be.directPosts.length), ...body }]);
+    }
     if (p === "/rest/v1/rpc/field_report_upsert") {
       const body = JSON.parse(req.postData() || "{}");
       be.reportUpserts.push(body);
@@ -1084,6 +1097,89 @@ console.log("\n== 390px：今日開工沒存到 → 提示到報工補填，開�
   ok(await sheet(page).locator('[data-station-cmd-result="pending"]').count() === 1, "開工指令照常等待工廠結果");
   ok(await footerToday(page, "A04") === "今日尚未開工", "卡片底部仍是「今日尚未開工」（沒存到就不假裝）", await footerToday(page, "A04"));
   if (true) await page.screenshot({ path: path.join(shotsDir, "390-start-counter-save-failed.png") });
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：開工送出被拒（FORBIDDEN）→ 不寫今日開工，數量留在欄位上 ==");
+{
+  const be = makeBackend({ dailyStartDone: false, submitError: "FORBIDDEN: not allowed" });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill("208");
+  await sheet(page).locator("[data-station-cmd-confirm]").evaluate((el) => { el.click(); el.click(); el.click(); });
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+  await page.waitForTimeout(1500);
+  ok(be.submits.length === 1, `開工 RPC 只試一次（${be.submits.length}）`);
+  ok(be.commands.size === 0, "伺服器沒有建立指令列");
+  ok(be.reportUpserts.length === 0 && be.directPosts.length === 0, `開工被拒 → 沒寫今日開工（${be.reportUpserts.length}／${be.directPosts.length}）`);
+  ok((await sheet(page).locator("[data-station-cmd-error]").innerText()).trim().length > 0, "確認卡照舊顯示開工被拒", await sheet(page).locator("[data-station-cmd-error]").innerText());
+  ok(await dailyField(page).count() === 1 && await dailyField(page).inputValue() === "208", "數量欄還在、208 留著");
+  ok(await sheet(page).locator("[data-station-cmd-daily-state]").count() === 0, "沒有「已記錄／儲存中」字樣");
+  ok(await footerToday(page, "A04") === "今日尚未開工", "卡片底部仍是「今日尚未開工」", await footerToday(page, "A04"));
+  await page.screenshot({ path: path.join(shotsDir, "390-start-counter-start-refused.png") });
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：開工送出時網路斷（沒收到回覆）→ 不寫；按重送被接受後才寫，之後工廠拒絕也不撤 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill("150");
+  be.abortNextSubmit = true;
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+  await page.waitForTimeout(800);
+  ok(be.submits.length === 1 && be.reportUpserts.length === 0, `沒收到回覆 → 今日開工沒寫（${be.submits.length}／${be.reportUpserts.length}）`);
+  ok(await dailyField(page).count() === 1 && await dailyField(page).inputValue() === "150", "數量欄還在、150 留著");
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "重送", "按鈕變「重送」");
+  be.mode = "hold";
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-daily-state="saved"]').waitFor({ timeout: 10000 });
+  ok(be.submits.length === 2 && be.submits[1].p_command_uuid === be.submits[0].p_command_uuid, "重送用同一個 command_uuid");
+  ok(be.reportUpserts.length === 1 && be.reportUpserts[0].p_payload?.report_payload?.machine_qty === 150, `重送被接受 → 今日開工寫一次、數量 150（${be.reportUpserts.length}）`);
+  be.mode = "rejected";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  await page.waitForTimeout(500);
+  ok(be.reportUpserts.length === 1 && (await sheet(page).locator('[data-station-cmd-daily-state="saved"]').count()) === 1, "工廠之後拒絕套用 → 今日開工不撤、不重送");
+  await page.waitForFunction(() => {
+    const card = [...document.querySelectorAll("#workOrderGrid .machine-tile-card")].find((c) => c.querySelector("h2")?.textContent.includes("A04"));
+    return card?.querySelector("[data-today-status]")?.textContent.includes("今日已開工");
+  }, null, { timeout: 8000 }).catch(() => {});
+  ok(/^今日已開工/.test(await footerToday(page, "A04")), "卡片底部「今日已開工…」（計數器是事實）", await footerToday(page, "A04"));
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+for (const [mode, label] of [["ok", "回了列"], ["structRejected", "結構化欄位被拒"], ["noRow", "201 但沒回列"]]) {
+  console.log(`\n== 390px：outbox 關掉、直接 POST production_reports（${label}）==`);
+  const be = makeBackend({ dailyStartDone: false, directMode: mode });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], enableOutboxSubmit: false,' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill("208");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator(mode === "ok" ? '[data-station-cmd-daily-state="saved"]' : '[data-station-cmd-daily-state="failed"]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(800);
+  ok(be.submits.length === 1, `${label}：開工指令一次`);
+  ok(be.reportUpserts.length === 0 && be.directPosts.length === 1, `${label}：直接 POST 只一次、沒有退回只送基本欄位（${be.directPosts.length}）`);
+  const body = be.directPosts[0] || {};
+  ok(body.report_type === "dailyStart" && body.report_payload?.machine_qty === 208 && body.process_id === id(304), `${label}：POST 帶 report_type＋report_payload.machine_qty 208`, JSON.stringify(body));
+  if (mode === "ok") {
+    ok((await sheet(page).locator('[data-station-cmd-daily-state="saved"]').innerText()).trim() === "今日開工數量 208：已記錄", "回了列 → 已記錄");
+    await page.waitForFunction(() => {
+      const card = [...document.querySelectorAll("#workOrderGrid .machine-tile-card")].find((c) => c.querySelector("h2")?.textContent.includes("A04"));
+      return card?.querySelector("[data-today-status]")?.textContent.includes("今日已開工");
+    }, null, { timeout: 8000 }).catch(() => {});
+    ok(/^今日已開工/.test(await footerToday(page, "A04")), "重讀找到那一列 → 卡片底部「今日已開工」", await footerToday(page, "A04"));
+  } else {
+    ok((await sheet(page).locator('[data-station-cmd-daily-state="failed"]').innerText()).trim() === "今日開工數量沒存到，請到報工→今日開工補填", `${label} → 「今日開工數量沒存到，請到報工→今日開工補填」`);
+    ok(await footerToday(page, "A04") === "今日尚未開工", `${label} → 卡片底部仍「今日尚未開工」`, await footerToday(page, "A04"));
+  }
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

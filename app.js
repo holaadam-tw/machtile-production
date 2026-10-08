@@ -13543,12 +13543,15 @@ function machtileStationCmdDailyStartHtml(sheet) {
       </section>`;
   }
   if (ds.state === "failed") return `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-daily-state="failed">${escapeHtml(core.DAILY_START_FAILED_TEXT)}</p>`;
-  const text = ds.state === "saving" ? "儲存中…" : ds.state === "queued" ? "已排入待送，連線後自動送出" : "已記錄";
+  const text = ds.state === "saving" || ds.state === "awaitAck" ? "儲存中…" : "已記錄";
   const tone = ds.state === "saved" ? "is-ok" : "is-wait";
   return `<p class="station-cmd-daily-line ${tone}" role="status" data-station-cmd-daily-state="${escapeHtml(ds.state)}">今日開工數量 ${escapeHtml(String(ds.qty))}：${escapeHtml(text)}</p>`;
 }
 
-// 確認卡上「確認開工」：有今日開工那一格 → 先檢查數量（不合格就不送任何東西）→ 今日開工送出（不等它）→ 開工指令照舊送
+// 確認卡上「確認開工」：有今日開工那一格 → 先檢查數量（不合格就不送任何東西）→ 開工指令照舊送 →
+// 伺服器「接受」這筆開工指令（machtile_submit_station_command 回了這個 uuid 的指令列，新建或冪等重送都算）才寫今日開工。
+// 送出被拒／送出時網路斷（沒收到回覆）／按鈕鎖住 → 不寫今日開工，數量留在欄位上可以重送（2026-10-08 L3 P1）。
+// 之後工廠套用舊 MES 的結果（applied／rejected／expired）不影響已寫的今日開工：計數器數字是事實。
 function machtileStationCmdConfirm() {
   const core = machtileStationCmdCore;
   const sheet = machtileStationCmd.sheet;
@@ -13565,12 +13568,28 @@ function machtileStationCmdConfirm() {
       try { document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-qty]")?.focus(); } catch { /* ignore */ }
       return;
     }
-    ds.state = "saving";   // 同步改掉：再按一次（或重送開工指令）都不會再送今日開工
+    ds.value = raw;
     ds.qty = check.value;
     ds.error = "";
-    machtileStationCmdSaveDailyStart(sheet);
+    ds.state = "awaitAck";   // 等開工指令被接受；送出被拒會改回 ask（數量還在）
   }
   machtileStationCmdSubmit();
+}
+
+// machtileStationCmdSubmit 的兩個出口呼叫：accepted＝伺服器回了這筆指令列
+function machtileStationCmdDailyStartAfterSubmit(sheet, accepted, row) {
+  const ds = sheet && sheet.dailyStart;
+  if (!ds || ds.state !== "awaitAck") return;
+  if (!accepted) { ds.state = "ask"; return; }   // 開工沒送成 → 不寫，欄位連同數字回到確認卡
+  const sameCommand = row && (row.command_uuid == null || String(row.command_uuid) === String(sheet.uuid));
+  if (!sameCommand) {
+    // 回應裡沒有這筆指令列：不能確定開工有被接受 → 不寫，提示去報工補填
+    ds.state = "failed";
+    showToast(machtileStationCmdCore.DAILY_START_FAILED_TEXT);
+    return;
+  }
+  ds.state = "saving";   // 同步改掉：之後再按、重送開工指令都不會再送今日開工
+  machtileStationCmdSaveDailyStart(sheet);
 }
 
 async function machtileStationCmdSaveDailyStart(sheet) {
@@ -13584,8 +13603,13 @@ async function machtileStationCmdSaveDailyStart(sheet) {
       reportPayload: buildDailyStartCounterPayload(ds.qty),
       operators: actorId ? [actorId] : [],
       noFiles: true,
+      requireStructured: true,
     });
-    if (result && result.wroteCloud && !result.deadLetter) outcome = result.queuedOffline ? "queued" : "saved";
+    // 只有伺服器回了這一列（outbox 已送達且有 report_id、或直接 POST 回了列 id）才算存到；
+    // 排入待送、伺服器拒絕、沒回列 → 都當沒存到（L3 P2）
+    const confirmed = Boolean(result && result.wroteCloud && !result.queuedOffline && !result.deadLetter
+      && result.reportId != null && String(result.reportId) !== "");
+    if (confirmed) outcome = "saved";
   } catch (error) {
     console.warn("station command: dailyStart save failed", error);
   }
@@ -13664,6 +13688,7 @@ async function machtileStationCmdSubmit() {
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
     if (timer) clearTimeout(timer);
+    machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
     if (machtileStationCmd.sheet !== sheet) return;
     const info = core.submitErrorText(error);
     if (info.missing) machtileStationCmd.availability = "missing";
@@ -13685,6 +13710,7 @@ async function machtileStationCmdSubmit() {
     return;
   }
   if (timer) clearTimeout(timer);
+  machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
   const now = Date.now();
   // 伺服器時鐘差：只有第一次送出（新建的列）才準；重送拿到的可能是舊列 → 不算
   const offset = sheet.attempts === 1 && row ? core.serverOffset(row.requested_at, now) : (existing?.commandUuid === sheet.uuid ? existing.serverOffset : null);
@@ -20549,6 +20575,8 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     reportUuid: report_uuid || null,
     // 伺服器明確拒絕（dead-letter）：既有報工畫面照舊只看 queuedOffline；開工確認卡用它判「沒存到」
     deadLetter: record?.status === "failed",
+    // 已送達時伺服器回的列 id（field_report_upsert 的 report_id）；開工確認卡只在有它時才說「已記錄」
+    reportId: sentNow ? (record?.report_id ?? null) : null,
   };
 }
 
@@ -21415,7 +21443,14 @@ async function submitReport(completed, defects, remark, reportType, options = {}
     basePayload.report_uuid = crypto.randomUUID();
   }
   let rows;
-  if (useStructuredReportColumns) {
+  if (options.requireStructured) {
+    // 開工確認卡的今日開工（2026-10-08 L3 P2）：計數器在 report_type／report_payload 裡，不能退回只有基本欄位的
+    // POST（會靜默丟掉數量）。只送一次；回應沒有列 id＝呼叫端當「沒存到」。
+    rows = await supabaseFetch("production_reports", {
+      method: "POST",
+      body: JSON.stringify({ ...basePayload, ...structuredPayload }),
+    });
+  } else if (useStructuredReportColumns) {
     try {
       rows = await supabaseFetch("production_reports", {
         method: "POST",
@@ -21429,7 +21464,7 @@ async function submitReport(completed, defects, remark, reportType, options = {}
       useStructuredReportColumns = false;
     }
   }
-  if (!rows) {
+  if (!rows && !options.requireStructured) {
     rows = await supabaseFetch("production_reports", {
       method: "POST",
       body: JSON.stringify(basePayload),
@@ -21442,6 +21477,8 @@ async function submitReport(completed, defects, remark, reportType, options = {}
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
     reportUuid: basePayload.report_uuid || null,
+    // 伺服器回的那一列 id（沒有＝沒確認寫進去）；報工畫面不看，開工確認卡用它判「已記錄」
+    reportId: reportId ?? null,
   };
 }
 
