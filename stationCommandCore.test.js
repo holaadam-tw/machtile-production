@@ -150,6 +150,7 @@ eq("其他 → 帶伺服器訊息", c.submitErrorText(new Error('400 {"message":
 
 eq("ADMIN_LEGACY_ID_MISSING → 白話、不可重送", (({ retry, code, text }) => ({ retry, code, text }))(c.submitErrorText(rpcErr("ADMIN_LEGACY_ID_MISSING"))), { retry: false, code: "ADMIN_LEGACY_ID_MISSING", text: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定" });
 eq("ADMIN_SUBMIT_DISABLED → 白話、不可重送", (({ retry, code, text }) => ({ retry, code, text }))(c.submitErrorText(rpcErr("ADMIN_SUBMIT_DISABLED"))), { retry: false, code: "ADMIN_SUBMIT_DISABLED", text: "管理員開工／停工尚未開放" });
+eq("FORBIDDEN → 中文白話、不可重送", (({ retry, code, text }) => ({ retry, code, text }))(c.submitErrorText(rpcErr("FORBIDDEN"))), { retry: false, code: "FORBIDDEN", text: "這個管理員帳號的角色資料不一致，請找管理員檢查。" });
 
 console.log("== statusView（結果只看伺服器 status）==");
 eq("pending → 等待", c.statusView({ status: "pending" }, "start", null), { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: "已送出，等工廠接手。請稍等，不要重按。", late: false });

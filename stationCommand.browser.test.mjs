@@ -61,6 +61,9 @@ function baselineFile(rel) {
   }
   return baselineCache.get(rel);
 }
+if (baselineAvailable && ["index.html", "app.js", "styles.css", "stationCommandCore.js", "config.js"].some((file) => !baselineFile(file))) {
+  baselineAvailable = false;
+}
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   let p = decodeURIComponent(url.pathname);
@@ -356,6 +359,7 @@ for (const vp of ["desktop", "phone"]) {
     ok(await page.locator(".station-cmd-row, [data-station-cmd]").count() === 0, `${W}：表不存在 → 沒有按鈕`);
     ok(be.stationReads >= 1 && be.submits.length === 0, `${W}：只試讀一次，沒送任何指令`);
     if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：表不存在 → 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
+    else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過表不存在時一字不差比對`); }
     ok(realErrors(errors).length === 0, `${W}：表不存在 → 沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
@@ -404,7 +408,9 @@ for (const vp of ["desktop", "phone"]) {
         `${W}：A04 以外的 ${others.length} 張卡片原始 HTML 跟 ${baselineRef} 逐字相同（不壓空白）`,
         others.map((c, i) => c.html === othersBase[i]?.html ? "" : `${c.name} ${firstDiff(c.html, othersBase[i]?.html || "")}`).filter(Boolean).join(" | "));
       const baseA04 = cardOf(b.page, "A04");
-      ok(await baseA04.locator("[data-station-cmd-row]").count() === 1, `${W}：（對照）main 的 A04 還是中段區塊`);
+      // #74 已合進 main 之後，基準本身就沒有中段區塊：此時「比 main 矮」不再適用，改印 SKIP（只在基準仍是舊版時斷言）
+      const baseHasMiddle = (await baseA04.locator("[data-station-cmd-row]").count()) === 1;
+      if (!baseHasMiddle) console.log(`  SKIP ${W}：基準 ${baselineRef} 已含 #74（無中段區塊），不比較高度`);
       await baseA04.scrollIntoViewIfNeeded();
       // 截圖時把浮在上面的東西（登入徽章、AI 客服、回報鈕、手機底部分頁、toast）暫時藏起來，才看得到卡片底部；截完拿掉
       const hideFloating = (pg) => pg.addStyleTag({ content: "#machtileSessionBadge, #aiSupportFab, .fab, .mobile-tabs, #toast { visibility: hidden !important; }" });
@@ -415,9 +421,13 @@ for (const vp of ["desktop", "phone"]) {
       const hAfter = Math.round((await a04.boundingBox()).height);
       await a04.screenshot({ path: path.join(outDir, `${vp}-00-a04-after.png`) });
       console.log(`  INFO ${W}：A04 卡片高度 main ${hBefore}px → 現在 ${hAfter}px（矮 ${hBefore - hAfter}px）`);
-      ok(hAfter < hBefore, `${W}：A04 卡片比 main 矮（${hBefore} → ${hAfter}px）`);
+      if (baseHasMiddle) ok(hAfter < hBefore, `${W}：A04 卡片比 main 矮（${hBefore} → ${hAfter}px）`);
+      else ok(hAfter <= hBefore + 40, `${W}：A04 卡片沒有比已含 #74 的基準明顯變高（${hBefore} → ${hAfter}px）`);
       await hideB.evaluate((el) => el.remove()); await hideMine.evaluate((el) => el.remove());
       await b.context.close();
+    } else {
+      skip += 3;
+      console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過 #74 非 A04 卡片逐字比對、main A04 區塊與高度比對（3 項）`);
     }
 
     // 確認卡內容
