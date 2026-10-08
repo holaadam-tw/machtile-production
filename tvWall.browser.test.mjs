@@ -297,6 +297,7 @@ console.log("== 每 60 秒自動刷新／權限讀取失敗不可保留舊授權
   ok(be.cardReads === reads0, `60 秒內不重讀（${be.cardReads - reads0} 次）`);
   ok(cellOf(await tvInfo(page), "A02").today === "今日未開工", "還沒到 60 秒：A02 照舊");
   await advance(page, be, 20);
+  await settle(page, () => document.querySelector('#tvWall .tv-cell[data-tv-machine="A02"] .tv-today')?.textContent.trim() === "12:58 開工", "A02 after refresh");
   let info = await tvInfo(page);
   ok(be.cardReads === reads0 + 1 && be.todayReads >= today0 + 1, `60 秒自動重讀一次（工單 ${be.cardReads - reads0} 次、今日報工 ${be.todayReads - today0} 次）`);
   ok(cellOf(info, "A02").today === "12:58 開工" && cellOf(info, "A02").sev === "" && info.tiles.notStarted.value === "0台" && info.tiles.notStarted.tone === "zero", "刷新後 A02 變成 12:58 開工、不再上色；未開工 0 台（中性）", JSON.stringify([cellOf(info, "A02"), info.tiles.notStarted]));
