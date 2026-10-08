@@ -12864,6 +12864,26 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .am-dept-hint { display: block; margin-top: 4px; color: var(--subtle); font-size: 11px; }
 .am-dept-note { margin: 0; color: var(--muted); font-size: 12px; }
 
+/* Stage-2 station report: distinct from the legacy batch-submit controls. */
+.station-report-panel { display: grid; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid #b9d5ec; border-left: 4px solid #2580bd; border-radius: 8px; background: #f4f9fd; }
+.station-report-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; color: #174d78; }
+.station-report-heading span, .station-report-hint { color: #53697b; font-size: 12px; }
+.station-report-hint { margin: 0; }
+.station-report-reason, .station-report-note { display: grid; gap: 4px; color: #34495b; font-size: 12px; font-weight: 700; }
+.station-report-reason select, .station-report-note textarea { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid #c6d2dc; border-radius: 5px; background: #fff; color: #263545; font: inherit; }
+.station-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.station-report-action { min-height: 36px; }
+.station-report-result { padding: 10px; border-radius: 6px; background: #fff; border: 1px solid #c7d2dc; }
+.station-report-result p { margin: 5px 0 0; font-size: 12px; }
+.station-report-result.is-success { border-color: #75bd91; background: #f2fbf5; }
+.station-report-result.is-warning { border-color: #e5b65c; background: #fff9eb; }
+.station-report-result.is-error { border-color: #e39a94; background: #fff5f4; }
+.station-report-confirm-card { display: grid; gap: 8px; padding: 18px; border: 2px solid #174d78; border-radius: 10px; background: #fff; font-size: 22px; line-height: 1.35; }
+.station-report-confirm-card > strong { font-size: 36px; }
+.station-report-confirm-card b { font-size: 32px; }
+.station-report-actions [data-station-report-confirm], .station-report-actions [data-station-report-preview-ack] { min-height: 64px; font-size: 24px; touch-action: none; }
+.station-report-preview-values { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; font-size: 12px; }
+.station-report-previous-step { display: inline-block; margin-top: 8px; color: #175ea8; font-weight: 700; }
 /* 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段；旗標 stationCommandMachines 開才出現） */
 .station-cmd-button { min-height: 44px; min-width: 88px; padding: 8px 16px; border: 0; border-radius: var(--radius); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
 .station-cmd-button.is-start { background: var(--green-strong); }
