@@ -297,7 +297,7 @@ eq("沒存到的提示", c.DAILY_START_FAILED_TEXT, "今日開工數量沒存到
 eq("欄位名稱", c.DAILY_START_FIELD_LABEL, "機台目前加工數量（今日開工）");
 const WO = "00000000-0000-4000-8000-000000000104";
 const dsOk = { qty: 208, processId: PID, workOrderId: WO, tenantId: "t1", processStatus: "pending" };
-eq("暫存今日開工：正常", c.pendingDailyStart(dsOk), { qty: 208, processId: PID, workOrderId: WO, tenantId: "t1", processStatus: "pending" });
+eq("暫存今日開工：正常", c.pendingDailyStart(dsOk), { qty: 208, processId: PID, workOrderId: WO, tenantId: "t1", processStatus: "pending", reportUuid: null });
 eq("暫存今日開工：0 可以", c.pendingDailyStart({ ...dsOk, qty: 0 }).qty, 0);
 eq("暫存今日開工：負數／小數／空白／null → 丟掉", [c.pendingDailyStart({ ...dsOk, qty: -1 }), c.pendingDailyStart({ ...dsOk, qty: 1.5 }), c.pendingDailyStart({ ...dsOk, qty: "" }), c.pendingDailyStart({ ...dsOk, qty: null })], [null, null, null, null]);
 eq("暫存今日開工：工序 id 壞 → 丟掉", c.pendingDailyStart({ ...dsOk, processId: "x" }), null);
@@ -310,6 +310,19 @@ eq("被拒／過期 → 丟掉", ["rejected", "expired"].map(c.delayedDailyStart
 eq("不明狀態 → 等", c.delayedDailyStartAction("weird"), "wait");
 eq("排入待送的提示", c.DAILY_START_QUEUED_TEXT, "今日開工數量已排入待送，連線後會自動送出，請不要再補填");
 eq("報工擋第二筆的提示", c.dailyStartBlockedText(208), "今日開工已排入待送（數量 208），不用再填");
+eq("暫存今日開工：report_uuid 跟著存", c.pendingDailyStart({ ...dsOk, reportUuid: "ABCDEF01-2345-4678-89ab-0123456789ab" }).reportUuid, "abcdef01-2345-4678-89ab-0123456789ab");
+eq("暫存今日開工：壞 report_uuid → null", c.pendingDailyStart({ ...dsOk, reportUuid: "x" }).reportUuid, null);
+eq("台灣日期（UTC 16:30 已是隔天）", [c.taiwanDay(Date.parse("2026-10-07T16:30:00Z")), c.taiwanDay(Date.parse("2026-10-07T15:59:00Z"))], ["2026-10-08", "2026-10-07"]);
+const ruArgs = { tenantId: "t1", machineCode: "A04", processId: PID, commandUuid: UUID, day: "2026-10-08" };
+const ru = c.dailyStartReportUuid(ruArgs);
+eq("今日開工 report_uuid：合法 UUID（第 8 版、RFC variant）", /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(ru) && c.isUuid(ru), true);
+eq("今日開工 report_uuid：同樣輸入永遠同一個（機台代號大小寫不影響）", [c.dailyStartReportUuid(ruArgs), c.dailyStartReportUuid({ ...ruArgs, machineCode: "a04" })], [ru, ru]);
+eq("今日開工 report_uuid：換機台／工序／日期／指令／租戶就不同", new Set([ru,
+  c.dailyStartReportUuid({ ...ruArgs, machineCode: "A05" }), c.dailyStartReportUuid({ ...ruArgs, processId: WO }),
+  c.dailyStartReportUuid({ ...ruArgs, day: "2026-10-09" }), c.dailyStartReportUuid({ ...ruArgs, commandUuid: PID }),
+  c.dailyStartReportUuid({ ...ruArgs, tenantId: "t2" })]).size, 6);
+eq("結果不確定的提示", c.DAILY_START_UNCONFIRMED_TEXT, "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填");
+eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已有今日開工紀錄");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
