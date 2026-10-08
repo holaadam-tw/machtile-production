@@ -462,8 +462,29 @@
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
       serverOffset: Number.isFinite(Number(rec.serverOffset)) && rec.serverOffset !== null ? Number(rec.serverOffset) : null,
+      // 開工送出時網路斷：作業員填的今日開工數量跟著這筆指令存（owner 2026-10-08「先修」）；指令確定被接受才寫
+      dailyStart: pendingDailyStart(rec.dailyStart),
     };
     return out;
+  }
+
+  // 等開工指令確認時暫存的今日開工：數量（0 以上整數）＋要報的那道工序。壞資料 → null（丟掉，不亂寫）
+  const LOOSE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function pendingDailyStart(d) {
+    if (!d || typeof d !== "object") return null;
+    const qty = Number(d.qty);
+    if (d.qty === null || d.qty === "" || !Number.isInteger(qty) || qty < 0) return null;
+    if (!LOOSE_UUID.test(text(d.processId)) || !LOOSE_UUID.test(text(d.workOrderId))) return null;
+    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null };
+  }
+
+  // 等確認的指令第一次查到伺服器上的列時，暫存的今日開工要不要寫：
+  // 還在等／工廠處理中／已套用＝指令被接受 → 寫；被拒、過期（沒人接手）→ 丟掉（owner 2026-10-08）
+  function delayedDailyStartAction(status) {
+    const s = String(status || "").toLowerCase();
+    if (["pending", "claimed", "applied"].includes(s)) return "write";
+    if (["rejected", "expired"].includes(s)) return "discard";
+    return "wait";
   }
 
   function restorePending(raw, nowMs) {
@@ -502,6 +523,12 @@
   const DAILY_START_INVALID_TEXT = "機台目前加工數量要填 0 或正整數。";
   const DAILY_START_FAILED_TEXT = "今日開工數量沒存到，請到報工→今日開工補填";
   const DAILY_START_FIELD_LABEL = "機台目前加工數量（今日開工）";
+  const DAILY_START_QUEUED_TEXT = "今日開工數量已排入待送，連線後會自動送出，請不要再補填";
+  const DAILY_START_EXISTS_TEXT = "今天這道已經有今日開工紀錄，這次的數量沒有再記";
+  // 報工→今日開工：同一道今天已有排入待送的今日開工 → 擋第二筆
+  function dailyStartBlockedText(qty) {
+    return `今日開工已排入待送（數量 ${Number.isFinite(Number(qty)) ? Number(qty) : "—"}），不用再填`;
+  }
   function dailyStartQtyCheck(raw) {
     const s = text(raw);
     if (s === "") return { ok: false, text: DAILY_START_EMPTY_TEXT };
@@ -531,6 +558,7 @@
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
-    dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart,
+    dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
   };
 });

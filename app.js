@@ -13504,9 +13504,10 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
 }
 
 // ---- 開工時一起填「今日開工」數量（owner 2026-10-08「按開工時，順便請他填計數器數字，一次做完」）----
-// 只有作業員按「開工」、而且今天這道工序還沒有今日開工紀錄（卡片底部「今日尚未開工」同一份資料）才在確認卡多一格必填數量。
-// 確認後：開工指令照舊送（payload 不變）；今日開工走報工→今日開工同一條路（submitReport → outbox field_report_upsert，
-// outbox 不能用時直接寫 production_reports），兩件事互不等待、各送一次。今日開工沒存到 → 提示到報工補填，不擋、不重送開工指令。
+// 只有作業員按「開工」、而且今天這道工序還沒有今日開工紀錄（伺服器或 outbox 待送都算有）才在確認卡多一格必填數量。
+// 開工指令被伺服器接受才寫今日開工（L3 P1）；送出時網路斷 → 數量跟著那筆等確認的指令存（localStorage），之後查到指令被接受
+// （確認卡還開著、關掉、或重新整理後的輪詢）才寫一次，被拒／過期就丟掉（owner「先修」）。寫之前一律重讀：今天已有就不寫。
+// 今日開工走報工→今日開工同一條路（submitReport → outbox field_report_upsert，outbox 不能用時直接寫 production_reports）。
 function machtileStationCmdAskDailyStart(type, order) {
   const core = machtileStationCmdCore;
   if (!core || typeof core.askDailyStart !== "function" || !order) return false;
@@ -13516,17 +13517,47 @@ function machtileStationCmdAskDailyStart(type, order) {
   });
 }
 
-// 回 false＝今天已經有今日開工（不用問了）；其他（還沒有、讀不到）＝照原本決定
-async function machtileStationCmdRecheckDailyStart(order) {
-  const ecore = machtileCardEstimateCore();
-  if (!ecore) return true;
+// outbox 裡還沒送到（待送／送出中）的今日開工：同一道、今天 → { qty }；沒有、outbox 不能用 → null
+async function machtileOutboxPendingDailyStart(processId) {
+  if (!processId || !machtileOutboxEnabled()) return null;
   try {
-    const rows = await machtileCardFetch(machtileCardTodayPath(ecore));
-    return !machtileStationCmdCore.dailyStartRecordedToday(rows, order.processId);
+    const box = await machtileGetOutbox();
+    if (!box) return null;
+    const ecore = machtileCardEstimateCore();
+    const since = ecore ? Date.parse(ecore.todayStartIso()) : NaN;
+    const items = await box.outbox.list();
+    const hit = (Array.isArray(items) ? items : []).find((it) => {
+      const pl = it && it.payload;
+      if (!pl || !["pending", "sending"].includes(it.status)) return false;
+      if (pl.report_type !== "dailyStart" || String(pl.process_id) !== String(processId)) return false;
+      const at = Date.parse(pl.ended_at || "") || Number(it.created_at) || 0;
+      return !Number.isFinite(since) || at >= since;
+    });
+    return hit ? { qty: hit.payload.report_payload?.machine_qty ?? null } : null;
   } catch (error) {
-    console.warn("station command: today dailyStart re-read failed; using the card data", error);
-    return true;
+    console.warn("outbox dailyStart lookup failed", error);
+    return null;
   }
+}
+
+// 今天這道有沒有今日開工：重讀伺服器（卡片底部同一支查詢）或 outbox 待送 → "server"／"outbox"；都沒有 → ""。
+// 伺服器讀不到 → 只看 outbox（卡片那份資料已經判過一次「還沒有」）。
+async function machtileDailyStartExistsToday(processId) {
+  const ecore = machtileCardEstimateCore();
+  if (ecore && processId) {
+    try {
+      const rows = await machtileCardFetch(machtileCardTodayPath(ecore));
+      if (machtileStationCmdCore.dailyStartRecordedToday(rows, processId)) return "server";
+    } catch (error) {
+      console.warn("station command: today dailyStart re-read failed; checking the outbox only", error);
+    }
+  }
+  return (await machtileOutboxPendingDailyStart(processId)) ? "outbox" : "";
+}
+
+// 回 false＝今天已經有今日開工（含排入待送）→ 不用問了
+async function machtileStationCmdRecheckDailyStart(order) {
+  return !(await machtileDailyStartExistsToday(order.processId));
 }
 
 function machtileStationCmdDailyStartHtml(sheet) {
@@ -13543,9 +13574,84 @@ function machtileStationCmdDailyStartHtml(sheet) {
       </section>`;
   }
   if (ds.state === "failed") return `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-daily-state="failed">${escapeHtml(core.DAILY_START_FAILED_TEXT)}</p>`;
+  if (ds.state === "queued") return `<p class="station-cmd-daily-line is-wait" role="status" data-station-cmd-daily-state="queued">${escapeHtml(core.DAILY_START_QUEUED_TEXT)}</p>`;
+  if (ds.state === "exists") return `<p class="station-cmd-daily-line is-wait" role="status" data-station-cmd-daily-state="exists">${escapeHtml(core.DAILY_START_EXISTS_TEXT)}</p>`;
   const text = ds.state === "saving" || ds.state === "awaitAck" ? "儲存中…" : "已記錄";
   const tone = ds.state === "saved" ? "is-ok" : "is-wait";
   return `<p class="station-cmd-daily-line ${tone}" role="status" data-station-cmd-daily-state="${escapeHtml(ds.state)}">今日開工數量 ${escapeHtml(String(ds.qty))}：${escapeHtml(text)}</p>`;
+}
+
+// 要跟著等確認的指令存的今日開工（數量＋那道工序的 id）；壞資料 → null
+function machtileStationCmdDailyStartSnapshot(order, qty) {
+  return machtileStationCmdCore.pendingDailyStart({
+    qty, processId: order?.processId, workOrderId: order?.workOrderId, tenantId: order?.tenantId, processStatus: order?.processStatus,
+  });
+}
+
+// 寫一筆今日開工（確認卡、等確認的指令共用）：先重讀，今天已有（伺服器或待送）→ 不寫。
+// 回 saved（伺服器回了列）／queued（outbox 排入待送）／exists（今天已有）／failed（其他）
+async function machtileStationCmdWriteDailyStart(order, qty) {
+  try {
+    if (await machtileDailyStartExistsToday(order.processId)) return "exists";
+    const actorId = await machtileResolveAppUserId();
+    const result = await submitReport(0, 0, buildDailyStartCounterRemark(qty), "dailyStart", {
+      order,
+      reportPayload: buildDailyStartCounterPayload(qty),
+      operators: actorId ? [actorId] : [],
+      noFiles: true,
+      requireStructured: true,
+    });
+    if (!result || !result.wroteCloud || result.deadLetter) return "failed";
+    // 離線排入 outbox：連線後會自動送出（同一個 report_uuid，冪等）→ 不能叫他去補填（會變兩筆）
+    if (result.queuedOffline) return "queued";
+    // 只有伺服器回了這一列（outbox 已送達且有 report_id、或直接 POST 回了列 id）才算存到（L3 P2）
+    return result.reportId != null && String(result.reportId) !== "" ? "saved" : "failed";
+  } catch (error) {
+    console.warn("station command: dailyStart save failed", error);
+    return "failed";
+  }
+}
+
+function machtileStationCmdDailyStartToast(outcome) {
+  const core = machtileStationCmdCore;
+  if (outcome === "failed") showToast(core.DAILY_START_FAILED_TEXT);
+  else if (outcome === "queued") showToast(core.DAILY_START_QUEUED_TEXT);
+}
+
+// 等確認的開工指令（送出時網路斷）在伺服器查到 → 處理跟著它存的今日開工數量（只會處理一次）。
+// 查到 pending／claimed／applied＝指令被接受 → 寫；rejected／expired → 丟掉（卡片照舊顯示被拒／過期）。
+function machtileStationCmdDelayedDailyStart(code, record, row) {
+  const core = machtileStationCmdCore;
+  const saved = record && record.dailyStart;
+  if (!core || !saved) return;
+  const action = core.delayedDailyStartAction(row && row.status);
+  if (action === "wait") return;
+  record.dailyStart = null;   // 同步清掉並存檔：之後的輪詢、重新整理都不會再處理這筆
+  machtileStationCmdSavePending();
+  if (action === "discard") return;
+  const sheet = machtileStationCmd.sheet;
+  const sheetDs = sheet && String(sheet.uuid) === String(record.commandUuid) && sheet.dailyStart ? sheet.dailyStart : null;
+  if (sheetDs) {
+    sheetDs.state = "saving";
+    sheetDs.qty = saved.qty;
+    machtileStationCmdRenderSheet();
+  }
+  (async () => {
+    const outcome = await machtileStationCmdWriteDailyStart(saved, saved.qty);
+    if (sheetDs) {
+      sheetDs.state = outcome;
+      if (machtileStationCmd.sheet === sheet) machtileStationCmdRenderSheet();
+    }
+    machtileStationCmdDailyStartToast(outcome);
+    if (outcome === "saved") await machtileStationCmdRefreshToday();
+  })();
+}
+
+// 送出失敗、要記成「等確認」時，跟著存的今日開工：確認卡剛送的那個數量，或（從卡片重送時）上一筆紀錄裡存的
+function machtileStationCmdCarriedDailyStart(sheet, existing) {
+  const ds = sheet && sheet.dailyStart;
+  if (ds && ds.state === "awaitAck") return machtileStationCmdDailyStartSnapshot(sheet.order, ds.qty);
+  return existing && existing.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
 }
 
 // 確認卡上「確認開工」：有今日開工那一格 → 先檢查數量（不合格就不送任何東西）→ 開工指令照舊送 →
@@ -13593,28 +13699,10 @@ function machtileStationCmdDailyStartAfterSubmit(sheet, accepted, row) {
 }
 
 async function machtileStationCmdSaveDailyStart(sheet) {
-  const core = machtileStationCmdCore;
   const ds = sheet.dailyStart;
-  let outcome = "failed";
-  try {
-    const actorId = await machtileResolveAppUserId();
-    const result = await submitReport(0, 0, buildDailyStartCounterRemark(ds.qty), "dailyStart", {
-      order: sheet.order,
-      reportPayload: buildDailyStartCounterPayload(ds.qty),
-      operators: actorId ? [actorId] : [],
-      noFiles: true,
-      requireStructured: true,
-    });
-    // 只有伺服器回了這一列（outbox 已送達且有 report_id、或直接 POST 回了列 id）才算存到；
-    // 排入待送、伺服器拒絕、沒回列 → 都當沒存到（L3 P2）
-    const confirmed = Boolean(result && result.wroteCloud && !result.queuedOffline && !result.deadLetter
-      && result.reportId != null && String(result.reportId) !== "");
-    if (confirmed) outcome = "saved";
-  } catch (error) {
-    console.warn("station command: dailyStart save failed", error);
-  }
+  const outcome = await machtileStationCmdWriteDailyStart(sheet.order, ds.qty);
   ds.state = outcome;
-  if (outcome === "failed") showToast(core.DAILY_START_FAILED_TEXT);
+  machtileStationCmdDailyStartToast(outcome);
   if (machtileStationCmd.sheet === sheet) machtileStationCmdRenderSheet();
   if (outcome === "saved") await machtileStationCmdRefreshToday();
 }
@@ -13688,6 +13776,7 @@ async function machtileStationCmdSubmit() {
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
     if (timer) clearTimeout(timer);
+    const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
     machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
     if (machtileStationCmd.sheet !== sheet) return;
     const info = core.submitErrorText(error);
@@ -13697,7 +13786,8 @@ async function machtileStationCmdSubmit() {
     sheet.canRetry = info.retry;
     if (info.retry) {
       // 不知道有沒有送到：記下來（重新整理後也記得），一面查這個 uuid，一面讓他立刻用同一個 uuid 重送
-      machtileStationCmd.pending[sheet.code] = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: true, serverOffset: null }), startedAt };
+      // 今日開工數量跟著這筆存：之後查到指令被接受才寫（作業員關掉確認卡、重新整理也一樣）
+      machtileStationCmd.pending[sheet.code] = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: true, serverOffset: null, dailyStart: carried }), startedAt };
       machtileStationCmdSavePending();
       machtileStationCmdPoll(sheet.code);
     } else if (machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid) {
@@ -13710,6 +13800,9 @@ async function machtileStationCmdSubmit() {
     return;
   }
   if (timer) clearTimeout(timer);
+  // 上一次送出網路斷時存的數量（從卡片「用同一筆重送」）；確認卡這次自己有填 → 由確認卡寫，存的那份丟掉
+  const carriedDs = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
+  const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
   machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
   const now = Date.now();
   // 伺服器時鐘差：只有第一次送出（新建的列）才準；重送拿到的可能是舊列 → 不算
@@ -13720,12 +13813,14 @@ async function machtileStationCmdSubmit() {
   const view = core.statusView(row || { status: "pending" }, sheet.type, core.ageForHint(record, row?.requested_at, now));
   record.view = view;
   record.lastStatus = String(row?.status || "pending");
+  if (carriedDs && !sheetAwaitsAck) record.dailyStart = carriedDs;
   machtileStationCmdSavePending();
   if (machtileStationCmd.sheet === sheet) {
     sheet.phase = "status";
     sheet.view = view;
     machtileStationCmdRenderSheet();
   }
+  if (record.dailyStart && row) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
   if (view.terminal) machtileStationCmdFinish(sheet.code, view);
   else machtileStationCmdPoll(sheet.code);
   machtileStationCmdRerender();
@@ -13764,6 +13859,7 @@ function machtileStationCmdPoll(code) {
       const row = Array.isArray(rows) ? rows[0] : null;
       if (machtileStationCmd.pending[code] !== current) return;
       if (row) {
+        if (current.dailyStart) machtileStationCmdDelayedDailyStart(code, current, row);
         const wasUnconfirmed = current.unconfirmed;
         current.unconfirmed = false;
         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
@@ -22079,6 +22175,14 @@ function bindEvents() {
     if (operatorMessage) {
       showToast(operatorMessage);
       return;
+    }
+    // 開了「開工／停工」的機台（owner 2026-10-08「先修」）：同一道今天已有排入待送的今日開工 → 不送第二筆
+    if (activeReportType === "dailyStart" && selectedOrder.processId && machtileStationCmdActiveFor(selectedOrder.machine)) {
+      const queued = await machtileOutboxPendingDailyStart(selectedOrder.processId);
+      if (queued) {
+        showToast(machtileStationCmdCore.dailyStartBlockedText(queued.qty));
+        return;
+      }
     }
     const meta = reportTypeMeta[activeReportType] || reportTypeMeta.workStart;
     const completed = Number($("#completedQty").value || 0);

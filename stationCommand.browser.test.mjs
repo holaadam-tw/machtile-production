@@ -13,6 +13,8 @@
 //      今日開工沒存到 → 提示到報工補填，開工指令照樣只送一次。
 //      L3 修正：開工指令被伺服器接受後才寫今日開工（送出被拒／沒收到回覆 → 不寫、數量留著）；
 //      直接 POST 回退一定帶計數器，沒回列 id 就當沒存到。
+//      owner「先修」：送出時網路斷 → 數量跟著等確認的指令存，關掉／重新整理後查到被接受才寫一次、被拒就丟；
+//      離線排入待送 → 說「已排入待送」、報工→今日開工擋第二筆、連線後只有一筆；今天已有的今日開工任何路徑都不重複。
 //      假後端預設「A04 今天已經有今日開工」（1–7 項的確認卡因此跟以前一樣）；第 8 項才用「今天還沒有」。
 // 不會碰任何真的後端：config.js 換成指向假專案網域的測試設定，Supabase 請求全部由這支腳本用假資料回應；
 // 其他對外請求一律擋掉（最後斷言沒有打到正式專案）。
@@ -175,6 +177,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
           expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, requested_at: new Date(Date.now() - be.serverSkewMs).toISOString(), status: "pending", reject_code: null, reject_message: null, applied_at: null };
         be.commands.set(body.p_command_uuid, row);
       }
+      if (be.ackLostNextSubmit) { be.ackLostNextSubmit = false; return route.abort("failed"); }   // 伺服器建好了，回覆在路上掉了
       return json(200, row);
     }
     // 開卡時重讀單一工序（id=eq.）
@@ -213,7 +216,11 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     if (p === "/rest/v1/rpc/field_report_upsert") {
       const body = JSON.parse(req.postData() || "{}");
       be.reportUpserts.push(body);
+      if (be.upsertOffline) return route.abort("failed");   // 平板離線：outbox 排入待送
       if (be.dailyStartFail) return json(400, { code: "P0001", message: "e2e: field_report_upsert rejected" });
+      be.insertedUuids = be.insertedUuids || new Map();
+      if (be.insertedUuids.has(body.p_report_uuid)) return json(200, { inserted: false, report_id: be.insertedUuids.get(body.p_report_uuid) });   // 冪等重放
+      be.insertedUuids.set(body.p_report_uuid, id(7000 + be.reportUpserts.length));
       const pl = body.p_payload || {};
       be.todayRows = [{ process_id: pl.process_id, report_type: pl.report_type, created_at: new Date().toISOString(), started_at: pl.started_at || null, ended_at: pl.ended_at || null,
         completed_qty: pl.completed_qty, defect_qty: pl.defect_qty, user_id: pl.user_id || null, operator_ids: pl.operators || [] }, ...be.todayRows];
@@ -1180,6 +1187,165 @@ for (const [mode, label] of [["ok", "回了列"], ["structRejected", "結構化�
     ok((await sheet(page).locator('[data-station-cmd-daily-state="failed"]').innerText()).trim() === "今日開工數量沒存到，請到報工→今日開工補填", `${label} → 「今日開工數量沒存到，請到報工→今日開工補填」`);
     ok(await footerToday(page, "A04") === "今日尚未開工", `${label} → 卡片底部仍「今日尚未開工」`, await footerToday(page, "A04"));
   }
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// owner 2026-10-08「先修」：(a) 開工送出時網路斷、作業員沒按重送就關掉 (b) 離線排入待送
+const until = async (fn, ms = 12000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 200)); } return fn(); };
+const readPending = (page) => page.evaluate(() => { try { return JSON.parse(localStorage.getItem("machtile.stationCmdPending.v1") || "{}"); } catch { return {}; } });
+const dailyStartRows = (be, pid) => be.todayRows.filter((r) => r.report_type === "dailyStart" && r.process_id === pid);
+async function waitReady(page) {
+  await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
+  await page.waitForFunction(() => typeof machtileCardPickState === "undefined" || machtileCardPickState.status === "ready", null, { timeout: 20000 });
+  await page.waitForTimeout(300);
+}
+async function startWithLostAck(page, be, qty) {
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill(String(qty));
+  be.failCommandPolls = true;     // 網路還沒好：查指令也查不到
+  be.ackLostNextSubmit = true;    // 伺服器其實建好了指令，回覆掉了
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+}
+
+console.log("\n== 390px：(a) 開工送出時網路斷 → 沒按重送就關掉 → 重新整理 → 查到指令被接受 → 只寫一次今日開工（存的數量）==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await startWithLostAck(page, be, 208);
+  ok(be.submits.length === 1 && be.commands.size === 1 && be.reportUpserts.length === 0, `網路斷 → 伺服器有指令，但今日開工還沒寫（${be.commands.size}／${be.reportUpserts.length}）`);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  const stored = (await readPending(page)).A04 || {};
+  ok(stored.commandUuid === be.submits[0].p_command_uuid && stored.dailyStart?.qty === 208 && stored.dailyStart?.processId === id(304),
+    "數量 208 跟著等確認的指令存在 localStorage（用 command_uuid 對得上）", JSON.stringify(stored));
+  be.failCommandPolls = false;    // 網路恢復
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitReady(page);
+  ok(await until(() => be.reportUpserts.length >= 1), "重新整理後查到指令被接受 → 寫今日開工");
+  await page.waitForTimeout(2500);
+  ok(be.reportUpserts.length === 1 && dailyStartRows(be, id(304)).length === 1, `今日開工剛好一筆（${be.reportUpserts.length}）`);
+  const pl = be.reportUpserts[0]?.p_payload || {};
+  ok(pl.report_type === "dailyStart" && pl.process_id === id(304) && pl.work_order_id === id(104) && pl.report_payload?.machine_qty === 208, "寫的是存著的數量 208、A04 那道", JSON.stringify(pl.report_payload));
+  ok(be.submits.length === 1, "沒有重送開工指令");
+  ok(((await readPending(page)).A04 || {}).dailyStart == null, "寫完 → localStorage 裡的數量清掉");
+  await page.waitForFunction(() => {
+    const card = [...document.querySelectorAll("#workOrderGrid .machine-tile-card")].find((c) => c.querySelector("h2")?.textContent.includes("A04"));
+    return card?.querySelector("[data-today-status]")?.textContent.includes("今日已開工");
+  }, null, { timeout: 8000 }).catch(() => {});
+  ok(/^今日已開工/.test(await footerToday(page, "A04")), "卡片底部「今日已開工…」", await footerToday(page, "A04"));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitReady(page);
+  await page.waitForTimeout(2500);
+  ok(be.reportUpserts.length === 1, "再重新整理一次也不會再寫");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：(a) 開工送出時網路斷 → 關掉 → 查到指令被拒 → 不寫今日開工、存的數量清掉 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await startWithLostAck(page, be, 150);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(((await readPending(page)).A04 || {}).dailyStart?.qty === 150, "數量 150 先存著");
+  be.mode = "rejected";
+  be.failCommandPolls = false;
+  await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-station-cmd-status]')?.textContent.includes("沒有開工"), null, { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+  ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText().catch(() => "")).includes("沒有開工"), "卡片照舊顯示開工被拒");
+  ok(be.reportUpserts.length === 0 && dailyStartRows(be, id(304)).length === 0, `被拒 → 今日開工 0 筆（${be.reportUpserts.length}）`);
+  const p2 = (await readPending(page)).A04;
+  ok(!p2 || p2.dailyStart == null, "存的數量清掉", JSON.stringify(p2));
+  ok(await footerToday(page, "A04") === "今日尚未開工", "卡片底部仍「今日尚未開工」", await footerToday(page, "A04"));
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：(a) 網路斷、關掉，這時別台平板記了今日開工 → 查到指令被接受也不重複寫 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await startWithLostAck(page, be, 208);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  be.todayRows = [{ process_id: id(304), report_type: "dailyStart", created_at: new Date().toISOString(), started_at: null, ended_at: new Date().toISOString(), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }, ...be.todayRows];
+  be.failCommandPolls = false;
+  await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-station-cmd-status]')?.textContent.includes("工廠處理中"), null, { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(2000);
+  ok(be.reportUpserts.length === 0 && dailyStartRows(be, id(304)).length === 1, `今天已有 → 不再寫（今日開工仍 1 筆；寫入 ${be.reportUpserts.length}）`);
+  ok(((await readPending(page)).A04 || {}).dailyStart == null, "存的數量清掉");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：確認卡開著時別台平板記了今日開工 → 開工被接受也不重複寫 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill("208");
+  be.todayRows = [{ process_id: id(304), report_type: "dailyStart", created_at: new Date().toISOString(), started_at: null, ended_at: new Date().toISOString(), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }];
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-daily-state="exists"]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(800);
+  ok(be.submits.length === 1 && be.reportUpserts.length === 0 && dailyStartRows(be, id(304)).length === 1, `開工送出、今日開工沒重複（${be.submits.length}／${be.reportUpserts.length}）`);
+  ok((await sheet(page).locator('[data-station-cmd-daily-state="exists"]').innerText()).trim() === "今天這道已經有今日開工紀錄，這次的數量沒有再記", "確認卡說明已有紀錄");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：(b) 平板離線 → 今日開工排入待送：說「已排入待送」、不收數量欄、報工擋第二筆、連線後只有一筆 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  be.upsertOffline = true;
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await dailyField(page).fill("208");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-daily-state="queued"]').waitFor({ timeout: 15000 });
+  const qText = (await sheet(page).locator('[data-station-cmd-daily-state="queued"]').innerText()).trim();
+  ok(qText === "今日開工數量已排入待送，連線後會自動送出，請不要再補填", "確認卡：已排入待送、請不要再補填", qText);
+  ok(await sheet(page).locator('[data-station-cmd-daily-state="failed"]').count() === 0 && !(await page.locator("#toast").innerText()).includes("沒存到"), "不說「沒存到」");
+  ok(be.submits.length === 1 && dailyStartRows(be, id(304)).length === 0, "開工指令送出；伺服器還沒有今日開工");
+  ok(await footerToday(page, "A04") === "今日尚未開工", "伺服器還沒有 → 卡片底部不翻成「今日已開工」", await footerToday(page, "A04"));
+  if (true) await page.screenshot({ path: path.join(shotsDir, "390-start-counter-queued.png") });
+  be.mode = "applied";
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  // 再按開工：outbox 已有待送的今日開工 → 不再問數量
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  ok(await dailyField(page).count() === 0, "待送中再按開工 → 沒有數量欄");
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await footerToday(page, "A04") === "今日尚未開工", "卡片底部仍「今日尚未開工」（等伺服器有那一列）");
+  // 報工→今日開工：擋第二筆
+  await page.evaluate(() => openReport("", { machine: "A04" }));
+  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.locator("#machineQty").fill("300");
+  await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
+  await page.locator("#reportForm button[type=submit].submit-report").click();
+  await page.waitForFunction(() => document.getElementById("toast")?.textContent.includes("不用再填"), null, { timeout: 10000 }).catch(() => {});
+  ok((await page.locator("#toast").innerText()).trim() === "今日開工已排入待送（數量 208），不用再填", "報工→今日開工：擋下並提示「今日開工已排入待送（數量 208），不用再填」", await page.locator("#toast").innerText());
+  ok(!be.reportUpserts.some((b) => b.p_payload?.report_payload?.machine_qty === 300), "報工那筆 300 沒有送出");
+  ok(await page.locator("#reportSheet").evaluate((el) => el.classList.contains("is-open")), "報工畫面留著（沒有當成送出成功關掉）");
+  await page.evaluate(() => closeReport());
+  // 連線恢復 → outbox 自動送出
+  be.upsertOffline = false;
+  for (let i = 0; i < 30 && dailyStartRows(be, id(304)).length === 0; i++) {
+    await page.evaluate(() => machtileGetOutbox().then((b) => b && b.outbox.flush())).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+  await page.waitForTimeout(1500);
+  const rows = dailyStartRows(be, id(304));
+  ok(rows.length === 1, `連線後伺服器剛好一筆今日開工（${rows.length}）`);
+  ok(new Set(be.reportUpserts.map((b) => b.p_report_uuid)).size === 1, "所有重送都是同一個 report_uuid（冪等）");
+  await page.evaluate(() => machtileStationCmdRefreshToday());
+  ok(/^今日已開工/.test(await footerToday(page, "A04")), "伺服器有了 → 卡片底部「今日已開工…」", await footerToday(page, "A04"));
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
