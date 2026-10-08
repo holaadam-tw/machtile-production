@@ -26,6 +26,9 @@ const config = {
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
+  // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
+  // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
+  stationCommandMachines: [],
   // Schedule foundation RPCs/tables are additive and must be rolled out per
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
@@ -10060,6 +10063,8 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
     machtileLoadCardActivity(),
     // 製程路線顯示層級（只讀；讀不到＝每個角色都「完整」）
     machtileLoadFlowVisibility(),
+    // 開工／停工回寫舊 MES：旗標關＝不讀；表不存在＝藏起來
+    machtileLoadStationCommandAvailability(),
     // 派工待做池（只讀；表還沒建＝不顯示這一段）
     machtileLoadDispatchPool(),
   ]);
@@ -13150,6 +13155,500 @@ function machtileOpenHmcMachineDetail(machineCode) {
     ${machtileHmcDetailSection(machine) || '<p class="empty-note">目前沒有盤況資料。</p>'}`;
 }
 
+// ============================================================================================
+// 機台卡片「開工／停工」回寫舊 MES（第 1 階段，owner 2026-10-07；合約與決策在 stationCommandCore.js 檔頭）。
+//   旗標 config.stationCommandMachines 空＝完全不碰：不讀 station_commands、不出按鈕。
+//   旗標開＋作業員 → 先試讀 station_commands（只讀一列）；讀不到（表不存在、沒權限、網路）→ 整個藏起來。
+//   按鈕 → 確認卡（開卡時重讀這一道是否還在這台；大字：機台／工單號／料號＋品名／第幾道＋工序名；
+//   「畫面資料（hh:mm）顯示…」）→ 確認才送 machtile_submit_station_command（command_uuid 由 App 產生，
+//   重送同一筆不會重複；20 秒逾時）→ 一直輪詢到伺服器給 applied／rejected／expired（App 不自己判結果）。
+//   第 1 階段不換單：「不是這張單」只叫作業員找生管。
+// ============================================================================================
+const machtileStationCmdCore = window.MachTileStationCommandCore || null;
+const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
+const machtileStationCmd = {
+  availability: "off",        // off（旗標關）／probing／ready／missing
+  pending: {},                // 機台代號 → pendingRecord（等伺服器結果中）
+  lastResult: {},             // 機台代號 → { view, at }（卡片上顯示最後一次結果）
+  timers: {},                 // 機台代號 → 輪詢 timer
+  sheet: null,                // 目前開著的確認卡
+};
+
+function machtileStationCmdFlag() {
+  return machtileStationCmdCore ? machtileStationCmdCore.parseFlag(config.stationCommandMachines) : { all: false, machines: [] };
+}
+
+function machtileStationCmdRoleOk() {
+  return Boolean(machtileStationCmdCore) && machtileStationCmdCore.roleAllowed(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true);
+}
+
+// 這台現在有沒有開這個功能（旗標＋作業員＋表在）
+function machtileStationCmdActiveFor(machineCode) {
+  return Boolean(machtileStationCmdCore) && machtileStationCmd.availability === "ready" && machtileStationCmdRoleOk()
+    && machtileStationCmdCore.enabledForMachine(machtileStationCmdFlag(), machineCode);
+}
+
+function machtileStationCmdSavePending() {
+  const plain = {};
+  Object.keys(machtileStationCmd.pending).forEach((code) => {
+    const { view, emptyPolls, releasedShown, ...rest } = machtileStationCmd.pending[code];
+    plain[code] = rest;
+  });
+  try { localStorage.setItem(MACHTILE_STATION_CMD_PENDING_KEY, JSON.stringify(plain)); } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+}
+
+function machtileStationCmdRestorePending() {
+  if (!machtileStationCmdCore) return;
+  let raw = null;
+  try { raw = localStorage.getItem(MACHTILE_STATION_CMD_PENDING_KEY); } catch { raw = null; }
+  const restored = machtileStationCmdCore.restorePending(raw, Date.now());
+  const flag = machtileStationCmdFlag();
+  Object.keys(restored).forEach((code) => {
+    if (!machtileStationCmdCore.enabledForMachine(flag, code) || machtileStationCmd.pending[code]) return;
+    machtileStationCmd.pending[code] = restored[code];
+    machtileStationCmdPoll(code);
+  });
+  machtileStationCmdSavePending();
+}
+
+// loadFromSupabase 時呼叫（成功過就不再試）
+async function machtileLoadStationCommandAvailability() {
+  const flag = machtileStationCmdFlag();
+  // 旗標關、或不是作業員帳號（只有作業員能送，合約 §3.1）→ 完全不讀
+  if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(flag) || state.source !== "supabase" || !machtileStationCmdRoleOk()) {
+    machtileStationCmd.availability = "off";
+    return;
+  }
+  if (machtileStationCmd.availability === "ready") return;
+  machtileStationCmd.availability = "probing";
+  try {
+    await supabaseFetch("station_commands?select=command_uuid&limit=1");
+    machtileStationCmd.availability = "ready";
+    machtileStationCmdRestorePending();
+  } catch (error) {
+    console.warn("station commands unavailable; start/stop buttons hidden", error);
+    machtileStationCmd.availability = "missing";
+  }
+}
+
+// 等待中的這筆是否已經可以讓作業員再按（本機 11 分鐘＋最後看到的伺服器狀態是 pending）
+function machtileStationCmdUnlocked(rec) {
+  const core = machtileStationCmdCore;
+  return Boolean(core && rec && core.lockReleased(rec.startedAt, Date.now()) && core.releasedNote(rec.lastStatus).unlock);
+}
+
+function machtileStationCmdMachineCode(machine) {
+  return String(machine?.code || machine?.name || "").trim().toUpperCase();
+}
+
+function machtileStationCmdRerender() {
+  try { renderWorkOrders(); } catch { /* 畫面沒開也沒關係 */ }
+}
+
+function machtileStationCmdMarkup(machine) {
+  if (!machtileStationCmdCore) return "";
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine?.order || null;
+  const gate = machtileStationCmdCore.eligibility({
+    flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
+  });
+  const pending = machtileStationCmd.pending[code];
+  // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
+  if (!gate.ok && !(pending && machtileStationCmdActiveFor(code))) return "";
+  const last = machtileStationCmd.lastResult[code];
+  const label = machtileStationCmdCore.TYPE_LABEL;
+  const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
+  const releaseNote = released ? machtileStationCmdCore.releasedNote(pending.lastStatus) : null;
+  const locked = Boolean(pending) && !(releaseNote && releaseNote.unlock);
+  let status = "";
+  if (pending && pending.unconfirmed) {
+    status = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>
+      <button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
+  } else if (pending) {
+    const view = pending.view || machtileStationCmdCore.statusView({ status: "pending" }, pending.commandType, null);
+    status = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
+  } else if (last) {
+    status = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
+  }
+  const buttons = gate.ok ? `
+      <button type="button" class="station-cmd-button is-start" data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>開工</button>
+      <button type="button" class="station-cmd-button is-stop" data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>停工</button>` : "";
+  return `
+    <div class="station-cmd-row" data-no-detail data-station-cmd-row="${escapeHtml(code)}">
+      <span class="station-cmd-label">舊 MES</span>${buttons}
+      ${status}
+    </div>`;
+}
+
+// 單台報工畫面：這台開了「舊 MES 開工／停工」→ 既有「今日開工」分頁標「只記錄（不改舊 MES）」
+function machtileStationCmdLabelReportTab(machineName) {
+  const tab = document.querySelector('.report-type-tab[data-report-type="dailyStart"]');
+  if (!tab) return;
+  tab.querySelector("[data-station-cmd-recordonly]")?.remove();
+  if (!machineName || !machtileStationCmdActiveFor(machineName)) return;
+  const note = document.createElement("small");
+  note.className = "station-cmd-recordonly";
+  note.dataset.stationCmdRecordonly = "";
+  note.textContent = "只記錄（不改舊 MES）";
+  tab.appendChild(note);
+}
+
+function machtileStationCmdMachineByCode(code) {
+  const key = String(code || "").trim().toUpperCase();
+  return (state.machines || []).find((m) => machtileStationCmdMachineCode(m) === key) || null;
+}
+
+function machtileStationCmdCloseSheet() {
+  const sheet = machtileStationCmd.sheet;
+  if (sheet && sheet.phase === "sending") return;
+  document.getElementById("machtileStationCmdSheet")?.remove();
+  machtileStationCmd.sheet = null;
+  if (!sheet) return;
+  // 焦點回到原本按的按鈕（卡片重畫過就找同一台同一顆）
+  let target = sheet.returnFocus && sheet.returnFocus.isConnected ? sheet.returnFocus : null;
+  if (!target) target = document.querySelector(`#workOrderGrid [data-station-cmd="${sheet.type}"][data-station-cmd-machine="${sheet.code}"]`)
+    || document.querySelector(`#workOrderGrid [data-station-cmd-retry="${sheet.code}"]`);
+  try { target?.focus(); } catch { /* ignore */ }
+}
+
+function machtileStationCmdFocusables() {
+  const panel = document.querySelector("#machtileStationCmdSheet .station-cmd-panel");
+  return panel ? [...panel.querySelectorAll("button:not([disabled]), [href], [tabindex]:not([tabindex='-1'])")] : [];
+}
+
+function machtileStationCmdRenderSheet(focus) {
+  const sheet = machtileStationCmd.sheet;
+  const holder = document.getElementById("machtileStationCmdSheet");
+  if (!sheet || !holder) return;
+  const core = machtileStationCmdCore;
+  const model = sheet.model;
+  const field = (label, value, attr) => `<div class="station-cmd-field"><span>${escapeHtml(label)}</span><strong ${attr}>${escapeHtml(value || "—")}</strong></div>`;
+  let body = "";
+  let actions = "";
+  if (sheet.phase === "notThis") {
+    body = `<p class="station-cmd-notice is-warn" data-station-cmd-notthis>${escapeHtml(model.notThisOrder)}</p>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-station-cmd-close>知道了</button>`;
+  } else if (sheet.phase === "confirm" || sheet.phase === "sending" || sheet.phase === "sendError") {
+    const sending = sheet.phase === "sending";
+    const freshBad = !sheet.loading && sheet.fresh && !sheet.fresh.ok;
+    const canSend = !sending && !sheet.loading && !freshBad && (sheet.phase !== "sendError" || sheet.canRetry);
+    body = `
+      <div class="station-cmd-fields">
+        ${field("機台", model.machine, "data-station-cmd-field=\"machine\"")}
+        ${field("工單號", model.workOrderNo, "data-station-cmd-field=\"order\"")}
+        ${field("料號／品名", sheet.loading ? "讀取中…" : [model.partNoDisplay, model.partName].filter(Boolean).join("　"), "data-station-cmd-field=\"part\"")}
+        ${field("第幾道／工序", [model.stepLabel, model.operationName].filter(Boolean).join("　"), "data-station-cmd-field=\"step\"")}
+      </div>
+      ${sheet.isRetry ? "" : `<section class="station-cmd-legacy" data-station-cmd-legacy>
+        <h3>舊 MES 現況（派工橋同步的畫面資料）</h3>
+        ${sheet.loading ? "<p>讀取中…</p>" : `<ul>${model.legacyLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`}
+      </section>`}
+      ${freshBad ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-stale>${escapeHtml(sheet.fresh.text)}</p>` : ""}
+      ${model.otherOrders && !sheet.isRetry ? `<p class="station-cmd-notice is-warn" data-station-cmd-others>${escapeHtml(model.otherOrders)}；請確認你現在做的就是上面這張。</p>` : ""}
+      ${sheet.phase === "sendError" ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-error>${escapeHtml(sheet.errorText)}</p>` : ""}`;
+    actions = `
+      <button type="button" class="station-cmd-confirm is-${escapeHtml(sheet.type)}" data-station-cmd-confirm ${canSend ? "" : "disabled"}>${sending ? "送出中…" : sheet.phase === "sendError" && sheet.canRetry ? "重送" : escapeHtml(model.confirmLabel)}</button>
+      ${sheet.isRetry ? "" : `<button type="button" class="station-cmd-secondary" data-station-cmd-notthis-open ${sending ? "disabled" : ""}>不是這張單</button>`}
+      <button type="button" class="station-cmd-secondary" data-station-cmd-close ${sending ? "disabled" : ""}>取消</button>`;
+  } else {
+    const view = sheet.view || core.statusView({ status: "pending" }, sheet.type, null);
+    body = `
+      <div class="station-cmd-fields is-compact">
+        ${field("機台", model.machine, "")}
+        ${field("工單號", model.workOrderNo, "")}
+        ${field("第幾道", model.stepLabel, "")}
+      </div>
+      <section class="station-cmd-result is-${escapeHtml(view.tone)}" data-station-cmd-result="${escapeHtml(view.phase)}"${view.late ? " data-station-cmd-late" : ""} role="status">
+        <strong>${escapeHtml(view.title)}</strong>
+        <p>${escapeHtml(view.text)}</p>
+        ${view.detail ? `<small>工廠說明：${escapeHtml(view.detail)}</small>` : ""}
+        ${view.code && view.phase === "rejected" ? `<small>代碼 ${escapeHtml(view.code)}</small>` : ""}
+      </section>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-station-cmd-close>${view.terminal ? "關閉" : "先關掉（結果會顯示在卡片上）"}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-${escapeHtml(sheet.type)}" role="dialog" aria-modal="true" aria-labelledby="stationCmdTitle">
+      <header><h2 id="stationCmdTitle">${escapeHtml(model.title)}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  // 初始焦點放「取消」（不是確認，免得桌機按 Enter 直接送出）；重畫時焦點留在卡片裡
+  if (focus || hadFocusInside) {
+    const target = holder.querySelector("[data-station-cmd-close]:not([disabled])") || machtileStationCmdFocusables()[0] || holder.querySelector("h2");
+    try { target?.focus(); } catch { /* ignore */ }
+  }
+}
+
+function machtileStationCmdNewSheet(fields) {
+  machtileStationCmdCloseSheet();
+  machtileStationCmd.sheet = fields;
+  const holder = document.createElement("div");
+  holder.id = "machtileStationCmdSheet";
+  holder.className = "station-cmd-overlay";
+  document.body.appendChild(holder);
+  machtileStationCmdRenderSheet(true);
+}
+
+async function machtileStationCmdOpen(type, code, returnFocus) {
+  const core = machtileStationCmdCore;
+  if (!core || !core.COMMAND_TYPES.includes(type)) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const order = machine?.order || null;
+  const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket });
+  const pending = machtileStationCmd.pending[code];
+  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending))) return;
+  let uuid;
+  try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
+  const others = Number(machine?.cardOtherCount || 0);
+  const sheet = {
+    code, type, order, uuid, phase: "confirm", loading: true, fresh: null, attempts: 0, returnFocus: returnFocus || null,
+    fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
+    model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others }),
+  };
+  machtileStationCmdNewSheet(sheet);
+  let legacy = null;
+  let legacyError = false;
+  let fresh = null;
+  await Promise.all([
+    (async () => {
+      try {
+        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
+        fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+      } catch (error) {
+        console.warn("station command: work_order_processes re-read failed", error);
+        fresh = { ok: false, reason: "read_failed", text: "讀不到最新的工單資料，請重新整理畫面再按。" };
+      }
+    })(),
+    (async () => {
+      try {
+        const wo = `"${encodeURIComponent(String(order.id).replace(/"/g, ""))}"`;
+        const rows = await supabaseFetch(`legacy_station_progress?select=work_order_no,machine_code,process_order,legacy_output,legacy_fail,legacy_updated_at,legacy_snapshot_at&work_order_no=in.(${wo})`);
+        legacy = core.legacyRowFor(rows, { workOrderNo: order.id, machineCode: code, step: order.stationStep });
+      } catch (error) {
+        console.warn("station command: legacy_station_progress unavailable", error);
+        legacyError = true;
+      }
+    })(),
+  ]);
+  if (machtileStationCmd.sheet !== sheet) return;
+  sheet.loading = false;
+  sheet.fresh = fresh;
+  if (fresh && fresh.ok) sheet.fields.partNo = fresh.partNo;
+  sheet.model = core.confirmModel({ commandType: type, machineCode: code, order, fresh, legacy, legacyError, otherOrderCount: others, nowMs: Date.now() });
+  machtileStationCmdRenderSheet();
+}
+
+// 重新整理後「上次送出不確定」→ 從卡片直接用同一個 uuid 重送
+function machtileStationCmdOpenRetry(code, returnFocus) {
+  const core = machtileStationCmdCore;
+  const rec = machtileStationCmd.pending[code];
+  if (!core || !rec || !rec.unconfirmed) return;
+  const order = { id: rec.orderNo, stationStep: rec.step, part: rec.partName, process: rec.operationName, manufactureIiId: rec.manufactureIiId };
+  const fresh = { ok: true, partNo: rec.partNo, partName: rec.partName, operationName: rec.operationName };
+  machtileStationCmdNewSheet({
+    code, type: rec.commandType, order, uuid: rec.commandUuid, phase: "sendError", loading: false, fresh, attempts: 1, isRetry: true,
+    returnFocus: returnFocus || null, canRetry: true,
+    errorText: "上次送出時網路斷了，不知道有沒有送到。按「重送」會用同一筆指令，不會重複。",
+    fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo },
+    model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh }),
+  });
+}
+
+function machtileStationCmdRecordFor(sheet, extra) {
+  return machtileStationCmdCore.pendingRecord({
+    commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
+    orderNo: sheet.fields.orderNo, step: sheet.fields.step, partNo: sheet.fields.partNo, manufactureIiId: sheet.fields.manufactureIiId,
+    partName: sheet.model.partName, operationName: sheet.model.operationName,
+    startedAt: machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid ? machtileStationCmd.pending[sheet.code].startedAt : Date.now(),
+    ...extra,
+  });
+}
+
+async function machtileStationCmdSubmit() {
+  const core = machtileStationCmdCore;
+  const sheet = machtileStationCmd.sheet;
+  if (!core || !sheet || sheet.phase === "sending" || sheet.loading) return;
+  if (!["confirm", "sendError"].includes(sheet.phase)) return;
+  if (sheet.phase === "sendError" && !sheet.canRetry) return;
+  if (!sheet.fresh || !sheet.fresh.ok) return;
+  const existing = machtileStationCmd.pending[sheet.code];
+  if (existing && existing.commandUuid !== sheet.uuid && !machtileStationCmdUnlocked(existing)) return;
+  sheet.phase = "sending";
+  sheet.attempts += 1;
+  machtileStationCmdRenderSheet();
+  const startedAt = existing?.commandUuid === sheet.uuid ? existing.startedAt : Date.now();
+  let row = null;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
+  try {
+    const payload = core.submitPayload({ commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code, ...sheet.fields });
+    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    if (timer) clearTimeout(timer);
+    if (machtileStationCmd.sheet !== sheet) return;
+    const info = core.submitErrorText(error);
+    if (info.missing) machtileStationCmd.availability = "missing";
+    sheet.phase = "sendError";
+    sheet.errorText = info.text;
+    sheet.canRetry = info.retry;
+    if (info.retry) {
+      // 不知道有沒有送到：記下來（重新整理後也記得），一面查這個 uuid，一面讓他立刻用同一個 uuid 重送
+      machtileStationCmd.pending[sheet.code] = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: true, serverOffset: null }), startedAt };
+      machtileStationCmdSavePending();
+      machtileStationCmdPoll(sheet.code);
+    } else if (machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid) {
+      // 伺服器明確拒絕了這次請求 → 這個 uuid 沒有建成指令，解鎖
+      delete machtileStationCmd.pending[sheet.code];
+      machtileStationCmdSavePending();
+    }
+    machtileStationCmdRenderSheet();
+    machtileStationCmdRerender();
+    return;
+  }
+  if (timer) clearTimeout(timer);
+  const now = Date.now();
+  // 伺服器時鐘差：只有第一次送出（新建的列）才準；重送拿到的可能是舊列 → 不算
+  const offset = sheet.attempts === 1 && row ? core.serverOffset(row.requested_at, now) : (existing?.commandUuid === sheet.uuid ? existing.serverOffset : null);
+  const record = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: false, serverOffset: offset }), startedAt };
+  machtileStationCmd.pending[sheet.code] = record;
+  delete machtileStationCmd.lastResult[sheet.code];
+  const view = core.statusView(row || { status: "pending" }, sheet.type, core.ageForHint(record, row?.requested_at, now));
+  record.view = view;
+  record.lastStatus = String(row?.status || "pending");
+  machtileStationCmdSavePending();
+  if (machtileStationCmd.sheet === sheet) {
+    sheet.phase = "status";
+    sheet.view = view;
+    machtileStationCmdRenderSheet();
+  }
+  if (view.terminal) machtileStationCmdFinish(sheet.code, view);
+  else machtileStationCmdPoll(sheet.code);
+  machtileStationCmdRerender();
+}
+
+// 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
+function machtileStationCmdFinish(code, view) {
+  const record = machtileStationCmd.pending[code];
+  if (!record) return;
+  clearTimeout(machtileStationCmd.timers[code]);
+  delete machtileStationCmd.timers[code];
+  delete machtileStationCmd.pending[code];
+  machtileStationCmdSavePending();
+  machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  const sheet = machtileStationCmd.sheet;
+  if (sheet && sheet.code === code && sheet.uuid === record.commandUuid) {
+    sheet.phase = "status";
+    sheet.view = view;
+    machtileStationCmdRenderSheet();
+  }
+  machtileStationCmdRerender();
+  if (view.phase === "applied") showToast(`${code} ${view.title}（舊 MES）`);
+}
+
+function machtileStationCmdPoll(code) {
+  const core = machtileStationCmdCore;
+  const record = machtileStationCmd.pending[code];
+  if (!core || !record) return;
+  clearTimeout(machtileStationCmd.timers[code]);
+  const elapsed = Date.now() - record.startedAt;
+  machtileStationCmd.timers[code] = setTimeout(async () => {
+    const current = machtileStationCmd.pending[code];
+    if (!current || current.commandUuid !== record.commandUuid) return;
+    try {
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,applied_at&command_uuid=eq.${current.commandUuid}`);
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (machtileStationCmd.pending[code] !== current) return;
+      if (row) {
+        const wasUnconfirmed = current.unconfirmed;
+        current.unconfirmed = false;
+        const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
+        if (view.terminal) { machtileStationCmdFinish(code, view); return; }
+        const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
+        current.view = view;
+        const statusChanged = current.lastStatus !== String(row.status || "");
+        current.lastStatus = String(row.status || "");
+        if (wasUnconfirmed || statusChanged) machtileStationCmdSavePending();
+        const sheet = machtileStationCmd.sheet;
+        if (sheet && sheet.code === code && sheet.uuid === current.commandUuid) {
+          if (sheet.phase === "sendError") sheet.phase = "status";
+          if (sheet.phase === "status") { sheet.view = view; machtileStationCmdRenderSheet(); }
+        }
+        if (changed) machtileStationCmdRerender();
+      } else if (current.unconfirmed) {
+        current.emptyPolls = (current.emptyPolls || 0) + 1;
+        if (core.unconfirmedNotSent(current, Date.now())) {
+          // 送出時網路斷、伺服器連續查不到這筆＝沒送到 → 解鎖（同一個 uuid 之後重送也沒問題）
+          delete machtileStationCmd.timers[code];
+          delete machtileStationCmd.pending[code];
+          machtileStationCmdSavePending();
+          const sheet = machtileStationCmd.sheet;
+          if (sheet && sheet.code === code && sheet.uuid === current.commandUuid && sheet.phase === "sendError") {
+            sheet.errorText = "目前查不到這筆（已等 30 秒、查了 3 次）。可以按「重送」，會用同一筆指令，不會重複。";
+            sheet.canRetry = true;
+            machtileStationCmdRenderSheet();
+          }
+          machtileStationCmdRerender();
+          return;
+        }
+      }
+    } catch (error) {
+      if (core.isMissingResourceError(error)) {
+        // 表不見了：停止輪詢；不宣稱結果
+        machtileStationCmd.availability = "missing";
+        clearTimeout(machtileStationCmd.timers[code]);
+        delete machtileStationCmd.timers[code];
+        delete machtileStationCmd.pending[code];
+        machtileStationCmdSavePending();
+        machtileStationCmdRerender();
+        return;
+      }
+      console.warn("station command poll failed; will retry", error);
+    }
+    // 剛過解鎖時間 → 卡片重畫一次（按鈕解鎖、輪詢照舊）
+    if (!current.releasedShown && core.lockReleased(current.startedAt, Date.now())) { current.releasedShown = true; machtileStationCmdRerender(); }
+    machtileStationCmdPoll(code);
+  }, core.pollDelay(elapsed));
+}
+
+// 卡片按鈕與確認卡的點擊（document 層代理，於卡片「明細」判斷之前處理）
+function machtileStationCmdHandleClick(event) {
+  const open = event.target.closest("[data-station-cmd]");
+  if (open) { machtileStationCmdOpen(open.dataset.stationCmd, open.dataset.stationCmdMachine, open); return true; }
+  const retry = event.target.closest("[data-station-cmd-retry]");
+  if (retry) { machtileStationCmdOpenRetry(retry.dataset.stationCmdRetry, retry); return true; }
+  if (!event.target.closest("#machtileStationCmdSheet")) return false;
+  if (event.target.closest("[data-station-cmd-confirm]")) { machtileStationCmdSubmit(); return true; }
+  if (event.target.closest("[data-station-cmd-notthis-open]")) {
+    const sheet = machtileStationCmd.sheet;
+    if (sheet && sheet.phase !== "sending") { sheet.phase = "notThis"; machtileStationCmdRenderSheet(true); }
+    return true;
+  }
+  if (event.target.closest("[data-station-cmd-close]")) { machtileStationCmdCloseSheet(); return true; }
+  return true;
+}
+
+// Esc 關閉；Tab 只在確認卡裡面轉（focus trap）
+document.addEventListener("keydown", (event) => {
+  if (!machtileStationCmd.sheet || !document.getElementById("machtileStationCmdSheet")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    machtileStationCmdCloseSheet();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const items = machtileStationCmdFocusables();
+  if (!items.length) { event.preventDefault(); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const inside = items.includes(document.activeElement);
+  if (event.shiftKey && (document.activeElement === first || !inside)) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
+});
+
 function renderMachineCard(machine) {
   const order = machine.order;
   const status = statusMeta[machine.status] || statusMeta.idle;
@@ -13211,6 +13710,7 @@ function renderMachineCard(machine) {
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
         `}
       </div>
+      ${machtileStationCmdMarkup(machine)}
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
@@ -13283,7 +13783,7 @@ function renderMachineCard(machine) {
             ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
             : order
               ? canReport
-                ? `<button type="button" class="machine-report-button" ${reportAttr}>回報</button>`
+                ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
                 : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}">前往指派</button>`
               : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}
         </div>
@@ -19251,6 +19751,7 @@ function openReport(orderId, options = {}) {
     $("#reportWorkNo").textContent = "待指派";
   }
   setReportType(options.reportType || "workStart");
+  machtileStationCmdLabelReportTab(order?.machine || machineName);
   if (!order) setReportDefaults(null);
   $("#reportSheet").classList.toggle("route-sheet", Boolean(options.routeMode));
   document.body.classList.toggle("route-mode", Boolean(options.routeMode));
@@ -21563,6 +22064,8 @@ function bindEvents() {
       machtileOpenHmcMachineDetail(hmcMachineDetail.dataset.hmcMachineDetail);
       return;
     }
+
+    if (machtileStationCmdHandleClick(event)) return;
 
     if (event.target.closest("[data-no-detail]")) {
       return;
