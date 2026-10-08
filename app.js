@@ -13783,7 +13783,7 @@ function renderMachineCard(machine) {
             ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
             : order
               ? canReport
-                ? `<button type="button" class="machine-report-button" ${reportAttr}>回報</button>`
+                ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
                 : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}">前往指派</button>`
               : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}
         </div>
