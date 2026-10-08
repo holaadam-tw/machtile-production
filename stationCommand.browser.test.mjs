@@ -17,6 +17,7 @@
 //      離線排入待送 → 說「已排入待送」、報工→今日開工擋第二筆、連線後只有一筆；今天已有的今日開工任何路徑都不重複。
 //      L3 複審：201 沒回列＝結果不確定（不叫補填，查回來：有→不重複；沒有→重送鈕用同一個 report_uuid）；
 //      報工→今日開工送出前重讀伺服器；RPC 回應不是同一個 command_uuid → 不寫今日開工。
+//      L3 複審 fa1db2fb：等送達的數量存到伺服器看到那一列才刪（送不到、重新整理都還在）；重讀讀不到（5xx）→ 不寫、留著、之後再試。
 //      假後端預設「A04 今天已經有今日開工」（1–7 項的確認卡因此跟以前一樣）；第 8 項才用「今天還沒有」。
 // 不會碰任何真的後端：config.js 換成指向假專案網域的測試設定，Supabase 請求全部由這支腳本用假資料回應；
 // 其他對外請求一律擋掉（最後斷言沒有打到正式專案）。
@@ -209,7 +210,11 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       }));
     }
     // 卡片底部「今日已開工／尚未開工」與總覽三格那一份查詢
-    if (p === "/rest/v1/production_reports" && method === "GET" && q.includes("report_type=in.(dailyStart,noon,finish)")) return json(200, be.todayRows);
+    if (p === "/rest/v1/production_reports" && method === "GET" && q.includes("report_type=in.(dailyStart,noon,finish)")) {
+      be.todayReads = (be.todayReads || 0) + 1;
+      if (be.todayReadFail) return json(503, { message: "e2e: upstream unavailable" });
+      return json(200, be.todayRows);
+    }
     if (p === "/rest/v1/production_reports" && method === "POST") {
       const body = JSON.parse(req.postData() || "{}");
       be.directPosts.push(body);
@@ -1450,6 +1455,104 @@ for (const [mode, label] of [["noUuid", "沒有 command_uuid"], ["wrongUuid", "c
   await page.waitForTimeout(2000);
   ok(be.submits.length === 1 && be.reportUpserts.length === 0 && be.directPosts.length === 0 && dailyStartRows(be, id(304)).length === 0, `${label} → 今日開工 0 筆（${be.reportUpserts.length}）`);
   ok(await footerToday(page, "A04") === "今日尚未開工", `${label} → 卡片底部仍「今日尚未開工」`);
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// L3 複審 fa1db2fb：等送達的今日開工持久保存；重讀讀不到不寫
+const readDsQueue = (page) => page.evaluate(() => { try { return JSON.parse(localStorage.getItem("machtile.stationCmdDailyStart.v1") || "{}"); } catch { return {}; } });
+const fastCfg = 'stationCommandMachines: ["A04"], stationCmdDailyStartVerifyMs: 300,';
+const otherTabletRow = () => ({ process_id: id(304), report_type: "dailyStart", created_at: new Date().toISOString(), started_at: null, ended_at: new Date().toISOString(), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] });
+
+console.log("\n== 390px：網路斷 → 關掉 → 重新整理後補寫但送不到（離線）→ 數量仍在 localStorage → 再開一次 → 剛好一筆 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: fastCfg });
+  await startWithLostAck(page, be, 208);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  be.failCommandPolls = false;
+  be.upsertOffline = true;           // 補寫時平板離線：報工送不到
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitReady(page);
+  ok(await until(() => be.reportUpserts.length >= 1), "重新整理後查到指令被接受 → 試著補寫");
+  await page.waitForTimeout(1500);
+  const q1 = Object.values(await readDsQueue(page));
+  ok(q1.length === 1 && q1[0].snap?.qty === 208 && q1[0].snap?.reportUuid === stationCore.dailyStartReportUuid({ tenantId: T, machineCode: "A04", processId: id(304), commandUuid: be.submits[0].p_command_uuid, day: stationCore.taiwanDay(Date.now()) }),
+    "送不到 → 數量 208（連同固定 report_uuid）還在 localStorage", JSON.stringify(q1));
+  ok(((await readPending(page)).A04 || {}).dailyStart == null, "指令紀錄裡的數量已搬到「等送達」（不會兩邊各寫一次）");
+  ok(dailyStartRows(be, id(304)).length === 0, "伺服器還沒有今日開工");
+  // 關頁、連線恢復後再開
+  be.upsertOffline = false;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitReady(page);
+  ok(await until(() => dailyStartRows(be, id(304)).length >= 1 && (be.insertedUuids?.size || 0) >= 1), "再開一次 → 送達");
+  await page.waitForTimeout(2500);
+  await page.waitForFunction(() => { try { return Object.keys(JSON.parse(localStorage.getItem("machtile.stationCmdDailyStart.v1") || "{}")).length === 0; } catch { return false; } }, null, { timeout: 10000 }).catch(() => {});
+  ok(dailyStartRows(be, id(304)).length === 1 && be.insertedUuids.size === 1, `伺服器剛好一筆今日開工（${dailyStartRows(be, id(304)).length}）`);
+  ok(new Set(be.reportUpserts.map((b) => b.p_report_uuid)).size === 1, "每次送都是同一個 report_uuid");
+  ok(Object.keys(await readDsQueue(page)).length === 0, "伺服器看到那一列 → localStorage 的數量才清掉");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：開工被接受後重讀伺服器回 5xx → 不寫、數量留著 → 讀得到後剛好一筆 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: fastCfg });
+  be.todayReadFail = true;
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  ok(await dailyField(page).count() === 1, "讀不到伺服器 → 照卡片資料還是問數量");
+  await dailyField(page).fill("208");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-daily-state="retrying"]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(1500);
+  ok((await sheet(page).locator('[data-station-cmd-daily-state="retrying"]').innerText()).trim() === "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填", "確認卡：暫時查不到、先存著、請不要補填");
+  ok(be.submits.length === 1 && be.reportUpserts.length === 0, `5xx → 今日開工 0 筆寫入（${be.reportUpserts.length}）`);
+  ok(Object.values(await readDsQueue(page))[0]?.snap?.qty === 208, "數量 208 留在 localStorage");
+  ok(be.todayReads >= 3, `有在退避重試（重讀 ${be.todayReads} 次）`);
+  be.todayReadFail = false;
+  await sheet(page).locator('[data-station-cmd-daily-state="saved"]').waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1000);
+  ok(be.reportUpserts.length === 1 && dailyStartRows(be, id(304)).length === 1, `讀得到後 → 剛好一筆（${be.reportUpserts.length}）`);
+  ok(Object.keys(await readDsQueue(page)).length === 0, "確認有了 → 數量清掉");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：重讀 5xx 期間別台平板記了今日開工 → 讀得到後看到已有 → 0 筆寫入 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: fastCfg });
+  be.todayReadFail = true;
+  await confirmStartWith(page, 208);
+  await sheet(page).locator('[data-station-cmd-daily-state="retrying"]').waitFor({ timeout: 10000 });
+  be.todayRows = [otherTabletRow(), ...be.todayRows];   // 別台平板（不同 report_uuid）
+  await page.waitForTimeout(800);
+  be.todayReadFail = false;
+  await sheet(page).locator('[data-station-cmd-daily-state="exists"]').waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1000);
+  ok(be.reportUpserts.length === 0 && be.directPosts.length === 0 && dailyStartRows(be, id(304)).length === 1, `多平板＋重讀失敗 → 沒有第二筆（寫入 ${be.reportUpserts.length}）`);
+  ok(Object.keys(await readDsQueue(page)).length === 0, "數量清掉");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：報工→今日開工送出前重讀回 5xx → 不送、提示稍後再送 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: fastCfg });
+  be.todayReadFail = true;
+  await page.evaluate(() => openReport("", { machine: "A04" }));
+  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.locator("#machineQty").fill("300");
+  await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
+  await page.locator("#reportForm button[type=submit].submit-report").click();
+  await page.waitForFunction(() => document.getElementById("toast")?.textContent.includes("稍後再送"), null, { timeout: 10000 }).catch(() => {});
+  ok((await page.locator("#toast").innerText()).trim() === "暫時查不到伺服器今天的紀錄，請稍後再送", "讀不到 → 「暫時查不到伺服器今天的紀錄，請稍後再送」", await page.locator("#toast").innerText());
+  ok(be.reportUpserts.length === 0 && be.directPosts.length === 0, "沒有送出");
+  await page.evaluate(() => closeReport());
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

@@ -323,6 +323,8 @@ eq("今日開工 report_uuid：換機台／工序／日期／指令／租戶就�
   c.dailyStartReportUuid({ ...ruArgs, tenantId: "t2" })]).size, 6);
 eq("結果不確定的提示", c.DAILY_START_UNCONFIRMED_TEXT, "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填");
 eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已有今日開工紀錄");
+eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");
+eq("重讀讀不到：報工提示", c.DAILY_START_UNREADABLE_TEXT, "暫時查不到伺服器今天的紀錄，請稍後再送");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

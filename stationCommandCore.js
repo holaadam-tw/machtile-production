@@ -567,6 +567,9 @@
   const DAILY_START_ABSENT_TEXT = "查過了，伺服器沒有這筆今日開工。按「重送今日開工」會用同一筆送出，不會重複";
   // 報工→今日開工：伺服器今天已有 → 擋
   const DAILY_START_ALREADY_TEXT = "今天已有今日開工紀錄";
+  // 寫之前重讀伺服器讀不到（L3：讀不到不能當沒有）
+  const DAILY_START_RETRY_TEXT = "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填";
+  const DAILY_START_UNREADABLE_TEXT = "暫時查不到伺服器今天的紀錄，請稍後再送";
   // 報工→今日開工：同一道今天已有排入待送的今日開工 → 擋第二筆
   function dailyStartBlockedText(qty) {
     return `今日開工已排入待送（數量 ${Number.isFinite(Number(qty)) ? Number(qty) : "—"}），不用再填`;
@@ -602,6 +605,6 @@
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
-    DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, taiwanDay, dailyStartReportUuid,
+    DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };
 });
