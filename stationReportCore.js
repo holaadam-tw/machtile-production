@@ -19,7 +19,7 @@
     "INVALID_REPORT_QTY", "FAIL_REASON_REQUIRED", "INVALID_FAIL_REASON", "INVALID_ACK",
     "INVALID_GUARD_SNAPSHOT", "REPORT_DISABLED", "STATION_NOT_STARTED", "ITEM_CLOSED",
     "LEGACY_STATE_INCONSISTENT", "REPORT_ENGINE_FAILED", "TX_PROMOTION_BLOCKED", "LEDGER_CONFLICT",
-    "STALE_COMMAND", "ORDER_MISMATCH", "INVALID_FINISH_STATUS",
+    "STALE_COMMAND", "ORDER_MISMATCH", "PART_NO_MISMATCH", "INVALID_FINISH_STATUS",
   ]);
   const SOFT_REJECTS = Object.freeze([
     "PREV_OUTSOURCE_UNCONFIRMED", "AUTO_PULL_ACK", "OLD_ORDER_NEWER_OPEN", "HIGH_FAIL_RATIO",
@@ -52,10 +52,10 @@
 
   function isGuardConfig(value, machineCode) {
     const code = String(machineCode || "").trim().toUpperCase();
-    return isPlainObject(value) && String(value.machine_code || "").trim() === code &&
+    return isPlainObject(value) && value.factory_synced === true && String(value.machine_code || "").trim() === code &&
       isPlainObject(value.report_enabled_machines) && typeof value.report_enabled === "boolean" &&
       value.report_enabled === (value.report_enabled_machines[code] === true) &&
-      Array.isArray(value.fail_reason_codes) &&
+      Array.isArray(value.fail_reason_codes) && value.fail_reason_codes.length > 0 &&
       value.fail_reason_codes.every((reason) => typeof reason === "string" && reason.trim().length > 0);
   }
 

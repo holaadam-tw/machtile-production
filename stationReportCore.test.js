@@ -64,8 +64,9 @@ check("report_enabled_machines is exact machine-code boolean map and fails close
 });
 
 check("guard config must match the requested machine and exact enabled map", () => {
-  const config = { machine_code: "A04", report_enabled: true, report_enabled_machines: { A04: true }, fail_reason_codes: ["尺寸不良"] };
+  const config = { factory_synced: true, machine_code: "A04", report_enabled: true, report_enabled_machines: { A04: true }, fail_reason_codes: ["尺寸不良"] };
   assert.equal(core.isGuardConfig(config, "A04"), true);
+  assert.equal(core.isGuardConfig({ ...config, factory_synced: false }, "A04"), false);
   assert.equal(core.isGuardConfig({ ...config, report_enabled: false }, "A04"), false);
   assert.equal(core.isGuardConfig({ ...config, machine_code: "A05" }, "A04"), false);
   assert.equal(core.isGuardConfig({ ...config, report_enabled_machines: { A04: 1 } }, "A04"), false);
