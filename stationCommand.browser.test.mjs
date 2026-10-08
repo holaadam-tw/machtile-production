@@ -48,6 +48,9 @@ function baselineFile(rel) {
   }
   return baselineCache.get(rel);
 }
+if (baselineAvailable && ["index.html", "app.js", "styles.css", "stationCommandCore.js", "config.js"].some((file) => !baselineFile(file))) {
+  baselineAvailable = false;
+}
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   let p = decodeURIComponent(url.pathname);
@@ -300,6 +303,7 @@ for (const vp of ["desktop", "phone"]) {
     ok(await page.locator(".station-cmd-row, [data-station-cmd]").count() === 0, `${W}：表不存在 → 沒有按鈕`);
     ok(be.stationReads >= 1 && be.submits.length === 0, `${W}：只試讀一次，沒送任何指令`);
     if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：表不存在 → 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
+    else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過表不存在時一字不差比對`); }
     ok(realErrors(errors).length === 0, `${W}：表不存在 → 沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
@@ -362,6 +366,9 @@ for (const vp of ["desktop", "phone"]) {
       ok(hAfter < hBefore, `${W}：A04 卡片比 main 矮（${hBefore} → ${hAfter}px）`);
       await hideB.evaluate((el) => el.remove()); await hideMine.evaluate((el) => el.remove());
       await b.context.close();
+    } else {
+      skip += 3;
+      console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過 #74 非 A04 卡片逐字比對、main A04 區塊與高度比對（3 項）`);
     }
 
     // 確認卡內容
