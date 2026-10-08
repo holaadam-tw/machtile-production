@@ -48,6 +48,9 @@ function baselineFile(rel) {
   }
   return baselineCache.get(rel);
 }
+if (baselineAvailable && ["index.html", "app.js", "styles.css", "stationCommandCore.js", "config.js"].some((file) => !baselineFile(file))) {
+  baselineAvailable = false;
+}
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   let p = decodeURIComponent(url.pathname);
@@ -300,6 +303,7 @@ for (const vp of ["desktop", "phone"]) {
     ok(await page.locator(".station-cmd-row, [data-station-cmd]").count() === 0, `${W}：表不存在 → 沒有按鈕`);
     ok(be.stationReads >= 1 && be.submits.length === 0, `${W}：只試讀一次，沒送任何指令`);
     if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：表不存在 → 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
+    else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過表不存在時一字不差比對`); }
     ok(realErrors(errors).length === 0, `${W}：表不存在 → 沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }

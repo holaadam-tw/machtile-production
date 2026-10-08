@@ -318,6 +318,7 @@
     // 管理員路徑（mini-mes station_commands admin actor migration）：都是寫入前就拒絕＝舊 MES 沒動
     ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
     ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
+    FORBIDDEN: "這個管理員帳號的角色資料不一致，請找管理員檢查。",
   });
   const INVALID_INPUT_TEXT = "卡片上的工單資料不完整（機台、工單號、第幾道或料號），請重新整理；還是不行請找生管。";
 
