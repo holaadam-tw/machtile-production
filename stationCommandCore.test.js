@@ -266,5 +266,66 @@ eq("解鎖後最後狀態 claimed → 工廠還在處理上一筆、不解鎖", 
 eq("lastStatus 會存（pending／claimed）", [c.pendingRecord({ ...rec, lastStatus: "claimed" }).lastStatus, c.pendingRecord({ ...rec, lastStatus: "weird" }).lastStatus], ["claimed", null]);
 eq("已確認的紀錄不適用", c.unconfirmedNotSent({ unconfirmed: false, emptyPolls: 9, startedAt: 0 }, 60000), false);
 
+console.log("== 開工時一起填今日開工數量（owner 2026-10-08）==");
+eq("空白 → 跟報工今日開工同一句", c.dailyStartQtyCheck(""), { ok: false, text: "請填寫目前機台已加工數量。" });
+eq("null／空白字元 → 必填", [c.dailyStartQtyCheck(null).ok, c.dailyStartQtyCheck("   ").ok], [false, false]);
+eq("0 可以（min=0）", c.dailyStartQtyCheck("0"), { ok: true, value: 0 });
+eq("正整數", c.dailyStartQtyCheck("1234"), { ok: true, value: 1234 });
+eq("沒有上限（表單沒有 max）", c.dailyStartQtyCheck("99999999"), { ok: true, value: 99999999 });
+eq("負數 → 擋", c.dailyStartQtyCheck("-1"), { ok: false, text: "機台目前加工數量要填 0 或正整數。" });
+eq("小數 → 擋（step 預設 1）", c.dailyStartQtyCheck("12.5").ok, false);
+eq("非數字 → 擋", c.dailyStartQtyCheck("abc").ok, false);
+eq("數字型別也可", c.dailyStartQtyCheck(208), { ok: true, value: 208 });
+const todayRows = [
+  { process_id: PID, report_type: "noon" },
+  { process_id: "00000000-0000-4000-8000-000000000301", report_type: "dailyStart" },
+];
+eq("只有別道的今日開工、這道只有中午 → 還沒記", c.dailyStartRecordedToday(todayRows, PID), false);
+eq("這道有今日開工 → 已記", c.dailyStartRecordedToday([...todayRows, { process_id: PID, report_type: "dailyStart" }], PID), true);
+eq("收工不算今日開工", c.dailyStartRecordedToday([{ process_id: PID, report_type: "finish" }], PID), false);
+eq("rows 不是陣列 → 當沒記", c.dailyStartRecordedToday(null, PID), false);
+const ask = (o) => c.askDailyStart({ commandType: "start", role: "operator", isBridge: false, todayStatus: "ok", rows: [], processId: PID, ...o });
+eq("作業員＋開工＋今天還沒記 → 問", ask({}), true);
+eq("停工 → 不問", ask({ commandType: "stop" }), false);
+eq("管理員 → 不問", ask({ role: "admin" }), false);
+eq("橋接帳號 → 不問", ask({ isBridge: true }), false);
+eq("manager／planner → 不問", [ask({ role: "manager" }), ask({ role: "planner" })], [false, false]);
+eq("今天已記 → 不問", ask({ rows: [{ process_id: PID, report_type: "dailyStart" }] }), false);
+eq("今天的紀錄讀不到（error／idle）→ 不問", [ask({ todayStatus: "error" }), ask({ todayStatus: "idle" })], [false, false]);
+eq("沒有工序 id → 不問", ask({ processId: "" }), false);
+eq("角色大小寫／空白不影響", ask({ role: " Operator " }), true);
+eq("沒存到的提示", c.DAILY_START_FAILED_TEXT, "今日開工數量沒存到，請到報工→今日開工補填");
+eq("欄位名稱", c.DAILY_START_FIELD_LABEL, "機台目前加工數量（今日開工）");
+const WO = "00000000-0000-4000-8000-000000000104";
+const dsOk = { qty: 208, processId: PID, workOrderId: WO, tenantId: "t1", processStatus: "pending" };
+eq("暫存今日開工：正常", c.pendingDailyStart(dsOk), { qty: 208, processId: PID, workOrderId: WO, tenantId: "t1", processStatus: "pending", reportUuid: null });
+eq("暫存今日開工：0 可以", c.pendingDailyStart({ ...dsOk, qty: 0 }).qty, 0);
+eq("暫存今日開工：負數／小數／空白／null → 丟掉", [c.pendingDailyStart({ ...dsOk, qty: -1 }), c.pendingDailyStart({ ...dsOk, qty: 1.5 }), c.pendingDailyStart({ ...dsOk, qty: "" }), c.pendingDailyStart({ ...dsOk, qty: null })], [null, null, null, null]);
+eq("暫存今日開工：工序 id 壞 → 丟掉", c.pendingDailyStart({ ...dsOk, processId: "x" }), null);
+eq("暫存今日開工：沒有 → null", c.pendingDailyStart(undefined), null);
+eq("pendingRecord 帶著今日開工數量", c.pendingRecord({ ...rec, dailyStart: dsOk }).dailyStart.qty, 208);
+eq("pendingRecord 沒帶 → null", c.pendingRecord(rec).dailyStart, null);
+eq("重新整理後還記得數量", c.restorePending(JSON.stringify({ A04: { ...rec, startedAt: now, dailyStart: dsOk } }), now).A04.dailyStart.qty, 208);
+eq("指令被接受（pending／claimed／applied）→ 寫", ["pending", "claimed", "applied"].map(c.delayedDailyStartAction), ["write", "write", "write"]);
+eq("被拒／過期 → 丟掉", ["rejected", "expired"].map(c.delayedDailyStartAction), ["discard", "discard"]);
+eq("不明狀態 → 等", c.delayedDailyStartAction("weird"), "wait");
+eq("排入待送的提示", c.DAILY_START_QUEUED_TEXT, "今日開工數量已排入待送，連線後會自動送出，請不要再補填");
+eq("報工擋第二筆的提示", c.dailyStartBlockedText(208), "今日開工已排入待送（數量 208），不用再填");
+eq("暫存今日開工：report_uuid 跟著存", c.pendingDailyStart({ ...dsOk, reportUuid: "ABCDEF01-2345-4678-89ab-0123456789ab" }).reportUuid, "abcdef01-2345-4678-89ab-0123456789ab");
+eq("暫存今日開工：壞 report_uuid → null", c.pendingDailyStart({ ...dsOk, reportUuid: "x" }).reportUuid, null);
+eq("台灣日期（UTC 16:30 已是隔天）", [c.taiwanDay(Date.parse("2026-10-07T16:30:00Z")), c.taiwanDay(Date.parse("2026-10-07T15:59:00Z"))], ["2026-10-08", "2026-10-07"]);
+const ruArgs = { tenantId: "t1", machineCode: "A04", processId: PID, commandUuid: UUID, day: "2026-10-08" };
+const ru = c.dailyStartReportUuid(ruArgs);
+eq("今日開工 report_uuid：合法 UUID（第 8 版、RFC variant）", /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(ru) && c.isUuid(ru), true);
+eq("今日開工 report_uuid：同樣輸入永遠同一個（機台代號大小寫不影響）", [c.dailyStartReportUuid(ruArgs), c.dailyStartReportUuid({ ...ruArgs, machineCode: "a04" })], [ru, ru]);
+eq("今日開工 report_uuid：換機台／工序／日期／指令／租戶就不同", new Set([ru,
+  c.dailyStartReportUuid({ ...ruArgs, machineCode: "A05" }), c.dailyStartReportUuid({ ...ruArgs, processId: WO }),
+  c.dailyStartReportUuid({ ...ruArgs, day: "2026-10-09" }), c.dailyStartReportUuid({ ...ruArgs, commandUuid: PID }),
+  c.dailyStartReportUuid({ ...ruArgs, tenantId: "t2" })]).size, 6);
+eq("結果不確定的提示", c.DAILY_START_UNCONFIRMED_TEXT, "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填");
+eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已有今日開工紀錄");
+eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");
+eq("重讀讀不到：報工提示", c.DAILY_START_UNREADABLE_TEXT, "暫時查不到伺服器今天的紀錄，請稍後再送");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

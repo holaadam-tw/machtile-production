@@ -463,8 +463,66 @@
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
       serverOffset: Number.isFinite(Number(rec.serverOffset)) && rec.serverOffset !== null ? Number(rec.serverOffset) : null,
+      // 開工送出時網路斷：作業員填的今日開工數量跟著這筆指令存（owner 2026-10-08「先修」）；指令確定被接受才寫
+      dailyStart: pendingDailyStart(rec.dailyStart),
     };
     return out;
+  }
+
+  // 等開工指令確認時暫存的今日開工：數量（0 以上整數）＋要報的那道工序。壞資料 → null（丟掉，不亂寫）
+  const LOOSE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function pendingDailyStart(d) {
+    if (!d || typeof d !== "object") return null;
+    const qty = Number(d.qty);
+    if (d.qty === null || d.qty === "" || !Number.isInteger(qty) || qty < 0) return null;
+    if (!LOOSE_UUID.test(text(d.processId)) || !LOOSE_UUID.test(text(d.workOrderId))) return null;
+    const reportUuid = LOOSE_UUID.test(text(d.reportUuid)) ? text(d.reportUuid).toLowerCase() : null;
+    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null, reportUuid };
+  }
+
+  // 台灣日期 YYYY-MM-DD（今日開工的「哪一天」）
+  function taiwanDay(ms) {
+    const t = Number.isFinite(Number(ms)) ? Number(ms) : Date.now();
+    return new Date(t + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+
+  // 128-bit 雜湊（cyrb128；同步、不需要 crypto.subtle，舊 WebView 也能算）
+  function hash128(str) {
+    let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+    for (let i = 0; i < str.length; i++) {
+      const k = str.charCodeAt(i);
+      h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+      h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+      h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+      h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+    }
+    h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+    h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+    h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+    h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+    h1 ^= (h2 ^ h3 ^ h4); h2 ^= h1; h3 ^= h1; h4 ^= h1;
+    return [h1 >>> 0, h2 >>> 0, h3 >>> 0, h4 >>> 0];
+  }
+
+  // 開工確認卡寫的今日開工用的 report_uuid：由（租戶、機台、工序、台灣日期、開工指令 uuid）算出來，永遠同一個。
+  // 重送、輪詢補寫、重新整理後補寫都用它 → 伺服器 UNIQUE(tenant_id, report_uuid)＋field_report_upsert 冪等，最多一列。
+  // 格式＝UUID 第 8 版（自訂）＋RFC 4122 variant。
+  function dailyStartReportUuid({ tenantId, machineCode, processId, commandUuid, day } = {}) {
+    const key = ["dailyStart", text(tenantId), normCode(machineCode), text(processId).toLowerCase(), text(day), text(commandUuid).toLowerCase()].join("|");
+    const hex = hash128(key).map((n) => n.toString(16).padStart(8, "0")).join("").split("");
+    hex[12] = "8";
+    hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+    const h = hex.join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  }
+
+  // 等確認的指令第一次查到伺服器上的列時，暫存的今日開工要不要寫：
+  // 還在等／工廠處理中／已套用＝指令被接受 → 寫；被拒、過期（沒人接手）→ 丟掉（owner 2026-10-08）
+  function delayedDailyStartAction(status) {
+    const s = String(status || "").toLowerCase();
+    if (["pending", "claimed", "applied"].includes(s)) return "write";
+    if (["rejected", "expired"].includes(s)) return "discard";
+    return "wait";
   }
 
   function restorePending(raw, nowMs) {
@@ -494,6 +552,49 @@
     return { unlock: true, text: "可以再按；伺服器會先把太舊的這筆作廢" };
   }
 
+  // ---------------------------------------------------------------- 開工時一起填「今日開工」數量（owner 2026-10-08）
+  // 「按開工時，順便請他填計數器數字，一次做完」。只有作業員、只有「開工」、只有今天這道工序還沒有今日開工紀錄才問；
+  // 管理員（不在機台旁）一律不問，也不替人建今日開工。今天的紀錄讀不到（todayStatus 不是 ok）→ 不問（跟現在一樣）。
+  // 數量規則跟報工「今日開工」表單同一套：#machineQty 是 <input type=number min=0>（step 預設 1）、空白擋下並提示
+  // 「請填寫目前機台已加工數量。」→ 必填、0 以上整數、沒有上限。照片照舊只在報工→今日開工（選填），這裡不出現。
+  const DAILY_START_EMPTY_TEXT = "請填寫目前機台已加工數量。";
+  const DAILY_START_INVALID_TEXT = "機台目前加工數量要填 0 或正整數。";
+  const DAILY_START_FAILED_TEXT = "今日開工數量沒存到，請到報工→今日開工補填";
+  const DAILY_START_FIELD_LABEL = "機台目前加工數量（今日開工）";
+  const DAILY_START_QUEUED_TEXT = "今日開工數量已排入待送，連線後會自動送出，請不要再補填";
+  const DAILY_START_EXISTS_TEXT = "今天這道已經有今日開工紀錄，這次的數量沒有再記";
+  // 送出結果不確定（例：伺服器回 201 但沒回那一列）：不叫他補填（可能已經寫進去），先查回來
+  const DAILY_START_UNCONFIRMED_TEXT = "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填";
+  const DAILY_START_ABSENT_TEXT = "查過了，伺服器沒有這筆今日開工。按「重送今日開工」會用同一筆送出，不會重複";
+  // 報工→今日開工：伺服器今天已有 → 擋
+  const DAILY_START_ALREADY_TEXT = "今天已有今日開工紀錄";
+  // 寫之前重讀伺服器讀不到（L3：讀不到不能當沒有）
+  const DAILY_START_RETRY_TEXT = "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填";
+  const DAILY_START_UNREADABLE_TEXT = "暫時查不到伺服器今天的紀錄，請稍後再送";
+  // 報工→今日開工：同一道今天已有排入待送的今日開工 → 擋第二筆
+  function dailyStartBlockedText(qty) {
+    return `今日開工已排入待送（數量 ${Number.isFinite(Number(qty)) ? Number(qty) : "—"}），不用再填`;
+  }
+  function dailyStartQtyCheck(raw) {
+    const s = text(raw);
+    if (s === "") return { ok: false, text: DAILY_START_EMPTY_TEXT };
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return { ok: false, text: DAILY_START_INVALID_TEXT };
+    return { ok: true, value: n };
+  }
+  // rows＝卡片底部同一份「今天（台灣）的 dailyStart／noon／finish」列（production_reports）
+  function dailyStartRecordedToday(rows, processId) {
+    const pid = text(processId);
+    if (!pid || !Array.isArray(rows)) return false;
+    return rows.some((r) => r && r.report_type === "dailyStart" && text(r.process_id) === pid);
+  }
+  function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
+    if (commandType !== "start") return false;
+    if (normRole(role) !== "operator" || isBridge === true) return false;
+    if (todayStatus !== "ok" || !text(processId)) return false;
+    return !dailyStartRecordedToday(rows, processId);
+  }
+
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
@@ -502,5 +603,9 @@
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
+    DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
+    dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
+    DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };
 });
