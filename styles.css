@@ -12916,6 +12916,17 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-cmd-confirm.is-stop { background: #b42318; }
 .station-cmd-confirm:disabled { background: var(--gray); cursor: wait; }
 .station-cmd-secondary { flex: 1 1 140px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+/* 2026-10-08 owner「按開工時順便填計數器數字」：作業員、今天這道還沒記今日開工時，確認卡多一格必填數量 */
+.station-cmd-daily { display: grid; gap: 6px; margin-top: 12px; padding: 12px; border: 2px solid var(--green-strong); border-radius: var(--radius); background: var(--green-soft); }
+.station-cmd-daily label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 18px; font-weight: 800; }
+.station-cmd-daily label small { padding: 1px 8px; border-radius: 999px; background: #b42318; color: #fff; font-size: 12px; font-weight: 800; }
+.station-cmd-daily input { width: 100%; min-height: 56px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: #fff; color: #111; font-size: 28px; font-weight: 800; }
+.station-cmd-daily input[aria-invalid="true"] { border-color: #b42318; outline: 2px solid #b42318; }
+.station-cmd-daily p { margin: 0; color: var(--muted); font-size: 14px; font-weight: 700; }
+.station-cmd-daily .station-cmd-notice { margin: 0; color: #9f1d14; font-size: 16px; }
+.station-cmd-daily-line { margin: 12px 0 0; font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+.station-cmd-daily-line.is-ok { color: var(--green-strong); }
+.station-cmd-daily-line.is-wait { color: var(--blue); }
 @media (max-width: 480px) {
   .station-cmd-panel { padding: 14px; }
   .station-cmd-panel h2 { font-size: 22px; }

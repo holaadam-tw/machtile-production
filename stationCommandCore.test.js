@@ -265,5 +265,36 @@ eq("解鎖後最後狀態 claimed → 工廠還在處理上一筆、不解鎖", 
 eq("lastStatus 會存（pending／claimed）", [c.pendingRecord({ ...rec, lastStatus: "claimed" }).lastStatus, c.pendingRecord({ ...rec, lastStatus: "weird" }).lastStatus], ["claimed", null]);
 eq("已確認的紀錄不適用", c.unconfirmedNotSent({ unconfirmed: false, emptyPolls: 9, startedAt: 0 }, 60000), false);
 
+console.log("== 開工時一起填今日開工數量（owner 2026-10-08）==");
+eq("空白 → 跟報工今日開工同一句", c.dailyStartQtyCheck(""), { ok: false, text: "請填寫目前機台已加工數量。" });
+eq("null／空白字元 → 必填", [c.dailyStartQtyCheck(null).ok, c.dailyStartQtyCheck("   ").ok], [false, false]);
+eq("0 可以（min=0）", c.dailyStartQtyCheck("0"), { ok: true, value: 0 });
+eq("正整數", c.dailyStartQtyCheck("1234"), { ok: true, value: 1234 });
+eq("沒有上限（表單沒有 max）", c.dailyStartQtyCheck("99999999"), { ok: true, value: 99999999 });
+eq("負數 → 擋", c.dailyStartQtyCheck("-1"), { ok: false, text: "機台目前加工數量要填 0 或正整數。" });
+eq("小數 → 擋（step 預設 1）", c.dailyStartQtyCheck("12.5").ok, false);
+eq("非數字 → 擋", c.dailyStartQtyCheck("abc").ok, false);
+eq("數字型別也可", c.dailyStartQtyCheck(208), { ok: true, value: 208 });
+const todayRows = [
+  { process_id: PID, report_type: "noon" },
+  { process_id: "00000000-0000-4000-8000-000000000301", report_type: "dailyStart" },
+];
+eq("只有別道的今日開工、這道只有中午 → 還沒記", c.dailyStartRecordedToday(todayRows, PID), false);
+eq("這道有今日開工 → 已記", c.dailyStartRecordedToday([...todayRows, { process_id: PID, report_type: "dailyStart" }], PID), true);
+eq("收工不算今日開工", c.dailyStartRecordedToday([{ process_id: PID, report_type: "finish" }], PID), false);
+eq("rows 不是陣列 → 當沒記", c.dailyStartRecordedToday(null, PID), false);
+const ask = (o) => c.askDailyStart({ commandType: "start", role: "operator", isBridge: false, todayStatus: "ok", rows: [], processId: PID, ...o });
+eq("作業員＋開工＋今天還沒記 → 問", ask({}), true);
+eq("停工 → 不問", ask({ commandType: "stop" }), false);
+eq("管理員 → 不問", ask({ role: "admin" }), false);
+eq("橋接帳號 → 不問", ask({ isBridge: true }), false);
+eq("manager／planner → 不問", [ask({ role: "manager" }), ask({ role: "planner" })], [false, false]);
+eq("今天已記 → 不問", ask({ rows: [{ process_id: PID, report_type: "dailyStart" }] }), false);
+eq("今天的紀錄讀不到（error／idle）→ 不問", [ask({ todayStatus: "error" }), ask({ todayStatus: "idle" })], [false, false]);
+eq("沒有工序 id → 不問", ask({ processId: "" }), false);
+eq("角色大小寫／空白不影響", ask({ role: " Operator " }), true);
+eq("沒存到的提示", c.DAILY_START_FAILED_TEXT, "今日開工數量沒存到，請到報工→今日開工補填");
+eq("欄位名稱", c.DAILY_START_FIELD_LABEL, "機台目前加工數量（今日開工）");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

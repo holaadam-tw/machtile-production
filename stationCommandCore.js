@@ -493,6 +493,35 @@
     return { unlock: true, text: "可以再按；伺服器會先把太舊的這筆作廢" };
   }
 
+  // ---------------------------------------------------------------- 開工時一起填「今日開工」數量（owner 2026-10-08）
+  // 「按開工時，順便請他填計數器數字，一次做完」。只有作業員、只有「開工」、只有今天這道工序還沒有今日開工紀錄才問；
+  // 管理員（不在機台旁）一律不問，也不替人建今日開工。今天的紀錄讀不到（todayStatus 不是 ok）→ 不問（跟現在一樣）。
+  // 數量規則跟報工「今日開工」表單同一套：#machineQty 是 <input type=number min=0>（step 預設 1）、空白擋下並提示
+  // 「請填寫目前機台已加工數量。」→ 必填、0 以上整數、沒有上限。照片照舊只在報工→今日開工（選填），這裡不出現。
+  const DAILY_START_EMPTY_TEXT = "請填寫目前機台已加工數量。";
+  const DAILY_START_INVALID_TEXT = "機台目前加工數量要填 0 或正整數。";
+  const DAILY_START_FAILED_TEXT = "今日開工數量沒存到，請到報工→今日開工補填";
+  const DAILY_START_FIELD_LABEL = "機台目前加工數量（今日開工）";
+  function dailyStartQtyCheck(raw) {
+    const s = text(raw);
+    if (s === "") return { ok: false, text: DAILY_START_EMPTY_TEXT };
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return { ok: false, text: DAILY_START_INVALID_TEXT };
+    return { ok: true, value: n };
+  }
+  // rows＝卡片底部同一份「今天（台灣）的 dailyStart／noon／finish」列（production_reports）
+  function dailyStartRecordedToday(rows, processId) {
+    const pid = text(processId);
+    if (!pid || !Array.isArray(rows)) return false;
+    return rows.some((r) => r && r.report_type === "dailyStart" && text(r.process_id) === pid);
+  }
+  function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
+    if (commandType !== "start") return false;
+    if (normRole(role) !== "operator" || isBridge === true) return false;
+    if (todayStatus !== "ok" || !text(processId)) return false;
+    return !dailyStartRecordedToday(rows, processId);
+  }
+
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
@@ -501,5 +530,7 @@
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
+    DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
+    dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart,
   };
 });

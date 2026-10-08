@@ -8372,6 +8372,29 @@ function buildReportPayload(type) {
   };
 }
 
+// 開工確認卡一起填的「今日開工」（owner 2026-10-08）：跟報工→今日開工送的是同一個 report_payload 形狀——
+// 等於 buildReportPayload("dailyStart") 在「只填了機台已加工數量、其他欄位都沒動」的表單上算出來的值
+// （cycle 沒動＝null、總數空白＝null、這次良品／不良 0、沒有照片／程式）。只差數量來自確認卡，不讀報工表單。
+function buildDailyStartCounterPayload(machineQty) {
+  return {
+    report_type: "dailyStart",
+    work_total_qty: null,
+    cycle_time_seconds: null,
+    machine_qty: Number(machineQty || 0),
+    completed_qty: 0,
+    defect_qty: 0,
+    has_program_upload: false,
+    overtime_plan: "",
+    pm_abnormal: "",
+    abnormal_type: "",
+  };
+}
+
+// 備註：跟 buildReportRemark("dailyStart", …) 同樣的前兩段，最後註明是開工確認卡填的
+function buildDailyStartCounterRemark(machineQty) {
+  return [`[${reportTypeMeta.dailyStart.label}]`, `機台已加工數量 ${Number(machineQty || 0)}`, "開工確認卡一起填"].join("；");
+}
+
 function reportFilesForType(type) {
   const files = [];
   const pushFile = (inputId, kind, label) => {
@@ -13317,7 +13340,7 @@ function machtileStationCmdCloseSheet() {
 
 function machtileStationCmdFocusables() {
   const panel = document.querySelector("#machtileStationCmdSheet .station-cmd-panel");
-  return panel ? [...panel.querySelectorAll("button:not([disabled]), [href], [tabindex]:not([tabindex='-1'])")] : [];
+  return panel ? [...panel.querySelectorAll("input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex='-1'])")] : [];
 }
 
 function machtileStationCmdRenderSheet(focus) {
@@ -13345,6 +13368,7 @@ function machtileStationCmdRenderSheet(focus) {
         ${field("料號／品名", sheet.loading ? "讀取中…" : [model.partNoDisplay, model.partName].filter(Boolean).join("　"), "data-station-cmd-field=\"part\"")}
         ${field("第幾道／工序", [model.stepLabel, model.operationName].filter(Boolean).join("　"), "data-station-cmd-field=\"step\"")}
       </div>
+      ${machtileStationCmdDailyStartHtml(sheet)}
       ${sheet.isRetry ? "" : `<section class="station-cmd-legacy" data-station-cmd-legacy>
         <h3>舊 MES 現況（派工橋同步的畫面資料）</h3>
         ${sheet.loading ? "<p>讀取中…</p>" : `<ul>${model.legacyLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`}
@@ -13369,10 +13393,12 @@ function machtileStationCmdRenderSheet(focus) {
         <p>${escapeHtml(view.text)}</p>
         ${view.detail ? `<small>工廠說明：${escapeHtml(view.detail)}</small>` : ""}
         ${view.code && view.phase === "rejected" ? `<small>代碼 ${escapeHtml(view.code)}</small>` : ""}
-      </section>`;
+      </section>
+      ${machtileStationCmdDailyStartHtml(sheet)}`;
     actions = `<button type="button" class="station-cmd-secondary" data-station-cmd-close>${view.terminal ? "關閉" : "先關掉（結果會顯示在卡片上）"}</button>`;
   }
   const hadFocusInside = holder.contains(document.activeElement);
+  const qtyHadFocus = Boolean(document.activeElement?.matches?.("[data-station-cmd-daily-qty]"));
   holder.innerHTML = `
     <section class="station-cmd-panel is-${escapeHtml(sheet.type)}" role="dialog" aria-modal="true" aria-labelledby="stationCmdTitle">
       <header><h2 id="stationCmdTitle">${escapeHtml(model.title)}</h2></header>
@@ -13381,7 +13407,9 @@ function machtileStationCmdRenderSheet(focus) {
     </section>`;
   // 初始焦點放「取消」（不是確認，免得桌機按 Enter 直接送出）；重畫時焦點留在卡片裡
   if (focus || hadFocusInside) {
-    const target = holder.querySelector("[data-station-cmd-close]:not([disabled])") || machtileStationCmdFocusables()[0] || holder.querySelector("h2");
+    // 正在打今日開工數量時（例：讀完資料重畫一次）焦點留在那一格
+    const qty = qtyHadFocus ? holder.querySelector("[data-station-cmd-daily-qty]") : null;
+    const target = qty || holder.querySelector("[data-station-cmd-close]:not([disabled])") || machtileStationCmdFocusables()[0] || holder.querySelector("h2");
     try { target?.focus(); } catch { /* ignore */ }
   }
 }
@@ -13415,6 +13443,8 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     code, type, order, uuid, phase: "confirm", loading: true, fresh: null, attempts: 0, returnFocus: returnFocus || null,
     fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
     model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others, actorRole, actorName: actorName() }),
+    // 開工時一起填今日開工數量（owner 2026-10-08）：作業員＋開工＋今天這道還沒有今日開工紀錄才問；管理員不問
+    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null } : null,
   };
   machtileStationCmdNewSheet(sheet);
   let legacy = null;
@@ -13442,7 +13472,11 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     })(),
     // 管理員：確認卡要寫出「你是管理員 <名字>」→ 讀一次 app_users 名字（已讀過就不再讀）
     isAdmin ? machtileResolveAppUserId().catch(() => "") : Promise.resolve(""),
-  ]);
+    // 要問今日開工數量時，重讀一次今天的紀錄（卡片的那份最多 2 分鐘前）：別台平板剛記過 → 不再問；讀不到 → 照卡片那份
+    sheet.dailyStart ? machtileStationCmdRecheckDailyStart(order) : Promise.resolve(true),
+  ]).then((results) => {
+    if (results[3] === false && sheet.dailyStart && sheet.dailyStart.state === "ask") sheet.dailyStart = null;
+  });
   if (machtileStationCmd.sheet !== sheet) return;
   sheet.loading = false;
   sheet.fresh = fresh;
@@ -13469,6 +13503,139 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
   });
 }
 
+// ---- 開工時一起填「今日開工」數量（owner 2026-10-08「按開工時，順便請他填計數器數字，一次做完」）----
+// 只有作業員按「開工」、而且今天這道工序還沒有今日開工紀錄（卡片底部「今日尚未開工」同一份資料）才在確認卡多一格必填數量。
+// 確認後：開工指令照舊送（payload 不變）；今日開工走報工→今日開工同一條路（submitReport → outbox field_report_upsert，
+// outbox 不能用時直接寫 production_reports），兩件事互不等待、各送一次。今日開工沒存到 → 提示到報工補填，不擋、不重送開工指令。
+function machtileStationCmdAskDailyStart(type, order) {
+  const core = machtileStationCmdCore;
+  if (!core || typeof core.askDailyStart !== "function" || !order) return false;
+  return core.askDailyStart({
+    commandType: type, role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    todayStatus: machtileCardState.todayStatus, rows: machtileCardState.todayRows, processId: order.processId,
+  });
+}
+
+// 回 false＝今天已經有今日開工（不用問了）；其他（還沒有、讀不到）＝照原本決定
+async function machtileStationCmdRecheckDailyStart(order) {
+  const ecore = machtileCardEstimateCore();
+  if (!ecore) return true;
+  try {
+    const rows = await machtileCardFetch(machtileCardTodayPath(ecore));
+    return !machtileStationCmdCore.dailyStartRecordedToday(rows, order.processId);
+  } catch (error) {
+    console.warn("station command: today dailyStart re-read failed; using the card data", error);
+    return true;
+  }
+}
+
+function machtileStationCmdDailyStartHtml(sheet) {
+  const core = machtileStationCmdCore;
+  const ds = sheet && sheet.dailyStart;
+  if (!core || !ds) return "";
+  if (ds.state === "ask") {
+    if (!["confirm", "sendError"].includes(sheet.phase)) return "";
+    return `<section class="station-cmd-daily" data-station-cmd-daily>
+        <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
+        <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
+        <p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>
+        ${ds.error ? `<p class="station-cmd-notice" id="stationCmdDailyErr" role="alert" data-station-cmd-daily-error>${escapeHtml(ds.error)}</p>` : ""}
+      </section>`;
+  }
+  if (ds.state === "failed") return `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-daily-state="failed">${escapeHtml(core.DAILY_START_FAILED_TEXT)}</p>`;
+  const text = ds.state === "saving" ? "儲存中…" : ds.state === "queued" ? "已排入待送，連線後自動送出" : "已記錄";
+  const tone = ds.state === "saved" ? "is-ok" : "is-wait";
+  return `<p class="station-cmd-daily-line ${tone}" role="status" data-station-cmd-daily-state="${escapeHtml(ds.state)}">今日開工數量 ${escapeHtml(String(ds.qty))}：${escapeHtml(text)}</p>`;
+}
+
+// 確認卡上「確認開工」：有今日開工那一格 → 先檢查數量（不合格就不送任何東西）→ 今日開工送出（不等它）→ 開工指令照舊送
+function machtileStationCmdConfirm() {
+  const core = machtileStationCmdCore;
+  const sheet = machtileStationCmd.sheet;
+  const ds = sheet && sheet.dailyStart;
+  if (core && ds && ds.state === "ask") {
+    if (!machtileStationCmdCanSubmit(sheet)) return;
+    const input = document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-qty]");
+    const raw = input ? input.value : ds.value;
+    const check = core.dailyStartQtyCheck(raw);
+    if (!check.ok) {
+      ds.value = raw;
+      ds.error = check.text;
+      machtileStationCmdRenderSheet();
+      try { document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-qty]")?.focus(); } catch { /* ignore */ }
+      return;
+    }
+    ds.state = "saving";   // 同步改掉：再按一次（或重送開工指令）都不會再送今日開工
+    ds.qty = check.value;
+    ds.error = "";
+    machtileStationCmdSaveDailyStart(sheet);
+  }
+  machtileStationCmdSubmit();
+}
+
+async function machtileStationCmdSaveDailyStart(sheet) {
+  const core = machtileStationCmdCore;
+  const ds = sheet.dailyStart;
+  let outcome = "failed";
+  try {
+    const actorId = await machtileResolveAppUserId();
+    const result = await submitReport(0, 0, buildDailyStartCounterRemark(ds.qty), "dailyStart", {
+      order: sheet.order,
+      reportPayload: buildDailyStartCounterPayload(ds.qty),
+      operators: actorId ? [actorId] : [],
+      noFiles: true,
+    });
+    if (result && result.wroteCloud && !result.deadLetter) outcome = result.queuedOffline ? "queued" : "saved";
+  } catch (error) {
+    console.warn("station command: dailyStart save failed", error);
+  }
+  ds.state = outcome;
+  if (outcome === "failed") showToast(core.DAILY_START_FAILED_TEXT);
+  if (machtileStationCmd.sheet === sheet) machtileStationCmdRenderSheet();
+  if (outcome === "saved") await machtileStationCmdRefreshToday();
+}
+
+// 今日開工存好 → 重讀今天的紀錄（卡片底部「今日已開工…」、總覽三格同一份），不用等每 2 分鐘的重讀
+async function machtileStationCmdRefreshToday() {
+  const ecore = machtileCardEstimateCore();
+  if (!ecore || state.source !== "supabase") return;
+  try {
+    machtileApplyCardTodayRows(ecore, await machtileCardFetch(machtileCardTodayPath(ecore)));
+  } catch (error) {
+    console.warn("station command: today reports refresh failed; the 2-minute refresh will pick it up", error);
+    return;
+  }
+  try { renderStats(); } catch { /* 總覽沒開也沒關係 */ }
+  machtileStationCmdRerender();
+}
+
+document.addEventListener("input", (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLElement) || !input.matches("[data-station-cmd-daily-qty]")) return;
+  const ds = machtileStationCmd.sheet && machtileStationCmd.sheet.dailyStart;
+  if (!ds || ds.state !== "ask") return;
+  ds.value = input.value;
+  // 改了數字 → 上一次的提示收起來（不整張重畫，游標不跳）
+  if (ds.error) {
+    ds.error = "";
+    input.removeAttribute("aria-invalid");
+    input.removeAttribute("aria-describedby");
+    document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-error]")?.remove();
+  }
+});
+
+// 送得出開工指令嗎（確認鈕的同一套條件；machtileStationCmdSubmit 也用這個）
+function machtileStationCmdCanSubmit(sheet) {
+  const core = machtileStationCmdCore;
+  if (!core || !sheet || sheet.phase === "sending" || sheet.loading) return false;
+  if (!["confirm", "sendError"].includes(sheet.phase)) return false;
+  if (sheet.phase === "sendError" && !sheet.canRetry) return false;
+  if (!sheet.fresh || !sheet.fresh.ok) return false;
+  const existing = machtileStationCmd.pending[sheet.code];
+  if (existing && existing.commandUuid !== sheet.uuid && !machtileStationCmdUnlocked(existing)) return false;
+  return true;
+}
+
 function machtileStationCmdRecordFor(sheet, extra) {
   return machtileStationCmdCore.pendingRecord({
     commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
@@ -13482,12 +13649,8 @@ function machtileStationCmdRecordFor(sheet, extra) {
 async function machtileStationCmdSubmit() {
   const core = machtileStationCmdCore;
   const sheet = machtileStationCmd.sheet;
-  if (!core || !sheet || sheet.phase === "sending" || sheet.loading) return;
-  if (!["confirm", "sendError"].includes(sheet.phase)) return;
-  if (sheet.phase === "sendError" && !sheet.canRetry) return;
-  if (!sheet.fresh || !sheet.fresh.ok) return;
+  if (!machtileStationCmdCanSubmit(sheet)) return;
   const existing = machtileStationCmd.pending[sheet.code];
-  if (existing && existing.commandUuid !== sheet.uuid && !machtileStationCmdUnlocked(existing)) return;
   sheet.phase = "sending";
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
@@ -13633,7 +13796,7 @@ function machtileStationCmdHandleClick(event) {
   const retry = event.target.closest("[data-station-cmd-retry]");
   if (retry) { machtileStationCmdOpenRetry(retry.dataset.stationCmdRetry, retry); return true; }
   if (!event.target.closest("#machtileStationCmdSheet")) return false;
-  if (event.target.closest("[data-station-cmd-confirm]")) { machtileStationCmdSubmit(); return true; }
+  if (event.target.closest("[data-station-cmd-confirm]")) { machtileStationCmdConfirm(); return true; }
   if (event.target.closest("[data-station-cmd-notthis-open]")) {
     const sheet = machtileStationCmd.sheet;
     if (sheet && sheet.phase !== "sending") { sheet.phase = "notThis"; machtileStationCmdRenderSheet(true); }
@@ -20348,7 +20511,7 @@ async function machtileUpdateOutboxBadge() {
   });
 }
 
-async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType, operators) {
+async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload, reportType, operators, filesOverride = null) {
   // ended_at = capture time fixed at enqueue (accurate even if the report is
   // sent hours later); started_at from the rolling ledger (W2=EndedAtOnly
   // superseded 2026-07-11 — the writeback bridge requires both).
@@ -20364,7 +20527,8 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     ended_at: endedAt,
   };
   if (startedAt) payload.started_at = startedAt;
-  const files = config.enableFileUpload ? reportFilesForType(reportType) : [];
+  // filesOverride（開工確認卡的今日開工＝[]）：不去讀報工表單上可能還留著的照片
+  const files = Array.isArray(filesOverride) ? filesOverride : config.enableFileUpload ? reportFilesForType(reportType) : [];
   const { report_uuid } = await box.submitter.submit(payload, {
     operators: operators && operators.length ? operators : (basePayload.user_id ? [basePayload.user_id] : []),
     files,
@@ -20383,6 +20547,8 @@ async function machtileSubmitReportViaOutbox(box, basePayload, structuredPayload
     uploaded: uploadResult.uploaded,
     uploadFailed: uploadResult.failed,
     reportUuid: report_uuid || null,
+    // 伺服器明確拒絕（dead-letter）：既有報工畫面照舊只看 queuedOffline；開工確認卡用它判「沒存到」
+    deadLetter: record?.status === "failed",
   };
 }
 
@@ -21202,20 +21368,24 @@ if (machtileOutboxEnabled()) {
   }
 }
 
-async function submitReport(completed, defects, remark, reportType) {
-  if (state.source !== "supabase" || !selectedOrder?.processId || !isUuid(selectedOrder.workOrderId)) {
+// options（只有開工確認卡的今日開工會帶，owner 2026-10-08；報工畫面照舊不帶＝行為不變）：
+//   order＝要報的工單（不動 selectedOrder）、reportPayload＝現成的 report_payload（不讀報工表單）、
+//   operators＝報工人（不讀報工表單的人員勾選）、noFiles＝不附任何檔案。
+async function submitReport(completed, defects, remark, reportType, options = {}) {
+  const order = options.order || selectedOrder;
+  if (state.source !== "supabase" || !order?.processId || !isUuid(order.workOrderId)) {
     return { wroteCloud: false, uploaded: 0, uploadFailed: 0 };
   }
 
-  const reportPayload = buildReportPayload(reportType);
+  const reportPayload = options.reportPayload || buildReportPayload(reportType);
   const basePayload = {
-    tenant_id: selectedOrder.tenantId,
-    work_order_id: selectedOrder.workOrderId,
-    process_id: selectedOrder.processId,
+    tenant_id: order.tenantId,
+    work_order_id: order.workOrderId,
+    process_id: order.processId,
     report_date: new Date().toISOString().slice(0, 10),
     completed_qty: completed,
     defect_qty: defects,
-    status_after_report: selectedOrder.processStatus || "running",
+    status_after_report: order.processStatus || "running",
     remark,
   };
   const actorAppUserId = await machtileResolveAppUserId();
@@ -21233,7 +21403,8 @@ async function submitReport(completed, defects, remark, reportType) {
     if (box) {
       return machtileSubmitReportViaOutbox(
         box, basePayload, structuredPayload, reportType,
-        machtileSelectedOperators(actorAppUserId)
+        options.operators || machtileSelectedOperators(actorAppUserId),
+        options.noFiles ? [] : null
       );
     }
   }
@@ -21265,7 +21436,7 @@ async function submitReport(completed, defects, remark, reportType) {
     });
   }
   const reportId = Array.isArray(rows) ? rows[0]?.id : rows?.id;
-  const uploadResult = await uploadReportFiles(reportId, reportType);
+  const uploadResult = options.noFiles ? { uploaded: 0, failed: 0 } : await uploadReportFiles(reportId, reportType);
   return {
     wroteCloud: true,
     uploaded: uploadResult.uploaded,
