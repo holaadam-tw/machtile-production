@@ -366,6 +366,9 @@ for (const vp of ["desktop", "phone"]) {
       ok(hAfter < hBefore, `${W}：A04 卡片比 main 矮（${hBefore} → ${hAfter}px）`);
       await hideB.evaluate((el) => el.remove()); await hideMine.evaluate((el) => el.remove());
       await b.context.close();
+    } else {
+      skip += 3;
+      console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過 #74 非 A04 卡片逐字比對、main A04 區塊與高度比對（3 項）`);
     }
 
     // 確認卡內容
