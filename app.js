@@ -13158,7 +13158,7 @@ function machtileOpenHmcMachineDetail(machineCode) {
 // ============================================================================================
 // 機台卡片「開工／停工」回寫舊 MES（第 1 階段，owner 2026-10-07；合約與決策在 stationCommandCore.js 檔頭）。
 //   旗標 config.stationCommandMachines 空＝完全不碰：不讀 station_commands、不出按鈕。
-//   旗標開＋作業員 → 先試讀 station_commands（只讀一列）；讀不到（表不存在、沒權限、網路）→ 整個藏起來。
+//   旗標開＋作業員或管理員（owner 2026-10-08 方案 C）→ 先試讀 station_commands（只讀一列）；讀不到（表不存在、沒權限、網路）→ 整個藏起來。
 //   按鈕 → 確認卡（開卡時重讀這一道是否還在這台；大字：機台／工單號／料號＋品名／第幾道＋工序名；
 //   「畫面資料（hh:mm）顯示…」）→ 確認才送 machtile_submit_station_command（command_uuid 由 App 產生，
 //   重送同一筆不會重複；20 秒逾時）→ 一直輪詢到伺服器給 applied／rejected／expired（App 不自己判結果）。
@@ -13182,7 +13182,7 @@ function machtileStationCmdRoleOk() {
   return Boolean(machtileStationCmdCore) && machtileStationCmdCore.roleAllowed(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true);
 }
 
-// 這台現在有沒有開這個功能（旗標＋作業員＋表在）
+// 這台現在有沒有開這個功能（旗標＋作業員或管理員＋表在）
 function machtileStationCmdActiveFor(machineCode) {
   return Boolean(machtileStationCmdCore) && machtileStationCmd.availability === "ready" && machtileStationCmdRoleOk()
     && machtileStationCmdCore.enabledForMachine(machtileStationCmdFlag(), machineCode);
@@ -13214,7 +13214,7 @@ function machtileStationCmdRestorePending() {
 // loadFromSupabase 時呼叫（成功過就不再試）
 async function machtileLoadStationCommandAvailability() {
   const flag = machtileStationCmdFlag();
-  // 旗標關、或不是作業員帳號（只有作業員能送，合約 §3.1）→ 完全不讀
+  // 旗標關、或不是作業員／管理員帳號（橋接、manager、planner 都不行）→ 完全不讀
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(flag) || state.source !== "supabase" || !machtileStationCmdRoleOk()) {
     machtileStationCmd.availability = "off";
     return;
@@ -13333,7 +13333,9 @@ function machtileStationCmdRenderSheet(focus) {
     const sending = sheet.phase === "sending";
     const freshBad = !sheet.loading && sheet.fresh && !sheet.fresh.ok;
     const canSend = !sending && !sheet.loading && !freshBad && (sheet.phase !== "sendError" || sheet.canRetry);
+    const adminLines = Array.isArray(model.adminLines) ? model.adminLines : [];
     body = `
+      ${adminLines.length ? `<div class="station-cmd-notice is-warn" role="note" data-station-cmd-admin>${adminLines.map((line, i) => `<p style="margin:${i ? "4px" : "0"} 0 0" data-station-cmd-admin-line="${i}">${i === 0 ? `<strong>${escapeHtml(line)}</strong>` : escapeHtml(line)}</p>`).join("")}</div>` : ""}
       <div class="station-cmd-fields">
         ${field("機台", model.machine, "data-station-cmd-field=\"machine\"")}
         ${field("工單號", model.workOrderNo, "data-station-cmd-field=\"order\"")}
@@ -13403,10 +13405,13 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   let uuid;
   try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
   const others = Number(machine?.cardOtherCount || 0);
+  const isAdmin = core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true);
+  const actorRole = isAdmin ? "admin" : "operator";
+  const actorName = () => machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "";
   const sheet = {
     code, type, order, uuid, phase: "confirm", loading: true, fresh: null, attempts: 0, returnFocus: returnFocus || null,
     fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
-    model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others }),
+    model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others, actorRole, actorName: actorName() }),
   };
   machtileStationCmdNewSheet(sheet);
   let legacy = null;
@@ -13432,12 +13437,14 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
         legacyError = true;
       }
     })(),
+    // 管理員：確認卡要寫出「你是管理員 <名字>」→ 讀一次 app_users 名字（已讀過就不再讀）
+    isAdmin ? machtileResolveAppUserId().catch(() => "") : Promise.resolve(""),
   ]);
   if (machtileStationCmd.sheet !== sheet) return;
   sheet.loading = false;
   sheet.fresh = fresh;
   if (fresh && fresh.ok) sheet.fields.partNo = fresh.partNo;
-  sheet.model = core.confirmModel({ commandType: type, machineCode: code, order, fresh, legacy, legacyError, otherOrderCount: others, nowMs: Date.now() });
+  sheet.model = core.confirmModel({ commandType: type, machineCode: code, order, fresh, legacy, legacyError, otherOrderCount: others, nowMs: Date.now(), actorRole, actorName: actorName() });
   machtileStationCmdRenderSheet();
 }
 
@@ -13453,7 +13460,9 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
     returnFocus: returnFocus || null, canRetry: true,
     errorText: "上次送出時網路斷了，不知道有沒有送到。按「重送」會用同一筆指令，不會重複。",
     fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo },
-    model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh }),
+    model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh,
+      actorRole: core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true) ? "admin" : "operator",
+      actorName: machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "" }),
   });
 }
 

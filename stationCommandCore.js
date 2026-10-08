@@ -82,9 +82,24 @@
     return /^B\d/.test(normCode(machineCode));
   }
 
-  // 只有作業員帳號能送（合約 §3.1：role=operator、非橋接；套用帳號另有 APPLIER_CANNOT_SUBMIT）。
+  // 作業員帳號能送（合約 §3.1：role=operator、非橋接；套用帳號另有 APPLIER_CANNOT_SUBMIT）。
+  // 管理員（admin）也能送（owner 2026-10-08 核定方案 C、D1–D4）：記成管理員本人按的；RPC 另有開關與「管理員對照表」，
+  // App 這裡只是外觀閘門。橋接帳號一律不行；manager／planner 仍不行（D4b：先只開 admin）。
+  const SUBMIT_ROLES = Object.freeze(["operator", "admin"]);
+  function normRole(role) {
+    return String(role || "").trim().toLowerCase();
+  }
   function roleAllowed(role, isBridge) {
-    return String(role || "").trim().toLowerCase() === "operator" && isBridge !== true;
+    return SUBMIT_ROLES.includes(normRole(role)) && isBridge !== true;
+  }
+  function isAdminActor(role, isBridge) {
+    return normRole(role) === "admin" && isBridge !== true;
+  }
+  // 確認卡上給管理員看的兩行（作業員回空陣列）
+  function actorLines(role, name) {
+    if (normRole(role) !== "admin") return [];
+    const who = text(name);
+    return [who ? `你是管理員 ${who}，這筆會記成你按的` : "你是管理員，這筆會記成你按的", "你不在機台旁，請先確認現場狀況"];
   }
 
   function isUuid(value) {
@@ -212,7 +227,7 @@
     return lines;
   }
 
-  function confirmModel({ commandType, machineCode, order, fresh, legacy, legacyError, otherOrderCount, nowMs } = {}) {
+  function confirmModel({ commandType, machineCode, order, fresh, legacy, legacyError, otherOrderCount, nowMs, actorRole, actorName } = {}) {
     const type = COMMAND_TYPES.includes(commandType) ? commandType : "";
     const step = Number(order && order.stationStep);
     const others = Number(otherOrderCount || 0);
@@ -233,6 +248,8 @@
       otherOrders: others > 0 ? `這台還掛 ${others} 張別的單` : "",
       notThisOrder: "現在做的不是這張？請找生管在舊 MES 換單。App 第一階段不會幫你換單。",
       confirmLabel: type ? `確認${TYPE_LABEL[type]}` : "",
+      isAdmin: normRole(actorRole) === "admin",
+      adminLines: actorLines(actorRole, actorName),
     };
   }
 
@@ -298,6 +315,9 @@
     MACHINE_NOT_ALLOWED: "你的帳號不能操作這台機台（課別不符），請找生管。",
     COMMAND_UUID_CONFLICT: "這筆指令跟之前送過的內容不一樣，請關掉重新按一次。",
     MACHINE_COMMAND_IN_FLIGHT: "這台已經有一筆開工／停工在等工廠處理（可能是別台平板按的），請等它有結果再按。",
+    // 管理員路徑（mini-mes station_commands admin actor migration）：都是寫入前就拒絕＝舊 MES 沒動
+    ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
+    ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
   });
   const INVALID_INPUT_TEXT = "卡片上的工單資料不完整（機台、工單號、第幾道或料號），請重新整理；還是不行請找生管。";
 
@@ -340,6 +360,9 @@
     // 套用端速查表（#785 runbook）：OUTCOME_UNKNOWN／INTERNAL_ERROR＝舊 MES 有沒有改「不確定」，不能說沒生效
     OUTCOME_UNKNOWN: "舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
     INTERNAL_ERROR: "工廠套用時出錯，舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
+    // 管理員路徑：伺服器在建指令前就拒絕（舊 MES 沒動）。正常是 submit 錯誤；萬一出現在 reject_code 也給同樣白話。
+    ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
+    ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
   });
   // 這些代碼不是一般的「沒有開工／停工」：LEGACY_APPLIED_LATE／LEGACY_PARTIAL_WRITE／ORDER_CHANGED_DURING_APPLY
   // 舊 MES 其實已經改了；MANUAL_RELEASED 不確定。標題不能寫「沒有開工／停工」。
@@ -361,6 +384,7 @@
     "ORDER_MISMATCH", "INDEX_SN_MISMATCH", "PART_NO_MISMATCH", "MII_NOT_FOUND", "MII_CLOSED", "OPERATOR_NOT_SET", "OPERATOR_UNKNOWN",
     "ALREADY_RUNNING", "ALREADY_STOPPED", "NOT_STARTED", "WORK_ORDER_NOT_FOUND", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID",
     "RMS_UNAVAILABLE", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT", "OPERATOR_LIST_TOO_LONG", "NEED_PAUSED",
+    "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED",
   ]);
   const UNTOUCHED_FALLBACK_TEXT = "舊 MES 沒有套用這次指令。";
   const UNKNOWN_CODE_TEXT = "沒有完成，舊 MES 狀態請核對";
@@ -472,7 +496,7 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    parseFlag, flagIsOn, enabledForMachine, isMultiStation, roleAllowed, isUuid, eligibility, newUuid,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,

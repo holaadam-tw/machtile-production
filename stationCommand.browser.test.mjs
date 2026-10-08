@@ -6,6 +6,8 @@
 //   5. 確認 → 呼叫 machtile_submit_station_command（App 產生的 command_uuid、合約欄位）；等待中按鈕鎖住、連按只送一次；
 //      pending → claimed → applied；rejected（白話原因＋工廠說明）；expired。
 //   6. 送出時 RPC 不存在 → 功能藏起來；送出時網路斷 → 「重送」用同一個 command_uuid。
+//   7. 管理員（owner 2026-10-08 方案 C）：旗標含 A04 → 管理員也看到按鈕，確認卡多兩行「你是管理員…」「你不在機台旁…」；
+//      旗標關 → 卡片 HTML 跟 origin/main 一字不差；manager 不出按鈕；ADMIN_* 錯誤碼白話。
 // 不會碰任何真的後端：config.js 換成指向假專案網域的測試設定，Supabase 請求全部由這支腳本用假資料回應；
 // 其他對外請求一律擋掉（最後斷言沒有打到正式專案）。
 //
@@ -106,9 +108,9 @@ const testConfig = (extra) => `window.MACHTILE_CONFIG = {
 };`;
 
 // ---------- fake backend（每個情境一份） ----------
-function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null } = {}) {
+function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null } = {}) {
   const be = {
-    tableMissing, rpcMissing, role, submitError,
+    tableMissing, rpcMissing, role, submitError, appUserName,
     stationReads: 0,          // 任何對 station_commands 的請求
     submits: [],              // RPC body
     commands: new Map(),      // uuid → row
@@ -190,7 +192,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/app_users") {
-      if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: users[0].name }]);
+      if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: be.appUserName || users[0].name }]);
       return json(200, users.map(({ auth, ...u }) => u));
     }
     if (p === "/rest/v1/legacy_station_progress") {
@@ -743,6 +745,100 @@ console.log("\n== 390px：同一台已有指令在途（別台平板按的）→
   ok(t.includes("已經有一筆開工／停工在等工廠處理"), "在途 → 白話", t);
   await sheet(page).locator("[data-station-cmd-close]").click();
   ok(await cardOf(page, "A04").locator('[data-station-cmd="stop"]').isEnabled(), "伺服器明確拒絕 → 不鎖卡片");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// 管理員（owner 2026-10-08 方案 C，D1–D4）
+for (const vp of ["desktop", "phone"]) {
+  const W = VIEWPORTS[vp].viewport.width;
+  console.log(`\n== ${W}px：管理員＋旗標關 → 跟現在一模一樣 ==`);
+  {
+    let baselineGrid = null;
+    if (baselineAvailable) {
+      const b = await newPage(browser, vp, { backend: makeBackend({ role: "admin", appUserName: "Adam" }), baseline: true });
+      baselineGrid = await gridHtml(b.page);
+      await b.context.close();
+    }
+    const be = makeBackend({ role: "admin", appUserName: "Adam" });
+    const { context, page, errors } = await newPage(browser, vp, { backend: be });
+    ok(await page.locator(".station-cmd-row, [data-station-cmd]").count() === 0, `${W}：管理員＋旗標關 → 沒有按鈕`);
+    ok(be.stationReads === 0, `${W}：管理員＋旗標關 → 沒讀 station_commands（${be.stationReads}）`);
+    if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：管理員＋旗標關 → 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
+    else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過一字不差比對`); }
+    ok(realErrors(errors).length === 0, `${W}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
+    await context.close();
+  }
+
+  console.log(`== ${W}px：管理員＋旗標含 A04 → 看得到按鈕、確認卡寫明是管理員 ==`);
+  {
+    const be = makeBackend({ role: "admin", appUserName: "Adam" });
+    const { context, page, errors } = await newPage(browser, vp, { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+    ok(be.stationReads >= 1, `${W}：管理員也會探測 station_commands（${be.stationReads}）`);
+    const a04 = cardOf(page, "A04");
+    ok(await a04.locator("[data-station-cmd]").count() === 2, `${W}：管理員在 A04 看到「開工」「停工」`);
+    ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === 2, `${W}：只有 A04 有（A01、B03 沒有）`);
+    await a04.locator('[data-station-cmd="start"]').click();
+    await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+    ok(await sheet(page).locator("[data-station-cmd-admin]").count() === 1, `${W}：確認卡有管理員提示`);
+    const l0 = (await sheet(page).locator('[data-station-cmd-admin-line="0"]').innerText()).trim();
+    const l1 = (await sheet(page).locator('[data-station-cmd-admin-line="1"]').innerText()).trim();
+    ok(l0 === "你是管理員 Adam，這筆會記成你按的", `${W}：第一行「你是管理員 Adam，這筆會記成你按的」`, l0);
+    ok(l1 === "你不在機台旁，請先確認現場狀況", `${W}：第二行「你不在機台旁，請先確認現場狀況」`, l1);
+    ok(await fieldText(page, "machine") === "A04" && await fieldText(page, "order") === "XX01202502050012" && await fieldText(page, "part") === "HCG-06-01　HCG-06本體",
+      `${W}：機台／工單號／料號跟作業員一樣`);
+    ok(await page.evaluate(() => document.activeElement?.hasAttribute("data-station-cmd-close")), `${W}：初始焦點仍在「取消」`);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    ok(overflow <= 1, `${W}：沒有橫向捲動（${overflow}px）`);
+    await page.screenshot({ path: path.join(outDir, `${vp}-20-admin-confirm.png`) });
+    be.mode = "applied";
+    await sheet(page).locator("[data-station-cmd-confirm]").click();
+    await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+    const sent = be.submits[0] || {};
+    ok(be.submits.length === 1 && sent.p_command_type === "start" && sent.p_machine_code === "A04" && sent.p_expected_order_no === "XX01202502050012" && sent.p_expected_index_sn === 5
+      && Object.keys(sent).sort().join(",") === "p_command_type,p_command_uuid,p_expected_index_sn,p_expected_order_no,p_expected_part_no,p_machine_code,p_manufacture_ii_id",
+      `${W}：管理員送出的欄位跟作業員完全一樣（身分由伺服器判斷）`, JSON.stringify(sent));
+    await sheet(page).locator("[data-station-cmd-close]").click();
+    ok(be.otherWrites.length === 0, `${W}：除了指令 RPC 沒有任何其他寫入`, be.otherWrites.join(" "));
+    ok(realErrors(errors).length === 0, `${W}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
+    await context.close();
+  }
+}
+
+console.log("\n== 1440px：作業員的確認卡沒有管理員字樣 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "desktop", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  ok(await sheet(page).locator("[data-station-cmd-admin]").count() === 0 && !(await sheet(page).innerText()).includes("管理員"), "作業員 → 沒有「你是管理員」");
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 1440px：旗標開但登入的是 manager → 不出按鈕、不讀 ==");
+{
+  const be = makeBackend({ role: "manager" });
+  const { context, page, errors } = await newPage(browser, "desktop", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === 0, "manager → 沒有開工／停工按鈕");
+  ok(be.stationReads === 0, `manager → 沒讀 station_commands（${be.stationReads}）`);
+  ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+for (const [code, want] of [["ADMIN_LEGACY_ID_MISSING", "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定"], ["ADMIN_SUBMIT_DISABLED", "管理員開工／停工尚未開放"]]) {
+  console.log(`\n== 390px：管理員送出被拒 ${code} → 白話、不鎖 ==`);
+  const be = makeBackend({ role: "admin", appUserName: "Adam", submitError: `${code}: detail` });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator("[data-station-cmd-error]").waitFor({ timeout: 10000 });
+  const t = (await sheet(page).locator("[data-station-cmd-error]").innerText()).trim();
+  ok(t === want, `${code} → 「${want}」`, t);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="stop"]').isEnabled(), `${code} → 不鎖卡片`);
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
