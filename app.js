@@ -21086,7 +21086,9 @@ async function machtileLoadStationReportSettings(machineCodes) {
     configs.forEach((configRow, index) => {
       const code = String(enabledCodes[index]).trim().toUpperCase();
       if (!core.isGuardConfig(configRow, code)) throw new Error(`invalid guard config for ${code}`);
-      machines[code] = true;
+      // Factory's synced display list is the runtime kill switch. A configured-but-disabled
+      // machine must keep the legacy batch-report path and must not render the smart-report UI.
+      machines[code] = core.guardConfigReportEnabled(configRow, code);
       failReasonCodesByMachine[code] = configRow.fail_reason_codes;
     });
     machtileBatchState.stationReportSettings = { status: "loaded", machines, failReasonCodesByMachine, error: "" };

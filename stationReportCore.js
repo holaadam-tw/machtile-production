@@ -59,6 +59,10 @@
       value.fail_reason_codes.every((reason) => typeof reason === "string" && reason.trim().length > 0);
   }
 
+  function guardConfigReportEnabled(value, machineCode) {
+    return isGuardConfig(value, machineCode) && value.report_enabled === true;
+  }
+
   function legacyIdentityFromProjection(row) {
     if (!isPlainObject(row) || !Number.isInteger(row.legacy_index_sn) || row.legacy_index_sn < 1 ||
         (row.manufacture_ii_id != null && (typeof row.manufacture_ii_id !== "string" || !row.manufacture_ii_id.trim() || row.manufacture_ii_id.length > 100)) ||
@@ -279,7 +283,7 @@
 
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT,
-    ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, legacyIdentityFromProjection, validateReportInput, buildSubmitArgs,
+    ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck, createClient,
   });
 });

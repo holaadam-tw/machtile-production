@@ -70,6 +70,10 @@ check("guard config must match the requested machine and exact enabled map", () 
   assert.equal(core.isGuardConfig({ ...config, report_enabled: false }, "A04"), false);
   assert.equal(core.isGuardConfig({ ...config, machine_code: "A05" }, "A04"), false);
   assert.equal(core.isGuardConfig({ ...config, report_enabled_machines: { A04: 1 } }, "A04"), false);
+  const factoryDisabled = { ...config, report_enabled: false, report_enabled_machines: {} };
+  assert.equal(core.isGuardConfig(factoryDisabled, "A04"), true);
+  assert.equal(core.guardConfigReportEnabled(factoryDisabled, "A04"), false);
+  assert.equal(core.guardConfigReportEnabled(config, "A04"), true);
 });
 
 check("legacy report identity maps only explicit bridge projection fields", () => {
