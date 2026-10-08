@@ -13245,8 +13245,11 @@ function machtileStationCmdRerender() {
   try { renderWorkOrders(); } catch { /* 畫面沒開也沒關係 */ }
 }
 
-function machtileStationCmdMarkup(machine) {
-  if (!machtileStationCmdCore) return "";
+// 卡片上的「開工／停工」（owner 2026-10-08：卡片太高）——按鈕併進卡片底部那排（明細｜報工｜開工｜停工），
+// 狀態字改成底部正上方的一行小字。沒開這個功能的機台兩段都回空字串＝卡片 HTML 跟以前逐字相同。
+function machtileStationCmdParts(machine) {
+  const none = { status: "", buttons: "" };
+  if (!machtileStationCmdCore) return none;
   const code = machtileStationCmdMachineCode(machine);
   const order = machine?.order || null;
   const gate = machtileStationCmdCore.eligibility({
@@ -13255,30 +13258,30 @@ function machtileStationCmdMarkup(machine) {
   });
   const pending = machtileStationCmd.pending[code];
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
-  if (!gate.ok && !(pending && machtileStationCmdActiveFor(code))) return "";
+  if (!gate.ok && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
   const releaseNote = released ? machtileStationCmdCore.releasedNote(pending.lastStatus) : null;
   const locked = Boolean(pending) && !(releaseNote && releaseNote.unlock);
-  let status = "";
+  let line = "";
+  let retry = "";
   if (pending && pending.unconfirmed) {
-    status = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>
-      <button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
+    line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>`;
+    retry = `<button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
   } else if (pending) {
     const view = pending.view || machtileStationCmdCore.statusView({ status: "pending" }, pending.commandType, null);
-    status = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
+    line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
   } else if (last) {
-    status = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
+    line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
+  // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
+  const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
+      ` : "";
   const buttons = gate.ok ? `
-      <button type="button" class="station-cmd-button is-start" data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>開工</button>
-      <button type="button" class="station-cmd-button is-stop" data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>停工</button>` : "";
-  return `
-    <div class="station-cmd-row" data-no-detail data-station-cmd-row="${escapeHtml(code)}">
-      <span class="station-cmd-label">舊 MES</span>${buttons}
-      ${status}
-    </div>`;
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked ? "disabled" : ""}>開工</button>
+          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>停工</button>` : "";
+  return { status, buttons, active: true };
 }
 
 // 單台報工畫面：這台開了「舊 MES 開工／停工」→ 既有「今日開工」分頁標「只記錄（不改舊 MES）」
@@ -13689,6 +13692,7 @@ function renderMachineCard(machine) {
   const flowLevel = machtileFlowVisibilityLevel();
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
+  const stationCmd = machtileStationCmdParts(machine);
 
   return `
     <article class="machine-tile-card ${status.className} ${deptTone}" ${detailAttr}>
@@ -13719,7 +13723,7 @@ function renderMachineCard(machine) {
           <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
         `}
       </div>
-      ${machtileStationCmdMarkup(machine)}
+      ${"" /* 原本中段「舊 MES 開工／停工」區塊的位置：已移到卡片底部（保留這一行，沒開功能的機台卡片 HTML 才會跟以前逐字相同） */}
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
@@ -13780,7 +13784,7 @@ function renderMachineCard(machine) {
         </section>
       </details>
 
-      <footer class="machine-tile-footer">
+      ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
           ${order
@@ -13794,7 +13798,7 @@ function renderMachineCard(machine) {
               ? canReport
                 ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
                 : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}">前往指派</button>`
-              : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}
+              : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}${stationCmd.buttons}
         </div>
       </footer>
     </article>

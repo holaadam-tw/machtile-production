@@ -315,6 +315,55 @@ for (const vp of ["desktop", "phone"]) {
     await a04.scrollIntoViewIfNeeded();
     await a04.screenshot({ path: path.join(outDir, `${vp}-01-a04-card.png`) });
 
+    // 2026-10-08 owner「卡片短一點」：開工／停工併進卡片底部那排（明細｜報工｜開工｜停工），中段「舊 MES」區塊拿掉
+    ok(await a04.locator(".machine-tile-footer .machine-tile-actions [data-station-cmd]").count() === 2, `${W}：開工／停工在卡片底部按鈕列（.machine-tile-actions）`);
+    ok(await a04.locator(".station-cmd-row, [data-station-cmd-row], .station-cmd-label").count() === 0, `${W}：A04 中段「舊 MES 開工 停工」區塊已拿掉`);
+    const footerLabels = (await a04.locator(".machine-tile-actions > *").allInnerTexts()).map((t) => t.trim());
+    ok(footerLabels.join("｜") === "明細｜報工｜開工｜停工", `${W}：底部順序＝明細｜報工｜開工｜停工`, footerLabels.join("｜"));
+    const sizes = await a04.locator(".machine-tile-actions > button").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { h: Math.round(r.height), font: cs.fontSize, bg: cs.backgroundColor }; }));
+    ok(sizes.length === 4 && sizes.every((x) => x.h === sizes[0].h && x.font === sizes[0].font), `${W}：四顆按鈕同一個大小（跟明細／報工一樣）`, JSON.stringify(sizes));
+    ok(sizes[2]?.bg === "rgb(21, 128, 61)", `${W}：開工仍是綠色（--green-strong）`, sizes[2]?.bg);
+    ok(sizes[3]?.bg === "rgb(180, 35, 24)", `${W}：停工仍是紅色`, sizes[3]?.bg);
+    if (vp === "phone") {
+      const overflow = await page.evaluate(() => {
+        const card = [...document.querySelectorAll("#workOrderGrid .machine-tile-card")].find((c) => c.querySelector("h2")?.textContent.includes("A04"));
+        const cr = card.getBoundingClientRect();
+        const btns = [...card.querySelectorAll(".machine-tile-actions > *")].map((b) => b.getBoundingClientRect());
+        return { doc: document.documentElement.scrollWidth - document.documentElement.clientWidth, card: card.scrollWidth - card.clientWidth,
+          outside: btns.filter((r) => r.left < cr.left - 0.5 || r.right > cr.right + 0.5).length };
+      });
+      ok(overflow.doc <= 0 && overflow.card <= 0 && overflow.outside === 0, "390：四顆按鈕不會橫向溢出（必要時換第二排）", JSON.stringify(overflow));
+    }
+    // 跟 main（同樣旗標只開 A04）比：A04 以外的卡片原始 HTML 逐字相同；A04 變矮
+    if (baselineAvailable) {
+      const bBe = makeBackend();
+      const b = await newPage(browser, vp, { backend: bBe, baseline: true, configExtra: 'stationCommandMachines: ["A04"],' });
+      const rawCards = (pg) => pg.evaluate(() => [...document.querySelectorAll("#workOrderGrid .machine-tile-card")]
+        .map((c) => ({ name: c.querySelector("h2")?.textContent.trim() || "", html: c.outerHTML.split("/__baseline/").join("/") })));
+      const mine = await rawCards(page);
+      const theirs = await rawCards(b.page);
+      const others = mine.filter((c) => !c.name.startsWith("A04"));
+      const othersBase = theirs.filter((c) => !c.name.startsWith("A04"));
+      ok(others.length > 0 && others.length === othersBase.length && others.every((c, i) => c.html === othersBase[i].html),
+        `${W}：A04 以外的 ${others.length} 張卡片原始 HTML 跟 ${baselineRef} 逐字相同（不壓空白）`,
+        others.map((c, i) => c.html === othersBase[i]?.html ? "" : `${c.name} ${firstDiff(c.html, othersBase[i]?.html || "")}`).filter(Boolean).join(" | "));
+      const baseA04 = cardOf(b.page, "A04");
+      ok(await baseA04.locator("[data-station-cmd-row]").count() === 1, `${W}：（對照）main 的 A04 還是中段區塊`);
+      await baseA04.scrollIntoViewIfNeeded();
+      // 截圖時把浮在上面的東西（登入徽章、AI 客服、回報鈕、手機底部分頁、toast）暫時藏起來，才看得到卡片底部；截完拿掉
+      const hideFloating = (pg) => pg.addStyleTag({ content: "#machtileSessionBadge, #aiSupportFab, .fab, .mobile-tabs, #toast { visibility: hidden !important; }" });
+      const hideB = await hideFloating(b.page); const hideMine = await hideFloating(page);
+      const hBefore = Math.round((await baseA04.boundingBox()).height);
+      await baseA04.screenshot({ path: path.join(outDir, `${vp}-00-a04-before-main.png`) });
+      await a04.scrollIntoViewIfNeeded();
+      const hAfter = Math.round((await a04.boundingBox()).height);
+      await a04.screenshot({ path: path.join(outDir, `${vp}-00-a04-after.png`) });
+      console.log(`  INFO ${W}：A04 卡片高度 main ${hBefore}px → 現在 ${hAfter}px（矮 ${hBefore - hAfter}px）`);
+      ok(hAfter < hBefore, `${W}：A04 卡片比 main 矮（${hBefore} → ${hAfter}px）`);
+      await hideB.evaluate((el) => el.remove()); await hideMine.evaluate((el) => el.remove());
+      await b.context.close();
+    }
+
     // 確認卡內容
     await a04.locator('[data-station-cmd="start"]').click();
     await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
@@ -386,7 +435,12 @@ for (const vp of ["desktop", "phone"]) {
     ok(enabled.every(Boolean), `${W}：套用完成 → 按鈕解鎖`);
     ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).trim() === "已開工", `${W}：卡片顯示「已開工」`);
     await cardOf(page, "A04").scrollIntoViewIfNeeded();
-    await cardOf(page, "A04").screenshot({ path: path.join(outDir, `${vp}-05-a04-applied.png`) });
+    {
+      const hide = await page.addStyleTag({ content: "#machtileSessionBadge, #aiSupportFab, .fab, .mobile-tabs, #toast { visibility: hidden !important; }" });
+      await cardOf(page, "A04").screenshot({ path: path.join(outDir, `${vp}-05-a04-applied.png`) });
+      await hide.evaluate((el) => el.remove());
+    }
+    ok(await cardOf(page, "A04").locator(".station-cmd-footline + .machine-tile-footer [data-station-cmd]").count() === 2, `${W}：狀態字在卡片底部正上方一行（緊接著底部按鈕列）`);
 
     // 開著確認卡看到 applied
     be.mode = "hold";

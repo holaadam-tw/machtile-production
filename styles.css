@@ -12865,15 +12865,23 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .am-dept-note { margin: 0; color: var(--muted); font-size: 12px; }
 
 /* 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段；旗標 stationCommandMachines 開才出現） */
-.station-cmd-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-soft); }
-.station-cmd-label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .station-cmd-button { min-height: 44px; min-width: 88px; padding: 8px 16px; border: 0; border-radius: var(--radius); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
 .station-cmd-button.is-start { background: var(--green-strong); }
 .station-cmd-button.is-stop { background: #b42318; }
 .station-cmd-button:disabled { background: var(--gray); cursor: not-allowed; opacity: .7; }
-.station-cmd-retry { min-height: 44px; padding: 8px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-weight: 800; cursor: pointer; }
+.station-cmd-retry { min-height: 36px; padding: 6px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-weight: 800; cursor: pointer; }
 .station-cmd-recordonly { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .station-cmd-status { flex: 1 1 100%; margin: 0; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+/* 2026-10-08 owner「卡片太短一點」：開工／停工併進卡片底部那排（明細｜報工｜開工｜停工），只有開了這功能的機台（has-station-cmd）才吃這段 */
+.station-cmd-footline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 10px 0 -4px; }
+.station-cmd-footlabel { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; background: var(--surface-soft); color: var(--muted); font-size: 11px; font-weight: 800; }
+.station-cmd-footline .station-cmd-status { flex: 1 1 160px; }
+.machine-tile-footer.has-station-cmd { flex-wrap: wrap; row-gap: 8px; }
+.machine-tile-footer.has-station-cmd .machine-tile-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.machine-tile-actions .station-cmd-button { min-width: 0; border: 1px solid transparent; color: #fff; cursor: pointer; }
+.machine-tile-actions .station-cmd-button.is-start { margin-left: 6px; border-color: var(--green-strong); background: var(--green-strong); }
+.machine-tile-actions .station-cmd-button.is-stop { border-color: #b42318; background: #b42318; }
+.machine-tile-actions .station-cmd-button:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: 1; }
 .station-cmd-status.is-wait { color: var(--blue); }
 .station-cmd-status.is-ok { color: var(--green-strong); }
 .station-cmd-status.is-bad { color: #b42318; }
