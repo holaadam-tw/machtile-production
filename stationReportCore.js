@@ -25,6 +25,17 @@
     "PREV_OUTSOURCE_UNCONFIRMED", "AUTO_PULL_ACK", "OLD_ORDER_NEWER_OPEN", "HIGH_FAIL_RATIO",
     "FAIL_ONLY", "EXCEEDS_ORDER_QTY", "DUPLICATE_SUSPECTED", "GUARD_STATE_CHANGED",
   ]);
+  const GUARD_LABELS = Object.freeze({
+    PREV_OUTSOURCE_UNCONFIRMED: "上一道委外尚未確認收貨",
+    AUTO_PULL_ACK: "本次將產生先領倉量單",
+    OLD_ORDER_NEWER_OPEN: "同料號已有較新工單",
+    HIGH_FAIL_RATIO: "本次不良比例較高",
+    QTY_EXCEEDS_AVAILABLE: "本次數量超過可報數",
+  });
+  function guardMessage(code, message, fallback = "請聯絡管理員。") {
+    const text = typeof message === "string" ? message.trim() : "";
+    return text && text !== code ? text : GUARD_LABELS[code] || fallback;
+  }
   const REPORT_SELECT = "command_uuid,command_type,status,good_qty,fail_qty,preview_result,reject_code,reject_message,legacy_snapshot,requested_at";
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -203,21 +214,23 @@
         return {
           kind: result.allowed ? "previewed" : isPreviewSoft ? "preview-soft" : "preview-blocked",
           title: result.allowed ? "預覽完成・尚未報工" : isPreviewSoft ? "預覽需要明確確認" : "預覽遭 guard 阻擋",
-          message: [result.message || guard?.message, verdict].filter(Boolean).join(" "),
+          message: [guardMessage(code, result.message || guard?.message, "報工條件需確認"), verdict].filter(Boolean).join(" "),
           guardCode: code,
+          guardLabel: GUARD_LABELS[code] || "報工條件需確認",
+          previousIndex: Number(guard?.prev_index_sn) || null,
           allowed: result.allowed,
           values: result,
           preview: result,
         };
       }
-      if (row.status === "rejected") return { kind: "hard", title: "預覽未通過", message: row.reject_message || row.reject_code || "預覽遭拒。", code: row.reject_code || "" };
+      if (row.status === "rejected") return { kind: "hard", title: "預覽未通過", message: guardMessage(row.reject_code, row.reject_message, "預覽遭拒。"), code: row.reject_code || "" };
       if (row.status === "expired") return { kind: "hard", title: "預覽已過期", message: "請重新預覽後再送。", code: "EXPIRED" };
       return { kind: "pending", title: "正在預覽", message: "等待套用端計算；舊 MES 尚未寫入。" };
     }
     if (row.status === "applied") return { kind: "applied", title: "報工完成", message: `已報工 ${Number(row.good_qty || 0)} 件（舊 MES 已更新）`, snapshot: row.legacy_snapshot || null };
-    if (row.status === "rejected" && SOFT_REJECTS.includes(row.reject_code)) return { kind: "soft", title: "需要再次確認", message: row.reject_message || "此筆報工遇到軟性提醒。", code: row.reject_code, snapshot: row.legacy_snapshot || null };
+    if (row.status === "rejected" && SOFT_REJECTS.includes(row.reject_code)) return { kind: "soft", title: "需要再次確認", message: guardMessage(row.reject_code, row.reject_message, "此筆報工遇到軟性提醒。"), code: row.reject_code, guardLabel: GUARD_LABELS[row.reject_code] || "報工條件需確認", snapshot: row.legacy_snapshot || null };
     if (row.status === "rejected" && row.reject_code === "LEGACY_APPLIED_LATE") return { kind: "applied-late", title: "舊 MES 已記錄，請勿重送", message: "舊 MES 已記這筆報工（回報太晚），不要再按；請到電子紙或 Factory 確認。", snapshot: row.legacy_snapshot || null };
-    if (row.status === "rejected") return { kind: HARD_REJECTS.includes(row.reject_code) ? "hard" : "rejected", title: "報工未送入舊 MES", message: row.reject_message || row.reject_code || "請聯絡管理員。", code: row.reject_code || "" };
+    if (row.status === "rejected") return { kind: HARD_REJECTS.includes(row.reject_code) ? "hard" : "rejected", title: "報工未送入舊 MES", message: guardMessage(row.reject_code, row.reject_message), code: row.reject_code || "", previousIndex: Number(row.legacy_snapshot?.report?.guard?.prev_index_sn) || null };
     if (row.status === "expired") return { kind: "hard", title: "報工已過期，未套用", message: "這筆未寫入舊 MES。請重新確認現況後再送。", code: "EXPIRED" };
     return { kind: "pending", title: "等待套用端處理", message: "結果尚未確認；請勿重複建立報工。" };
   }
@@ -227,18 +240,20 @@
       throw new ContractError("COMMAND_UUID_REQUIRED", "再次確認必須使用新的報工識別碼。");
     }
     if (!SOFT_REJECTS.includes(ack)) throw new ContractError("INVALID_ACK", "此項目不能以再次確認略過。");
+    if (ack === "OLD_ORDER_NEWER_OPEN" && !String(previousArgs?.p_report_note || "").trim()) throw new ContractError("REPORT_NOTE_REQUIRED", "報在舊工單須填原因。");
+    if (String(previousArgs?.p_report_note || "").length > 500) throw new ContractError("INVALID_REPORT_NOTE", "備註不可超過 500 字。");
     const acks = [...new Set([...(previousArgs.p_acks || []), ack])];
     return { ...previousArgs, p_command_uuid: nextCommandUuid, p_preview: false, p_acks: acks };
   }
 
-  function retryPreviewWithAck(previousArgs, previewCommand, ack, nextCommandUuid) {
+  function retryPreviewWithAck(previousArgs, previewCommand, ack, nextCommandUuid, reportNote = previousArgs?.p_report_note) {
     const result = previewCommand?.preview_result;
     if (!isPlainObject(result) || result.allowed !== false || result.hard !== false ||
         (result.guard_code || result.legacy_snapshot?.report?.guard?.code) !== ack || !SOFT_REJECTS.includes(ack)) {
       throw new ContractError("INVALID_ACK", "只有預覽明確指出的軟性 guard 才能由使用者確認略過。");
     }
     const snapshot = buildClientGuardSnapshot(previewCommand);
-    const retry = retryWithAck({ ...previousArgs, p_client_guard_snapshot: snapshot }, ack, nextCommandUuid);
+    const retry = retryWithAck({ ...previousArgs, p_report_note: reportNote || null, p_client_guard_snapshot: snapshot }, ack, nextCommandUuid);
     return retry;
   }
 

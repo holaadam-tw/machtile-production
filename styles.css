@@ -12883,6 +12883,7 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-confirm-card b { font-size: 32px; }
 .station-report-actions [data-station-report-confirm], .station-report-actions [data-station-report-preview-ack] { min-height: 64px; font-size: 24px; touch-action: none; }
 .station-report-preview-values { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; font-size: 12px; }
+.station-report-route-summary { margin: 8px 0; font-weight: 700; color: #174d78; }
 .station-report-previous-step { display: inline-block; margin-top: 8px; color: #175ea8; font-weight: 700; }
 /* 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段；旗標 stationCommandMachines 開才出現） */
 .station-cmd-button { min-height: 44px; min-width: 88px; padding: 8px 16px; border: 0; border-radius: var(--radius); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }

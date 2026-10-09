@@ -200,6 +200,20 @@ check("preview soft guard requires explicit ack and creates a new report UUID wi
   assert.throws(() => core.retryPreviewWithAck(previewArgs, previewCommand, card.guardCode, UUID_PREVIEW), { code: "COMMAND_UUID_REQUIRED" });
 });
 
+check("old-order preview requires a note on retry and keeps the new note", () => {
+  const oldOrder = structuredClone(COMPLETE_PREVIEW);
+  oldOrder.allowed = false;
+  oldOrder.hard = false;
+  oldOrder.guard_code = "OLD_ORDER_NEWER_OPEN";
+  oldOrder.legacy_snapshot.report.guard.code = oldOrder.guard_code;
+  const previewCommand = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: oldOrder };
+  const previous = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  assert.throws(() => core.retryPreviewWithAck(previous, previewCommand, oldOrder.guard_code, UUID_RETRY), { code: "REPORT_NOTE_REQUIRED" });
+  const retry = core.retryPreviewWithAck(previous, previewCommand, oldOrder.guard_code, UUID_RETRY, "確認仍報舊單");
+  assert.equal(retry.p_report_note, "確認仍報舊單");
+  assert.deepEqual(retry.p_acks, ["OLD_ORDER_NEWER_OPEN"]);
+});
+
 check("preview hard deny and unknown deny remain blocked with no ack path", () => {
   const previewCommand = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: COMPLETE_PREVIEW };
   for (const [guardCode, hard] of [["QTY_EXCEEDS_AVAILABLE", true], ["UNRECOGNIZED_GUARD", false]]) {
@@ -211,6 +225,10 @@ check("preview hard deny and unknown deny remain blocked with no ack path", () =
     denied.legacy_snapshot.report.guard.hard = hard;
     const row = { ...previewCommand, preview_result: denied };
     assert.equal(core.resultCard(row).kind, "preview-blocked");
+    if (guardCode === "QTY_EXCEEDS_AVAILABLE") {
+      denied.legacy_snapshot.report.guard.prev_index_sn = 3;
+      assert.equal(core.resultCard(row).previousIndex, 3);
+    }
     assert.throws(() => core.buildClientGuardSnapshot(row), { code: guardCode });
     assert.throws(() => core.retryPreviewWithAck(core.buildSubmitArgs(validInput(), UUID_PREVIEW, true), row, guardCode, UUID_RETRY), { code: "INVALID_ACK" });
   }
@@ -221,6 +239,11 @@ check("hard, soft, late-applied, and pending outcomes remain distinct", () => {
   assert.equal(core.resultCard({ command_type: "report", status: "rejected", reject_code: "PREV_OUTSOURCE_UNCONFIRMED" }).kind, "soft");
   assert.equal(core.resultCard({ command_type: "report", status: "rejected", reject_code: "LEGACY_APPLIED_LATE" }).kind, "applied-late");
   assert.equal(core.resultCard({ command_type: "report", status: "claimed" }).kind, "pending");
+  assert.equal(core.resultCard({ command_type: "report", status: "rejected", reject_code: "PREV_OUTSOURCE_UNCONFIRMED" }).message, "上一道委外尚未確認收貨");
+  assert.equal(core.resultCard({ command_type: "report", status: "rejected", reject_code: "PREV_OUTSOURCE_UNCONFIRMED", reject_message: "PREV_OUTSOURCE_UNCONFIRMED" }).message, "上一道委外尚未確認收貨");
+  assert.equal(core.resultCard({ command_type: "report_preview", status: "previewed", preview_result: {
+    ...COMPLETE_PREVIEW, allowed: false, hard: false, guard_code: "PREV_OUTSOURCE_UNCONFIRMED", message: "",
+  } }).guardLabel, "上一道委外尚未確認收貨");
 });
 
 check("client calls only specified RPC args and reads command status by UUID", async () => {

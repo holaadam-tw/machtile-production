@@ -21138,6 +21138,15 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   if (!core || settings.status !== "loaded" || !core.reportMachineEnabled(settings.machines, code)) return "";
   const flow = machtileStationReportState(row);
   const context = machtileStationReportContext(order, code);
+  const route = machtileProcessFlows.get(order?.id);
+  const routeLevel = machtileFlowVisibilityLevel();
+  const routeSteps = route && window.MachTileProcessFlow?.steps
+    ? window.MachTileProcessFlow.steps(route.processes, order?.processId, route.quantity) : [];
+  const routePosition = routeSteps.findIndex((step) => step.current);
+  const routeCurrent = routePosition >= 0 ? routeSteps[routePosition] : null;
+  const routeSummary = routeLevel === "full" && routeSteps.length
+    ? `<div class="station-report-route-summary">第 ${routePosition >= 0 ? routePosition + 1 : "?"}／共 ${routeSteps.length} 道・本道累計已報 ${routeCurrent?.done == null ? "無資料" : escapeHtml(routeCurrent.done)}／${route.quantity != null && Number.isFinite(Number(route.quantity)) ? escapeHtml(route.quantity) : "工單量無資料"} 件</div>${machtileProcessFlowMarkup(order, { compact: true, level: routeLevel })}`
+    : "";
   const missingContext = machtileStationReportMissingContext(order, code);
   const reasons = settings.failReasonCodesByMachine[code] || [];
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
@@ -21159,8 +21168,8 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
       ? `<div class="station-report-preview-values"><span>目前可報 <strong>${result.values.available}</strong> 件</span>${Number.isInteger(result.values.predicted_ac03_qty) ? `<span>預估先領 <strong>${result.values.predicted_ac03_qty}</strong> 件</span>` : ""}</div>`
       : "";
     const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview); return true; } catch { return false; } })();
-    const prevIndex = Number(result.snapshot?.guard?.prev_index_sn);
-    const previousStep = result.kind === "hard" && result.code === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
+    const prevIndex = Number(result.previousIndex);
+    const previousStep = ["hard", "preview-blocked"].includes(result.kind) && (result.code || result.guardCode) === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
       ? `<a class="station-report-previous-step" href="${escapeHtml(workOrderDetailUrl(order?.id))}">查看製程路線，先報第 ${prevIndex} 道</a>` : "";
     resultHtml = `<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
     if (result.kind === "previewed") {
@@ -21169,10 +21178,10 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
         : `<p class="batch-notice is-error" role="alert">預覽回傳 guard 欄位不完整；已阻擋正式送出。</p>`;
     } else if (result.kind === "preview-soft") {
       resultHtml += snapshotReady
-        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認照送（${escapeHtml(result.guardCode)}）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認照送（${escapeHtml(result.guardLabel)}）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">軟性 guard 預覽資料不完整；已阻擋送出。</p>`;
     } else if (result.kind === "preview-blocked" || result.kind === "preview-invalid") {
-      resultHtml += `<p class="batch-notice is-error" role="alert">${escapeHtml(result.guardCode ? `Guard ${result.guardCode}：` : "")}${escapeHtml(result.kind === "preview-invalid" ? "預覽 guard 資料不完整；已阻擋正式送出。" : "已阻擋確認送出；可修改數量後重新預覽。")}</p><div class="station-report-actions"><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`;
+      resultHtml += `<p class="batch-notice is-error" role="alert">${escapeHtml(result.guardCode ? `${result.guardLabel}：` : "")}${escapeHtml(result.kind === "preview-invalid" ? "預覽資料不完整；已阻擋正式送出。" : "已阻擋確認送出；可修改數量後重新預覽。")}</p><div class="station-report-actions"><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`;
     } else if (result.kind === "soft") {
       resultHtml += `<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>照送（使用新識別碼）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel="${escapeHtml(code)}">取消</button></div>`;
     }
@@ -21183,15 +21192,17 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   const phaseBusy = ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report"].includes(flow.phase);
   const finalApplied = result?.kind === "applied" || result?.kind === "applied-late";
   const formAllowed = !busy && !phaseBusy && flow.phase !== "blocked" && flow.phase !== "previewed" && !finalApplied && !noContext;
+  const oldOrderNoteAllowed = !busy && !phaseBusy && result?.kind === "preview-soft" && result.guardCode === "OLD_ORDER_NEWER_OPEN";
   const contextMessage = noContext
     ? `已選工單 ${order?.id || "—"}／機台 ${code}／畫面工序 ${order?.process || "—"}${order?.stationStep ? `（APP 工序序號 ${order.stationStep}）` : ""}。缺少：${missingContext.join("、") || "合約識別資料"}；不會用 APP process_order 代替舊 MES IndexSN。`
     : "送出前會先由套用端唯讀預覽；預覽完成以前不會建立正式報工。";
   return `<section class="station-report-panel" aria-label="${escapeHtml(code)} 智慧報工">
     <div class="station-report-heading"><strong>智慧報工</strong><span>套用端預覽 → 確認</span></div>
     <p class="station-report-hint">${escapeHtml(contextMessage)}</p>
+    ${routeSummary}
     ${flow.error ? `<p class="batch-notice is-error" role="alert">${escapeHtml(flow.error)}</p>` : ""}
     <label class="station-report-reason"><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>
-    <label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>
+    <label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed && !oldOrderNoteAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>
     <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || !row.good && !row.bad ? " disabled" : ""}>${flow.phase === "waiting-preview" ? "等待套用端預覽…" : "先預覽，不寫入舊 MES"}</button>
     ${resultHtml}
   </section>`;
@@ -21299,22 +21310,24 @@ async function machtileStationReportSendFinal(code, args) {
 
 async function machtileStationReportRetryAck(code) {
   const core = machtileStationReportCore();
-  const flow = machtileStationReportState(machtileBatchRow(code));
+  const row = machtileBatchRow(code);
+  const flow = machtileStationReportState(row);
   const result = flow.result;
   if (!core || !flow.args || !result || !core.SOFT_REJECTS.includes(result.reject_code)) return;
   let args;
-  try { args = core.retryWithAck(flow.args, result.reject_code, crypto.randomUUID()); }
+  try { args = core.retryWithAck({ ...flow.args, p_report_note: row.reportNote || null }, result.reject_code, crypto.randomUUID()); }
   catch (error) { flow.error = error.message; machtileRenderBatchReport(); return; }
   await machtileStationReportSendFinal(code, args);
 }
 
 async function machtileStationReportRetryPreviewAck(code) {
   const core = machtileStationReportCore();
-  const flow = machtileStationReportState(machtileBatchRow(code));
+  const row = machtileBatchRow(code);
+  const flow = machtileStationReportState(row);
   const result = flow.result ? core?.resultCard(flow.result) : null;
   if (!core || !flow.args || !flow.preview || result?.kind !== "preview-soft") return;
   let args;
-  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID()); }
+  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), row.reportNote); }
   catch (error) { flow.error = error.message; machtileRenderBatchReport(); return; }
   await machtileStationReportSendFinal(code, args);
 }
@@ -22046,7 +22059,10 @@ function machtileHandleBatchInput(event) {
   row.error = "";
   row.result = null;
   const flow = machtileStationReportState(row);
-  if ((t.dataset.batchGood || t.dataset.batchBad || t.dataset.stationReportReason || t.dataset.stationReportNote) &&
+  const guardResult = t.dataset.stationReportNote ? machtileStationReportCore()?.resultCard(flow.result) : null;
+  const oldOrderNoteEdit = t.dataset.stationReportNote &&
+    (guardResult?.guardCode || guardResult?.code) === "OLD_ORDER_NEWER_OPEN";
+  if ((t.dataset.batchGood || t.dataset.batchBad || t.dataset.stationReportReason || t.dataset.stationReportNote && !oldOrderNoteEdit) &&
       ["previewed", "finished"].includes(flow.phase) && coreResultWasNotApplied(flow.result)) {
     flow.phase = "idle"; flow.result = null; flow.preview = null; flow.args = null; flow.error = "";
   }
