@@ -8092,8 +8092,12 @@ function getProgramProfile(order) {
     ...base,
     programName: order?.programName || base.programName,
     programVersion: order?.programVersion || base.programVersion,
-    previousVersion: order?.previousProgramVersion || base.previousVersion,
+    previousVersion: order?.programSameAsPrevious
+      ? (order?.programVersion || base.programVersion)
+      : (order?.previousProgramVersion || base.previousVersion),
     programHash: order?.programHash || base.programHash,
+    programUploadedBy: order?.programUploadedBy || "—",
+    programUploadedAt: order?.programUploadedAt || "",
     previousHash: order?.previousProgramHash || base.previousHash,
     changedLines: order?.changedLines ?? base.changedLines,
     toolChanges: order?.toolChanges || base.toolChanges,
@@ -10024,6 +10028,32 @@ function normalizeOrder(row) {
   };
 }
 
+async function machtileLoadCncProgramsForCards() {
+  if (!state.workOrders.length) return;
+  try {
+    const rows = await supabaseFetch("cnc_programs?select=id,work_order_id,version,sha256,file_path,uploaded_by,uploaded_at,same_as_previous&work_order_id=not.is.null&is_active=eq.true&order=uploaded_at.desc&limit=2000");
+    const latestByOrder = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((program) => {
+      const key = String(program.work_order_id || "");
+      if (key && !latestByOrder.has(key)) latestByOrder.set(key, program);
+    });
+    state.workOrders.forEach((order) => {
+      const program = latestByOrder.get(String(order.workOrderId || ""));
+      if (!program) return;
+      const metadata = globalThis.MachTileCncProgramUploadCore?.cardMetadata?.(program) || {};
+      order.programName = metadata.fileName || "—";
+      order.programVersion = metadata.version || "—";
+      order.previousProgramVersion = metadata.previousVersion || "—";
+      order.programHash = String(metadata.sha256 || "").slice(0, 8);
+      order.programSameAsPrevious = metadata.sameAsPrevious === true;
+      order.programUploadedBy = metadata.uploadedBy || "—";
+      order.programUploadedAt = metadata.uploadedAt || "";
+    });
+  } catch (error) {
+    console.warn("cnc_programs work-order source unavailable; keeping legacy card fields", error);
+  }
+}
+
 function normalizeMachineMaster(row) {
   return {
     id: row.machine_id || row.id || "",
@@ -10056,6 +10086,7 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
   if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
   state.workOrders = rows.map(normalizeOrder);
+  await machtileLoadCncProgramsForCards();
   try {
     const machineRows = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
     state.machineMasters = Array.isArray(machineRows) ? machineRows.map(normalizeMachineMaster) : [];
@@ -10364,6 +10395,7 @@ function machtileAssignedCardProcess(row) {
   const existing = (state.workOrders || []).find(o => o.processId === row.id);
   if (existing) {
     for (const key of ["programName", "programVersion", "previousProgramVersion", "programHash", "previousProgramHash",
+      "programSameAsPrevious", "programUploadedBy", "programUploadedAt",
       "pureCycleSec", "machineTimeSource", "baselineCycleSec", "loadUnloadSec", "historyRuns", "historyYears", "lastRunDate"])
       if (existing[key] != null) order[key] = existing[key];
     order.customer = existing.customer;
@@ -14226,8 +14258,10 @@ function renderMachineCard(machine) {
             <small>點擊看細節</small>
           </summary>
           <div class="machine-program-panel">
-            <p><span>程式檔</span><strong>${escapeHtml(profile.programName)}</strong></p>
-            <p><span>目前版本</span><strong>${escapeHtml(profile.programVersion || "-")}</strong></p>
+            <p><span>上傳人</span><strong>${escapeHtml(profile.programUploadedBy || "—")}</strong></p>
+            <p><span>上傳時間</span><strong>${profile.programUploadedAt ? escapeHtml(formatDateTime(profile.programUploadedAt)) : "—"}</strong></p>
+            <p><span>版本</span><strong>${escapeHtml(profile.programVersion || "—")}</strong></p>
+            <p><span>檔名</span><strong>${escapeHtml(profile.programName || "—")}</strong></p>
             <p><span>版本比較</span><strong>${profile.previousVersion && profile.previousVersion !== profile.programVersion ? `較 ${escapeHtml(profile.previousVersion)} 有差異` : "與上版相同"}</strong></p>
           </div>
         </details>
@@ -18808,6 +18842,9 @@ function renderProgramModule() {
     if (!machtileCanManageWorkOrders()) {
       return `<p class="admin-module-note">此功能需要排程以上權限的正式環境帳號。</p>`;
     }
+    // Owner 2026-10-12: uploads belong to the work-order detail page. Keep this
+    // module as a local estimator so an upload can never be registered without a work order.
+    const canCncUpload = false;
     return `
       <div class="machtile-estimate-tabs" role="tablist" aria-label="估時與估價功能">
         <button class="machtile-estimate-tab is-active" type="button" role="tab" aria-selected="true" data-estimate-tab="gcode">G-code 估時</button>
@@ -18817,19 +18854,19 @@ function renderProgramModule() {
 
       <section class="machtile-estimate-panel" data-estimate-panel="gcode" role="tabpanel">
         <div class="machtile-gcode-source-tabs" role="tablist" aria-label="G-code 輸入方式">
-          <button class="machtile-gcode-source-tab is-active" type="button" role="tab" aria-selected="true" data-gcode-source-mode="file">上傳程式檔</button>
-          <button class="machtile-gcode-source-tab" type="button" role="tab" aria-selected="false" data-gcode-source-mode="paste">直接貼上 G-code</button>
+          ${canCncUpload ? '<button class="machtile-gcode-source-tab is-active" type="button" role="tab" aria-selected="true" data-gcode-source-mode="file">上傳程式檔</button>' : ""}
+          <button class="machtile-gcode-source-tab ${canCncUpload ? "" : "is-active"}" type="button" role="tab" aria-selected="${canCncUpload ? "false" : "true"}" data-gcode-source-mode="paste">直接貼上 G-code</button>
         </div>
 
-        <div data-gcode-source-panel="file">
+        ${canCncUpload ? `<div data-gcode-source-panel="file">
           <div id="machtileCncDrop" class="machtile-cnc-drop" role="button" tabindex="0">
             <strong>📄 把 O 檔拖進來，或點擊選檔</strong>
-            <span>上傳後自動進行 FANUC／EIA 加工時間估算，並保留程式版本</span>
+            <span>上傳後自動估算並保留版本；單檔上限 20MB</span>
             <input id="machtileCncFile" type="file" hidden>
           </div>
-        </div>
+        </div>` : ""}
 
-        <div class="machtile-gcode-paste" data-gcode-source-panel="paste" hidden>
+        <div class="machtile-gcode-paste" data-gcode-source-panel="paste" ${canCncUpload ? "hidden" : ""}>
           <label class="admin-field" for="machtileCncPasteInput">
             <span>直接貼上 FANUC／EIA G-code</span>
             <textarea id="machtileCncPasteInput" class="machtile-gcode-paste-input" rows="14" spellcheck="false" placeholder="例如：&#10;O1234&#10;G21 G90&#10;G0 X0 Y0 Z10&#10;G1 Z-2 F300&#10;M30"></textarea>
@@ -18841,9 +18878,9 @@ function renderProgramModule() {
           <div class="machtile-gcode-paste-actions">
             <button id="machtileCncPasteEstimateBtn" class="admin-save-button" type="button">立即估算</button>
             <button id="machtileCncPasteClearBtn" type="button">清除</button>
-            <button id="machtileCncPasteSaveBtn" class="secondary-action" type="button" hidden>另存成程式版本…</button>
+            ${canCncUpload ? '<button id="machtileCncPasteSaveBtn" class="secondary-action" type="button" hidden>另存成程式版本…</button>' : ""}
           </div>
-          <p class="admin-module-note">直接貼上的內容只在此瀏覽器計算，按「另存成程式版本」並完成確認前，不會上傳或寫入資料庫。</p>
+          <p class="admin-module-note">直接貼上的內容只在此瀏覽器計算，不會上傳或寫入資料庫；要保存版本請到該工單明細上傳。</p>
           <div id="machtileCncPasteResult" class="machtile-gcode-paste-result" aria-live="polite" hidden></div>
         </div>
 
@@ -19440,7 +19477,7 @@ async function machtileInitCncModule() {
   let pendingFile = null;
   let pendingEstimate = null;
   let pendingPasteText = "";
-  let activeSourceMode = "file";
+  let activeSourceMode = document.getElementById("machtileCncDrop") ? "file" : "paste";
   const refresh = async () => {
     try {
       await machtileLoadCalibrationGovernance();
@@ -19494,6 +19531,13 @@ async function machtileInitCncModule() {
   const fileInput = document.getElementById("machtileCncFile");
   const handleFile = async (file, options = {}) => {
     if (!file) return;
+    const validation = globalThis.MachTileCncProgramUploadCore?.validateFile(file);
+    if (validation && !validation.ok) {
+      const status = document.getElementById("machtileCncStatus");
+      if (status) status.textContent = validation.message;
+      showToast(validation.message);
+      return;
+    }
     pendingFile = file;
     const text = await file.text();
     const lines = text.split(/\r?\n/).length;
@@ -20301,6 +20345,7 @@ async function hydrateDetail(order) {
   let processes = [];
   let reports = [];
   let abnormalities = [];
+  let cncPrograms = [];
 
   if (state.source === "supabase" && isUuid(order.workOrderId)) {
     try {
@@ -20313,6 +20358,18 @@ async function hydrateDetail(order) {
       abnormalities = await supabaseFetch(
         `abnormal_events?select=event_type,severity,description,status,reported_at,resolution&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=reported_at.desc&limit=6`
       );
+      cncPrograms = await supabaseFetch(
+        `cnc_programs?select=id,work_order_id,part_name,part_no,program_no,machine_id,current_version_id,version,sha256,file_path,uploaded_by,uploaded_at,same_as_previous,updated_at,cnc_program_versions!program_id(id,version_no,file_name,file_hash,file_size_bytes,storage_path,uploaded_by,uploaded_at)&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&is_active=eq.true&order=uploaded_at.desc`
+      );
+      const uploaderIds = [...new Set((cncPrograms || []).flatMap((program) => [program.uploaded_by, ...(program.cnc_program_versions || []).map((version) => version.uploaded_by)]).filter(Boolean))];
+      if (uploaderIds.length) {
+        const users = await supabaseFetch(`app_users?select=id,name&id=in.(${uploaderIds.join(",")})`);
+        const names = new Map((users || []).map((user) => [String(user.id), user.name]));
+        cncPrograms.forEach((program) => {
+          program.uploaded_by_name = names.get(String(program.uploaded_by || "")) || "-";
+          (program.cnc_program_versions || []).forEach((version) => { version.uploaded_by_name = names.get(String(version.uploaded_by || "")) || "-"; });
+        });
+      }
     } catch (error) {
       console.warn("Detail load failed, using fallback:", error);
     }
@@ -20322,6 +20379,7 @@ async function hydrateDetail(order) {
     processes: processes.length ? processes : fallbackProcesses(order),
     reports: reports.length ? reports : fallbackReports(order),
     abnormalities: abnormalities.length ? abnormalities : fallbackAbnormalities(order),
+    cncPrograms,
   });
 }
 
@@ -20434,6 +20492,107 @@ function priorityLabel(priority) {
 function inspectionLabel(value) {
   const labels = { none: "無", pending: "待檢", pass: "通過", fail: "不通過", skipped: "略過" };
   return labels[value] || value || "-";
+}
+
+function machtileWorkOrderCncMarkup(order, programs) {
+  const core = globalThis.MachTileCncProgramUploadCore;
+  const versions = core?.flattenVersions(programs) || [];
+  const canUpload = state.source === "supabase" && isUuid(order.workOrderId) && core?.canUpload(machtileAuthState.role);
+  const rows = versions.map((version) => `
+    <tr>
+      <td><strong>${escapeHtml(version.version_no || "-")}</strong>${version.same_as_previous && versions[0]?.id === version.id ? "<small>同上版</small>" : ""}</td>
+      <td>${escapeHtml(version.file_name || "-")}</td>
+      <td><code>${escapeHtml(String(version.file_hash || "").slice(0, 12) || "-")}</code></td>
+      <td>${escapeHtml(version.uploaded_by_name || "-")}</td>
+      <td>${escapeHtml(formatDateTime(version.uploaded_at))}</td>
+    </tr>
+  `).join("");
+  return `
+    <section class="detail-section cnc-work-order-section" data-cnc-work-order="${escapeHtml(order.workOrderId || "")}">
+      <div class="detail-section-title">
+        <h3>CNC 程式版本</h3>
+        <span>${versions.length ? `${versions.length} 個版本` : "待上傳"}</span>
+      </div>
+      ${canUpload ? `
+        <div class="cnc-work-order-drop" data-cnc-work-order-drop role="button" tabindex="0">
+          <strong>拖曳 CNC 程式到這裡，或點擊選檔</strong>
+          <span>僅 planner／admin 可上傳；單檔上限 20MB；瀏覽器與 Storage bucket 雙重限制。</span>
+          <input type="file" data-cnc-work-order-file hidden>
+        </div>
+        <p class="admin-module-note" data-cnc-work-order-status aria-live="polite"></p>
+      ` : ""}
+      ${rows ? `<div class="cnc-work-order-table-wrap"><table class="cnc-work-order-table"><thead><tr><th>版本</th><th>檔名</th><th>SHA-256</th><th>上傳人</th><th>時間</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty-note">尚未上傳 CNC 程式。</p>'}
+    </section>
+  `;
+}
+
+function machtileInitWorkOrderCncUpload(order, programs) {
+  const core = globalThis.MachTileCncProgramUploadCore;
+  const root = document.querySelector("[data-cnc-work-order]");
+  const drop = root?.querySelector("[data-cnc-work-order-drop]");
+  const input = root?.querySelector("[data-cnc-work-order-file]");
+  const status = root?.querySelector("[data-cnc-work-order-status]");
+  if (!core || !drop || !input || !core.canUpload(machtileAuthState.role)) return;
+  let busy = false;
+  const handle = async (file) => {
+    if (busy) return;
+    const validation = core.validateFile(file);
+    if (!validation.ok) { status.textContent = validation.message; return; }
+    busy = true;
+    drop.classList.add("is-busy");
+    try {
+      status.textContent = "計算 SHA-256…";
+      const sha256 = await hashFile(file);
+      if (!sha256) throw new Error("此瀏覽器無法計算 SHA-256，未上傳任何檔案。");
+      const program = core.latestProgram(programs);
+      const tenantId = machtileTenantIdFromSession();
+      const filePath = core.storagePath({ tenantId, workOrderNo: order.id, sha256, fileName: file.name });
+      if (!filePath) throw new Error("無法建立安全的上傳路徑，請重新登入。");
+      const payload = {
+        work_order_id: order.workOrderId,
+        program_id: program?.id || null,
+        part_name: order.part || "未命名零件",
+        part_no: order.drawing || null,
+        process_name: order.process || "CNC 加工",
+        file_name: file.name,
+        sha256,
+        file_path: filePath,
+        file_size_bytes: file.size,
+      };
+      const latestVersion = core.flattenVersions(programs)[0];
+      if (latestVersion?.file_hash !== sha256) {
+        status.textContent = "上傳檔案…";
+        const response = await fetch(storageObjectUrl("machtile-cnc-programs", filePath), {
+          method: "POST",
+          headers: {
+            apikey: config.supabaseAnonKey,
+            Authorization: `Bearer ${machtileSupabaseBearerToken()}`,
+            "Content-Type": file.type || "application/octet-stream",
+            "x-upsert": "false",
+          },
+          body: file,
+        });
+        if (!response.ok) throw new Error(`檔案上傳失敗（${response.status}）`);
+      }
+      status.textContent = "登錄版本…";
+      const result = await supabaseFetch("rpc/cnc_program_work_order_version_register", { method: "POST", body: JSON.stringify({ p_payload: payload }) });
+      status.textContent = result?.same_as_previous ? "同上版：內容相同，未新增版本。" : `已上傳 ${result?.version_no || "新版本"}。`;
+      showToast(status.textContent);
+      await hydrateDetail(order);
+    } catch (error) {
+      status.textContent = `上傳失敗：${String(error?.message || error)}`;
+    } finally {
+      busy = false;
+      drop.classList.remove("is-busy");
+      input.value = "";
+    }
+  };
+  drop.addEventListener("click", () => input.click());
+  drop.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.click(); } });
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("is-over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
+  drop.addEventListener("drop", (event) => { event.preventDefault(); drop.classList.remove("is-over"); handle(event.dataTransfer?.files?.[0]); });
+  input.addEventListener("change", () => handle(input.files?.[0]));
 }
 
 function renderDetail(order, detail) {
@@ -20549,6 +20708,8 @@ function renderDetail(order, detail) {
       <p class="program-note">${escapeHtml(profile.toolChanges)}</p>
     </section>
 
+    ${machtileWorkOrderCncMarkup(order, detail.cncPrograms || [])}
+
     <section class="detail-section">
       <div class="detail-section-title">
         <h3>製程進度</h3>
@@ -20615,6 +20776,7 @@ function renderDetail(order, detail) {
       </section>
     </div>
   `;
+  machtileInitWorkOrderCncUpload(order, detail.cncPrograms || []);
 }
 
 function showToast(message) {

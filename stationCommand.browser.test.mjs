@@ -250,6 +250,11 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     }
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards);
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
+    if (p === "/rest/v1/cnc_programs") return json(200, [{
+      id: id(990), work_order_id: id(104), version: 3, sha256: "a".repeat(64),
+      file_path: `${T}/cnc-programs/XX01202502050012/aaaaaaaaaaaaaaaa-O500%20finish.NC`,
+      uploaded_by: "王小明", uploaded_at: "2026-10-13T01:02:03Z", same_as_previous: false,
+    }]);
     if (p === "/rest/v1/app_users") {
       if (url.searchParams.get("auth_user_id")) return json(200, [{ id: users[0].id, name: be.appUserName || users[0].name }]);
       return json(200, users.map(({ auth, ...u }) => u));
@@ -394,6 +399,11 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     ok(await a04.locator(".machine-program-panel").isHidden(), `${W}：程式細節預設收合`);
     await programSummary.click();
     ok(await a04.locator(".machine-program-panel").isVisible(), `${W}：點徽章列會展開程式細節`);
+    const programText = (await a04.locator(".machine-program-panel").innerText()).replace(/\s+/g, " ");
+    ok(programText.includes("上傳人 王小明") && programText.includes("上傳時間") && programText.includes("版本 V3") && programText.includes("檔名 O500 finish.NC"), `${W}：展開顯示上傳人／時間／版本／檔名`, programText);
+    await cardOf(page, "A01").locator(".machine-program-details summary").click();
+    const pendingProgramText = (await cardOf(page, "A01").locator(".machine-program-panel").innerText()).replace(/\s+/g, " ");
+    ok(pendingProgramText.includes("上傳人 —") && pendingProgramText.includes("上傳時間 —"), `${W}：無 metadata 顯示 —、不報錯`, pendingProgramText);
     await programSummary.click();
     const hmcFooterLabels = (await cardOf(page, "B01").locator(".machine-tile-actions > *").allInnerTexts()).map((t) => t.trim());
     ok(hmcFooterLabels[0] === "報工" && hmcFooterLabels.at(-1) === "多盤多工件每日盤點", `${W}：B01 報工在左、多盤按鈕保留最右`, hmcFooterLabels.join("｜"));
@@ -406,6 +416,10 @@ for (const vp of ["desktop", "tablet", "phone"]) {
           outside: btns.filter((r) => r.left < cr.left - 0.5 || r.right > cr.right + 0.5).length };
       });
       ok(overflow.doc <= 0 && overflow.card <= 0 && overflow.outside === 0, "390：三顆按鈕不會橫向溢出", JSON.stringify(overflow));
+    }
+    if (vp === "tablet") {
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      ok(overflow <= 1, `800px 沒有橫向捲動（${overflow}px）`);
     }
     // 跟 main（同樣旗標只開 A04）比：A04 以外的卡片原始 HTML 逐字相同；A04 變矮
     if (baselineAvailable) {
