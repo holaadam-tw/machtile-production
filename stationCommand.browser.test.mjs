@@ -277,6 +277,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
 const blocked = [];
 const VIEWPORTS = {
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
+  tablet: { viewport: { width: 800, height: 1100 }, deviceScaleFactor: 1 },
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 };
 
@@ -317,7 +318,11 @@ async function newPage(browser, vp, { backend, configExtra = "", baseline = fals
 const cardOf = (page, code) => page.locator("#workOrderGrid .machine-tile-card").filter({ has: page.locator("h2", { hasText: code }) }).first();
 const realErrors = (errors) => errors.filter((e) => !e.includes("CATALOG_ENDPOINT_INVALID"));
 // 卡片裡的報工／完整單連結會帶頁面網址（對照組在 /__baseline/ 底下）→ 比較前把那段拿掉
-const gridHtml = (page) => page.evaluate(() => document.getElementById("workOrderGrid").innerHTML.replace(/\s+/g, " ").split("/__baseline/").join("/"));
+const gridHtml = (page) => page.evaluate(() => {
+  const grid = document.getElementById("workOrderGrid").cloneNode(true);
+  grid.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove());
+  return grid.innerHTML.replace(/\s+/g, " ").split("/__baseline/").join("/");
+});
 const firstDiff = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return `@${i}: …${a.slice(Math.max(0, i - 80), i + 80)}… vs …${b.slice(Math.max(0, i - 80), i + 80)}…`; };
 const sheet = (page) => page.locator("#machtileStationCmdSheet");
 const fieldText = async (page, key) => (await sheet(page).locator(`[data-station-cmd-field="${key}"]`).innerText()).trim();
@@ -326,7 +331,7 @@ await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch();
 
 // ---------------------------------------------------------------------------------------------
-for (const vp of ["desktop", "phone"]) {
+for (const vp of ["desktop", "tablet", "phone"]) {
   const W = VIEWPORTS[vp].viewport.width;
   console.log(`\n== ${W}px：旗標關（預設）＝跟現在一模一樣 ==`);
   let baselineGrid = null;
@@ -375,15 +380,23 @@ for (const vp of ["desktop", "phone"]) {
     await a04.scrollIntoViewIfNeeded();
     await a04.screenshot({ path: path.join(outDir, `${vp}-01-a04-card.png`) });
 
-    // 2026-10-08 owner「卡片短一點」：開工／停工併進卡片底部那排（明細｜報工｜開工｜停工），中段「舊 MES」區塊拿掉
+    // 2026-10-12 owner：三種卡片統一底部列＝報工｜開工｜停工；中段「舊 MES」區塊維持移除
     ok(await a04.locator(".machine-tile-footer .machine-tile-actions [data-station-cmd]").count() === 2, `${W}：開工／停工在卡片底部按鈕列（.machine-tile-actions）`);
     ok(await a04.locator(".station-cmd-row, [data-station-cmd-row], .station-cmd-label").count() === 0, `${W}：A04 中段「舊 MES 開工 停工」區塊已拿掉`);
     const footerLabels = (await a04.locator(".machine-tile-actions > *").allInnerTexts()).map((t) => t.trim());
-    ok(footerLabels.join("｜") === "明細｜報工｜開工｜停工", `${W}：底部順序＝明細｜報工｜開工｜停工`, footerLabels.join("｜"));
+    ok(footerLabels.join("｜") === "報工｜開工｜停工", `${W}：底部順序＝報工｜開工｜停工`, footerLabels.join("｜"));
     const sizes = await a04.locator(".machine-tile-actions > button").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { h: Math.round(r.height), font: cs.fontSize, bg: cs.backgroundColor }; }));
-    ok(sizes.length === 4 && sizes.every((x) => x.h === sizes[0].h && x.font === sizes[0].font), `${W}：四顆按鈕同一個大小（跟明細／報工一樣）`, JSON.stringify(sizes));
-    ok(sizes[2]?.bg === "rgb(21, 128, 61)", `${W}：開工仍是綠色（--green-strong）`, sizes[2]?.bg);
-    ok(sizes[3]?.bg === "rgb(180, 35, 24)", `${W}：停工仍是紅色`, sizes[3]?.bg);
+    ok(sizes.length === 3 && sizes.every((x) => x.h === sizes[0].h && x.font === sizes[0].font), `${W}：三顆按鈕同一個大小`, JSON.stringify(sizes));
+    ok(sizes[1]?.bg === "rgb(21, 128, 61)", `${W}：開工仍是綠色（--green-strong）`, sizes[1]?.bg);
+    ok(sizes[2]?.bg === "rgb(180, 35, 24)", `${W}：停工仍是紅色`, sizes[2]?.bg);
+    const programSummary = a04.locator(".machine-program-details summary");
+    ok(await programSummary.count() === 1, `${W}：CNC 程式收斂成一列可展開徽章`);
+    ok(await a04.locator(".machine-program-panel").isHidden(), `${W}：程式細節預設收合`);
+    await programSummary.click();
+    ok(await a04.locator(".machine-program-panel").isVisible(), `${W}：點徽章列會展開程式細節`);
+    await programSummary.click();
+    const hmcFooterLabels = (await cardOf(page, "B01").locator(".machine-tile-actions > *").allInnerTexts()).map((t) => t.trim());
+    ok(hmcFooterLabels[0] === "報工" && hmcFooterLabels.at(-1) === "多盤多工件每日盤點", `${W}：B01 報工在左、多盤按鈕保留最右`, hmcFooterLabels.join("｜"));
     if (vp === "phone") {
       const overflow = await page.evaluate(() => {
         const card = [...document.querySelectorAll("#workOrderGrid .machine-tile-card")].find((c) => c.querySelector("h2")?.textContent.includes("A04"));
@@ -392,20 +405,20 @@ for (const vp of ["desktop", "phone"]) {
         return { doc: document.documentElement.scrollWidth - document.documentElement.clientWidth, card: card.scrollWidth - card.clientWidth,
           outside: btns.filter((r) => r.left < cr.left - 0.5 || r.right > cr.right + 0.5).length };
       });
-      ok(overflow.doc <= 0 && overflow.card <= 0 && overflow.outside === 0, "390：四顆按鈕不會橫向溢出（必要時換第二排）", JSON.stringify(overflow));
+      ok(overflow.doc <= 0 && overflow.card <= 0 && overflow.outside === 0, "390：三顆按鈕不會橫向溢出", JSON.stringify(overflow));
     }
     // 跟 main（同樣旗標只開 A04）比：A04 以外的卡片原始 HTML 逐字相同；A04 變矮
     if (baselineAvailable) {
       const bBe = makeBackend();
       const b = await newPage(browser, vp, { backend: bBe, baseline: true, configExtra: 'stationCommandMachines: ["A04"],' });
       const rawCards = (pg) => pg.evaluate(() => [...document.querySelectorAll("#workOrderGrid .machine-tile-card")]
-        .map((c) => ({ name: c.querySelector("h2")?.textContent.trim() || "", html: c.outerHTML.split("/__baseline/").join("/") })));
+        .map((c) => { const clone = c.cloneNode(true); clone.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove()); return { name: c.querySelector("h2")?.textContent.trim() || "", html: clone.outerHTML.split("/__baseline/").join("/") }; }));
       const mine = await rawCards(page);
       const theirs = await rawCards(b.page);
       const others = mine.filter((c) => !c.name.startsWith("A04"));
       const othersBase = theirs.filter((c) => !c.name.startsWith("A04"));
       ok(others.length > 0 && others.length === othersBase.length && others.every((c, i) => c.html === othersBase[i].html),
-        `${W}：A04 以外的 ${others.length} 張卡片原始 HTML 跟 ${baselineRef} 逐字相同（不壓空白）`,
+        `${W}：排除本 PR 的程式列／底部列後，A04 以外 ${others.length} 張卡片跟 ${baselineRef} 相同`,
         others.map((c, i) => c.html === othersBase[i]?.html ? "" : `${c.name} ${firstDiff(c.html, othersBase[i]?.html || "")}`).filter(Boolean).join(" | "));
       const baseA04 = cardOf(b.page, "A04");
       // #74 已合進 main 之後，基準本身就沒有中段區塊：此時「比 main 矮」不再適用，改印 SKIP（只在基準仍是舊版時斷言）

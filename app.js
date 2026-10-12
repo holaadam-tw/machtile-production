@@ -14166,6 +14166,17 @@ function renderMachineCard(machine) {
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
   const stationCmd = machtileStationCmdParts(machine);
+  const programPending = !profile || profile.programName === "待上傳";
+  const programSameAsPrevious = !programPending && profile.previousVersion && profile.previousVersion === profile.programVersion;
+  const programBadgeTone = programPending ? "pending" : programSameAsPrevious ? "same" : "uploaded";
+  const programBadgeLabel = programPending
+    ? "待上傳"
+    : programSameAsPrevious
+      ? "同上版"
+      : `已上傳${profile.programVersion && profile.programVersion !== "-" ? ` ${profile.programVersion}` : ""}`;
+  const reportAction = order && canReport
+    ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
+    : `<button type="button" class="machine-report-button" data-no-detail disabled>報工</button>`;
 
   return `
     <article class="machine-tile-card ${status.className} ${deptTone}" ${detailAttr}>
@@ -14182,7 +14193,11 @@ function renderMachineCard(machine) {
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
           ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
-          ${order ? `<a class="machine-open-link" data-no-detail ${flowLevel === "full" ? `data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" ` : ""}href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>` : ""}
+          ${order
+            ? `<a class="machine-open-link" data-no-detail ${flowLevel === "full" ? `data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" ` : ""}href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>`
+            : isHmc
+              ? `<button class="machine-open-link" type="button" data-no-detail data-hmc-machine-detail="${escapeHtml(machine.code || machine.name)}">機台詳情</button>`
+              : ""}
         </div>
       </header>
 
@@ -14204,14 +14219,18 @@ function renderMachineCard(machine) {
       ${machtileCardPoolEntryMarkup(machine)}
 
       ${order ? `
-        <div class="program-strip">
-          <span>CNC 程式</span>
-          <strong>${escapeHtml(profile.programName)}</strong>
-          <small>
-            ${escapeHtml(profile.programVersion)}
-            ${profile.previousVersion && profile.previousVersion !== profile.programVersion ? ` · 較 ${escapeHtml(profile.previousVersion)} 有差異` : " · 與上版相同"}
-          </small>
-        </div>
+        <details class="machine-program-details" data-no-detail>
+          <summary aria-label="CNC 程式：${escapeHtml(programBadgeLabel)}">
+            <span>CNC 程式</span>
+            <strong class="machine-program-badge is-${programBadgeTone}">${escapeHtml(programBadgeLabel)}</strong>
+            <small>點擊看細節</small>
+          </summary>
+          <div class="machine-program-panel">
+            <p><span>程式檔</span><strong>${escapeHtml(profile.programName)}</strong></p>
+            <p><span>目前版本</span><strong>${escapeHtml(profile.programVersion || "-")}</strong></p>
+            <p><span>版本比較</span><strong>${profile.previousVersion && profile.previousVersion !== profile.programVersion ? `較 ${escapeHtml(profile.previousVersion)} 有差異` : "與上版相同"}</strong></p>
+          </div>
+        </details>
       ` : ""}
 
       <div class="machine-metrics">
@@ -14260,18 +14279,8 @@ function renderMachineCard(machine) {
       ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
-          ${order
-            ? `<button class="machine-detail-button" type="button" data-detail="${escapeHtml(order.id)}">明細</button>`
-            : isHmc
-              ? `<button class="machine-detail-button" type="button" data-no-detail data-hmc-machine-detail="${escapeHtml(machine.code || machine.name)}">明細</button>`
-              : ""}
-          ${isHmc
-            ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>`
-            : order
-              ? canReport
-                ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
-                : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}">前往指派</button>`
-              : `<button type="button" data-no-detail data-schedule-open="${escapeHtml(machine.code || machine.name)}" ${["maintenance", "offline"].includes(machine.status) ? "disabled" : ""}>${["maintenance", "offline"].includes(machine.status) ? "不可指派" : "指派機台"}</button>`}${stationCmd.buttons}
+          ${reportAction}${stationCmd.buttons}
+          ${isHmc ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>` : ""}
         </div>
       </footer>
     </article>
