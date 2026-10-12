@@ -44,5 +44,22 @@
       .sort((left, right) => String(right.uploaded_at || right.updated_at || "").localeCompare(String(left.uploaded_at || left.updated_at || "")))[0] || null;
   }
 
-  return Object.freeze({ MAX_FILE_BYTES, UPLOAD_ROLES, canUpload, validateFile, sanitizeSegment, storagePath, flattenVersions, latestProgram });
+  function cardMetadata(program) {
+    const version = Number(program?.version || 0);
+    const pathParts = text(program?.file_path).split("/");
+    let fileName = pathParts[pathParts.length - 1] || "";
+    try { fileName = decodeURIComponent(fileName); } catch {}
+    fileName = fileName.replace(/^[0-9a-f]{16}-/i, "");
+    return Object.freeze({
+      fileName: fileName || "—",
+      version: version > 0 ? `V${version}` : "—",
+      previousVersion: program?.same_as_previous === true ? (version > 0 ? `V${version}` : "—") : (version > 1 ? `V${version - 1}` : "—"),
+      sha256: text(program?.sha256),
+      uploadedBy: text(program?.uploaded_by) || "—",
+      uploadedAt: text(program?.uploaded_at) || "",
+      sameAsPrevious: program?.same_as_previous === true,
+    });
+  }
+
+  return Object.freeze({ MAX_FILE_BYTES, UPLOAD_ROLES, canUpload, validateFile, sanitizeSegment, storagePath, flattenVersions, latestProgram, cardMetadata });
 });

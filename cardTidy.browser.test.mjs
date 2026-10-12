@@ -294,14 +294,14 @@ console.log("== 手機（Pixel 7）==");
   ok(inOrder(o4), "B04 也是同一個順序", JSON.stringify(o4));
   ok((await b01.locator("[data-card-orders-summary]").innerText()).trim() === "這台還掛 1 張", "B01：這台還掛 1 張（收起）");
   ok(await b01.locator(".machine-tile-footer .machine-hmc-report-link").isVisible(), "報工主流程「多盤多工件每日盤點」仍在卡片底部");
-  ok(await b01.locator(".machine-tile-footer .machine-detail-button").isVisible(), "「明細」按鈕仍在卡片底部");
+  ok(await b01.locator(".machine-tile-footer .machine-detail-button").count() === 0, "統一底部列不再放「明細」按鈕");
   ok(await cardOf(page, "B04").locator(".machine-tile-footer .machine-report-button").isVisible(), "一般機台（B04）「回報」按鈕還在");
   ok(await cardOf(page, "A01").locator(".machine-tile-footer .machine-report-button").isVisible(), "車床（A01）「回報」按鈕還在");
   await b01.scrollIntoViewIfNeeded();
   await b01.screenshot({ path: path.join(outDir, "02-phone-b01-card-after.png") });
 
   console.log("-- 明細頁看得到兩塊，按鈕照常能用 --");
-  await b01.locator(".machine-detail-button").click();
+  await b01.click({ position: { x: 12, y: 110 } });
   await page.locator("#detailSheet.is-open").waitFor();
   const hmcSection = page.locator("#detailContent [data-detail-hmc]");
   await hmcSection.waitFor();
@@ -336,7 +336,7 @@ console.log("== 手機（Pixel 7）==");
   await page.evaluate(() => closeDetail());
 
   console.log("-- 一般機台的明細不會多出這兩塊 --");
-  await cardOf(page, "B04").locator(".machine-detail-button").click();
+  await cardOf(page, "B04").click({ position: { x: 12, y: 110 } });
   await page.locator("#detailSheet.is-open").waitFor();
   await page.waitForFunction(() => document.querySelector("#detailContent .detail-head"));
   ok(await page.locator("#detailContent [data-detail-hmc]").count() === 0, "B04 明細沒有盤況區塊");
