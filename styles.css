@@ -5293,6 +5293,30 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .machtile-cnc-drop span { color: var(--muted); font-size: 12px; }
 .machtile-cnc-drop.is-over { background: #dbeafe; border-style: solid; }
 
+.cnc-work-order-drop {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 20px;
+  border: 2px dashed #93c5fd;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.cnc-work-order-drop span { color: #475569; font-size: 12px; }
+.cnc-work-order-drop.is-over { background: #dbeafe; border-color: #2563eb; }
+.cnc-work-order-drop.is-busy { cursor: wait; opacity: 0.65; pointer-events: none; }
+.cnc-work-order-table-wrap { overflow-x: auto; }
+.cnc-work-order-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cnc-work-order-table th,
+.cnc-work-order-table td { padding: 9px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; white-space: nowrap; }
+.cnc-work-order-table td:first-child strong,
+.cnc-work-order-table td:first-child small { display: block; }
+.cnc-work-order-table td:first-child small { color: #2563eb; font-weight: 700; }
+.cnc-work-order-table code { color: #334155; font-size: 12px; }
+
 .machtile-estimate-tabs {
   display: flex;
   flex-wrap: wrap;
