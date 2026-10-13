@@ -96,6 +96,9 @@ async function handleFake(r) {
     return json(200, users.map(({ auth, ...u }) => u));
   }
   if (p === "/rest/v1/production_reports" && req.method() === "GET") {
+    if ((url.searchParams.get("select") || "") === "report_type,report_payload,created_at") {
+      return json(200, [{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: ago(600) }]);
+    }
     if (failReportsRead) return r.abort();
     const pid = (url.searchParams.get("process_id") || "").replace(/^eq\./, "");
     return json(200, reports.filter((x) => x.process_id === pid).slice().reverse());

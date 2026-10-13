@@ -602,6 +602,25 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     ok(realErrors(errors).length === 0, `${W}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
+
+  console.log(`== ${W}px：11 台 CNC 名單開啟 ==`);
+  {
+    const be = makeBackend();
+    const allCnc = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"];
+    const { context, page, errors } = await newPage(browser, vp, { backend: be, configExtra: `stationCommandMachines: ${JSON.stringify(allCnc)},` });
+    ok(await page.evaluate((want) => JSON.stringify(config.stationCommandMachines) === JSON.stringify(want), allCnc), `${W}：頁面收到完整 11 台 CNC 名單`);
+    const eligibleFixtureMachines = ["A01", "A04"];
+    for (const machine of eligibleFixtureMachines) {
+      ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 2, `${W}：${machine} 有「開工」「停工」`);
+    }
+    for (const machine of ["B01", "B03"]) {
+      ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 0, `${W}：${machine} fixture 缺 ManufactureII Id 仍被安全擋下`);
+    }
+    ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === eligibleFixtureMachines.length * 2, `${W}：只有具備完整工序資料的 fixture 出現按鈕`);
+    ok(be.submits.length === 0, `${W}：只顯示按鈕，沒有自動送出指令`);
+    ok(realErrors(errors).length === 0, `${W}：11 台名單沒有 JS 錯誤`, realErrors(errors).join(" | "));
+    await context.close();
+  }
 }
 
 console.log("\n== 390px：送出時 RPC 不存在 → 功能藏起來 ==");
@@ -1119,8 +1138,11 @@ console.log("\n== 390px：作業員、今天已經有今日開工 → 沒有數�
   ok(await dailyField(page).count() === 0 && await sheet(page).locator("[data-station-cmd-daily]").count() === 0, "已有今日開工 → 沒有數量欄");
   await sheet(page).locator("[data-station-cmd-confirm]").click();
   await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+  be.mode = "applied";
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
   await page.waitForTimeout(800);
-  ok(be.submits.length === 1 && be.reportUpserts.length === 0, `已有今日開工 → 只送開工指令（${be.submits.length}／${be.reportUpserts.length}）`);
+  ok(be.submits.length === 1 && be.reportUpserts.length === 0 && be.directPosts.length === 0,
+    `名單內機台已有今日開工 → 再按開工只送一筆指令、不生第二筆 dailyStart（指令 ${be.submits.length}／RPC 報工 ${be.reportUpserts.length}／direct 報工 ${be.directPosts.length}）`);
   ok(await sheet(page).locator("[data-station-cmd-daily-state]").count() === 0, "結果畫面也沒有今日開工字樣");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();

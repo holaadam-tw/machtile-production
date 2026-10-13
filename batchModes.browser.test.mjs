@@ -145,6 +145,9 @@ async function handleFake(route) {
     return json(200, (body.p_process_ids || []).map(progressRow).filter(Boolean));
   }
   if (p === "/rest/v1/production_reports") {
+    if ((url.searchParams.get("select") || "") === "report_type,report_payload,created_at") {
+      return json(200, [{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: new Date().toISOString() }]);
+    }
     if ((url.searchParams.get("cycle_time_seconds") || "") === "not.is.null") {
       const extra = [...inserted.values()].filter((x) => x.cycle_time_seconds != null).map((x) => ({ process_id: x.process_id, cycle_time_seconds: x.cycle_time_seconds, created_at: x.__created }));
       return json(200, [...machineTimeRows, ...extra]);

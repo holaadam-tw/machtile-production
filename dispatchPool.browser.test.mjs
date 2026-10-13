@@ -23,10 +23,12 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], returnRequests = [];
+let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], returnRequests = [], exposeAssignedOrder = true;
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
+const rolloutConfig = await readFile(path.join(root, 'config.js'), 'utf8');
+const rolloutIndex = await readFile(path.join(root, 'index.html'), 'utf8');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 const server = createServer(async (req, res) => { if (req.method !== 'GET') { res.writeHead(405); res.end(); return; } const u = new URL(req.url, 'http://localhost'); const file = path.resolve(root, '.' + (u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname))); if (!file.startsWith(root + path.sep)) { res.writeHead(403); res.end(); return; } try { res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' }); res.end(await readFile(file)); } catch { res.writeHead(404); res.end(); } });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -78,12 +80,13 @@ async function openApp(role, width) {
       const rows = machineRows.filter(m => access.all_departments || access.department_codes.includes(m.department_name === '車床課' ? 'LATHE' : 'MILL'));
       return json(200, p.endsWith('/v_machine_management_cards') ? rows.map(({ id, name, ...row }) => ({ ...row, machine_id: id, machine_name: name })) : rows);
     }
-    if (p === '/rest/v1/work_orders') return json(200, [{ ...order, work_order_processes: [proc] }]);
+    if (p === '/rest/v1/work_orders') return json(200, exposeAssignedOrder ? [{ ...order, work_order_processes: [proc] }] : []);
     if (p === '/rest/v1/work_order_processes') {
+      if (!exposeAssignedOrder) return json(200, []);
       if ((u.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, [{ ...proc, off_station_at: null, work_orders: order, machines: machineRows[0] }]);
       return json(200, [proc]);
     }
-    if (p === '/rest/v1/v_work_order_cards') return json(200, [{ id: order.id, tenant_id: tenant, work_order_no: order.work_order_no, part_name: order.part_name, quantity: order.quantity, due_date: order.due_date, work_order_status: order.status, current_process_id: proc.id, current_process_name: proc.process_name, current_process_status: proc.status, machine_name: 'A01', qty_completed: 0, qty_defect: 0, current_process_off_station: false }]);
+    if (p === '/rest/v1/v_work_order_cards') return json(200, exposeAssignedOrder ? [{ id: order.id, tenant_id: tenant, work_order_no: order.work_order_no, part_name: order.part_name, quantity: order.quantity, due_date: order.due_date, work_order_status: order.status, current_process_id: proc.id, current_process_name: proc.process_name, current_process_status: proc.status, machine_name: 'A01', qty_completed: 0, qty_defect: 0, current_process_off_station: false }] : []);
     if (p === '/rest/v1/rpc/batch_report_progress') return json(200, []);
     return json(200, []);
   });
@@ -96,6 +99,8 @@ async function openApp(role, width) {
 const poolKeys = page => page.locator('#machtileCardSelection [data-card-selection-pool] [data-pool-key]').evaluateAll(xs => xs.map(x => x.getAttribute('data-pool-key')));
 
 try {
+  ok(/dispatchPoolMachines:\s*\["A01",\s*"A03"\]/.test(rolloutConfig), 'rollout config enables only A01 and A03');
+  ok(rolloutIndex.includes('config.js?v=20261013-dispatch-pool-a01a03-r1'), 'rollout config cache key is bumped');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
@@ -161,6 +166,20 @@ try {
     ok(await page.locator('[data-card-pool-open]').count() === 0, 'empty pool: no operator entry');
     await ctx.close();
   }
+  // Production rollout allowlist: A01/A03 can claim; every other machine remains non-actionable.
+  poolMode = 'rows'; dispatchPoolMachines = ['A01', 'A03']; claimWinner = ''; exposeAssignedOrder = false;
+  access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
+  {
+    const { ctx, page } = await openApp('operator', 1440);
+    for (const machine of ['A01', 'A02', 'A03']) {
+      await page.locator(`[data-card-pool-open="${machine}"]`).click();
+      const claim = page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]');
+      ok((machine === 'A01' || machine === 'A03') ? await claim.isEnabled() : await claim.isDisabled(), `rollout: ${machine} claim action matches A01/A03-only allowlist`);
+      await page.locator('[data-close-card-selection]').click();
+    }
+    await ctx.close();
+  }
+  exposeAssignedOrder = true;
   // Planner returns the claimed A01 item, then another machine reclaims it.
   poolMode = 'rows'; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; returnRequests = []; claimRequests = [];
   access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };

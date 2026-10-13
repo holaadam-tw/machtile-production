@@ -254,6 +254,7 @@ try {
     await a.reload({ waitUntil: "commit" });
     await a.waitForTimeout(800);
     ok(authorizeRequests.length === countBefore, "重新載入後沒有再自動開一次登入");
+    await a.waitForSelector("[data-machtile-oauth-login]");
     ok((await gateText(a)).includes("等待登入完成"), "顯示「等待登入完成」");
     await a.click("[data-machtile-oauth-login]");
     await waitFor(async () => authorizeRequests.length > countBefore);
