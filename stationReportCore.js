@@ -87,6 +87,42 @@
     };
   }
 
+  function positiveSeconds(value) {
+    const seconds = Number(value);
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  }
+
+  // Factory's preview is authoritative. The existing cloud-synced process value is
+  // only a fallback when the applier has not returned FWC/IQR timing yet.
+  function previewCycleTime(previewResult, fallbackSeconds = null) {
+    const rate = isPlainObject(previewResult?.rate_check) ? previewResult.rate_check : {};
+    const owner = positiveSeconds(rate.FWC_OwnerCycleSeconds ?? rate.fwc_owner_cycle_seconds ?? previewResult?.FWC_OwnerCycleSeconds);
+    if (owner) return { seconds: owner, source: "FWC_OwnerCycleSeconds", estimated: false };
+    const iqr = positiveSeconds(rate.iqr_cycle_seconds ?? rate.IQRCycleSeconds ?? previewResult?.iqr_cycle_seconds);
+    if (iqr) return { seconds: iqr, source: "IQR 實測估計", estimated: true };
+    const fallback = positiveSeconds(fallbackSeconds);
+    return fallback ? { seconds: fallback, source: "既有同步工時", estimated: true } : null;
+  }
+
+  function rateReasonableness({ previewResult, fallbackSeconds = null, startedAt, serverNow, reportedQty } = {}) {
+    const cycle = previewCycleTime(previewResult, fallbackSeconds);
+    const startMs = Date.parse(startedAt);
+    const nowMs = Date.parse(serverNow);
+    const qty = Number(reportedQty);
+    if (!cycle || !Number.isFinite(startMs) || !Number.isFinite(nowMs) || nowMs < startMs ||
+        !Number.isInteger(qty) || qty < 0) return null;
+    const maxQty = Math.floor((nowMs - startMs) / 1000 / cycle.seconds);
+    return {
+      maxQty,
+      reportedQty: qty,
+      cycleSeconds: cycle.seconds,
+      source: cycle.source,
+      estimated: cycle.estimated,
+      warn: qty > maxQty,
+      message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "",
+    };
+  }
+
   function validateReportInput(input, failReasonCodes = FAIL_REASON_DEFAULTS) {
     const x = input || {};
     const good = Number(x.goodQty);
@@ -298,7 +334,7 @@
 
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT,
-    ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, validateReportInput, buildSubmitArgs,
+    ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck, createClient,
   });
 });
