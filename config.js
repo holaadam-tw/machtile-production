@@ -63,7 +63,7 @@ window.MACHTILE_CONFIG = {
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
   // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
-  stationCommandMachines: ["A04"],
+  stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
   stationReportMachines: ["A04"],

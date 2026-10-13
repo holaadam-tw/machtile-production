@@ -603,6 +603,25 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     ok(realErrors(errors).length === 0, `${W}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
+
+  console.log(`== ${W}px：11 台 CNC 名單開啟 ==`);
+  {
+    const be = makeBackend();
+    const allCnc = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"];
+    const { context, page, errors } = await newPage(browser, vp, { backend: be, configExtra: `stationCommandMachines: ${JSON.stringify(allCnc)},` });
+    ok(await page.evaluate((want) => JSON.stringify(config.stationCommandMachines) === JSON.stringify(want), allCnc), `${W}：頁面收到完整 11 台 CNC 名單`);
+    const eligibleFixtureMachines = ["A01", "A04"];
+    for (const machine of eligibleFixtureMachines) {
+      ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 2, `${W}：${machine} 有「開工」「停工」`);
+    }
+    for (const machine of ["B01", "B03"]) {
+      ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 0, `${W}：${machine} fixture 缺 ManufactureII Id 仍被安全擋下`);
+    }
+    ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === eligibleFixtureMachines.length * 2, `${W}：只有具備完整工序資料的 fixture 出現按鈕`);
+    ok(be.submits.length === 0, `${W}：只顯示按鈕，沒有自動送出指令`);
+    ok(realErrors(errors).length === 0, `${W}：11 台名單沒有 JS 錯誤`, realErrors(errors).join(" | "));
+    await context.close();
+  }
 }
 
 console.log("\n== 390px：送出時 RPC 不存在 → 功能藏起來 ==");

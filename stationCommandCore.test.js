@@ -29,6 +29,10 @@ eq("A04 開", c.enabledForMachine(flagA04, "A04"), true);
 eq("A01 關", c.enabledForMachine(flagA04, "A01"), false);
 eq("空代號 → 關", c.enabledForMachine(flagA04, ""), false);
 eq("* → B03 也開", c.enabledForMachine(c.parseFlag("*"), "b03"), true);
+const allCncMachines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"];
+const allCncFlag = c.parseFlag(allCncMachines);
+eq("11 台 CNC 名單逐台開啟", allCncMachines.map((machine) => c.enabledForMachine(allCncFlag, machine)), Array(11).fill(true));
+eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), false);
 
 console.log("== 單台報工今日開工分頁 ==");
 eq("名單內 A04 → 隱藏今日開工", c.dailyStartReportVisible(flagA04, "A04"), false);
