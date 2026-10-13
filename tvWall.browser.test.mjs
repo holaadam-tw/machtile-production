@@ -189,6 +189,11 @@ async function settle(page, cond, label) {
 async function openTv(page) {
   await page.goto(base + "?view=tv", { waitUntil: "domcontentloaded" });
   await settle(page, () => document.getElementById("tvWall")?.dataset.tvState === "ok" && document.querySelectorAll("#tvWall .tv-cell").length === 11, "tv ok");
+  // The first successful TV render can precede the remaining signed-in startup
+  // reads. Let those reads finish before advancing the fake clock, otherwise a
+  // department-generation change can race the 60-second refresh under load.
+  await page.waitForLoadState("networkidle");
+  await settle(page, () => document.getElementById("tvWall")?.dataset.tvState === "ok" && document.querySelectorAll("#tvWall .tv-cell").length === 11, "tv stable after startup");
 }
 
 // 快轉 n 秒（計時器照跑），後端的「現在」也跟著走
