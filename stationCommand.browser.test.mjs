@@ -1139,8 +1139,11 @@ console.log("\n== 390px：作業員、今天已經有今日開工 → 沒有數�
   ok(await dailyField(page).count() === 0 && await sheet(page).locator("[data-station-cmd-daily]").count() === 0, "已有今日開工 → 沒有數量欄");
   await sheet(page).locator("[data-station-cmd-confirm]").click();
   await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+  be.mode = "applied";
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
   await page.waitForTimeout(800);
-  ok(be.submits.length === 1 && be.reportUpserts.length === 0, `已有今日開工 → 只送開工指令（${be.submits.length}／${be.reportUpserts.length}）`);
+  ok(be.submits.length === 1 && be.reportUpserts.length === 0 && be.directPosts.length === 0,
+    `名單內機台已有今日開工 → 再按開工只送一筆指令、不生第二筆 dailyStart（指令 ${be.submits.length}／RPC 報工 ${be.reportUpserts.length}／direct 報工 ${be.directPosts.length}）`);
   ok(await sheet(page).locator("[data-station-cmd-daily-state]").count() === 0, "結果畫面也沒有今日開工字樣");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
