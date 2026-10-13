@@ -76,6 +76,18 @@ check("guard config must match the requested machine and exact enabled map", () 
   assert.equal(core.guardConfigReportEnabled(config, "A04"), true);
 });
 
+check("rate check prioritizes Factory owner time, warns without blocking, and hides without timing", () => {
+  const base = { startedAt: "2026-10-13T01:00:00.000Z", serverNow: "2026-10-13T01:10:00.000Z", reportedQty: 7 };
+  const owner = core.rateReasonableness({ ...base, previewResult: { rate_check: { FWC_OwnerCycleSeconds: 100, iqr_cycle_seconds: 80 } }, fallbackSeconds: 50 });
+  assert.deepEqual(owner, { maxQty: 6, reportedQty: 7, cycleSeconds: 100, source: "FWC_OwnerCycleSeconds", estimated: false, warn: true, message: "照工時這段時間最多約 6 件，你報 7 件，請確認" });
+  const iqr = core.rateReasonableness({ ...base, reportedQty: 6, previewResult: { rate_check: { iqr_cycle_seconds: 100 } } });
+  assert.equal(iqr.warn, false);
+  assert.equal(iqr.source, "IQR 實測估計");
+  assert.equal(iqr.message, "");
+  assert.equal(core.rateReasonableness({ ...base, previewResult: {} }), null);
+  assert.equal(core.rateReasonableness({ ...base, previewResult: {}, fallbackSeconds: 100 }).source, "既有同步工時");
+});
+
 check("legacy report identity maps only explicit bridge projection fields", () => {
   const projected = { legacy_index_sn: 2, manufacture_ii_id: "MII-00042", simulation_id: "Y011BG35APT0", process_order: 99 };
   assert.deepEqual(core.legacyIdentityFromProjection(projected), {

@@ -229,9 +229,9 @@ const reportTypeMeta = {
     quantityMode: "cumulative",
   },
   noon: {
-    label: "中午報工",
+    label: "報工",
     needsQty: true,
-    submitLabel: "送出中午報工",
+    submitLabel: "送出報工",
     quantityMode: "cumulative",
   },
   afternoonCheck: {
@@ -8304,14 +8304,15 @@ function validateReportForm(type) {
   if (type === "workStart") {
     if (!Number($("#workTotalQty")?.value || 0)) return "請填寫工件總數。";
     if (!getReportCycleSeconds()) return "請填寫 cycle time。";
-    if (!hasFile("startPhoto")) return "首次開工必須拍照。";
+    const photoError = MachTileReportPhotoCore.validationError(type, hasFile("startPhoto"));
+    if (photoError) return photoError;
     if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成首次開工首件檢查表。";
   }
   if (type === "dailyStart") {
     if (($("#machineQty")?.value ?? "") === "") return "請填寫目前機台已加工數量。";
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
-    if (completed < 0 || defects < 0) return "這次良品與這次不良不可小於 0。";
+    if (completed < 0 || defects < 0) return "良品累計與不良累計不可小於 0。";
   }
   if (type === "afternoonCheck") {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -8319,12 +8320,10 @@ function validateReportForm(type) {
     if (selectedRadioValue("pmAbnormal") === "yes" && !$("#pmAbnormalNote")?.value.trim()) return "有異常時請填寫異常備註。";
   }
   if (type === "finish") {
-    if (!hasFile("finishPhoto")) return "收工 / 完工必須拍照。";
     if (!checkedRadio("finishOvertime")) return "請確認是否加班。";
   }
   if (type === "abnormal") {
     if (!$("#abnormalType")?.value) return "請選擇異常類型。";
-    if (!hasFile("abnormalPhoto")) return "異常回報必須拍照。";
   }
   return "";
 }
@@ -8405,13 +8404,12 @@ function reportFilesForType(type) {
     const file = fileForInput(inputId);
     if (file) files.push({ file, kind, label });
   };
+  const photoSpec = MachTileReportPhotoCore.PHOTO_BY_TYPE[type];
+  const selectedPhoto = photoSpec ? MachTileReportPhotoCore.selectedPhoto(type, fileForInput(photoSpec.inputId)) : null;
+  if (selectedPhoto) files.push(selectedPhoto);
   if (type === "workStart") {
-    pushFile("startPhoto", "start_photo", "開工照片");
     pushFile("programUpload", "cnc_program", "CNC 程式");
   }
-  if (type === "dailyStart") pushFile("machinePhoto", "machine_photo", "今日開工機台照片");
-  if (type === "finish") pushFile("finishPhoto", "finish_photo", "完工照片");
-  if (type === "abnormal") pushFile("abnormalPhoto", "abnormal_photo", "異常照片");
   return files;
 }
 
@@ -17257,11 +17255,9 @@ async function machtileInitFlowVisibilityModule() {
 function renderReportRulesModule() {
   const rules = [
     ["首次開工", "工件總數、cycle time 必填", "開工照片、首件檢查必填；程式選填", "產生預估完工與中午目標"],
-    ["今日開工", "當日第一筆", "機台已加工數量必填；機台照片選填", "建立當日加工基準"],
-    ["中午報工", "中午休息前", "這次良品 / 這次不良必填（不是累計）", "判斷是否加班或拆單"],
-    ["下午 4:30 檢查", "固定提醒", "下午檢查表必填、不填數量", "主管下班前確認風險"],
-    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）/ 完工照片必填", "結算當日進度"],
-    ["異常回報", "事件式", "異常類型與照片必填", "異常備註與主管處理"],
+    ["報工", "隨時可按", "照計數器填累計良品 / 不良", "智慧報工先預覽再確認"],
+    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）必填；完工照片選填", "結算當日進度"],
+    ["異常回報", "事件式", "異常類型必填；異常照片選填", "異常備註與主管處理"],
   ];
   return renderRuleTable("報工規則", rules, "儲存報工規則");
 }
@@ -20827,19 +20823,19 @@ function appendAiSupportMessage(role, text) {
 function aiSupportAnswer(question) {
   const q = String(question || "").toLowerCase();
   if (q.includes("相機") || q.includes("拍照") || q.includes("照片")) {
-    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n首次開工、收工/完工、異常回報的照片是必填；今日開工的機台照片與 CNC 程式檔是選填。";
+    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n只有首次開工的開工照片必填；今日開工、收工/完工、異常回報的照片與 CNC 程式檔都是選填。";
   }
   if (q.includes("暫停") || q.includes("pause") || q.includes("停工")) {
-    return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。正常中午休息不要用暫停，請用「中午報工」。";
+    return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。一般進度請用「報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 今日開工：目前機台已加工數量必填，機台照片選填。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 報工：隨時可按，照機台計數器填累計數量，先預覽再確認。\n3. 收工/完工：填數量與是否加班，完工照片選填。\n4. 異常回報：異常類型必填，照片選填。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";
   }
   if (q.includes("警報") || q.includes("延誤") || q.includes("加班") || q.includes("風險")) {
-    return "警報頁是風險處理中心。可能延誤、已延誤、異常、待品檢、未回報都集中在那裡。\n\n中午報工是判斷要不要加班的關鍵；下午 4:30 檢查是讓主管下班前確認是否要處理。";
+    return "警報頁是風險處理中心。可能延誤、已延誤、異常、待品檢、未回報都集中在那裡。\n\n報工預覽會提示數量與工時是否合理，但不會擋住送出。";
   }
   if (q.includes("管理") || q.includes("設定") || q.includes("員工") || q.includes("程式") || q.includes("加工時間")) {
     return "管理頁目前包含機台、員工、邀請碼、供應商授權、公司資料、製程模板、報工規則、CNC 程式管理、加工時間管理、通知規則、串接設定與資料匯出。\n\nCNC 程式管理用來保存程式版次與 hash；加工時間管理用來保存純加工時間、歷史平均與日產能。";
@@ -20850,7 +20846,7 @@ function aiSupportAnswer(question) {
   if (q.includes("客服") || q.includes("ai") || q.includes("幫助")) {
     return "我是 MachTile 的內建 AI 客服，先用產品規則回答常見問題。下一步可以接 OpenAI API 或 LINE Messaging API，讓我回答廠內 SOP、報工規則、警報處理與客戶導入問題。";
   }
-  return "我先用 MachTile 的規則回答：這個問題可能跟報工、機台、警報、管理或部署有關。你可以問得更具體一點，例如「中午報工要填什麼」、「暫停加工怎麼用」、「QR 可以給未排機嗎」或「Supabase 地端怎麼部署」。";
+  return "我先用 MachTile 的規則回答：這個問題可能跟報工、機台、警報、管理或部署有關。你可以問得更具體一點，例如「報工要填什麼」、「暫停加工怎麼用」、「QR 可以給未排機嗎」或「Supabase 地端怎麼部署」。";
 }
 
 function submitAiSupportQuestion(question) {
@@ -21335,6 +21331,16 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
+  const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
+  const rateCheck = result && ["previewed", "preview-soft"].includes(result.kind)
+    ? core.rateReasonableness({
+        previewResult: result.preview,
+        fallbackSeconds: order ? machtileBatchState.machineTimeByProcess?.get?.(String(order.processId)) : null,
+        startedAt: progress?.last_report_at || progress?.actual_start_at || null,
+        serverNow: flow.preview?.requested_at || null,
+        reportedQty: Number(row.good || 0) + Number(row.bad || 0),
+      })
+    : null;
   const operatorName = machtileBatchState.users.find((user) => String(user.id) === String(row.operatorId))?.name || row.operatorId || "未選報工人";
   const confirmCard = `<div class="station-report-confirm-card" role="group" aria-label="報工確認資訊">
     <strong>${escapeHtml(machtileBatchMachineLabel(code))}・${escapeHtml(operatorName)}</strong>
@@ -21348,7 +21354,7 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     const resultTone = result.kind === "applied" || result.kind === "previewed" ? "success"
       : result.kind === "pending" ? "pending" : result.kind === "soft" || result.kind === "preview-soft" ? "warning" : "error";
     const previewValues = result.values && Number.isInteger(result.values.available)
-      ? `<div class="station-report-preview-values"><span>目前可報 <strong>${result.values.available}</strong> 件</span>${Number.isInteger(result.values.predicted_ac03_qty) ? `<span>預估先領 <strong>${result.values.predicted_ac03_qty}</strong> 件</span>` : ""}</div>`
+      ? `<div class="station-report-preview-values"><span>目前可報 <strong>${result.values.available}</strong> 件</span>${Number.isInteger(result.values.predicted_ac03_qty) ? `<span>預估先領 <strong>${result.values.predicted_ac03_qty}</strong> 件</span>` : ""}${rateCheck ? `<span>工時上限約 <strong>${rateCheck.maxQty}</strong> 件（${escapeHtml(rateCheck.source)}${rateCheck.estimated ? "，估計" : ""}）</span>` : ""}</div>${rateCheck?.warn ? `<p class="station-report-rate-warning" role="note">${escapeHtml(rateCheck.message)}</p>` : ""}`
       : "";
     const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview); return true; } catch { return false; } })();
     const prevIndex = Number(result.previousIndex);
@@ -21785,7 +21791,7 @@ function machtileBatchStartInfo(order, endedAtIso, mode) {
 
 function machtileBatchMachineTimeDefault(order) {
   if (!order) return null;
-  const sec = machtileBatchState.machineTimeByProcess.get(String(order.processId));
+  const sec = machtileBatchState.machineTimeByProcess?.get?.(String(order.processId));
   return Number(sec) > 0 ? Number(sec) : null;
 }
 
