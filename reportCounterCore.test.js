@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { latestBaseline, calculate } = require("./reportCounterCore.js");
+const { latestBaseline, calculate, rateReasonableness } = require("./reportCounterCore.js");
 
 const start = { report_type: "dailyStart", created_at: "2026-10-13T00:10:00Z", report_payload: { machine_qty: 100 } };
 const report = { report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 145 } };
@@ -13,4 +13,6 @@ const second = calculate(160, latestBaseline([start, { ...report, report_payload
 assert.equal(first.delta, 45, "first report uses daily-start counter");
 assert.equal(second.delta, 15, "second report uses first report cumulative counter");
 assert.equal(calculate(10, null).code, "BASELINE_REQUIRED", "missing baseline requires start or manual baseline");
-console.log("PASS: cumulative report counter rules (8 assertions)");
+assert.equal(rateReasonableness({ cycleSeconds: 100, startedAt: "2026-10-13T01:00:00Z", now: "2026-10-13T01:10:00Z", reportedQty: 7 }).warn, true, "quantity over elapsed capacity warns");
+assert.equal(rateReasonableness({ cycleSeconds: 100, startedAt: "2026-10-13T01:00:00Z", now: "2026-10-13T01:10:00Z", reportedQty: 6 }).warn, false, "quantity at elapsed capacity is normal");
+console.log("PASS: cumulative report counter rules (10 assertions)");

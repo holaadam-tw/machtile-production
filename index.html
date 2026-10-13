@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261013-ireporter-machine-link-p3-r3">
+  <link rel="stylesheet" href="./styles.css?v=20261013-cumulative-counter-rate-r2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -454,6 +454,7 @@
             </div>
 
             <div id="reportCounterPreview" class="report-counter-preview" role="status">累計 -｜上次 -｜這次 -</div>
+            <p id="reportCounterRateWarning" class="station-report-rate-warning" role="note" hidden></p>
             <div id="reportCounterManual" class="report-counter-manual" hidden>
               <p>今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。</p>
               <label class="field-label" for="reportCounterManualBaseline">手填基準 <small>必填</small></label>

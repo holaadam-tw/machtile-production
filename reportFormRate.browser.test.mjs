@@ -30,6 +30,7 @@ const encode = value => Buffer.from(JSON.stringify(value)).toString("base64url")
 const token = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: id(801), email: "operator@test.invalid", exp: Math.floor(Date.now() / 1000) + 3600, role: "authenticated", app_metadata: { tenant_id: tenant, role: "operator" } })}.synthetic`;
 let checks = 0;
 let counterReports = [{ report_type: "dailyStart", created_at: "2026-10-13T00:10:00.000Z", report_payload: { machine_qty: 100 } }];
+let submittedPayload = null;
 function check(value, label) { assert.ok(value, label); checks++; console.log(`PASS ${label}`); }
 
 const browser = await chromium.launch();
@@ -47,6 +48,10 @@ await context.route("**/*", async route => {
     if (url.pathname === "/rest/v1/v_machine_management_cards") return json([{ id: id(201), machine_code: "A01", machine_name: "A01", machine_type: "車床", status: "idle", display_order: 1 }]);
     if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: processId, legacy_output: 0, legacy_fail: 0, last_report_at: "2026-10-13T01:00:00.000Z", actual_start_at: "2026-10-13T00:00:00.000Z" }]);
     if (url.pathname === "/rest/v1/production_reports" && request.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(counterReports);
+    if (url.pathname === "/rest/v1/production_reports" && request.method() === "POST") {
+      submittedPayload = request.postDataJSON();
+      return json([submittedPayload]);
+    }
     return json(url.pathname.startsWith("/rest/v1/rpc/") ? null : []);
   }
   if (url.origin === new URL(base).origin) {
@@ -110,6 +115,26 @@ check((await page.locator('label[for="completedQty"]').innerText()).startsWith("
 await page.screenshot({ path: path.join(screenshotDir, "20261013-report-cumulative-counter-800px.png"), fullPage: true });
 await page.locator('[data-report-type="finish"]').click();
 check((await page.locator("#reportCounterPreview").innerText()) === "累計 145｜上次 130｜這次 15" && (await page.locator("#completedQtyLabel").innerText()) === "機台目前累計數", "收工分頁套用相同累計差額規則");
+
+counterReports = [{ report_type: "noon", created_at: new Date(Date.now() - 600_000).toISOString(), report_payload: { machine_qty: 130 } }];
+await page.locator('[data-report-type="noon"]').click();
+await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
+await page.evaluate(() => {
+  document.querySelector("#cycleMinutes").value = "0";
+  document.querySelector("#cycleSeconds").value = "100";
+  document.querySelector("#cycleSeconds").dispatchEvent(new Event("input", { bubbles: true }));
+});
+await page.locator("#defectQty").fill("0");
+await page.locator("#completedQty").fill("136");
+check(await page.locator("#reportCounterRateWarning").isHidden(), "normal Z plus defects does not show rate warning");
+await page.locator("#completedQty").fill("137");
+const realRateWarning = page.locator("#reportCounterRateWarning");
+check(await realRateWarning.isVisible() && (await realRateWarning.innerText()).includes("7"), "real cumulative preview shows warning when Z plus defects exceeds capacity");
+check(await page.locator("#reportForm .submit-report").isEnabled(), "rate warning leaves submit enabled");
+check((await page.evaluate(() => validateReportForm("noon"))) === "", "rate warning is non-blocking validation");
+await page.screenshot({ path: path.join(screenshotDir, "20261013-report-rate-warning-real-flow-800px.png"), fullPage: true });
+await page.evaluate(() => submitReport(7, 0, "", "noon"));
+check(submittedPayload?.completed_qty === 7, "rate warning does not block real submit and payload uses Z");
 
 const rate = await page.evaluate(() => {
   const core = window.MachTileStationReportCore;

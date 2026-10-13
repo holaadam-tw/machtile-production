@@ -8186,13 +8186,24 @@ function reportCounterCalculation() {
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
 }
 
+function reportCounterRateReasonableness(result = reportCounterCalculation()) {
+  return window.MachTileReportCounterCore.rateReasonableness({
+    cycleSeconds: getReportCycleSeconds(),
+    startedAt: reportCounterBaselineState.baseline?.createdAt,
+    now: new Date().toISOString(),
+    reportedQty: result.valid ? result.delta + Number($("#defectQty")?.value || 0) : null,
+  });
+}
+
 function updateReportCounterPreview() {
   const preview = $("#reportCounterPreview");
   const manual = $("#reportCounterManual");
+  const rateWarning = $("#reportCounterRateWarning");
   if (!preview || !manual) return;
   const applies = reportCounterApplies();
   preview.hidden = !applies;
   manual.hidden = !applies || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
+  if (rateWarning) { rateWarning.hidden = true; rateWarning.textContent = ""; }
   if (!applies) return;
   if (reportCounterBaselineState.status === "loading") {
     preview.textContent = "正在讀取今天的機台計數基準…";
@@ -8211,6 +8222,11 @@ function updateReportCounterPreview() {
   const delta = result.delta ?? "-";
   preview.textContent = `累計 ${current}｜上次 ${baseline}｜這次 ${delta}${result.valid ? "" : `；${result.message}`}`;
   preview.classList.toggle("is-error", !result.valid);
+  const rateCheck = reportCounterRateReasonableness(result);
+  if (rateWarning && rateCheck?.warn) {
+    rateWarning.textContent = rateCheck.message;
+    rateWarning.hidden = false;
+  }
 }
 
 async function loadReportCounterBaseline(order = selectedOrder) {
@@ -23067,10 +23083,11 @@ function bindEvents() {
       const value = Math.max(0, Number(input.value || 0) + Number(button.dataset.delta));
       input.value = value;
       updateNoonAdvice();
+      updateReportCounterPreview();
     });
   });
 
-  ["workTotalQty", "cycleMinutes", "cycleSeconds", "completedQty", "reportCounterManualBaseline"].forEach((id) => {
+  ["workTotalQty", "cycleMinutes", "cycleSeconds", "completedQty", "defectQty", "reportCounterManualBaseline"].forEach((id) => {
     const input = $(`#${id}`);
     if (!input) return;
     input.addEventListener("input", () => {

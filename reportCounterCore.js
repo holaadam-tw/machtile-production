@@ -39,5 +39,17 @@
     return { valid: true, code: "OK", message: "", current, baseline, delta };
   }
 
-  return { latestBaseline, calculate };
+  function rateReasonableness({ cycleSeconds, startedAt, now, reportedQty } = {}) {
+    const seconds = Number(cycleSeconds);
+    const startMs = Date.parse(startedAt);
+    const nowMs = Date.parse(now);
+    const qty = Number(reportedQty);
+    if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(startMs) ||
+        !Number.isFinite(nowMs) || nowMs < startMs || !Number.isInteger(qty) || qty < 0) return null;
+    const maxQty = Math.floor((nowMs - startMs) / 1000 / seconds);
+    return { maxQty, reportedQty: qty, warn: qty > maxQty,
+      message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "" };
+  }
+
+  return { latestBaseline, calculate, rateReasonableness };
 });
