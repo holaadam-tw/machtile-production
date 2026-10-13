@@ -43,8 +43,8 @@ ok(result.exactLimit.ok === true, "20MB is accepted in browser logic");
 ok(result.overLimit.code === "FILE_TOO_LARGE", ">20MB is rejected before network");
 ok(result.path.includes("/cnc-programs/WO-9/ffffffffffffffff-O9.NC"), "browser builds tenant/work-order/hash storage path");
 ok(appSource.includes('data-cnc-work-order-drop') && appSource.includes('rpc/cnc_program_work_order_version_register'), "actual app wires drop zone to work-order upload RPC");
-ok(indexSource.includes('cncProgramUploadCore.js?v=20261013-card-program-metadata-r1') && indexSource.includes('app.js?v=20261013-hide-daily-start-r2'), "HTML preserves card metadata core and cache-busts the merged app asset");
-ok(indexSource.includes('stationReportCore.js?v=20261009-station-report-r2'), "HTML preserves main station-report core");
+ok(indexSource.includes('cncProgramUploadCore.js?v=20261013-card-program-metadata-r1') && indexSource.includes('app.js?v=20261013-ireporter-machine-link-p3-r3'), "HTML preserves card metadata core and cache-busts the integrated app asset");
+ok(indexSource.includes('stationReportCore.js?v=20261013-rate-check-r2'), "HTML cache-busts the integrated station-report core");
 
 await browser.close();
 await new Promise((resolve) => server.close(resolve));
