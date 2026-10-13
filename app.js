@@ -21490,7 +21490,8 @@ function machtileSyncSingleStationReportRow() {
   row.processId = order.processId;
   row.good = counter.valid ? counter.delta : "";
   row.bad = Math.max(0, Number($("#defectQty")?.value || 0));
-  if (!row.operatorId) row.operatorId = machtileBatchState.actorId || machtileBatchState.users[0]?.id || "";
+  const selectedOperators = machtileSelectedOperators(machtileBatchState.actorId);
+  row.operatorId = selectedOperators[0] || "";
   return row;
 }
 
@@ -21724,6 +21725,21 @@ async function machtileStationReportSubmitPreview(code) {
   const flow = machtileStationReportState(row);
   const context = machtileStationReportContext(order, code);
   if (!core || !context || machtileStationReportFlowBusy(flow)) return;
+  if (machtileSingleStationReportOrder(code)) {
+    const validationMessage = validateReportForm(activeReportType);
+    const operatorMessage = machtileValidateOperatorSelection();
+    if (validationMessage || operatorMessage) {
+      flow.error = validationMessage || operatorMessage;
+      machtileRenderStationReportSurfaces();
+      return;
+    }
+    const reportType = activeReportType === "finish" ? "finish" : "noon";
+    flow.singleReport = {
+      reportType,
+      reportPayload: buildReportPayload(reportType),
+      operators: machtileSelectedOperators(machtileBatchState.actorId),
+    };
+  }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
     reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: null };
   let args;
@@ -21780,25 +21796,32 @@ async function machtileStationReportSubmitFinal(code) {
 async function machtileRecordSingleStationProductionReport(code, args) {
   const row = machtileBatchRow(code);
   const order = machtileSingleStationReportOrder(code);
+  const flow = machtileStationReportState(row);
   const resultKind = machtileStationReportCore()?.resultCard(row.stationReport?.result)?.kind;
-  if (!order || !["applied", "applied-late"].includes(resultKind) || row.stationProductionReportUuid === args.p_command_uuid) return;
+  const commandUuid = args.p_command_uuid;
+  if (!order || !["applied", "applied-late"].includes(resultKind)
+    || row.stationProductionReportUuid === commandUuid || row.stationProductionReportPendingUuid === commandUuid) return;
+  row.stationProductionReportPendingUuid = commandUuid;
   try {
-    const reportType = activeReportType === "finish" ? "finish" : "noon";
+    const reportType = flow.singleReport?.reportType || "noon";
     const reportPayload = {
-      ...buildReportPayload(reportType),
+      ...(flow.singleReport?.reportPayload || buildReportPayload(reportType)),
       completed_qty: args.p_good_qty,
       defect_qty: args.p_fail_qty,
-      station_command_uuid: args.p_command_uuid,
+      station_command_uuid: commandUuid,
     };
     await submitReport(args.p_good_qty, args.p_fail_qty, args.p_report_note || "", reportType, {
       order,
-      reportUuid: args.p_command_uuid,
+      reportUuid: commandUuid,
       reportPayload,
+      operators: flow.singleReport?.operators || [],
       requireStructured: true,
     });
-    row.stationProductionReportUuid = args.p_command_uuid;
+    row.stationProductionReportUuid = commandUuid;
   } catch (error) {
     row.stationReport.error = `舊 MES 已套用，但 App 報工紀錄未確認：${error.message || error}。請勿重送數量。`;
+  } finally {
+    if (row.stationProductionReportPendingUuid === commandUuid) row.stationProductionReportPendingUuid = null;
   }
 }
 
@@ -21916,6 +21939,7 @@ async function machtileStationReportReconcile(code) {
       ? (result.command_type === "report_preview" && result.status === "previewed" ? "previewed" : "finished")
       : result.command_type === "report_preview" ? "waiting-preview" : "waiting-report";
     flow.error = core.isTerminal(result) ? "" : "原報工仍在處理；請勿建立第二筆。";
+    await machtileRecordSingleStationProductionReport(code, flow.args);
   } catch (error) {
     flow.error = `仍無法確認原報工狀態，請勿重送。${error.message || ""}`;
   }
@@ -23329,7 +23353,14 @@ function bindEvents() {
       showToast("此機台尚未指派工單，請先由主管排入工單。");
       return;
     }
-    if (["noon", "finish"].includes(activeReportType) && machtileSingleStationReportAllowlisted(selectedOrder.machine)) {
+    const smartReportAllowlisted = ["noon", "finish"].includes(activeReportType)
+      && machtileSingleStationReportAllowlisted(selectedOrder.machine);
+    const smartReportExplicitlyDisabled = smartReportAllowlisted
+      && machtileBatchState.stationReportSettings.status === "loaded"
+      && !machtileStationReportCore()?.reportMachineEnabled(
+        machtileBatchState.stationReportSettings.machines, selectedOrder.machine
+      );
+    if (smartReportAllowlisted && !smartReportExplicitlyDisabled) {
       showToast(machtileSingleStationReportActive()
         ? "此機台須先在智慧報工區預覽，再長按確認送出。"
         : "智慧報工 guard 尚未載入；本次未送出任何報工。");
