@@ -45,7 +45,7 @@ ok(result.path.includes("/cnc-programs/WO-9/ffffffffffffffff-O9.NC"), "browser b
 ok(appSource.includes('data-cnc-work-order-drop') && appSource.includes('rpc/cnc_program_work_order_version_register'), "actual app wires drop zone to work-order upload RPC");
 const appAsset = indexSource.match(/<script src="\.\/app\.js\?v=([^"\s]+)"><\/script>/)?.[1] || "";
 ok(indexSource.includes('cncProgramUploadCore.js?v=20261013-card-program-metadata-r1') && appAsset.length > 0, "HTML preserves card metadata core and reads the current app cache-bust from index.html");
-ok(indexSource.includes('stationReportCore.js?v=20261009-station-report-r2'), "HTML preserves main station-report core");
+ok(indexSource.includes('stationReportCore.js?v=20261013-rate-check-r2'), "HTML cache-busts the integrated station-report core");
 
 await browser.close();
 await new Promise((resolve) => server.close(resolve));
