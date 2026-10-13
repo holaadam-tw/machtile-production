@@ -76,6 +76,15 @@
     return flag.all || flag.machines.includes(code);
   }
 
+  // 有卡片「開工／停工」的機台，開工確認卡已順便記今日開工；單台報工不再顯示重複的「今日開工」分頁。
+  // 若既有連結／flow 指定 dailyStart，移到下一個仍可用的分頁「中午報工」。
+  function dailyStartReportVisible(flag, machineCode) {
+    return !enabledForMachine(flag, machineCode);
+  }
+  function reportTypeForMachine(requestedType, flag, machineCode) {
+    return requestedType === "dailyStart" && !dailyStartReportVisible(flag, machineCode) ? "noon" : requestedType;
+  }
+
   // 舊 MES 多工站（ManufactureII，B01–B06）。第 1 階段派工橋還沒把 ManufactureII.Id 同步上來，
   // 沒有這個 id 的多工站不顯示按鈕（工廠端必須用 Id 才知道是哪一筆）。
   function isMultiStation(machineCode) {
@@ -598,7 +607,8 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, dailyStartReportVisible, reportTypeForMachine,
+    isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,

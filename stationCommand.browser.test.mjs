@@ -578,13 +578,25 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     await page.screenshot({ path: path.join(outDir, `${vp}-08-expired.png`) });
     await sheet(page).locator("[data-station-cmd-close]").click();
 
-    // 單台報工：A04 的「今日開工」分頁標「只記錄（不改舊 MES）」，A01 沒有
-    await page.evaluate(() => openReport("", { machine: "A04" }));
-    const tabA04 = (await page.locator('.report-type-tab[data-report-type="dailyStart"]').innerText()).replace(/\s+/g, " ");
-    ok(tabA04.includes("今日開工") && tabA04.includes("只記錄（不改舊 MES）"), `${W}：A04 報工「今日開工」標只記錄`, tabA04);
+    // 單台報工：A04 在開工／停工名單內，隱藏重複的「今日開工」；既有 dailyStart flow 往下一頁 noon。
+    const compareShots = process.env.STATION_CMD_COMPARE_SHOTS;
+    if (W === 800 && compareShots && baselineAvailable) {
+      await mkdir(compareShots, { recursive: true });
+      const before = await newPage(browser, vp, { backend: makeBackend(), baseline: true, configExtra: 'stationCommandMachines: ["A04"],' });
+      await before.page.evaluate(() => openReport("", { machine: "A04", reportType: "dailyStart" }));
+      await before.page.screenshot({ path: path.join(compareShots, "800-before-daily-start-visible.png"), fullPage: true });
+      await before.context.close();
+    }
+    await page.evaluate(() => openReport("", { machine: "A04", reportType: "dailyStart" }));
+    ok(!(await page.locator('.report-type-tab[data-report-type="dailyStart"]').isVisible()), `${W}：A04 報工隱藏「今日開工」分頁`);
+    ok(await page.locator('.report-type-tab[data-report-type="noon"]').getAttribute("class").then((value) => value.includes("active")), `${W}：A04 dailyStart flow 預設改到下一個可用分頁「中午報工」`);
+    ok(!(await page.locator('[data-report-section="dailyStart"]').isVisible()), `${W}：A04 今日開工表單內容一併隱藏`);
+    ok(await page.locator('[data-station-cmd-recordonly]').count() === 0, `${W}：A04 不再顯示「只記錄（不改舊 MES）」註記`);
+    if (W === 800 && compareShots) await page.screenshot({ path: path.join(compareShots, "800-after-daily-start-hidden.png"), fullPage: true });
     await page.evaluate(() => closeReport());
-    await page.evaluate(() => openReport("", { machine: "A01" }));
-    ok(await page.locator('.report-type-tab[data-report-type="dailyStart"] [data-station-cmd-recordonly]').count() === 0, `${W}：A01（沒開）報工「今日開工」不加標示`);
+    await page.evaluate(() => openReport("", { machine: "A01", reportType: "dailyStart" }));
+    ok(await page.locator('.report-type-tab[data-report-type="dailyStart"]').isVisible(), `${W}：A01（名單外）維持顯示「今日開工」`);
+    ok(await page.locator('.report-type-tab[data-report-type="dailyStart"]').getAttribute("class").then((value) => value.includes("active")), `${W}：A01 dailyStart flow 維持原分頁`);
     await page.evaluate(() => closeReport());
 
     ok(be.otherWrites.length === 0, `${W}：除了指令 RPC 沒有任何其他寫入`, be.otherWrites.join(" "));
@@ -1013,6 +1025,8 @@ for (const vp of ["phone", "desktop"]) {
   await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
   await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
   ok(await dailyField(page).count() === 1, `${W}：開工確認卡出現今日開工數量欄位`);
+  ok(!(await sheet(page).innerText()).includes("今天這台還沒記今日開工") && !(await sheet(page).innerText()).includes("只記錄（不改舊 MES）"),
+    `${W}：名單內機台不再顯示重複的今日開工／只記錄提示`);
   const label = (await sheet(page).locator("[data-station-cmd-daily] label").innerText()).replace(/\s+/g, " ").trim();
   ok(label === "機台目前加工數量（今日開工） 必填", `${W}：欄位名稱＋必填`, label);
   const attrs = await dailyField(page).evaluate((el) => ({ type: el.type, min: el.min, step: el.step, required: el.required, value: el.value, max: el.max }));
@@ -1383,7 +1397,7 @@ console.log("\n== 390px：(b) 平板離線 → 今日開工排入待送：說「
   ok(await footerToday(page, "A04") === "今日尚未開工", "卡片底部仍「今日尚未開工」（等伺服器有那一列）");
   // 報工→今日開工：擋第二筆
   await page.evaluate(() => openReport("", { machine: "A04" }));
-  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.evaluate(() => setReportType("dailyStart")); // 隱藏後仍驗證舊／書籤狀態不會重複送
   await page.locator("#machineQty").fill("300");
   await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
   await page.locator("#reportForm button[type=submit].submit-report").click();
@@ -1469,7 +1483,7 @@ console.log("\n== 390px：報工→今日開工送出前重讀伺服器：今天
   // 卡片讀的時候還沒有，之後別台平板記了（畫面上的資料是舊的）
   be.todayRows = [{ process_id: id(304), report_type: "dailyStart", created_at: new Date().toISOString(), started_at: null, ended_at: new Date().toISOString(), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }];
   await page.evaluate(() => openReport("", { machine: "A04" }));
-  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.evaluate(() => setReportType("dailyStart")); // 隱藏後仍驗證內部防重
   await page.locator("#machineQty").fill("300");
   await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
   await page.locator("#reportForm button[type=submit].submit-report").click();
@@ -1582,7 +1596,7 @@ console.log("\n== 390px：報工→今日開工送出前重讀回 5xx → 不送
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: fastCfg });
   be.todayReadFail = true;
   await page.evaluate(() => openReport("", { machine: "A04" }));
-  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.evaluate(() => setReportType("dailyStart")); // 隱藏後仍驗證內部防重
   await page.locator("#machineQty").fill("300");
   await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
   await page.locator("#reportForm button[type=submit].submit-report").click();
@@ -1599,7 +1613,7 @@ console.log("\n== 390px：報工→今日開工分頁照舊自己能送（同一
   const be = makeBackend({ dailyStartDone: false });
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
   await page.evaluate(() => openReport("", { machine: "A01" }));
-  await page.locator('.report-type-tab[data-report-type="dailyStart"]').click();
+  await page.evaluate(() => setReportType("dailyStart")); // 隱藏後仍驗證內部防重
   await page.locator("#machineQty").fill("77");
   await page.evaluate(() => { const box = document.getElementById("machtileOperatorList"); box?.querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = i.dataset.mapped === "1"; }); });
   await page.locator("#reportForm button[type=submit].submit-report").click();
