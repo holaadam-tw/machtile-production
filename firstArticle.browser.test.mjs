@@ -151,6 +151,13 @@ async function scenario(outbox) {
   check(await page.locator('[data-report-type="dailyStart"], #machinePhoto').count() === 0, "removed dailyStart and its photo control stay absent");
   check(await page.locator('#startPhoto').count() === 1 && await page.locator('#finishPhoto[required], #abnormalPhoto[required]').count() === 0, "only workStart enforces a required photo; other photo controls are optional");
   await page.evaluate(() => closeReport());
+  await open("finish");
+  await page.locator('input[name="finishOvertime"][value="none"]').check();
+  check(await page.locator('label[for="finishPhoto"] small').textContent() === "選填", "finish photo is visibly optional");
+  await submit();
+  await closed();
+  check(posts.length === before + 2, "finish without photo submits exactly once");
+  check(uploads.length === 1, "finish without photo sends no finish_photo upload");
   await page.setViewportSize({ width: 390, height: 844 });
   await open("workStart");
   await screenshot("work-start-mobile");

@@ -409,7 +409,7 @@
               <strong>收工 / 完工</strong>
               <span>加工當日最後一筆回報</span>
             </div>
-            <label class="field-label" for="finishPhoto">開啟相機拍完工照片 <small>必填</small></label>
+            <label class="field-label" for="finishPhoto">開啟相機拍完工照片 <small class="opt">選填</small></label>
             <div class="camera-capture-field">
               <input id="finishPhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
               <button class="camera-open-button" type="button" data-camera-for="finishPhoto" data-camera-label="完工照片">開啟相機拍照</button>
@@ -425,7 +425,7 @@
           <section class="report-section is-hidden" data-report-section="abnormal">
             <div class="report-section-head">
               <strong>異常回報</strong>
-              <span>有異常才建立，照片必填</span>
+              <span>有異常才建立，照片選填</span>
             </div>
             <label class="field-label" for="abnormalType">異常類型 <small>必填</small></label>
             <select id="abnormalType" class="report-input">
@@ -436,7 +436,7 @@
               <option>機台異音</option>
               <option>其他</option>
             </select>
-            <label class="field-label" for="abnormalPhoto">開啟相機拍異常照片 <small>必填</small></label>
+            <label class="field-label" for="abnormalPhoto">開啟相機拍異常照片 <small class="opt">選填</small></label>
             <div class="camera-capture-field">
               <input id="abnormalPhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
               <button class="camera-open-button" type="button" data-camera-for="abnormalPhoto" data-camera-label="異常照片">開啟相機拍照</button>
@@ -692,6 +692,7 @@
   <script src="./cardActiveOrderCore.js?v=20261002-card-list-ui"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
   <script src="./reportCycleCore.js?v=20261002-first-cycle-noop"></script>
+  <script src="./reportPhotoCore.js?v=20261013-finish-photo-optional-r1"></script>
   <script src="./cardEstimateCore.js?v=20261002-card-estimate-r2"></script>
   <script src="./todayReportStatusCore.js?v=20261002-monitor-today-tiles-r2"></script>
   <script src="./analyticsCore.js?v=20261002-analytics-123-r2"></script>
@@ -702,6 +703,6 @@
   <script src="./dispatchPoolCore.js?v=20261007-dispatch-pool-view"></script>
   <script src="./stationCommandCore.js?v=20261013-hide-daily-start-r1"></script>
   <script src="./stationReportCore.js?v=20261013-rate-check-r2"></script>
-  <script src="./app.js?v=20261013-report-form-rate-check-r2"></script>
+  <script src="./app.js?v=20261013-report-form-rate-check-r3"></script>
 </body>
 </html>
