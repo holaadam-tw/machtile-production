@@ -23,13 +23,11 @@
       seen.add(key); return true;
     });
   }
-  function queryPaths(values, date = taipeiDate(), chunkSize = 40) {
-    const tuples = uniqueTuples(values), paths = [];
-    for (let index = 0; index < tuples.length; index += chunkSize) {
-      const or = tuples.slice(index, index + chunkSize).map((value) => `and(work_order_id.eq.${encodeURIComponent(value.workOrderId)},process_id.eq.${encodeURIComponent(value.processId)},machine_id.eq.${encodeURIComponent(value.machineId)})`).join(",");
-      paths.push(`process_inspections?select=work_order_id,process_id,machine_id,inspected_at,result,source_url&inspection_date=eq.${encodeURIComponent(date)}&or=(${or})&order=inspected_at.desc`);
-    }
-    return paths;
+  function queryPaths(values, date = taipeiDate()) {
+    const workOrderIds = [...new Set(uniqueTuples(values).map((value) => String(value.workOrderId).trim()))];
+    if (!workOrderIds.length) return [];
+    const ids = workOrderIds.map(encodeURIComponent).join(",");
+    return [`process_inspections?select=work_order_id,process_id,machine_id,inspected_at,result,source_url&inspection_date=eq.${encodeURIComponent(date)}&work_order_id=in.(${ids})&order=inspected_at.desc`];
   }
   function latestByTuple(rows) {
     const result = new Map();

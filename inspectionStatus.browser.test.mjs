@@ -34,6 +34,13 @@ async function runCase({ failRead = false } = {}) {
   let inspectionRequests = 0;
   try {
     await context.addInitScript(([jwt]) => sessionStorage.setItem("machtileAuthSession", JSON.stringify({ version: 1, accessToken: jwt, mode: "session", createdAt: Date.now() })), [token]);
+    await context.addInitScript(() => {
+      const NativeDate = Date, fixed = new NativeDate("2026-10-13T09:00:00Z").getTime();
+      globalThis.Date = class extends NativeDate {
+        constructor(...args) { super(...(args.length ? args : [fixed])); }
+        static now() { return fixed; }
+      };
+    });
     await context.route("**/*", async (route) => {
       const req = route.request(), url = new URL(req.url());
       if (req.url().startsWith(base)) {
@@ -61,9 +68,17 @@ async function runCase({ failRead = false } = {}) {
       assert.equal(await page.getByText("今日未檢驗", { exact: true }).count(), 0, "read failure is never shown as missing");
     } else {
       for (const [code, , expected] of specs) assert.equal(await statusText(code), expected, code);
+      await page.locator('[data-view="alerts"]').first().click();
+      assert.equal(await page.locator("#alertList").getByText("WO-A04", { exact: true }).count(), 1, "after-cutoff missing inspection appears in the all-attention list");
+      assert.match(await page.locator('[data-alert-filter="全部"] span').innerText(), /[1-9]/, "all-attention count includes inspection attention");
+      await page.locator('[data-view="dashboard"]').first().click();
       const failButton = page.locator(".machine-inspection-status.is-fail");
       await failButton.click();
       assert.equal(await page.locator("#alertsView").evaluate((node) => node.classList.contains("is-active")), true, "fail links to the attention center");
+      assert.equal(await page.locator('#alertChips [data-alert-filter="異常"]').evaluate((node) => node.classList.contains("active")), true, "fail selects the abnormal filter");
+      const focusedFail = page.locator('[data-alert-card-order="WO-A02"]');
+      assert.equal(await focusedFail.count(), 1, "the abnormal list contains the selected failed-inspection order");
+      await assert.doesNotReject(() => focusedFail.scrollIntoViewIfNeeded(), "the failed-inspection order can be located");
       assert.equal(await page.evaluate(() => MachTileInspectionStatusCore.taipeiDate("2026-10-13T16:00:00Z")), "2026-10-14", "browser core handles Taipei midnight");
     }
     assert.equal(inspectionRequests, 1, "one batch request serves all enabled cards");

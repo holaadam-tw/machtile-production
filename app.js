@@ -14561,7 +14561,7 @@ function machtileInspectionStatusMarkup(machine, order) {
   if (status.kind === "hidden") return "";
   const content = `<span>${escapeHtml(status.label)}</span>`;
   return status.kind === "fail"
-    ? `<button type="button" class="machine-inspection-status is-${status.kind}" data-no-detail data-view="alerts" aria-label="${escapeHtml(status.label)}，前往異常回報">${content}</button>`
+    ? `<button type="button" class="machine-inspection-status is-${status.kind}" data-no-detail data-view="alerts" data-alert-filter="異常" data-alert-order-id="${escapeHtml(order.id)}" aria-label="${escapeHtml(status.label)}，前往異常回報">${content}</button>`
     : `<div class="machine-inspection-status is-${status.kind}">${content}</div>`;
 }
 
@@ -14589,7 +14589,7 @@ function alertOrders() {
     .filter((order) => {
       const categories = alertCategories(order);
       const categoryMatches = activeAlertFilter === "全部"
-        ? categories.size > 0 && deriveOrderStatus(order) !== "normal"
+        ? machtileOrderIncludedInAllAlerts(order, categories)
         : categories.has(activeAlertFilter);
       return categoryMatches && machtileAttentionMatchesWorkflow(order);
     })
@@ -14599,12 +14599,18 @@ function alertOrders() {
     });
 }
 
+function machtileOrderIncludedInAllAlerts(order, categories = alertCategories(order)) {
+  if (categories.size === 0) return false;
+  const inspectionKind = machtileInspectionStatusForOrder(order).kind;
+  return deriveOrderStatus(order) !== "normal" || inspectionKind === "missing-attention" || inspectionKind === "fail";
+}
+
 function renderAlerts() {
   const counts = Object.fromEntries(alertFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
     if (!machtileAttentionMatchesWorkflow(order)) return;
     const categories = alertCategories(order);
-    if (categories.size > 0 && deriveOrderStatus(order) !== "normal") counts["全部"] += 1;
+    if (machtileOrderIncludedInAllAlerts(order, categories)) counts["全部"] += 1;
     categories.forEach((category) => {
       if (category in counts) counts[category] += 1;
     });
@@ -14618,7 +14624,7 @@ function renderAlerts() {
 
   const workflowCounts = Object.fromEntries(attentionWorkflowFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
-    if (alertCategories(order).size === 0 || deriveOrderStatus(order) === "normal") return;
+    if (!machtileOrderIncludedInAllAlerts(order)) return;
     attentionWorkflowFilters.forEach((filter) => {
       if (machtileAttentionMatchesWorkflow(order, filter)) workflowCounts[filter] += 1;
     });
@@ -14707,7 +14713,7 @@ function renderAlertCard(order) {
   const selected = machtileAttentionState.selectedKeys.has(sourceKey);
 
   return `
-    <article class="alert-card ${status.className} ${caseState.status === "closed" ? "is-attention-closed" : ""}">
+    <article class="alert-card ${status.className} ${caseState.status === "closed" ? "is-attention-closed" : ""}" data-alert-card-order="${escapeHtml(order.id)}">
       <header class="alert-card-header">
         <div class="alert-title-group">
           <label class="attention-select-control" title="選取後可批次指派或結案">
@@ -22925,7 +22931,17 @@ function bindEvents() {
     if (machtileHandleBatchClick(event)) return;
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
+      if (viewButton.dataset.alertFilter) {
+        activeAlertFilter = viewButton.dataset.alertFilter;
+        activeAttentionStatus = "待處理";
+        renderAlerts();
+      }
       switchView(viewButton.dataset.view);
+      if (viewButton.dataset.alertOrderId) {
+        const target = [...document.querySelectorAll("[data-alert-card-order]")]
+          .find((card) => card.dataset.alertCardOrder === viewButton.dataset.alertOrderId);
+        target?.scrollIntoView({ block: "center" });
+      }
       return;
     }
 
