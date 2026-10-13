@@ -10512,6 +10512,7 @@ function machtileAssignedCardProcess(row) {
   }
   order.stationStep = row.process_order;
   order.processType = row.process_type;
+  order.manufactureIiId = String(row.manufacture_ii_id || "").trim() || null;
   order.perProcessCard = true;
   order.dispatchPoolSourceKey = wo.legacy_mes_source === "dispatch_pool" ? String(wo.external_ref || "").trim() : "";
   return order;
@@ -10529,7 +10530,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
