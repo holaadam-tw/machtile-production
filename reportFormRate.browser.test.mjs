@@ -29,6 +29,7 @@ const card = { id: id(101), tenant_id: tenant, work_order_no: "RATE-WO-001", par
 const encode = value => Buffer.from(JSON.stringify(value)).toString("base64url");
 const token = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: id(801), email: "operator@test.invalid", exp: Math.floor(Date.now() / 1000) + 3600, role: "authenticated", app_metadata: { tenant_id: tenant, role: "operator" } })}.synthetic`;
 let checks = 0;
+let counterReports = [{ report_type: "dailyStart", created_at: "2026-10-13T00:10:00.000Z", report_payload: { machine_qty: 100 } }];
 function check(value, label) { assert.ok(value, label); checks++; console.log(`PASS ${label}`); }
 
 const browser = await chromium.launch();
@@ -45,6 +46,7 @@ await context.route("**/*", async route => {
     if (url.pathname === "/rest/v1/v_work_order_cards") return json([card]);
     if (url.pathname === "/rest/v1/v_machine_management_cards") return json([{ id: id(201), machine_code: "A01", machine_name: "A01", machine_type: "車床", status: "idle", display_order: 1 }]);
     if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: processId, legacy_output: 0, legacy_fail: 0, last_report_at: "2026-10-13T01:00:00.000Z", actual_start_at: "2026-10-13T00:00:00.000Z" }]);
+    if (url.pathname === "/rest/v1/production_reports" && request.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(counterReports);
     return json(url.pathname.startsWith("/rest/v1/rpc/") ? null : []);
   }
   if (url.origin === new URL(base).origin) {
@@ -66,9 +68,48 @@ const tabs = await page.locator("#reportForm .report-type-tab").allTextContents(
 check(JSON.stringify(tabs.map(v => v.trim())) === JSON.stringify(["首次開工", "報工", "收工/完工", "異常回報"]), "報工表單只有四分頁且名稱正確");
 check(await page.locator('[data-report-type="dailyStart"], [data-report-type="afternoonCheck"]').count() === 0, "今日開工與下午 4:30 入口已移除");
 await page.locator('[data-report-type="noon"]').click();
+await page.waitForFunction(() => document.querySelector("#reportCounterPreview")?.textContent.includes("上次 100"));
+await page.locator("#completedQty").fill("130");
+const startBaseline = await page.evaluate(() => ({
+  text: document.querySelector("#reportCounterPreview")?.textContent,
+  validation: validateReportForm("noon"),
+  payload: buildReportPayload("noon"),
+}));
+check(startBaseline.text === "累計 130｜上次 100｜這次 30", "開工計數器作基準並預覽 X/Y/Z");
+check(startBaseline.validation === "" && startBaseline.payload.completed_qty === 30 && startBaseline.payload.machine_qty === 130, "正常累計只送差額 Z 並記錄目前累計");
+await page.locator("#completedQty").fill("100");
+check((await page.evaluate(() => validateReportForm("noon"))).includes("差額需大於 0"), "Z <= 0 有說明且擋送出");
+
+counterReports = [...counterReports, { report_type: "noon", created_at: "2026-10-13T03:00:00.000Z", report_payload: { machine_qty: 130 } }];
+await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
+await page.waitForFunction(() => document.querySelector("#reportCounterPreview")?.textContent.includes("上次 130"));
+await page.locator("#completedQty").fill("145");
+const consecutive = await page.evaluate(() => ({ text: document.querySelector("#reportCounterPreview")?.textContent, payload: buildReportPayload("noon") }));
+check(consecutive.text === "累計 145｜上次 130｜這次 15" && consecutive.payload.completed_qty === 15, "連續第二次報工使用第一次累計作基準");
+counterReports = [];
+await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
+await page.waitForFunction(() => !document.querySelector("#reportCounterManual")?.hidden);
+check((await page.locator("#reportCounterManual").innerText()).includes("請先按開工"), "無基準時提示先按開工並開放手填基準");
+await page.locator("#reportCounterManualBaseline").fill("120");
+await page.locator("#completedQty").fill("150");
+const manual = await page.evaluate(() => buildReportPayload("noon"));
+check(manual.completed_qty === 30 && manual.counter_baseline_qty === 120 && manual.counter_baseline_source === "manual", "手填基準會記錄來源且送出差額");
+counterReports = [{ report_type: "noon", created_at: "2026-10-13T03:00:00.000Z", report_payload: { machine_qty: 130 } }];
+await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
+await page.locator("#completedQty").fill("145");
+const sourceCoverage = await page.evaluate(() => {
+  const core = window.MachTileReportCounterCore;
+  return {
+    start: core.latestBaseline([{ report_type: "dailyStart", created_at: "2026-10-13T00:00:00Z", report_payload: { machine_qty: 10 } }]),
+    report: core.latestBaseline([{ report_type: "dailyStart", created_at: "2026-10-13T00:00:00Z", report_payload: { machine_qty: 10 } }, { report_type: "noon", created_at: "2026-10-13T02:00:00Z", report_payload: { machine_qty: 20 } }]),
+  };
+});
+check(sourceCoverage.start.source === "dailyStart" && sourceCoverage.report.source === "report", "browser core 涵蓋兩種基準來源");
 check((await page.locator('[data-report-section="noon"]').innerText()).includes("照機台計數器填累計數量") && !(await page.locator('[data-report-section="noon"]').innerText()).includes("中午"), "報工說明沒有時間字樣且維持累計語意");
-check((await page.locator('label[for="completedQty"]').innerText()).startsWith("良品累計") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("不良累計"), "報工數量欄維持 cumulative");
-await page.screenshot({ path: path.join(screenshotDir, "20261013-report-form-4tabs-800px.png"), fullPage: true });
+check((await page.locator('label[for="completedQty"]').innerText()).startsWith("機台目前累計數") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("這次不良數"), "報工欄位區分機台累計與這次不良");
+await page.screenshot({ path: path.join(screenshotDir, "20261013-report-cumulative-counter-800px.png"), fullPage: true });
+await page.locator('[data-report-type="finish"]').click();
+check((await page.locator("#reportCounterPreview").innerText()) === "累計 145｜上次 130｜這次 15" && (await page.locator("#completedQtyLabel").innerText()) === "機台目前累計數", "收工分頁套用相同累計差額規則");
 
 const rate = await page.evaluate(() => {
   const core = window.MachTileStationReportCore;
