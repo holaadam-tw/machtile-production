@@ -353,11 +353,9 @@
         <form id="reportForm" class="report-form">
           <div class="report-type-tabs" aria-label="回報類型">
             <button class="report-type-tab active" type="button" data-report-type="workStart">首次開工</button>
-            <button class="report-type-tab" type="button" data-report-type="dailyStart">今日開工</button>
-            <button class="report-type-tab" type="button" data-report-type="noon">中午報工</button>
-            <button class="report-type-tab" type="button" data-report-type="afternoonCheck">4:30 檢查</button>
+            <button class="report-type-tab" type="button" data-report-type="noon">報工</button>
             <button class="report-type-tab" type="button" data-report-type="finish">收工/完工</button>
-            <button class="report-type-tab" type="button" data-report-type="abnormal">異常</button>
+            <button class="report-type-tab" type="button" data-report-type="abnormal">異常回報</button>
           </div>
 
           <section class="report-section" data-report-section="workStart">
@@ -398,57 +396,12 @@
             </div>
           </section>
 
-          <section class="report-section is-hidden" data-report-section="dailyStart">
-            <div class="report-section-head">
-              <strong>今日開工</strong>
-              <span>加工當日第一筆回報，記錄機台已加工數量；機台照片選填</span>
-            </div>
-            <div class="report-form-grid">
-              <label class="field-label" for="machineQty">目前機台已加工數量 <small>必填</small></label>
-              <input id="machineQty" class="report-input" type="number" min="0" value="0">
-
-              <label class="field-label" for="machinePhoto">開啟相機拍機台照片 <small class="opt">選填</small></label>
-              <div class="camera-capture-field">
-                <input id="machinePhoto" class="upload-input camera-input camera-input-hidden" type="file" accept="image/*" capture="environment">
-                <button class="camera-open-button" type="button" data-camera-for="machinePhoto" data-camera-label="機台照片">開啟相機拍照</button>
-                <span class="camera-file-status" data-camera-status-for="machinePhoto">尚未拍照</span>
-              </div>
-            </div>
-          </section>
-
           <section class="report-section is-hidden" data-report-section="noon">
             <div class="report-section-head">
-              <strong>中午報工</strong>
-              <span>決定下午是否需要加班或拆單</span>
+              <strong>報工</strong>
+              <span>照機台計數器填累計數量，先預覽再確認</span>
             </div>
-            <div id="noonAdvice" class="report-advice-card">系統會用中午累計數量判斷是否落後。</div>
-          </section>
-
-          <section class="report-section is-hidden" data-report-section="afternoonCheck">
-            <div class="report-section-head">
-              <strong>下午 4:30 檢查</strong>
-              <span>不填數量，只確認異常與加班需求</span>
-            </div>
-            <div class="checklist-card">
-              <strong>下午檢查表 <small>必填</small></strong>
-              <label><input id="pmToolCheck" type="checkbox"> 刀具狀態正常</label>
-              <label><input id="pmDimensionCheck" type="checkbox"> 抽檢尺寸正常</label>
-              <label><input id="pmScheduleCheck" type="checkbox"> 進度已回報主管</label>
-            </div>
-            <div class="radio-card">
-              <span class="field-label">是否異常 <small>必填</small></span>
-              <label><input name="pmAbnormal" type="radio" value="no"> 無異常</label>
-              <label><input name="pmAbnormal" type="radio" value="yes"> 有異常</label>
-            </div>
-            <label class="field-label" for="pmAbnormalNote">異常備註 <em>有異常才填</em></label>
-            <textarea id="pmAbnormalNote" rows="2" placeholder="例如：刀具磨耗偏快，已通知主管確認"></textarea>
-            <label class="field-label" for="overtimePlan">加班安排確認 <small class="opt">選填</small></label>
-            <select id="overtimePlan" class="report-input">
-              <option value="">尚未決定</option>
-              <option value="none">不加班</option>
-              <option value="1730">加班到 17:30</option>
-              <option value="2030">加班到 20:30</option>
-            </select>
+            <div id="noonAdvice" class="report-advice-card">系統會用累計數量判斷進度。</div>
           </section>
 
           <section class="report-section is-hidden" data-report-section="finish">
@@ -492,15 +445,15 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
-            <label class="field-label" for="completedQty">這次良品 <small>必填</small></label>
-            <p class="report-qty-help">填這次新做的數量，不是累計</p>
+            <label class="field-label" for="completedQty">良品累計 <small>必填</small></label>
+            <p class="report-qty-help">報工請照機台計數器填累計數量</p>
             <div class="stepper">
               <button type="button" data-step="completedQty" data-delta="-1">−</button>
               <input id="completedQty" type="number" min="0" value="5">
               <button type="button" data-step="completedQty" data-delta="1">+</button>
             </div>
 
-            <label class="field-label" for="defectQty">這次不良 <small>必填</small></label>
+            <label class="field-label" for="defectQty">不良累計 <small>必填</small></label>
             <div class="stepper">
               <button type="button" data-step="defectQty" data-delta="-1">−</button>
               <input id="defectQty" type="number" min="0" value="0">
@@ -749,7 +702,7 @@
   <script src="./processFlowCore.js?v=20261006-full-route-display-r5"></script>
   <script src="./dispatchPoolCore.js?v=20261007-dispatch-pool-view"></script>
   <script src="./stationCommandCore.js?v=20261013-hide-daily-start-r1"></script>
-  <script src="./stationReportCore.js?v=20261009-station-report-r2"></script>
-  <script src="./app.js?v=20261013-hide-daily-start-r2"></script>
+  <script src="./stationReportCore.js?v=20261013-rate-check-r2"></script>
+  <script src="./app.js?v=20261013-report-form-rate-check-r3"></script>
 </body>
 </html>
