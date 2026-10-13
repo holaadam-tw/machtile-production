@@ -8229,6 +8229,7 @@ function updateReportCounterPreview() {
     rateWarning.textContent = rateCheck.message;
     rateWarning.hidden = false;
   }
+  machtileRenderSingleStationReport();
 }
 
 async function loadReportCounterBaseline(order = selectedOrder) {
@@ -8367,6 +8368,7 @@ function setReportType(type) {
   const completedLabel = $("#completedQtyLabel");
   if (completedLabel) completedLabel.textContent = reportCounterApplies() ? "機台目前累計數" : "良品數";
   updateReportCounterPreview();
+  machtileRenderSingleStationReport();
 }
 
 function fileForInput(inputId) {
@@ -20492,6 +20494,7 @@ function openReport(orderId, options = {}) {
   document.body.classList.toggle("route-mode", Boolean(options.routeMode));
   $("#reportSheet").classList.add("is-open");
   $("#reportSheet").setAttribute("aria-hidden", "false");
+  void machtileLoadSingleStationReport(order);
   machtileRenderOperatorSection().catch(() => {});   // strict+flag only; no-op otherwise
   ($("#workTotalQty") || $("#completedQty")).focus();
 }
@@ -20502,6 +20505,10 @@ function closeReport() {
   $("#reportSheet").classList.remove("route-sheet");
   document.body.classList.remove("route-mode");
   $("#reportSheet").setAttribute("aria-hidden", "true");
+  machtileSingleStationReportState.machineCode = "";
+  machtileSingleStationReportState.processId = "";
+  machtileSingleStationReportState.loading = false;
+  machtileRenderSingleStationReport();
   activeReportReturnDetailOrderId = "";
   if (returnDetailOrderId) openDetail(returnDetailOrderId);
 }
@@ -21435,9 +21442,117 @@ const machtileBatchState = {
   lastLoadedAt: 0,
 };
 
+const machtileSingleStationReportState = {
+  loading: false,
+  machineCode: "",
+  processId: "",
+};
+
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
+
+function machtileSingleStationReportAllowlisted(machineCode = selectedOrder?.machine) {
+  const code = String(machineCode || "").trim().toUpperCase();
+  const allowed = window.MACHTILE_CONFIG?.stationReportMachines || [];
+  return machtileStationReportEnabled() && state.source === "supabase" && Boolean(code)
+    && (allowed.includes(code) || allowed.includes("*"));
+}
+
+function machtileSingleStationReportOrder(code = machtileSingleStationReportState.machineCode) {
+  return selectedOrder && String(selectedOrder.machine || "").trim().toUpperCase() === String(code || "").trim().toUpperCase()
+    ? selectedOrder : null;
+}
+
+function machtileStationReportOrderForCode(code) {
+  return machtileSingleStationReportOrder(code) || machtileBatchSelectedOrder(code);
+}
+
+function machtileSingleStationReportActive() {
+  const code = machtileSingleStationReportState.machineCode;
+  const core = machtileStationReportCore();
+  return ["noon", "finish"].includes(activeReportType) && machtileSingleStationReportAllowlisted(code)
+    && machtileBatchState.stationReportSettings.status === "loaded"
+    && core?.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code);
+}
+
+function machtileRenderStationReportSurfaces() {
+  machtileRenderBatchReport();
+  machtileRenderSingleStationReport();
+}
+
+function machtileSyncSingleStationReportRow() {
+  const code = machtileSingleStationReportState.machineCode;
+  const order = machtileSingleStationReportOrder(code);
+  if (!code || !order) return null;
+  const row = machtileBatchRow(code);
+  const counter = reportCounterCalculation();
+  row.processId = order.processId;
+  row.good = counter.valid ? counter.delta : "";
+  row.bad = Math.max(0, Number($("#defectQty")?.value || 0));
+  const selectedOperators = machtileSelectedOperators(machtileBatchState.actorId);
+  row.operatorId = selectedOperators[0] || "";
+  return row;
+}
+
+function machtileRenderSingleStationReport() {
+  const holder = document.getElementById("singleStationReportPanel");
+  const submit = document.querySelector("#reportForm .submit-report");
+  if (!holder || !submit) return;
+  const code = machtileSingleStationReportState.machineCode;
+  const order = machtileSingleStationReportOrder(code);
+  const eligibleType = ["noon", "finish"].includes(activeReportType);
+  const allowlisted = eligibleType && machtileSingleStationReportAllowlisted(code);
+  holder.hidden = !allowlisted;
+  submit.hidden = allowlisted;
+  submit.disabled = allowlisted;
+  if (!allowlisted) { holder.innerHTML = ""; return; }
+  if (machtileSingleStationReportState.loading) {
+    holder.innerHTML = '<p class="batch-notice" role="status">正在載入智慧報工 guard…</p>';
+    return;
+  }
+  const settings = machtileBatchState.stationReportSettings;
+  if (settings.status !== "loaded") {
+    holder.innerHTML = `<p class="batch-notice is-error" role="alert">${escapeHtml(settings.error || "無法載入智慧報工 guard；已阻擋送出，請重新開啟報工再試。")}</p>`;
+    return;
+  }
+  if (!machtileStationReportCore()?.reportMachineEnabled(settings.machines, code)) {
+    holder.hidden = true; holder.innerHTML = ""; submit.hidden = false; submit.disabled = false;
+    return;
+  }
+  const row = machtileSyncSingleStationReportRow();
+  holder.innerHTML = row && order ? machtileRenderStationReportPanel(code, order, row, false) : '<p class="batch-notice is-error" role="alert">工單資料不完整；已阻擋智慧報工。</p>';
+}
+
+async function machtileLoadSingleStationReport(order) {
+  const code = String(order?.machine || "").trim().toUpperCase();
+  machtileSingleStationReportState.machineCode = code;
+  machtileSingleStationReportState.processId = String(order?.processId || "");
+  if (!machtileSingleStationReportAllowlisted(code)) { machtileRenderSingleStationReport(); return; }
+  machtileSingleStationReportState.loading = true;
+  machtileBatchState.stationReportSettings = { status: "unavailable", machines: {}, failReasonCodesByMachine: {}, error: "" };
+  machtileRenderSingleStationReport();
+  try {
+    await machtileLoadStationReportSettings([code]);
+    await machtileLoadStationReportIdentity([code], isUuid(order?.processId) ? [order.processId] : []);
+    if (machtileBatchState.stationReportSettings.status === "loaded") {
+      const [actorId, users, progress, machineTimes] = await Promise.all([
+        machtileResolveAppUserId(), machtileBatchFetchUsers(),
+        machtileBatchFetchProgress(isUuid(order?.processId) ? [order.processId] : []),
+        machtileFetchMachineTimes(isUuid(order?.processId) ? [order.processId] : []),
+      ]);
+      machtileBatchState.actorId = actorId || "";
+      machtileBatchState.users = machtileBatchCore()?.operatorChoices(users) || [];
+      machtileBatchState.progressByProcess = progress.map;
+      machineTimes.forEach((value, processId) => machtileBatchState.machineTimeByProcess.set(processId, value.seconds));
+    }
+  } finally {
+    if (selectedOrder?.processId === order?.processId) {
+      machtileSingleStationReportState.loading = false;
+      machtileRenderSingleStationReport();
+    }
+  }
+}
 
 async function machtileLoadStationReportSettings(machineCodes) {
   const core = machtileStationReportCore();
@@ -21467,13 +21582,15 @@ async function machtileLoadStationReportSettings(machineCodes) {
   }
 }
 
-async function machtileLoadStationReportIdentity(machineCodes) {
+async function machtileLoadStationReportIdentity(machineCodes, explicitProcessIds = null) {
   const core = machtileStationReportCore();
   const identities = new Map();
   machtileBatchState.stationReportIdentityByProcess = identities;
   if (!core || state.source !== "supabase" || machtileBatchState.stationReportSettings.status !== "loaded") return;
   const enabledCodes = (machineCodes || []).filter((code) => core.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code));
-  const processIds = [...new Set(enabledCodes.flatMap((code) => machtileBatchCandidates(code).map((order) => String(order.processId || ""))).filter(isUuid))];
+  const processIds = [...new Set((Array.isArray(explicitProcessIds)
+    ? explicitProcessIds
+    : enabledCodes.flatMap((code) => machtileBatchCandidates(code).map((order) => String(order.processId || "")))).filter(isUuid))];
   if (!processIds.length) return;
   try {
     // Separate, optional read after the config gate: old card/list queries never
@@ -21603,11 +21720,26 @@ async function machtileStationReportWait(code, commandUuid, kind) {
 
 async function machtileStationReportSubmitPreview(code) {
   const core = machtileStationReportCore();
-  const order = machtileBatchSelectedOrder(code);
+  const order = machtileStationReportOrderForCode(code);
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const context = machtileStationReportContext(order, code);
   if (!core || !context || machtileStationReportFlowBusy(flow)) return;
+  if (machtileSingleStationReportOrder(code)) {
+    const validationMessage = validateReportForm(activeReportType);
+    const operatorMessage = machtileValidateOperatorSelection();
+    if (validationMessage || operatorMessage) {
+      flow.error = validationMessage || operatorMessage;
+      machtileRenderStationReportSurfaces();
+      return;
+    }
+    const reportType = activeReportType === "finish" ? "finish" : "noon";
+    flow.singleReport = {
+      reportType,
+      reportPayload: buildReportPayload(reportType),
+      operators: machtileSelectedOperators(machtileBatchState.actorId),
+    };
+  }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
     reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: null };
   let args;
@@ -21615,13 +21747,13 @@ async function machtileStationReportSubmitPreview(code) {
     args = core.buildSubmitArgs(form, crypto.randomUUID(), true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) {
     flow.error = error.message || "報工資料不完整。";
-    machtileRenderBatchReport();
+    machtileRenderStationReportSurfaces();
     return;
   }
   flow.args = args;
   flow.phase = "submitting-preview";
   flow.error = "";
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
     const submitted = await client.submit(args);
@@ -21639,7 +21771,7 @@ async function machtileStationReportSubmitPreview(code) {
       ? "智慧報工後端尚未同步；未建立正式報工。"
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
 }
 
 async function machtileStationReportSubmitFinal(code) {
@@ -21649,16 +21781,48 @@ async function machtileStationReportSubmitFinal(code) {
   if (!core || machtileStationReportFlowBusy(flow) || !flow.preview) return;
   let snapshot;
   try { snapshot = core.buildClientGuardSnapshot(flow.preview); }
-  catch (error) { flow.error = error.message; machtileRenderBatchReport(); return; }
-  const context = machtileStationReportContext(machtileBatchSelectedOrder(code), code);
-  if (!context) { flow.error = "工序識別資料不完整；已阻擋正式送出。"; machtileRenderBatchReport(); return; }
+  catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
+  const context = machtileStationReportContext(machtileStationReportOrderForCode(code), code);
+  if (!context) { flow.error = "工序識別資料不完整；已阻擋正式送出。"; machtileRenderStationReportSurfaces(); return; }
   let args;
   try {
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
       reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
-  } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderBatchReport(); return; }
+  } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
+}
+
+async function machtileRecordSingleStationProductionReport(code, args) {
+  const row = machtileBatchRow(code);
+  const order = machtileSingleStationReportOrder(code);
+  const flow = machtileStationReportState(row);
+  const resultKind = machtileStationReportCore()?.resultCard(row.stationReport?.result)?.kind;
+  const commandUuid = args.p_command_uuid;
+  if (!order || !["applied", "applied-late"].includes(resultKind)
+    || row.stationProductionReportUuid === commandUuid || row.stationProductionReportPendingUuid === commandUuid) return;
+  row.stationProductionReportPendingUuid = commandUuid;
+  try {
+    const reportType = flow.singleReport?.reportType || "noon";
+    const reportPayload = {
+      ...(flow.singleReport?.reportPayload || buildReportPayload(reportType)),
+      completed_qty: args.p_good_qty,
+      defect_qty: args.p_fail_qty,
+      station_command_uuid: commandUuid,
+    };
+    await submitReport(args.p_good_qty, args.p_fail_qty, args.p_report_note || "", reportType, {
+      order,
+      reportUuid: commandUuid,
+      reportPayload,
+      operators: flow.singleReport?.operators || [],
+      requireStructured: true,
+    });
+    row.stationProductionReportUuid = commandUuid;
+  } catch (error) {
+    row.stationReport.error = `舊 MES 已套用，但 App 報工紀錄未確認：${error.message || error}。請勿重送數量。`;
+  } finally {
+    if (row.stationProductionReportPendingUuid === commandUuid) row.stationProductionReportPendingUuid = null;
+  }
 }
 
 async function machtileStationReportSendFinal(code, args) {
@@ -21668,7 +21832,7 @@ async function machtileStationReportSendFinal(code, args) {
   flow.args = args;
   flow.phase = "submitting-report";
   flow.error = "";
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
     const submitted = await client.submit(args);
@@ -21682,7 +21846,8 @@ async function machtileStationReportSendFinal(code, args) {
       ? "智慧報工後端尚未同步；未建立正式報工。"
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
-  machtileRenderBatchReport();
+  await machtileRecordSingleStationProductionReport(code, args);
+  machtileRenderStationReportSurfaces();
 }
 
 async function machtileStationReportRetryAck(code) {
@@ -21693,7 +21858,7 @@ async function machtileStationReportRetryAck(code) {
   if (!core || !flow.args || !result || !core.SOFT_REJECTS.includes(result.reject_code)) return;
   let args;
   try { args = core.retryWithAck({ ...flow.args, p_report_note: row.reportNote || null }, result.reject_code, crypto.randomUUID()); }
-  catch (error) { flow.error = error.message; machtileRenderBatchReport(); return; }
+  catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
 
@@ -21705,7 +21870,7 @@ async function machtileStationReportRetryPreviewAck(code) {
   if (!core || !flow.args || !flow.preview || result?.kind !== "preview-soft") return;
   let args;
   try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), row.reportNote); }
-  catch (error) { flow.error = error.message; machtileRenderBatchReport(); return; }
+  catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
 
@@ -21765,7 +21930,7 @@ async function machtileStationReportReconcile(code) {
   const commandUuid = flow.args?.p_command_uuid;
   if (!core || !commandUuid) return;
   flow.error = "正在查詢原報工識別碼…";
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
   try {
     const result = await machtileStationReportCreateClient().read(commandUuid);
     flow.result = result;
@@ -21774,17 +21939,18 @@ async function machtileStationReportReconcile(code) {
       ? (result.command_type === "report_preview" && result.status === "previewed" ? "previewed" : "finished")
       : result.command_type === "report_preview" ? "waiting-preview" : "waiting-report";
     flow.error = core.isTerminal(result) ? "" : "原報工仍在處理；請勿建立第二筆。";
+    await machtileRecordSingleStationProductionReport(code, flow.args);
   } catch (error) {
     flow.error = `仍無法確認原報工狀態，請勿重送。${error.message || ""}`;
   }
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
 }
 
 function machtileStationReportCancel(code) {
   const flow = machtileStationReportState(machtileBatchRow(code));
   if (machtileStationReportFlowBusy(flow)) return;
   flow.phase = "idle"; flow.result = null; flow.preview = null; flow.args = null; flow.error = "";
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
 }
 
 function machtileStationReportNew(code) {
@@ -21793,7 +21959,7 @@ function machtileStationReportNew(code) {
   if (kind !== "applied" && kind !== "applied-late") return;
   row.good = ""; row.bad = ""; row.failReasonCode = ""; row.reportNote = "";
   row.stationReport = { phase: "idle", result: null, args: null, preview: null, error: "" };
-  machtileRenderBatchReport();
+  machtileRenderStationReportSurfaces();
 }
 
 function machtileStationReportCreateClient() {
@@ -22396,7 +22562,7 @@ function machtileBatchRefreshSubmitButton() {
 
 function machtileHandleBatchInput(event) {
   const t = event.target;
-  if (!(t instanceof HTMLElement) || !t.closest("[data-batch-root]")) return false;
+  if (!(t instanceof HTMLElement) || !t.closest("[data-batch-root], #singleStationReportPanel")) return false;
   if (t.hasAttribute("data-batch-operator-all")) {
     if (event.type !== "change" || !t.value) return true;
     const core = machtileBatchCore();
@@ -23185,6 +23351,19 @@ function bindEvents() {
     event.preventDefault();
     if (!selectedOrder) {
       showToast("此機台尚未指派工單，請先由主管排入工單。");
+      return;
+    }
+    const smartReportAllowlisted = ["noon", "finish"].includes(activeReportType)
+      && machtileSingleStationReportAllowlisted(selectedOrder.machine);
+    const smartReportExplicitlyDisabled = smartReportAllowlisted
+      && machtileBatchState.stationReportSettings.status === "loaded"
+      && !machtileStationReportCore()?.reportMachineEnabled(
+        machtileBatchState.stationReportSettings.machines, selectedOrder.machine
+      );
+    if (smartReportAllowlisted && !smartReportExplicitlyDisabled) {
+      showToast(machtileSingleStationReportActive()
+        ? "此機台須先在智慧報工區預覽，再長按確認送出。"
+        : "智慧報工 guard 尚未載入；本次未送出任何報工。");
       return;
     }
     const validationMessage = validateReportForm(activeReportType);
