@@ -30,6 +30,13 @@ eq("A01 關", c.enabledForMachine(flagA04, "A01"), false);
 eq("空代號 → 關", c.enabledForMachine(flagA04, ""), false);
 eq("* → B03 也開", c.enabledForMachine(c.parseFlag("*"), "b03"), true);
 
+console.log("== 單台報工今日開工分頁 ==");
+eq("名單內 A04 → 隱藏今日開工", c.dailyStartReportVisible(flagA04, "A04"), false);
+eq("名單外 A01 → 顯示今日開工", c.dailyStartReportVisible(flagA04, "A01"), true);
+eq("名單內 flow 預設 dailyStart → 下一個可用分頁 noon", c.reportTypeForMachine("dailyStart", flagA04, "A04"), "noon");
+eq("名單外 flow 預設 dailyStart → 維持 dailyStart", c.reportTypeForMachine("dailyStart", flagA04, "A01"), "dailyStart");
+eq("其他分頁不動", ["workStart", "noon", "afternoonCheck", "finish"].map((type) => c.reportTypeForMachine(type, flagA04, "A04")), ["workStart", "noon", "afternoonCheck", "finish"]);
+
 console.log("== isMultiStation ==");
 eq("A04 單工站", c.isMultiStation("A04"), false);
 eq("B03 多工站", c.isMultiStation("B03"), true);
