@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261013-ireporter-machine-link-p3-r3">
+  <link rel="stylesheet" href="./styles.css?v=20261013-cumulative-counter-rate-r2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -445,7 +445,7 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
-            <label class="field-label" for="completedQty">良品累計 <small>必填</small></label>
+            <label class="field-label" for="completedQty"><span id="completedQtyLabel">機台目前累計數</span> <small>必填</small></label>
             <p class="report-qty-help">報工請照機台計數器填累計數量</p>
             <div class="stepper">
               <button type="button" data-step="completedQty" data-delta="-1">−</button>
@@ -453,7 +453,15 @@
               <button type="button" data-step="completedQty" data-delta="1">+</button>
             </div>
 
-            <label class="field-label" for="defectQty">不良累計 <small>必填</small></label>
+            <div id="reportCounterPreview" class="report-counter-preview" role="status">累計 -｜上次 -｜這次 -</div>
+            <p id="reportCounterRateWarning" class="station-report-rate-warning" role="note" hidden></p>
+            <div id="reportCounterManual" class="report-counter-manual" hidden>
+              <p>今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。</p>
+              <label class="field-label" for="reportCounterManualBaseline">手填基準 <small>必填</small></label>
+              <input id="reportCounterManualBaseline" class="report-input" type="number" min="0" placeholder="例如：120">
+            </div>
+
+            <label class="field-label" for="defectQty">這次不良數 <small>必填</small></label>
             <div class="stepper">
               <button type="button" data-step="defectQty" data-delta="-1">−</button>
               <input id="defectQty" type="number" min="0" value="0">
@@ -692,6 +700,7 @@
   <script src="./cardActiveOrderCore.js?v=20261002-card-list-ui"></script>
   <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
   <script src="./reportCycleCore.js?v=20261002-first-cycle-noop"></script>
+  <script src="./reportCounterCore.js?v=20261013-cumulative-counter-r1"></script>
   <script src="./reportPhotoCore.js?v=20261013-finish-photo-optional-r1"></script>
   <script src="./cardEstimateCore.js?v=20261002-card-estimate-r2"></script>
   <script src="./todayReportStatusCore.js?v=20261002-monitor-today-tiles-r2"></script>
@@ -704,6 +713,6 @@
   <script src="./stationCommandCore.js?v=20261013-hide-daily-start-r1"></script>
   <script src="./stationReportCore.js?v=20261013-rate-check-r2"></script>
   <script src="./inspectionLinkCore.js?v=20261013-ireporter-machine-link-p3-r2"></script>
-  <script src="./app.js?v=20261013-ireporter-machine-link-p3-r3"></script>
+  <script src="./app.js?v=20261013-cumulative-counter-r1"></script>
 </body>
 </html>

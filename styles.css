@@ -13069,3 +13069,25 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-result.is-error { border-color: #e39a94; background: #fff5f4; }
 .station-report-preview-values { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; font-size: 12px; }
 .station-report-previous-step { display: inline-block; margin-top: 8px; color: #175ea8; font-weight: 700; }
+.report-counter-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef6ff;
+  color: #174f7c;
+  font-weight: 700;
+}
+
+.report-counter-preview.is-error,
+.report-counter-manual {
+  background: #fff8dc;
+  color: #765b00;
+}
+
+.report-counter-manual {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.report-counter-manual[hidden] { display: none; }
