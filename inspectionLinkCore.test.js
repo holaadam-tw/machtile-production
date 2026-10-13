@@ -20,6 +20,23 @@ equal("process-record tab", url.searchParams.get("tab"), "process_record");
 equal("readable values round trip", [url.searchParams.get("wo"), url.searchParams.get("process"), url.searchParams.get("machine"), url.searchParams.get("operator")], ["WO 100/甲", "精銑 & 去毛邊", "A04 小瀧澤", "王小明"]);
 equal("percent encoding is present", result.includes("WO+100%2F%E7%94%B2") && result.includes("%E7%B2%BE%E9%8A%91+%26+%E5%8E%BB%E6%AF%9B%E9%82%8A"), true);
 equal("return URL", url.searchParams.get("return_url"), "https://app.machtile.com/");
+for (const devUrl of ["http://localhost:4173/", "http://127.0.0.1:4173/"]) {
+  equal(`explicit dev return URL ${devUrl}`, new URL(core.buildUrl("https://holaadam-tw.github.io/I-Reporter/", { return_url: devUrl })).searchParams.get("return_url"), devUrl);
+}
+for (const unsafe of [
+  "javascript:alert(1)",
+  "https://evil.example/phish",
+  "//evil.example/phish",
+  "https://app.machtile.com//",
+  "https://app.machtile.com.evil.example/",
+  "https://user:password@app.machtile.com/",
+  "http://app.machtile.com/",
+  "https://app.machtile.com/path",
+  "https://app.machtile.com/?next=evil",
+  "https://app.machtile.com/#fragment",
+]) {
+  equal(`unsafe return URL falls back: ${unsafe}`, new URL(core.buildUrl("https://holaadam-tw.github.io/I-Reporter/", { return_url: unsafe })).searchParams.get("return_url"), core.DEFAULT_RETURN_URL);
+}
 equal("no secrets or email fields", [...url.searchParams.keys()].some((key) => /token|email/i.test(key)), false);
 equal("invalid base URL closes link", core.buildUrl("not a URL", { wo: "WO-1" }), "");
 equal("non-web scheme closes link", core.buildUrl("javascript:alert(1)", { wo: "WO-1" }), "");

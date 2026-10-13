@@ -10081,6 +10081,9 @@ function normalizeMachineMaster(row) {
 }
 
 async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
+  // Machine-card inspection links use app_users.id, never the Auth/JWT subject.
+  // Resolve before cards render; lookup failure leaves the operator hint empty.
+  await machtileResolveAppUserId();
   await machtileLoadDepartmentAccess({ readOnly: true, force: true });
   machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
@@ -14339,8 +14342,8 @@ function machtileInspectionLinkMarkup(machine, order) {
     process: machtileOperationLabel(order),
     machine_id: machine.id || machine.dbRowId,
     machine: machine.location ? `${code} ${machine.location}` : code,
-    operator_id: machtileAuthState.userId,
-    operator: machtileAuthState.appUserName || "登入者",
+    operator_id: machtileAuthState.appUserId,
+    operator: machtileAuthState.appUserId ? machtileAuthState.appUserName : "",
     return_url: "https://app.machtile.com/",
   });
   if (!href) return "";
