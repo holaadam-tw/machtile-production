@@ -152,6 +152,9 @@ async function handleFake(route) {
     const body = JSON.parse(req.postData() || "{}");
     return json(200, (body.p_process_ids || []).filter((pid) => progress[pid]).map((pid) => ({ process_id: pid, ...progress[pid] })));
   }
+  if (p === "/rest/v1/production_reports" && method === "GET" && (url.searchParams.get("select") || "") === "report_type,report_payload,created_at") {
+    return json(200, [{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: new Date().toISOString() }]);
+  }
   if (p.startsWith("/rest/v1/rpc/")) return json(200, null);
   if (p.startsWith("/rest/v1/")) return json(200, []);
   return json(200, {});

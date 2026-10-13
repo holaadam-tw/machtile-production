@@ -1099,6 +1099,22 @@ a.machine-qr-card small {
   color: #ffffff;
 }
 
+.machine-tile-actions .machine-inspection-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  border: 1px solid var(--brand-blue);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--surface);
+  color: var(--brand-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .machine-tile-actions {
   flex-wrap: nowrap;
   justify-content: flex-end;
@@ -12892,6 +12908,9 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .card-selection-panel .pool-eligible { color: #4b5a68; }
 .card-selection-panel button[data-pool-claim]:disabled { cursor: not-allowed; opacity: 0.6; }
 .card-pool-entry { background: #f6efe3; color: #8a3b00; }
+.card-selection-panel .pool-claim-reason { display: block; color: #8a3b00; }
+.card-selection-panel .pool-claim-message { min-height: 1.5em; font-weight: 700; color: #9f1239; }
+.pool-return-action { background: #fff4e5; color: #8a3b00; border-color: #d97706; }
 
 /* Process route: neutral states, steel-blue current step, contained horizontal scroll. */
 .process-flow { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 10px 0; border: 1px solid #d7dde4; border-radius: 8px; background: #f5f7f9; }
@@ -13053,3 +13072,25 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-result.is-error { border-color: #e39a94; background: #fff5f4; }
 .station-report-preview-values { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; font-size: 12px; }
 .station-report-previous-step { display: inline-block; margin-top: 8px; color: #175ea8; font-weight: 700; }
+.report-counter-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef6ff;
+  color: #174f7c;
+  font-weight: 700;
+}
+
+.report-counter-preview.is-error,
+.report-counter-manual {
+  background: #fff8dc;
+  color: #765b00;
+}
+
+.report-counter-manual {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.report-counter-manual[hidden] { display: none; }
