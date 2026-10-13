@@ -94,7 +94,8 @@ const users = [{ id: id(901), name: "王小明", legacy_user_id: "1080301", auth
 const procs = [
   { n: 1, wo: "XX01202609020008", part: "MPW-01止油閥座", partNo: "MPW-01", machine: "A01", step: 2, proc: "車床加工", qty: 5000 },
   { n: 4, wo: "XX01202502050012", part: "HCG-06本體", partNo: "HCG-06-01", machine: "A04", step: 5, proc: "CNC車床二序", qty: 600 },
-  { n: 33, wo: "XX01202606300001", part: "A37軸蓋", partNo: "A37-02", machine: "B03", step: 3, proc: "銑床加工", qty: 196 },
+  { n: 33, wo: "XX01202606300001", part: "A37軸蓋", partNo: "A37-02", machine: "B03", step: 3, proc: "銑床加工", qty: 196, manufactureIiId: "C011E0ZE2YZJ" },
+  { n: 34, wo: "XX01202604140005#7", part: "B04安全測試", partNo: "B04-NULL", machine: "B04", step: 7, proc: "銑床加工", qty: 50, manufactureIiId: null },
 ];
 const machines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"].map((code, i) => ({
   id: id(200 + i), machine_code: code, machine_name: code, machine_type: code.startsWith("A") ? "車床" : (code === "B01" || code === "B02" ? "臥式加工中心" : "加工中心"),
@@ -206,7 +207,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
         const c = cards.find((k) => k.work_order_no === x.wo);
         return {
           id: c.current_process_id, tenant_id: T, process_order: x.step, process_name: x.proc, process_type: "cnc", status: "pending",
-          off_station_at: null, qty_completed: 0, queue_order: null,
+          off_station_at: null, qty_completed: 0, queue_order: null, manufacture_ii_id: x.manufactureIiId ?? null,
           work_orders: { id: c.id, work_order_no: x.wo, part_no: x.partNo, part_name: x.part, quantity: x.qty, due_date: c.due_date, status: "in_progress" },
           machines: machines.find((m) => m.machine_code === x.machine),
         };
@@ -609,15 +610,20 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     const allCnc = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"];
     const { context, page, errors } = await newPage(browser, vp, { backend: be, configExtra: `stationCommandMachines: ${JSON.stringify(allCnc)},` });
     ok(await page.evaluate((want) => JSON.stringify(config.stationCommandMachines) === JSON.stringify(want), allCnc), `${W}：頁面收到完整 11 台 CNC 名單`);
-    const eligibleFixtureMachines = ["A01", "A04"];
+    const eligibleFixtureMachines = ["A01", "A04", "B03"];
     for (const machine of eligibleFixtureMachines) {
       ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 2, `${W}：${machine} 有「開工」「停工」`);
     }
-    for (const machine of ["B01", "B03"]) {
+    for (const machine of ["B01", "B04"]) {
       ok(await cardOf(page, machine).locator("[data-station-cmd]").count() === 0, `${W}：${machine} fixture 缺 ManufactureII Id 仍被安全擋下`);
     }
+    await cardOf(page, "B03").locator('[data-station-cmd="stop"]').click();
+    await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+    await sheet(page).locator("[data-station-cmd-confirm]").click();
+    ok(be.submits.at(-1)?.p_manufacture_ii_id === "C011E0ZE2YZJ", `${W}：B03 停工送出卡片的 ManufactureII Id`);
+    await sheet(page).locator("[data-station-cmd-close]").click();
     ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === eligibleFixtureMachines.length * 2, `${W}：只有具備完整工序資料的 fixture 出現按鈕`);
-    ok(be.submits.length === 0, `${W}：只顯示按鈕，沒有自動送出指令`);
+    ok(be.submits.length === 1, `${W}：只由測試點擊送出一筆 B03 指令`);
     ok(realErrors(errors).length === 0, `${W}：11 台名單沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
