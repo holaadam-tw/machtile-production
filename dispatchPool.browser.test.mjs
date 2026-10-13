@@ -107,8 +107,8 @@ async function openApp(role, width) {
 const poolKeys = page => page.locator('#machtileCardSelection [data-card-selection-pool] [data-pool-key]').evaluateAll(xs => xs.map(x => x.getAttribute('data-pool-key')));
 
 try {
-  ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05');
-  ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-a01a05-r2'), 'rollout config cache key is bumped');
+  ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
+  ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-b01b06-r1'), 'rollout config cache key is bumped');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
