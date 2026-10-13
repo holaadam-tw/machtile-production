@@ -12892,6 +12892,8 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .card-selection-panel .pool-eligible { color: #4b5a68; }
 .card-selection-panel button[data-pool-claim]:disabled { cursor: not-allowed; opacity: 0.6; }
 .card-pool-entry { background: #f6efe3; color: #8a3b00; }
+.card-selection-panel .pool-claim-reason { display: block; color: #8a3b00; }
+.card-selection-panel .pool-claim-message { min-height: 1.5em; font-weight: 700; color: #9f1239; }
 
 /* Process route: neutral states, steel-blue current step, contained horizontal scroll. */
 .process-flow { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 10px 0; border: 1px solid #d7dde4; border-radius: 8px; background: #f5f7f9; }

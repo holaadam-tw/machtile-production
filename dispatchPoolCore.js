@@ -67,6 +67,34 @@
     return { department, items: hideNotEligible ? list.filter((item) => item.eligibleHere) : list };
   }
 
+  function claimArgs(sourceKey, machineCode) {
+    return { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
+  }
+
+  function claimState(item, machine, enabledMachines) {
+    const code = text(machine && (machine.machineCode || machine.code || machine.name));
+    const enabled = (Array.isArray(enabledMachines) ? enabledMachines : []).map(text).includes(code);
+    if (!enabled) return { enabled: false, reason: "此機台尚未開放接單" };
+    if (text(machine && machine.status).toLowerCase() !== "idle" || Boolean(machine && machine.hasOrder)) {
+      return { enabled: false, reason: "機台不是空閒狀態" };
+    }
+    const eligible = Array.isArray(item && item.eligible_machine_codes)
+      && item.eligible_machine_codes.map(text).includes(code);
+    if (!eligible) return { enabled: false, reason: "此機台不在可做清單" };
+    return { enabled: true, reason: "" };
+  }
+
+  function claimErrorText(error) {
+    const message = text(error && error.message || error);
+    if (message.includes("POOL_ITEM_NOT_WAITING")) return "這張單已被其他機台接走。";
+    if (message.includes("MACHINE_NOT_EMPTY") || message.includes("MACHINE_NOT_IDLE")) return "機台已不是空閒狀態，請重新整理。";
+    if (message.includes("MACHINE_NOT_ELIGIBLE")) return "這台機台不在這張單的可做清單。";
+    if (message.includes("MACHINE_DEPARTMENT_MISMATCH") || message.includes("DEPARTMENT_ACCESS_DENIED")) return "這張單不屬於此機台或登入者的課別。";
+    if (message.includes("DISPATCH_POOL_CLAIM_DISABLED")) return "接單功能尚未由系統端開啟。";
+    if (message.includes("POOL_ITEM_INCOMPLETE")) return "待做池資料不完整，請生管確認。";
+    return "接單失敗，請重新整理後再試。";
+  }
+
   function urgencyLabel(item) {
     const u = urgencyOf(item);
     return u ? URGENCY_LABEL[u] : "緊急程度未提供";
@@ -110,6 +138,9 @@
     urgencyOf,
     sortItems,
     itemsForMachine,
+    claimArgs,
+    claimState,
+    claimErrorText,
     urgencyLabel,
     dueText,
     plannedStartText,

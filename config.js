@@ -64,6 +64,8 @@ window.MACHTILE_CONFIG = {
   // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
   // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
   stationCommandMachines: ["A04"],
+  // 派工池接單預設全關；完成 RUNBOOK 全部 gate 後，首波 pilot 才改為 ["A01", "A03"]。
+  dispatchPoolMachines: [],
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
   stationReportMachines: ["A04"],
