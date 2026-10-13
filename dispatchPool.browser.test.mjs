@@ -16,14 +16,14 @@ const machineRows = [
   { id: id(103), machine_code: 'A03', name: 'A03', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 3 },
   { id: id(123), machine_code: 'B03', name: 'B03', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 23 },
 ];
-const order = { id: id(201), work_order_no: 'TEST-ON-A01', part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-10-20', status: 'in_progress', source_system: 'app_manual', created_by: actor };
+const order = { id: id(201), work_order_no: 'TEST-ON-A01', part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-10-20', status: 'in_progress', source_system: 'app_manual', created_by: actor, legacy_mes_source: 'dispatch_pool', external_ref: '01|TESTNEED0001|TEST-SIM-1' };
 const proc = { id: id(301), work_order_id: id(201), process_order: 1, process_name: '車削', process_type: 'cnc', machine_id: id(101), status: 'pending', qty_completed: 0, qty_defect: 0 };
 const poolRows = [
   { source_key: '01|TESTNEED0001|TEST-SIM-1', work_order_no: 'TEST-POOL-L2', process_order: 2, operation_name: 'CNC車床加工-1/2', part_no: 'TEST-P1', part_name: '測試軸', quantity: 120, due_date: '2026-10-20', planned_start: '2026-10-08T00:00:00Z', urgency: 2, department_code: 'LATHE', eligible_machine_codes: ['A01', 'A02', 'A03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [];
+let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], returnRequests = [];
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -55,6 +55,12 @@ async function openApp(role, width) {
         if (claimWinner) return json(409, { message: 'POOL_ITEM_NOT_WAITING' });
         claimWinner = body.p_machine_code;
         return json(200, { action: 'claimed', source_key: body.p_source_key, machine_code: body.p_machine_code });
+      }
+      if (p === '/rest/v1/rpc/dispatch_pool_return' && req.method() === 'POST') {
+        const body = JSON.parse(req.postData() || '{}'); returnRequests.push(body); mutations.push(p);
+        if (!['planner', 'admin'].includes(access.role)) return json(403, { message: 'DISPATCH_POOL_RETURN_FORBIDDEN' });
+        claimWinner = '';
+        return json(200, { action: 'returned', source_key: body.p_source_key, returned_by: auth, reason: body.p_reason });
       }
       if (req.method() !== 'GET') { mutations.push(p); return json(403, { message: 'fixture: unexpected pool write' }); }
       poolQueries.push(u.search);
@@ -143,6 +149,7 @@ try {
     ok(await page.locator('#machtileCardSelection [data-card-selection-assigned], #machtileCardSelection [data-card-select-process]').count() === 0, 'operator: no selection buttons in pool-only dialog');
     ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0002|TEST-SIM-2', '01|TESTNEED0001|TEST-SIM-1']), 'operator: own department items in owner order');
     ok(await page.locator('#machtileCardSelection [data-pool-claim]:not([disabled])').count() === 0, 'operator: claim disabled');
+    ok(await page.locator('[data-pool-return]').count() === 0, 'operator: no return-to-pool control anywhere');
     await page.screenshot({ path: path.join(out, 'operator-a02-390.png') });
     await ctx.close();
   }
@@ -154,6 +161,31 @@ try {
     ok(await page.locator('[data-card-pool-open]').count() === 0, 'empty pool: no operator entry');
     await ctx.close();
   }
+  // Planner returns the claimed A01 item, then another machine reclaims it.
+  poolMode = 'rows'; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; returnRequests = []; claimRequests = [];
+  access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  {
+    const planner = await openApp('planner', 1440);
+    const returnButton = planner.page.locator('.machine-tile-card [data-pool-return="01|TESTNEED0001|TEST-SIM-1"]').first();
+    ok(await returnButton.count() === 1 && (await returnButton.innerText()).includes('退回池子'), 'planner: machine card shows return-to-pool control');
+    planner.page.once('dialog', dialog => dialog.accept('排程調整'));
+    await returnButton.click();
+    await planner.page.waitForFunction(() => document.body.innerText.includes('已退回池子'));
+    ok(returnRequests.length === 1 && returnRequests[0].p_source_key === '01|TESTNEED0001|TEST-SIM-1' && returnRequests[0].p_reason === '排程調整', 'planner: return RPC sends source key and reason');
+    await planner.ctx.close();
+  }
+  access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
+  {
+    const next = await openApp('operator', 390);
+    await next.page.locator('[data-card-pool-open="A02"]').click();
+    const reclaim = next.page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]');
+    ok(await reclaim.isEnabled(), 'after return: another eligible idle machine can reclaim');
+    await reclaim.click();
+    await next.page.waitForFunction(() => document.body.innerText.includes('接單成功'));
+    ok(claimRequests.length === 1 && claimRequests[0].p_machine_code === 'A02', 'claim→return→another-machine reclaim browser flow completes');
+    await next.ctx.close();
+  }
+  dispatchPoolMachines = []; claimWinner = '';
   // Two browser sessions race for the same row. The fixture serializes the claim like the RPC row lock.
   poolMode = 'rows'; dispatchPoolMachines = ['A02', 'A03']; claimWinner = ''; claimRequests = [];
   access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
@@ -200,7 +232,7 @@ try {
     await ctx.close();
   }
   console.log('non-GET calls seen (read-only RPCs of other panels): ' + [...new Set(mutations)].join(','));
-  ok(mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_claim').length === 2 && !mutations.some(p => /work_order_upsert|machine_queue/.test(p)), 'only the two expected atomic claim writes were sent');
+  ok(mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_claim').length === 3 && mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_return').length === 1 && !mutations.some(p => /work_order_upsert|machine_queue/.test(p)), 'only expected atomic claim/return writes were sent');
   ok(blocked.length === 0, 'no real backend or non-GET local request: ' + blocked.join(','));
   ok(errors.length === 0, 'no JS errors: ' + errors.join(' | '));
   console.log(`${checks}/${checks} dispatch pool view checks passed`);

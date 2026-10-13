@@ -71,6 +71,14 @@
     return { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
   }
 
+  function canReturn(role) {
+    return ["planner", "admin"].includes(text(role).toLowerCase());
+  }
+
+  function returnArgs(sourceKey, reason) {
+    return { p_source_key: text(sourceKey), p_reason: text(reason) };
+  }
+
   function claimState(item, machine, enabledMachines) {
     const code = text(machine && (machine.machineCode || machine.code || machine.name));
     const enabled = (Array.isArray(enabledMachines) ? enabledMachines : []).map(text).includes(code);
@@ -93,6 +101,15 @@
     if (message.includes("DISPATCH_POOL_CLAIM_DISABLED")) return "接單功能尚未由系統端開啟。";
     if (message.includes("POOL_ITEM_INCOMPLETE")) return "待做池資料不完整，請生管確認。";
     return "接單失敗，請重新整理後再試。";
+  }
+
+  function returnErrorText(error) {
+    const message = text(error && error.message || error);
+    if (message.includes("ACTIVE_CLAIM_NOT_FOUND") || message.includes("POOL_ITEM_NOT_CLAIMED")) return "這張單已退回或狀態已變更，請重新整理。";
+    if (message.includes("CLAIM_ALREADY_STARTED")) return "工序已開工或已有報工，不能退回池子。";
+    if (message.includes("DISPATCH_POOL_RETURN_FORBIDDEN")) return "只有生管或管理員可以退回池子。";
+    if (message.includes("INVALID_RETURN_PAYLOAD")) return "請填寫 1–500 字退回原因。";
+    return "退回失敗，請重新整理後再試。";
   }
 
   function urgencyLabel(item) {
@@ -139,8 +156,11 @@
     sortItems,
     itemsForMachine,
     claimArgs,
+    canReturn,
+    returnArgs,
     claimState,
     claimErrorText,
+    returnErrorText,
     urgencyLabel,
     dueText,
     plannedStartText,

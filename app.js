@@ -8306,7 +8306,8 @@ function validateReportForm(type) {
   if (type === "workStart") {
     if (!Number($("#workTotalQty")?.value || 0)) return "請填寫工件總數。";
     if (!getReportCycleSeconds()) return "請填寫 cycle time。";
-    if (!hasFile("startPhoto")) return "首次開工必須拍照。";
+    const photoError = MachTileReportPhotoCore.validationError(type, hasFile("startPhoto"));
+    if (photoError) return photoError;
     if (!checkedAll(["firstArticleSize", "firstArticleSurface", "firstArticleTool"])) return "請完成首次開工首件檢查表。";
   }
   if (type === "dailyStart") {
@@ -8321,12 +8322,10 @@ function validateReportForm(type) {
     if (selectedRadioValue("pmAbnormal") === "yes" && !$("#pmAbnormalNote")?.value.trim()) return "有異常時請填寫異常備註。";
   }
   if (type === "finish") {
-    if (!hasFile("finishPhoto")) return "收工 / 完工必須拍照。";
     if (!checkedRadio("finishOvertime")) return "請確認是否加班。";
   }
   if (type === "abnormal") {
     if (!$("#abnormalType")?.value) return "請選擇異常類型。";
-    if (!hasFile("abnormalPhoto")) return "異常回報必須拍照。";
   }
   return "";
 }
@@ -8407,13 +8406,12 @@ function reportFilesForType(type) {
     const file = fileForInput(inputId);
     if (file) files.push({ file, kind, label });
   };
+  const photoSpec = MachTileReportPhotoCore.PHOTO_BY_TYPE[type];
+  const selectedPhoto = photoSpec ? MachTileReportPhotoCore.selectedPhoto(type, fileForInput(photoSpec.inputId)) : null;
+  if (selectedPhoto) files.push(selectedPhoto);
   if (type === "workStart") {
-    pushFile("startPhoto", "start_photo", "開工照片");
     pushFile("programUpload", "cnc_program", "CNC 程式");
   }
-  if (type === "dailyStart") pushFile("machinePhoto", "machine_photo", "今日開工機台照片");
-  if (type === "finish") pushFile("finishPhoto", "finish_photo", "完工照片");
-  if (type === "abnormal") pushFile("abnormalPhoto", "abnormal_photo", "異常照片");
   return files;
 }
 
@@ -10407,6 +10405,7 @@ function machtileAssignedCardProcess(row) {
   order.stationStep = row.process_order;
   order.processType = row.process_type;
   order.perProcessCard = true;
+  order.dispatchPoolSourceKey = wo.legacy_mes_source === "dispatch_pool" ? String(wo.external_ref || "").trim() : "";
   return order;
 }
 
@@ -10422,7 +10421,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -11143,6 +11142,32 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   }
 }
 
+function machtileCanReturnDispatchPool() {
+  return Boolean(machtileDispatchPoolCore?.canReturn(machtileDepartmentAccess?.role || machtileAuthState.role));
+}
+
+function machtileDispatchPoolReturnMarkup(order, machineCode) {
+  if (!machtileCanReturnDispatchPool() || !order?.dispatchPoolSourceKey || order.done > 0) return "";
+  return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
+}
+
+async function machtileReturnDispatchPool(sourceKey) {
+  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool()) return;
+  const reason = window.prompt("請輸入退回池子的原因（1–500 字）", "");
+  if (reason === null) return;
+  const args = machtileDispatchPoolCore.returnArgs(sourceKey, reason);
+  if (!args.p_reason || args.p_reason.length > 500) { showToast("請填寫 1–500 字退回原因。", "error"); return; }
+  machtileDispatchPoolState.claimBusy = sourceKey;
+  try {
+    await supabaseFetch("rpc/dispatch_pool_return", { method: "POST", body: JSON.stringify(args) });
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines(); renderAll(); machtileCloseCardSelection();
+    showToast("已退回池子，可由其他合格空閒機台重新接單。", "success");
+  } catch (error) {
+    showToast(machtileDispatchPoolCore.returnErrorText(error), "error");
+  } finally { machtileDispatchPoolState.claimBusy = ""; }
+}
+
 // 作業員（不能排程）也能從機台卡打開「只看待做池」：只在這台同課有待接工序時才出現入口。
 function machtileCardPoolEntryMarkup(machine) {
   if (machine?.isUnassignedBucket || machtileCanEditSchedule()) return "";
@@ -11157,7 +11182,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
   machtileCloseCardSelection();
-  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button></li>`).join("") || `<li>${empty}</li>`;
+  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
   let selectionMarkup = "";
   if (!poolOnly) {
     const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
@@ -14289,7 +14314,7 @@ function renderMachineCard(machine) {
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
       ${machtileCardPoolEntryMarkup(machine)}
 
       ${order ? `
@@ -17295,8 +17320,8 @@ function renderReportRulesModule() {
     ["今日開工", "當日第一筆", "機台已加工數量必填；機台照片選填", "建立當日加工基準"],
     ["中午報工", "中午休息前", "這次良品 / 這次不良必填（不是累計）", "判斷是否加班或拆單"],
     ["下午 4:30 檢查", "固定提醒", "下午檢查表必填、不填數量", "主管下班前確認風險"],
-    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）/ 完工照片必填", "結算當日進度"],
-    ["異常回報", "事件式", "異常類型與照片必填", "異常備註與主管處理"],
+    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）必填；完工照片選填", "結算當日進度"],
+    ["異常回報", "事件式", "異常類型必填；異常照片選填", "異常備註與主管處理"],
   ];
   return renderRuleTable("報工規則", rules, "儲存報工規則");
 }
@@ -20862,13 +20887,13 @@ function appendAiSupportMessage(role, text) {
 function aiSupportAnswer(question) {
   const q = String(question || "").toLowerCase();
   if (q.includes("相機") || q.includes("拍照") || q.includes("照片")) {
-    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n首次開工、收工/完工、異常回報的照片是必填；今日開工的機台照片與 CNC 程式檔是選填。";
+    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n只有首次開工的開工照片必填；今日開工、收工/完工、異常回報的照片與 CNC 程式檔都是選填。";
   }
   if (q.includes("暫停") || q.includes("pause") || q.includes("停工")) {
     return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。正常中午休息不要用暫停，請用「中午報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 今日開工：目前機台已加工數量必填，機台照片選填。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、完工照片、是否加班。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 今日開工：目前機台已加工數量必填，機台照片選填。\n3. 中午報工：這次良品 / 這次不良（填這次新做的數量，不是累計），用來判斷是否加班。\n4. 下午 4:30 檢查：只填檢查表與是否異常，不填數量。\n5. 收工/完工：這次良品 / 這次不良（不是累計）、是否加班必填，完工照片選填。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";
@@ -22848,6 +22873,8 @@ function bindEvents() {
       void machtileClaimDispatchPool(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
       return;
     }
+    const poolReturn = event.target.closest("[data-pool-return]");
+    if (poolReturn) { void machtileReturnDispatchPool(poolReturn.dataset.poolReturn); return; }
     const cardSelectProcess = event.target.closest("[data-card-select-process]");
     if (cardSelectProcess) {
       machtileCommitCardSelection(cardSelectProcess.dataset.cardSelectMachine, cardSelectProcess.dataset.cardSelectProcess);
