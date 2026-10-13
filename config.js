@@ -64,8 +64,8 @@ window.MACHTILE_CONFIG = {
   // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
   // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
   stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
-  // 派工池接單預設全關；完成 RUNBOOK 全部 gate 後，首波 pilot 才改為 ["A01", "A03"]。
-  dispatchPoolMachines: ["A01", "A03"],
+  // 派工池接單只開全部車床 A01–A05；B01–B06 與其他機台不開。
+  dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05"],
   // I-Reporter process-record entry on machine cards. Empty is the safe default.
   inspectionLinkMachines: [],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",

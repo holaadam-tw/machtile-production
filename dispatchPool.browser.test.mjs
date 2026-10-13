@@ -14,12 +14,20 @@ const machineRows = [
   { id: id(101), machine_code: 'A01', name: 'A01', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 1 },
   { id: id(102), machine_code: 'A02', name: 'A02', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 2 },
   { id: id(103), machine_code: 'A03', name: 'A03', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 3 },
+  { id: id(104), machine_code: 'A04', name: 'A04', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 4 },
+  { id: id(105), machine_code: 'A05', name: 'A05', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 5 },
+  { id: id(121), machine_code: 'B01', name: 'B01', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 21 },
+  { id: id(122), machine_code: 'B02', name: 'B02', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 22 },
   { id: id(123), machine_code: 'B03', name: 'B03', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 23 },
+  { id: id(124), machine_code: 'B04', name: 'B04', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 24 },
+  { id: id(125), machine_code: 'B05', name: 'B05', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 25 },
+  { id: id(126), machine_code: 'B06', name: 'B06', department_name: '銑床課', status: 'idle', machine_type: 'mill', display_order: 26 },
+  { id: id(131), machine_code: 'C01', name: 'C01', department_name: '其他課', status: 'idle', machine_type: 'other', display_order: 31 },
 ];
 const order = { id: id(201), work_order_no: 'TEST-ON-A01', part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-10-20', status: 'in_progress', source_system: 'app_manual', created_by: actor, legacy_mes_source: 'dispatch_pool', external_ref: '01|TESTNEED0001|TEST-SIM-1' };
 const proc = { id: id(301), work_order_id: id(201), process_order: 1, process_name: '車削', process_type: 'cnc', machine_id: id(101), status: 'pending', qty_completed: 0, qty_defect: 0 };
 const poolRows = [
-  { source_key: '01|TESTNEED0001|TEST-SIM-1', work_order_no: 'TEST-POOL-L2', process_order: 2, operation_name: 'CNC車床加工-1/2', part_no: 'TEST-P1', part_name: '測試軸', quantity: 120, due_date: '2026-10-20', planned_start: '2026-10-08T00:00:00Z', urgency: 2, department_code: 'LATHE', eligible_machine_codes: ['A01', 'A02', 'A03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
+  { source_key: '01|TESTNEED0001|TEST-SIM-1', work_order_no: 'TEST-POOL-L2', process_order: 2, operation_name: 'CNC車床加工-1/2', part_no: 'TEST-P1', part_name: '測試軸', quantity: 120, due_date: '2026-10-20', planned_start: '2026-10-08T00:00:00Z', urgency: 2, department_code: 'LATHE', eligible_machine_codes: ['A01', 'A02', 'A03', 'A04', 'A05'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
@@ -99,8 +107,8 @@ async function openApp(role, width) {
 const poolKeys = page => page.locator('#machtileCardSelection [data-card-selection-pool] [data-pool-key]').evaluateAll(xs => xs.map(x => x.getAttribute('data-pool-key')));
 
 try {
-  ok(/dispatchPoolMachines:\s*\["A01",\s*"A03"\]/.test(rolloutConfig), 'rollout config enables only A01 and A03');
-  ok(rolloutIndex.includes('config.js?v=20261013-dispatch-pool-a01a03-r1'), 'rollout config cache key is bumped');
+  ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05');
+  ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-a01a05-r2'), 'rollout config cache key is bumped');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
@@ -166,17 +174,18 @@ try {
     ok(await page.locator('[data-card-pool-open]').count() === 0, 'empty pool: no operator entry');
     await ctx.close();
   }
-  // Production rollout allowlist: A01/A03 can claim; every other machine remains non-actionable.
-  poolMode = 'rows'; dispatchPoolMachines = ['A01', 'A03']; claimWinner = ''; exposeAssignedOrder = false;
+  // Production rollout allowlist: all lathes A01-A05 can claim; every other machine remains non-actionable.
+  poolMode = 'rows'; dispatchPoolMachines = ['A01', 'A02', 'A03', 'A04', 'A05']; claimWinner = ''; exposeAssignedOrder = false;
   access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
   {
     const { ctx, page } = await openApp('operator', 1440);
-    for (const machine of ['A01', 'A02', 'A03']) {
+    for (const machine of ['A01', 'A02', 'A03', 'A04', 'A05']) {
       await page.locator(`[data-card-pool-open="${machine}"]`).click();
       const claim = page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]');
-      ok((machine === 'A01' || machine === 'A03') ? await claim.isEnabled() : await claim.isDisabled(), `rollout: ${machine} claim action matches A01/A03-only allowlist`);
+      ok(await claim.isEnabled(), `rollout: ${machine} shows an enabled claim action`);
       await page.locator('[data-close-card-selection]').click();
     }
+    ok(await page.locator('[data-card-pool-open="B01"], [data-card-pool-open="B02"], [data-card-pool-open="B03"], [data-card-pool-open="B04"], [data-card-pool-open="B05"], [data-card-pool-open="B06"], [data-card-pool-open="C01"], [data-pool-return]').count() === 0, 'rollout: B01-B06 and other machines expose no claim/return action');
     await ctx.close();
   }
   exposeAssignedOrder = true;
