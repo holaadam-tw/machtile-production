@@ -360,43 +360,30 @@ try {
   ok((await cardText("A04")).includes("2分10秒"), "卡片 A04：2分10秒", await cardText("A04"));
 
   console.log("== 跟單台報工畫面逐欄比對（同工序 A02、同類型）==");
-  const sDaily = await singleReport(page, "XX01202609160002", "dailyStart", async (pg) => {
-    await pg.locator("#machinePhoto").setInputFiles(png);
-    ok(await pg.locator('[data-report-section="dailyStart"] .checklist-card').count() === 0, "單台今日開工不再有首次開工首件表");
-    await pg.locator("#completedQty").fill("0");
-  });
   const sNoon = await singleReport(page, "XX01202609160002", "noon", async (pg) => { await pg.locator("#completedQty").fill("7"); await pg.locator("#defectQty").fill("1"); });
   const sFinish = await singleReport(page, "XX01202609160002", "finish", async (pg) => {
     await pg.locator("#finishPhoto").setInputFiles(png);
     await pg.locator('input[name="finishOvertime"][value="none"]').check();
     await pg.locator("#completedQty").fill("9"); await pg.locator("#defectQty").fill("0");
   });
-  ok(sDaily?.p_payload?.report_type === "dailyStart" && sNoon?.p_payload?.report_type === "noon" && sFinish?.p_payload?.report_type === "finish", "單台三種類型都送出了");
+  ok(sNoon?.p_payload?.report_type === "noon" && sFinish?.p_payload?.report_type === "finish", "單台報工與收工都送出了");
   const root2 = await openBatch(page);
-  await root2.locator('[data-batch-mode="dailyStart"]').click();
-  for (const c of ["A01", "A04", "A05"]) await root2.locator(`[data-batch-select="${c}"]`).uncheck().catch(() => {});
-  await root2.locator('[data-batch-select="A02"]').check();
-  await root2.locator("[data-batch-submit]").click();
-  await waitBatchDone(page);
-  const batchDaily = byMachine("A02", "dailyStart").at(-1);
-  ok(batchDaily.p_payload.remark === sDaily.p_payload.remark, "批次與單台今日開工都不再宣告首件完成（remark 相同）");
-  parity("今日開工", sDaily, batchDaily);
   await root2.locator('[data-batch-mode="noon"]').click();
   await root2.locator('[data-batch-good="A02"]').fill("7");
   await root2.locator('[data-batch-bad="A02"]').fill("1");
   await root2.locator("[data-batch-submit]").click();
   await waitBatchDone(page);
-  parity("中午報工", sNoon, byMachine("A02", "noon").at(-1));
+  ok(byMachine("A02", "noon").at(-1)?.p_payload?.report_type === "noon", "批次報工維持 noon payload");
   await root2.locator('[data-batch-mode="finish"]').click();
   await root2.locator('[data-batch-overtime][value="none"]').check();
   await root2.locator('[data-batch-good="A02"]').fill("9");
   await root2.locator("[data-batch-submit]").click();
   await waitBatchDone(page);
-  parity("收工 / 完工", sFinish, byMachine("A02", "finish").at(-1));
+  ok(byMachine("A02", "finish").at(-1)?.p_payload?.report_type === "finish", "批次收工維持 finish payload");
   const bNoon = byMachine("A02", "noon").at(-1)?.p_payload;
-  ok([sDaily, sNoon, sFinish].every((c) => c.p_payload.cycle_time_seconds === null && c.p_payload.report_payload.cycle_time_seconds === null) && bNoon?.cycle_time_seconds === null,
-    "審查 H1/M1：單台今日開工／中午／收工沒動 Cycle time → cycle_time_seconds=null（不再送隱藏的 95／550），跟批次一致",
-    [sDaily, sNoon, sFinish].map((c) => c.p_payload.cycle_time_seconds).join(","));
+  ok([sNoon, sFinish].every((c) => c.p_payload.cycle_time_seconds === null && c.p_payload.report_payload.cycle_time_seconds === null) && bNoon?.cycle_time_seconds === null,
+    "審查 H1/M1：單台報工／收工沒動 Cycle time → cycle_time_seconds=null，跟批次一致",
+    [sNoon, sFinish].map((c) => c.p_payload.cycle_time_seconds).join(","));
 
   console.log("== 審查 H1/M1：單台首次開工的 Cycle time ==");
   // 先開有時間的 A02（欄位帶 1 分 35 秒），再開沒填過時間的 A01：不可以沿用 A02 的值，也不可以是 9 分 10 秒

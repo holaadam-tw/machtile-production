@@ -13340,17 +13340,24 @@ function machtileStationCmdParts(machine) {
   return { status, buttons, active: true };
 }
 
-// 單台報工畫面：這台開了「舊 MES 開工／停工」→ 既有「今日開工」分頁標「只記錄（不改舊 MES）」
-function machtileStationCmdLabelReportTab(machineName) {
+// 單台報工畫面：這台開了卡片「開工／停工」時，確認卡已順便記今日開工，隱藏重複分頁。
+function machtileStationCmdSyncReportTabs(machineName) {
   const tab = document.querySelector('.report-type-tab[data-report-type="dailyStart"]');
-  if (!tab) return;
+  const section = document.querySelector('[data-report-section="dailyStart"]');
+  const hidden = Boolean(machineName && machtileStationCmdCore
+    && !machtileStationCmdCore.dailyStartReportVisible(machtileStationCmdFlag(), machineName));
+  if (!tab) return hidden;
   tab.querySelector("[data-station-cmd-recordonly]")?.remove();
-  if (!machineName || !machtileStationCmdActiveFor(machineName)) return;
-  const note = document.createElement("small");
-  note.className = "station-cmd-recordonly";
-  note.dataset.stationCmdRecordonly = "";
-  note.textContent = "只記錄（不改舊 MES）";
-  tab.appendChild(note);
+  tab.hidden = hidden;
+  tab.classList.toggle("is-hidden", hidden);
+  tab.style.display = hidden ? "none" : "";
+  if (section) section.hidden = hidden;
+  return hidden;
+}
+
+function machtileStationCmdDailyStartReportHidden(machineName) {
+  return Boolean(machineName && machtileStationCmdCore
+    && !machtileStationCmdCore.dailyStartReportVisible(machtileStationCmdFlag(), machineName));
 }
 
 function machtileStationCmdMachineByCode(code) {
@@ -13614,7 +13621,7 @@ function machtileStationCmdDailyStartHtml(sheet) {
     return `<section class="station-cmd-daily" data-station-cmd-daily>
         <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
         <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
-        <p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>
+        ${machtileStationCmdDailyStartReportHidden(sheet.code) ? "" : "<p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>"}
         ${ds.error ? `<p class="station-cmd-notice" id="stationCmdDailyErr" role="alert" data-station-cmd-daily-error>${escapeHtml(ds.error)}</p>` : ""}
       </section>`;
   }
@@ -20287,8 +20294,13 @@ function openReport(orderId, options = {}) {
     $("#reportPart").textContent = "尚未指派工單";
     $("#reportWorkNo").textContent = "待指派";
   }
-  setReportType(options.reportType || "workStart");
-  machtileStationCmdLabelReportTab(order?.machine || machineName);
+  const reportMachine = order?.machine || machineName;
+  machtileStationCmdSyncReportTabs(reportMachine);
+  const requestedType = options.reportType || "workStart";
+  const availableType = machtileStationCmdCore
+    ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
+    : requestedType;
+  setReportType(availableType);
   if (!order) setReportDefaults(null);
   $("#reportSheet").classList.toggle("route-sheet", Boolean(options.routeMode));
   document.body.classList.toggle("route-mode", Boolean(options.routeMode));
