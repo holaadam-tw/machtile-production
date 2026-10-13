@@ -66,6 +66,9 @@ window.MACHTILE_CONFIG = {
   stationCommandMachines: ["A04"],
   // 派工池接單預設全關；完成 RUNBOOK 全部 gate 後，首波 pilot 才改為 ["A01", "A03"]。
   dispatchPoolMachines: [],
+  // I-Reporter process-record entry on machine cards. Empty is the safe default.
+  inspectionLinkMachines: [],
+  inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
   stationReportMachines: ["A04"],

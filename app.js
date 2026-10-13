@@ -31,6 +31,8 @@ const config = {
   stationCommandMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
+  inspectionLinkMachines: [],
+  inspectionLinkBaseUrl: "",
   // Schedule foundation RPCs/tables are additive and must be rolled out per
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
@@ -8167,6 +8169,89 @@ function setReportCycleSeconds(seconds) {
 // 現在只有「首次開工」或「使用者這次真的改過 Cycle time」才送，其他一律 null。
 let reportCycleTouched = false;
 let reportCyclePrefilledSeconds = null;
+let reportCounterBaselineState = { status: "idle", baseline: null, processId: "" };
+
+function reportCounterApplies(type = activeReportType) {
+  return type === "noon" || type === "finish";
+}
+
+function reportCounterManualBaseline() {
+  const value = $("#reportCounterManualBaseline")?.value;
+  return value === "" || value == null ? null : Number(value);
+}
+
+function reportCounterEffectiveBaseline() {
+  return reportCounterBaselineState.baseline?.qty ?? reportCounterManualBaseline();
+}
+
+function reportCounterCalculation() {
+  return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
+}
+
+function reportCounterRateReasonableness(result = reportCounterCalculation()) {
+  return window.MachTileReportCounterCore.rateReasonableness({
+    cycleSeconds: getReportCycleSeconds(),
+    startedAt: reportCounterBaselineState.baseline?.createdAt,
+    now: new Date().toISOString(),
+    reportedQty: result.valid ? result.delta + Number($("#defectQty")?.value || 0) : null,
+  });
+}
+
+function updateReportCounterPreview() {
+  const preview = $("#reportCounterPreview");
+  const manual = $("#reportCounterManual");
+  const rateWarning = $("#reportCounterRateWarning");
+  if (!preview || !manual) return;
+  const applies = reportCounterApplies();
+  preview.hidden = !applies;
+  manual.hidden = !applies || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
+  if (rateWarning) { rateWarning.hidden = true; rateWarning.textContent = ""; }
+  if (!applies) return;
+  if (reportCounterBaselineState.status === "loading") {
+    preview.textContent = "正在讀取今天的機台計數基準…";
+    preview.classList.remove("is-error");
+    return;
+  }
+  if (reportCounterBaselineState.status === "error") {
+    preview.textContent = "讀不到今天的機台計數基準，請確認連線後重開報工。";
+    preview.classList.add("is-error");
+    manual.hidden = true;
+    return;
+  }
+  const result = reportCounterCalculation();
+  const current = result.current ?? "-";
+  const baseline = result.baseline ?? "-";
+  const delta = result.delta ?? "-";
+  preview.textContent = `累計 ${current}｜上次 ${baseline}｜這次 ${delta}${result.valid ? "" : `；${result.message}`}`;
+  preview.classList.toggle("is-error", !result.valid);
+  const rateCheck = reportCounterRateReasonableness(result);
+  if (rateWarning && rateCheck?.warn) {
+    rateWarning.textContent = rateCheck.message;
+    rateWarning.hidden = false;
+  }
+}
+
+async function loadReportCounterBaseline(order = selectedOrder) {
+  const processId = order?.processId || "";
+  reportCounterBaselineState = { status: "loading", baseline: null, processId };
+  updateReportCounterPreview();
+  if (state.source !== "supabase" || !isUuid(processId)) {
+    reportCounterBaselineState = { status: "ready", baseline: null, processId };
+    updateReportCounterPreview();
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const rows = await supabaseFetch(`production_reports?select=report_type,report_payload,created_at&process_id=eq.${encodeURIComponent(processId)}&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=100`);
+    if (selectedOrder?.processId !== processId) return;
+    reportCounterBaselineState = { status: "ready", baseline: window.MachTileReportCounterCore.latestBaseline(rows), processId };
+  } catch (error) {
+    console.warn("report counter baseline lookup failed", error);
+    if (selectedOrder?.processId !== processId) return;
+    reportCounterBaselineState = { status: "error", baseline: null, processId };
+  }
+  updateReportCounterPreview();
+}
 
 function reportCycleSecondsToSend(type) {
   if (type !== "workStart" && !reportCycleTouched) return null;
@@ -8245,6 +8330,10 @@ function setReportDefaults(order) {
   reportCycleTouched = false;
   updateReportEstimate();
   updateNoonAdvice();
+  const manualBaseline = $("#reportCounterManualBaseline");
+  if (manualBaseline) manualBaseline.value = "";
+  reportCounterBaselineState = { status: "idle", baseline: null, processId: order?.processId || "" };
+  updateReportCounterPreview();
 }
 
 // 單台報工選到「已報良品 ≥ 訂單數量」的單：只提醒，不擋報工（owner 2026-10-02）
@@ -8275,6 +8364,9 @@ function setReportType(type) {
   const submitButton = $(".submit-report");
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
+  const completedLabel = $("#completedQtyLabel");
+  if (completedLabel) completedLabel.textContent = reportCounterApplies() ? "機台目前累計數" : "良品數";
+  updateReportCounterPreview();
 }
 
 function fileForInput(inputId) {
@@ -8314,7 +8406,13 @@ function validateReportForm(type) {
     if (($("#machineQty")?.value ?? "") === "") return "請填寫目前機台已加工數量。";
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
-    if (completed < 0 || defects < 0) return "良品累計與不良累計不可小於 0。";
+    if (completed < 0 || defects < 0) return "良品與這次不良數不可小於 0。";
+  }
+  if (reportCounterApplies(type)) {
+    if (reportCounterBaselineState.status === "loading") return "正在讀取今天的機台計數基準，請稍候。";
+    if (reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
+    const result = reportCounterCalculation();
+    if (!result.valid) return result.message;
   }
   if (type === "afternoonCheck") {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -8358,6 +8456,7 @@ function buildReportRemark(type, remark) {
 }
 
 function buildReportPayload(type) {
+  const counter = reportCounterApplies(type) ? reportCounterCalculation() : null;
   return {
     report_type: type,
     ...(type === "workStart" ? {
@@ -8367,8 +8466,12 @@ function buildReportPayload(type) {
     } : {}),
     work_total_qty: Number($("#workTotalQty")?.value || 0) || null,
     cycle_time_seconds: reportCycleSecondsToSend(type),
-    machine_qty: Number($("#machineQty")?.value || 0),
-    completed_qty: Number($("#completedQty")?.value || 0),
+    machine_qty: counter ? counter.current : Number($("#machineQty")?.value || 0),
+    completed_qty: counter ? counter.delta : Number($("#completedQty")?.value || 0),
+    ...(counter ? {
+      counter_baseline_qty: counter.baseline,
+      counter_baseline_source: reportCounterBaselineState.baseline?.source || "manual",
+    } : {}),
     defect_qty: Number($("#defectQty")?.value || 0),
     has_program_upload: hasFile("programUpload"),
     overtime_plan: $("#overtimePlan")?.value || selectedRadioValue("finishOvertime") || "",
@@ -10081,6 +10184,9 @@ function normalizeMachineMaster(row) {
 }
 
 async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
+  // Machine-card inspection links use app_users.id, never the Auth/JWT subject.
+  // Resolve before cards render; lookup failure leaves the operator hint empty.
+  await machtileResolveAppUserId();
   await machtileLoadDepartmentAccess({ readOnly: true, force: true });
   machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
@@ -14380,12 +14486,31 @@ function renderMachineCard(machine) {
       ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
-          ${reportAction}${stationCmd.buttons}
+          ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}
           ${isHmc ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>` : ""}
         </div>
       </footer>
     </article>
   `;
+}
+
+function machtileInspectionLinkMarkup(machine, order) {
+  const core = window.MachTileInspectionLinkCore;
+  const code = machine?.code || machine?.name || "";
+  if (!core || !order || !core.isAllowed(code, config.inspectionLinkMachines)) return "";
+  const href = core.buildUrl(config.inspectionLinkBaseUrl, {
+    wo_id: order.workOrderId,
+    wo: order.id,
+    process_id: order.processId,
+    process: machtileOperationLabel(order),
+    machine_id: machine.id || machine.dbRowId,
+    machine: machine.location ? `${code} ${machine.location}` : code,
+    operator_id: machtileAuthState.appUserId,
+    operator: machtileAuthState.appUserId ? machtileAuthState.appUserName : "",
+    return_url: "https://app.machtile.com/",
+  });
+  if (!href) return "";
+  return `<a class="machine-inspection-link" data-no-detail href="${escapeHtml(href)}" target="_blank" rel="noopener">品檢／製程紀錄</a>`;
 }
 
 function alertOrders() {
@@ -20362,6 +20487,7 @@ function openReport(orderId, options = {}) {
     : requestedType;
   setReportType(availableType);
   if (!order) setReportDefaults(null);
+  void loadReportCounterBaseline(order);
   $("#reportSheet").classList.toggle("route-sheet", Boolean(options.routeMode));
   document.body.classList.toggle("route-mode", Boolean(options.routeMode));
   $("#reportSheet").classList.add("is-open");
@@ -23026,16 +23152,18 @@ function bindEvents() {
       const value = Math.max(0, Number(input.value || 0) + Number(button.dataset.delta));
       input.value = value;
       updateNoonAdvice();
+      updateReportCounterPreview();
     });
   });
 
-  ["workTotalQty", "cycleMinutes", "cycleSeconds", "completedQty"].forEach((id) => {
+  ["workTotalQty", "cycleMinutes", "cycleSeconds", "completedQty", "defectQty", "reportCounterManualBaseline"].forEach((id) => {
     const input = $(`#${id}`);
     if (!input) return;
     input.addEventListener("input", () => {
       if (id === "cycleMinutes" || id === "cycleSeconds") reportCycleTouched = true;
       updateReportEstimate();
       updateNoonAdvice();
+      updateReportCounterPreview();
     });
   });
 
@@ -23091,7 +23219,7 @@ function bindEvents() {
       }
     }
     const meta = reportTypeMeta[activeReportType] || reportTypeMeta.workStart;
-    const completed = Number($("#completedQty").value || 0);
+    const completed = reportCounterApplies() ? reportCounterCalculation().delta : Number($("#completedQty").value || 0);
     const defects = Number($("#defectQty").value || 0);
     const remark = buildReportRemark(activeReportType, $("#reportNote").value.trim());
     try {
