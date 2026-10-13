@@ -396,6 +396,7 @@ const state = {
   machines: [],
   machineMasters: [],
   source: "mock",
+  inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
 };
 
 const mockOrders = [
@@ -10213,6 +10214,7 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
   await machtileLoadScheduleQueue();
   state.source = "supabase";
   await machtileLoadAssignedCardProcesses();
+  await machtileLoadInspectionStatuses();
   // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
   await machtileLoadCardLegacyProgress();
   await machtileLoadCardMachineTimes();
@@ -10634,6 +10636,7 @@ function loadMockData() {
   state.workOrders = mockOrders.map((order) => ({ ...order }));
   state.machineMasters = [];
   state.source = "mock";
+  state.inspectionStatus = { loadState: "idle", latestByTuple: new Map() };
   machtileResetScheduleContracts();
   machtileAttentionState.status = "idle";
   machtileAttentionState.error = "";
@@ -10665,6 +10668,9 @@ function alertCategories(order) {
   if (status === "aiRisk") categories.add("可能延誤");
   if (status === "abnormal" || order.workStatus === "abnormal" || order.processStatus === "abnormal") categories.add("異常");
   if (status === "inspection" || order.workStatus === "waiting_inspection" || order.processStatus === "waiting_inspection") categories.add("待品檢");
+  const inspectionStatus = machtileInspectionStatusForOrder(order);
+  if (inspectionStatus.kind === "fail") categories.add("異常");
+  if (inspectionStatus.kind === "missing-attention") categories.add("待品檢");
   if (dueInfo(order).diffDays === 0) categories.add("今日到期");
   if (status === "stale" || String(order.lastReport || "").includes("尚未")) categories.add("未回報");
   return categories;
@@ -14485,6 +14491,7 @@ function renderMachineCard(machine) {
         </section>
       </details>
 
+      ${machtileInspectionStatusMarkup(machine, order)}
       ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
@@ -14494,6 +14501,68 @@ function renderMachineCard(machine) {
       </footer>
     </article>
   `;
+}
+
+function machtileInspectionMachine(order) {
+  const machineName = String(order?.machine || "").trim().toUpperCase();
+  return (state.machineMasters || []).find((machine) => [machine.code, machine.name].some((value) => String(value || "").trim().toUpperCase() === machineName)) || null;
+}
+
+function machtileInspectionTuple(order, machine = machtileInspectionMachine(order)) {
+  return { workOrderId: order?.workOrderId, processId: order?.processId, machineId: machine?.id || machine?.dbRowId };
+}
+
+function machtileInspectionEnabled(machine) {
+  return Boolean(window.MachTileInspectionLinkCore?.isAllowed?.(machine?.code || machine?.name || "", config.inspectionLinkMachines));
+}
+
+async function machtileLoadInspectionStatuses() {
+  const core = window.MachTileInspectionStatusCore;
+  const linkCore = window.MachTileInspectionLinkCore;
+  state.inspectionStatus = { loadState: "loading", latestByTuple: new Map() };
+  if (!core || !linkCore) {
+    state.inspectionStatus.loadState = "error";
+    return;
+  }
+  const tuples = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].map((order) => {
+    const machine = machtileInspectionMachine(order);
+    return machine && machtileInspectionEnabled(machine) ? machtileInspectionTuple(order, machine) : null;
+  }).filter(Boolean);
+  const paths = core.queryPaths(tuples, core.taipeiDate());
+  if (!paths.length) {
+    state.inspectionStatus = { loadState: "ready", latestByTuple: new Map() };
+    return;
+  }
+  try {
+    const batches = await Promise.all(paths.map((path) => supabaseFetch(path)));
+    const rows = batches.flatMap((batch) => Array.isArray(batch) ? batch : []);
+    state.inspectionStatus = { loadState: "ready", latestByTuple: core.latestByTuple(rows) };
+  } catch (error) {
+    console.warn("process_inspections batch read unavailable", error);
+    state.inspectionStatus = { loadState: "error", latestByTuple: new Map() };
+  }
+}
+
+function machtileInspectionStatusForOrder(order, machine = machtileInspectionMachine(order), now = new Date()) {
+  const core = window.MachTileInspectionStatusCore;
+  if (!core) return { kind: "hidden", label: "", attention: false };
+  const enabled = Boolean(order && machine && machtileInspectionEnabled(machine));
+  const tuple = machtileInspectionTuple(order, machine);
+  return core.cardStatus({
+    enabled,
+    loadState: state.inspectionStatus?.loadState || "idle",
+    latest: state.inspectionStatus?.latestByTuple?.get(core.tupleKey(tuple)) || null,
+    now,
+  });
+}
+
+function machtileInspectionStatusMarkup(machine, order) {
+  const status = machtileInspectionStatusForOrder(order, machine);
+  if (status.kind === "hidden") return "";
+  const content = `<span>${escapeHtml(status.label)}</span>`;
+  return status.kind === "fail"
+    ? `<button type="button" class="machine-inspection-status is-${status.kind}" data-no-detail data-view="alerts" aria-label="${escapeHtml(status.label)}，前往異常回報">${content}</button>`
+    : `<div class="machine-inspection-status is-${status.kind}">${content}</div>`;
 }
 
 function machtileInspectionLinkMarkup(machine, order) {
@@ -24339,6 +24408,7 @@ async function machtileTodayTick() {
   try {
     renderStats();
     renderWorkOrders();
+    renderAlerts();
   } catch (error) {
     console.warn("today tiles re-render failed", error);
   }

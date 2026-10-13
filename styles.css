@@ -11285,6 +11285,27 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .machine-advice p { font-size: 13px; }
 .machine-card-more summary { font-size: 13px; }
 .machine-tile-footer { color: #475467; font-size: 13px; }
+
+.machine-inspection-status {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #475467;
+  background: #f2f4f7;
+  font: inherit;
+  text-align: left;
+}
+.machine-inspection-status.is-pass { color: #166534; background: #ecfdf3; border-color: #abefc6; }
+.machine-inspection-status.is-fail { width: 100%; color: #b42318; background: #fef3f2; border-color: #fecdca; cursor: pointer; font-weight: 700; }
+.machine-inspection-status.is-skipped,
+.machine-inspection-status.is-error,
+.machine-inspection-status.is-loading { color: #667085; background: #f2f4f7; border-color: #d0d5dd; }
+.machine-inspection-status.is-missing { color: #854d0e; background: #fefce8; border-color: #fef08a; }
+.machine-inspection-status.is-missing-attention { color: #713f12; background: #fef08a; border-color: #eab308; font-weight: 800; box-shadow: 0 0 0 2px rgba(234, 179, 8, .15); }
 .machine-tile-actions button,
 .machine-tile-actions a { min-height: 36px; font-size: 13px; }
 .machine-qr-card small { font-size: 12px; }
