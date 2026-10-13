@@ -121,6 +121,9 @@ async function handleFake(route) {
     const body = JSON.parse(req.postData() || "{}");
     return json(200, (body.p_process_ids || []).filter((pid) => progress[pid]).map((pid) => ({ process_id: pid, ...progress[pid] })));
   }
+  if (p === "/rest/v1/production_reports" && req.method() === "GET" && (url.searchParams.get("select") || "") === "report_type,report_payload,created_at") {
+    return json(200, [{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: new Date().toISOString() }]);
+  }
   if (p === "/rest/v1/rpc/field_report_upsert") {
     const body = JSON.parse(req.postData() || "{}");
     calls.push(body);
@@ -292,11 +295,11 @@ console.log("== 手機（Pixel 7）：車床批次報工 ==");
   await page.locator('.mobile-tab[data-view="dashboard"]').click();
   await page.locator(".fab[data-open-report]").click();
   await page.locator('.report-type-tab[data-report-type="noon"]').click();
-  ok((await page.locator('label[for="completedQty"]').innerText()).startsWith("良品累計") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("不良累計"), "單台報工欄位維持良品／不良累計語意");
+  ok((await page.locator('label[for="completedQty"]').innerText()).startsWith("機台目前累計數") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("這次不良數"), "單台報工欄位維持機台累計／本次不良語意");
   ok((await page.locator('[data-report-section="noon"]').innerText()).includes("照機台計數器填累計數量"), "報工分頁說明累計填法");
-  ok(await page.locator("#completedQty").inputValue() === "0", "良品累計預設 0");
+  ok(await page.locator("#completedQty").inputValue() === "0", "機台累計預設 0");
   const reportLabels = await page.locator("#reportSheet").innerText();
-  ok(reportLabels.includes("良品累計"), "報工畫面顯示「良品累計」字樣");
+  ok(reportLabels.includes("機台目前累計數"), "報工畫面顯示「機台目前累計數」字樣");
   await page.locator("#completedQty").fill("7");
   ok((await page.locator("#noonAdvice").innerText()).includes("已完成＋這次") || (await page.locator("#noonAdvice").innerText()).includes("cycle time"), "中午建議改用「已完成＋這次」判斷");
   await page.screenshot({ path: path.join(outDir, "08-phone-single-report.png") });

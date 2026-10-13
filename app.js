@@ -29,6 +29,8 @@ const config = {
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
   stationCommandMachines: [],
+  // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
+  dispatchPoolMachines: [],
   inspectionLinkMachines: [],
   inspectionLinkBaseUrl: "",
   // Schedule foundation RPCs/tables are additive and must be rolled out per
@@ -10509,6 +10511,7 @@ function machtileAssignedCardProcess(row) {
   order.stationStep = row.process_order;
   order.processType = row.process_type;
   order.perProcessCard = true;
+  order.dispatchPoolSourceKey = wo.legacy_mes_source === "dispatch_pool" ? String(wo.external_ref || "").trim() : "";
   return order;
 }
 
@@ -10524,7 +10527,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -11155,9 +11158,9 @@ function machtileCloseCardSelection() {
 }
 
 // 派工待做池第 2 步（2026-10-07）：Factory 課別待做池「待接／退回待接」的工序（派工橋 → dispatch_pool_items）。
-// 只讀：RLS 已限同租戶＋自己的課別；這裡再依機台卡課別只列同課。接單（第 3 步）還沒開放，按鈕一律 disabled。
+// RLS 已限同租戶＋自己的課別；這裡再依機台卡課別只列同課。接單另受機台 allowlist、空閒與 eligible list 三道 gate。
 const machtileDispatchPoolCore = typeof window === "undefined" ? null : window.MachTileDispatchPoolCore;
-const machtileDispatchPoolState = { status: "idle", items: [], error: "" };
+const machtileDispatchPoolState = { status: "idle", items: [], error: "", claimBusy: "", claimMessage: "" };
 
 async function machtileLoadDispatchPool() {
   if (!machtileStrictMode() || !machtileDispatchPoolCore) {
@@ -11197,19 +11200,78 @@ function machtileDispatchPoolSectionMarkup(machine) {
   const items = pool.items.map(item => {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
+    const machineCode = machine?.code || machine?.name || "";
+    const claim = core.claimState(item, { machineCode, status: machine?.status, hasOrder: Boolean(machine?.order) }, config.dispatchPoolMachines);
+    const busy = Boolean(machtileDispatchPoolState.claimBusy);
+    const disabled = !claim.enabled || busy;
+    const reason = busy ? "接單處理中" : claim.reason;
     return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pool-key="${escapeHtml(item.source_key)}">
         <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">退回待接</span>` : ""}</div>
         <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: item.operation_name }))} · ${escapeHtml(item.part_name)}</span>
         <span>數量 ${escapeHtml(core.quantityText(item.quantity))} · 交期 ${escapeHtml(core.dueText(item.due_date))} · APS 預計開始 ${escapeHtml(core.plannedStartText(item.planned_start))}</span>
         <span class="pool-eligible">可做機台 ${escapeHtml(eligible)}${item.eligibleHere ? "" : `（${escapeHtml(machine.name)} 不在清單）`}</span>
-        <button type="button" disabled data-pool-claim aria-disabled="true" title="第 3 步才開放接單">接這張（下一步開放）</button>
+        <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? "接單中…" : "接單"}</button>
+        ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
   }).join("");
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
     : pool.department ? "<li>目前沒有同課待接的工序。</li>" : "<li>這台沒有設定車床課／銑床課，不列待做池。</li>";
-  return `<h3>待做池（同課）</h3><p class="pool-note">生管放進池子、還沒派機台的工序，依緊急程度 → 交期 → APS 預計開始排序；現在只能看，接單下一步開放。${synced ? `資料時間 ${escapeHtml(synced)}` : ""}</p>
-    <ul class="pool-list" data-card-selection-pool>${items || empty}</ul>`;
+  return `<h3>待做池（同課）</h3><p class="pool-note">生管放進池子、還沒派機台的工序，依緊急程度 → 交期 → APS 預計開始排序；空閒且在可做清單、並已開 pilot 的機台才能接單。${synced ? `資料時間 ${escapeHtml(synced)}` : ""}</p>
+    <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
+}
+
+async function machtileClaimDispatchPool(sourceKey, machineCode) {
+  if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
+  const holder = document.getElementById("machtileCardSelection");
+  const message = holder?.querySelector("[data-pool-claim-message]");
+  machtileDispatchPoolState.claimBusy = sourceKey;
+  machtileDispatchPoolState.claimMessage = "";
+  holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
+  try {
+    const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
+    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines();
+    renderAll();
+    machtileCloseCardSelection();
+    showToast("接單成功，工單已進入這台機台。", "success");
+  } catch (error) {
+    machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
+    if (message) message.textContent = machtileDispatchPoolState.claimMessage;
+    showToast(machtileDispatchPoolState.claimMessage, "error");
+    await machtileLoadDispatchPool();
+  } finally {
+    machtileDispatchPoolState.claimBusy = "";
+    const machine = machtileScheduleMachine(machineCode);
+    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+  }
+}
+
+function machtileCanReturnDispatchPool() {
+  return Boolean(machtileDispatchPoolCore?.canReturn(machtileDepartmentAccess?.role || machtileAuthState.role));
+}
+
+function machtileDispatchPoolReturnMarkup(order, machineCode) {
+  if (!machtileCanReturnDispatchPool() || !order?.dispatchPoolSourceKey || order.done > 0) return "";
+  return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
+}
+
+async function machtileReturnDispatchPool(sourceKey) {
+  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool()) return;
+  const reason = window.prompt("請輸入退回池子的原因（1–500 字）", "");
+  if (reason === null) return;
+  const args = machtileDispatchPoolCore.returnArgs(sourceKey, reason);
+  if (!args.p_reason || args.p_reason.length > 500) { showToast("請填寫 1–500 字退回原因。", "error"); return; }
+  machtileDispatchPoolState.claimBusy = sourceKey;
+  try {
+    await supabaseFetch("rpc/dispatch_pool_return", { method: "POST", body: JSON.stringify(args) });
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines(); renderAll(); machtileCloseCardSelection();
+    showToast("已退回池子，可由其他合格空閒機台重新接單。", "success");
+  } catch (error) {
+    showToast(machtileDispatchPoolCore.returnErrorText(error), "error");
+  } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
 
 // 作業員（不能排程）也能從機台卡打開「只看待做池」：只在這台同課有待接工序時才出現入口。
@@ -11226,7 +11288,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
   machtileCloseCardSelection();
-  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button></li>`).join("") || `<li>${empty}</li>`;
+  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
   let selectionMarkup = "";
   if (!poolOnly) {
     const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
@@ -14358,7 +14420,7 @@ function renderMachineCard(machine) {
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
       ${machtileCardPoolEntryMarkup(machine)}
 
       ${order ? `
@@ -22940,6 +23002,13 @@ function bindEvents() {
     if (cardSelectOpen) { machtileOpenCardSelection(cardSelectOpen.dataset.cardSelectOpen); return; }
     const cardPoolOpen = event.target.closest("[data-card-pool-open]");
     if (cardPoolOpen) { machtileOpenCardSelection(cardPoolOpen.dataset.cardPoolOpen, { poolOnly: true }); return; }
+    const poolClaim = event.target.closest("[data-pool-claim]");
+    if (poolClaim) {
+      void machtileClaimDispatchPool(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
+      return;
+    }
+    const poolReturn = event.target.closest("[data-pool-return]");
+    if (poolReturn) { void machtileReturnDispatchPool(poolReturn.dataset.poolReturn); return; }
     const cardSelectProcess = event.target.closest("[data-card-select-process]");
     if (cardSelectProcess) {
       machtileCommitCardSelection(cardSelectProcess.dataset.cardSelectMachine, cardSelectProcess.dataset.cardSelectProcess);

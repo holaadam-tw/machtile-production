@@ -35,6 +35,8 @@ window.MACHTILE_CONFIG = {
   // submit through the offline-first idempotent outbox seam (needs
   // migrations 202607110001–0003 on the target DB).
   enableOutboxSubmit: false,
+  // 派工池接單：空陣列＝全部關；首波 pilot 可設 ["A01", "A03"]。
+  dispatchPoolMachines: [],
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.
   scheduleCalendar: {

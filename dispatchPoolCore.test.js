@@ -44,6 +44,20 @@ eq("作業員：本機不在可做清單的不列", c.itemsForMachine(pool, { de
 eq("作業員：可做清單有本機的照 owner 排序", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A05" }, { hideNotEligible: true }).items.map((x) => x.work_order_no), ["L2"]);
 eq("沒給 options＝生管：全部同課照列", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A05" }).items.length, 2);
 
+console.log("== claim（旗標＋空閒＋eligible）==");
+eq("RPC 參數只帶一張單與一台機", c.claimArgs(" pool-1 ", " A01 "), { p_source_key: "pool-1", p_machine_code: "A01" });
+eq("只有 planner/admin 可退回", ["operator", "manager", "planner", "admin"].map(c.canReturn), [false, false, true, true]);
+eq("退回 RPC 參數去除前後空白", c.returnArgs(" pool-1 ", " 排程調整 "), { p_source_key: "pool-1", p_reason: "排程調整" });
+eq("旗標未開不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "idle", hasOrder: false }, []), { enabled: false, reason: "此機台尚未開放接單" });
+eq("忙機不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "running", hasOrder: false }, ["A01"]), { enabled: false, reason: "機台不是空閒狀態" });
+eq("已有工單不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "idle", hasOrder: true }, ["A01"]), { enabled: false, reason: "機台不是空閒狀態" });
+eq("不在 eligible list 不能接", c.claimState(item({ eligible_machine_codes: ["A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01"]), { enabled: false, reason: "此機台不在可做清單" });
+eq("pilot 空閒 eligible 可接", c.claimState(item({ eligible_machine_codes: ["A01", "A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01", "A03"]), { enabled: true, reason: "" });
+eq("搶輸顯示原因", c.claimErrorText(new Error("409 POOL_ITEM_NOT_WAITING")), "這張單已被其他機台接走。");
+eq("server 判定非空閒", c.claimErrorText(new Error("MACHINE_NOT_IDLE")), "機台已不是空閒狀態，請重新整理。");
+eq("已開工不可退回", c.returnErrorText(new Error("CLAIM_ALREADY_STARTED")), "工序已開工或已有報工，不能退回池子。");
+eq("operator 不可退回", c.returnErrorText(new Error("DISPATCH_POOL_RETURN_FORBIDDEN")), "只有生管或管理員可以退回池子。");
+
 console.log("== 顯示文字 ==");
 eq("緊急標籤", c.urgencyLabel({ urgency: 1 }), "緊急 1");
 eq("緊急未提供", c.urgencyLabel({ urgency: 7 }), "緊急程度未提供");

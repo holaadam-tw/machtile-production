@@ -60,6 +60,7 @@ async function scenario(outbox) {
       if (p === "/rest/v1/v_work_order_cards") return json([card]);
       if (p === "/rest/v1/v_machine_management_cards") return json(machines);
       if (p === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: id(301), legacy_output: 0, legacy_fail: 0, last_report_at: null, actual_start_at: null }]);
+      if (p === "/rest/v1/production_reports" && req.method() === "GET" && (url.searchParams.get("select") || "") === "report_type,report_payload,created_at") return json([{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: new Date().toISOString() }]);
       if (p === "/rest/v1/rpc/field_report_upsert") { posts.push(JSON.parse(req.postData()).p_payload); return json({ report_id: id(7000 + posts.length), inserted: true }); }
       if (p === "/rest/v1/production_reports" && req.method() === "POST") { posts.push(JSON.parse(req.postData())); return json([{ id: id(7000 + posts.length) }]); }
       if (p.startsWith("/storage/v1/object/") && req.method() === "POST") { uploads.push(p); return json({ Key: p }); }
@@ -153,6 +154,7 @@ async function scenario(outbox) {
   await page.evaluate(() => closeReport());
   await open("finish");
   await page.locator('input[name="finishOvertime"][value="none"]').check();
+  await page.locator("#completedQty").fill("1");
   check(await page.locator('label[for="finishPhoto"] small').textContent() === "選填", "finish photo is visibly optional");
   await submit();
   await closed();
