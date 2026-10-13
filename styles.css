@@ -1099,6 +1099,22 @@ a.machine-qr-card small {
   color: #ffffff;
 }
 
+.machine-tile-actions .machine-inspection-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  border: 1px solid var(--brand-blue);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--surface);
+  color: var(--brand-blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .machine-tile-actions {
   flex-wrap: nowrap;
   justify-content: flex-end;

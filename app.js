@@ -29,6 +29,8 @@ const config = {
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
   stationCommandMachines: [],
+  inspectionLinkMachines: [],
+  inspectionLinkBaseUrl: "",
   // Schedule foundation RPCs/tables are additive and must be rolled out per
   // environment. Keep production reads/writes disabled until that environment
   // has applied and verified 202607150004_machtile_schedule_foundation.sql.
@@ -10079,6 +10081,9 @@ function normalizeMachineMaster(row) {
 }
 
 async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
+  // Machine-card inspection links use app_users.id, never the Auth/JWT subject.
+  // Resolve before cards render; lookup failure leaves the operator hint empty.
+  await machtileResolveAppUserId();
   await machtileLoadDepartmentAccess({ readOnly: true, force: true });
   machtileHistoryRealRows = null;
   const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
@@ -14318,12 +14323,31 @@ function renderMachineCard(machine) {
       ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
-          ${reportAction}${stationCmd.buttons}
+          ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}
           ${isHmc ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>` : ""}
         </div>
       </footer>
     </article>
   `;
+}
+
+function machtileInspectionLinkMarkup(machine, order) {
+  const core = window.MachTileInspectionLinkCore;
+  const code = machine?.code || machine?.name || "";
+  if (!core || !order || !core.isAllowed(code, config.inspectionLinkMachines)) return "";
+  const href = core.buildUrl(config.inspectionLinkBaseUrl, {
+    wo_id: order.workOrderId,
+    wo: order.id,
+    process_id: order.processId,
+    process: machtileOperationLabel(order),
+    machine_id: machine.id || machine.dbRowId,
+    machine: machine.location ? `${code} ${machine.location}` : code,
+    operator_id: machtileAuthState.appUserId,
+    operator: machtileAuthState.appUserId ? machtileAuthState.appUserName : "",
+    return_url: "https://app.machtile.com/",
+  });
+  if (!href) return "";
+  return `<a class="machine-inspection-link" data-no-detail href="${escapeHtml(href)}" target="_blank" rel="noopener">品檢／製程紀錄</a>`;
 }
 
 function alertOrders() {
