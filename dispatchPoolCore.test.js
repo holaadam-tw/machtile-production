@@ -46,6 +46,8 @@ eq("沒給 options＝生管：全部同課照列", c.itemsForMachine(pool, { dep
 
 console.log("== claim（旗標＋空閒＋eligible）==");
 eq("RPC 參數只帶一張單與一台機", c.claimArgs(" pool-1 ", " A01 "), { p_source_key: "pool-1", p_machine_code: "A01" });
+eq("釋放角色含 admin/manager/planner，不含 operator", ["operator", "manager", "planner", "admin"].map(c.canRelease), [false, true, true, true]);
+eq("釋放 RPC 只帶 source key", c.releaseArgs(" pool-1 "), { p_source_key: "pool-1" });
 eq("只有 planner/admin 可退回", ["operator", "manager", "planner", "admin"].map(c.canReturn), [false, false, true, true]);
 eq("退回 RPC 參數去除前後空白", c.returnArgs(" pool-1 ", " 排程調整 "), { p_source_key: "pool-1", p_reason: "排程調整" });
 eq("旗標未開不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "idle", hasOrder: false }, []), { enabled: false, reason: "此機台尚未開放接單" });
@@ -53,8 +55,24 @@ eq("忙機不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { 
 eq("已有工單不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "idle", hasOrder: true }, ["A01"]), { enabled: false, reason: "機台不是空閒狀態" });
 eq("不在 eligible list 不能接", c.claimState(item({ eligible_machine_codes: ["A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01"]), { enabled: false, reason: "此機台不在可做清單" });
 eq("pilot 空閒 eligible 可接", c.claimState(item({ eligible_machine_codes: ["A01", "A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01", "A03"]), { enabled: true, reason: "" });
-eq("搶輸顯示原因", c.claimErrorText(new Error("409 POOL_ITEM_NOT_WAITING")), "這張單已被其他機台接走。");
+eq("搶輸顯示原因", c.claimErrorText(new Error("409 POOL_ITEM_NOT_WAITING")), "這張單已被別台接走。");
 eq("server 判定非空閒", c.claimErrorText(new Error("MACHINE_NOT_IDLE")), "機台已不是空閒狀態，請重新整理。");
+const claimErrors = {
+  "UNACKNOWLEDGED_CLAIM_EXISTS: 尚有未確認接單": "這張單已有未確認的接單，請找生管釋放。",
+  MACHINE_ALREADY_ASSIGNED: "機台還有未完成的工單。",
+  MACHINE_NOT_ELIGIBLE: "這台機台不在這張單的可做清單。",
+  MACHINE_DEPARTMENT_MISMATCH: "這張單不屬於這台機台的課別。",
+  DEPARTMENT_ACCESS_DENIED: "你沒有這張單所屬課別的權限。",
+  PROCESS_ALREADY_ASSIGNED: "這道工序已排到其他機台。",
+  POOL_ITEM_INCOMPLETE: "待做池資料不完整，請生管確認。",
+  DISPATCH_POOL_CLAIM_DISABLED: "接單功能尚未由系統端開啟。",
+  AUTH_REQUIRED: "登入已失效，請重新登入。",
+  TENANT_REQUIRED: "找不到公司資料，請重新登入或聯絡管理員。",
+};
+for (const [message, expected] of Object.entries(claimErrors)) eq(`錯誤碼 ${message.split(":")[0]}`, c.claimErrorText(new Error(message)), expected);
+eq("可解析 PostgREST 狀態碼前綴與中文訊息", c.errorCode(new Error("409 UNACKNOWLEDGED_CLAIM_EXISTS: 已有接單")), "UNACKNOWLEDGED_CLAIM_EXISTS");
+eq("可解析 PostgREST JSON 錯誤本文", c.errorCode(new Error('409 {"message":"POOL_ITEM_NOT_WAITING"}')), "POOL_ITEM_NOT_WAITING");
+eq("未知錯誤碼原樣顯示", c.claimErrorText(new Error("409 FUTURE_CLAIM_RULE: 新規則")), "FUTURE_CLAIM_RULE");
 eq("已開工不可退回", c.returnErrorText(new Error("CLAIM_ALREADY_STARTED")), "工序已開工或已有報工，不能退回池子。");
 eq("operator 不可退回", c.returnErrorText(new Error("DISPATCH_POOL_RETURN_FORBIDDEN")), "只有生管或管理員可以退回池子。");
 

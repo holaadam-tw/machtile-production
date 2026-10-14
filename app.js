@@ -11230,6 +11230,7 @@ function machtileDispatchPoolSectionMarkup(machine) {
   if (!core || status === "idle" || status === "missing") return "";
   const pool = machtileDispatchPoolForMachine(machine);
   const synced = core.latestSyncedAt(pool.items);
+  const canRelease = core.canRelease(machtileDepartmentAccess?.role || machtileAuthState.role);
   const items = pool.items.map(item => {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
@@ -11244,6 +11245,7 @@ function machtileDispatchPoolSectionMarkup(machine) {
         <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
         <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
         <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
+        ${canRelease ? `<button type="button" class="pool-release-action" data-pool-release="${escapeHtml(item.source_key)}" ${busy ? "disabled" : ""}>${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("release_claiming") : machtileTranslate("release_claim")}</button>` : ""}
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
   }).join("");
@@ -11278,6 +11280,28 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
     machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
     if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+  }
+}
+
+async function machtileReleaseDispatchPoolClaim(sourceKey) {
+  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileDispatchPoolCore?.canRelease(machtileDepartmentAccess?.role || machtileAuthState.role)) return;
+  const holder = document.getElementById("machtileCardSelection");
+  const machineCode = holder?.querySelector("[data-pool-machine]")?.dataset.poolMachine || "";
+  machtileDispatchPoolState.claimBusy = sourceKey;
+  machtileDispatchPoolState.claimMessage = "";
+  holder?.querySelectorAll("[data-pool-claim], [data-pool-release]").forEach(button => { button.disabled = true; });
+  try {
+    await supabaseFetch("rpc/dispatch_pool_claim_release", { method: "POST", body: JSON.stringify(machtileDispatchPoolCore.releaseArgs(sourceKey)) });
+    await machtileLoadDispatchPool();
+    machtileDispatchPoolState.claimMessage = machtileTranslate("release_claim_success");
+    showToast(machtileDispatchPoolState.claimMessage, "success");
+  } catch (error) {
+    machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
+    showToast(machtileDispatchPoolState.claimMessage, "error");
+    await machtileLoadDispatchPool();
+  } finally {
+    machtileDispatchPoolState.claimBusy = "";
+    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
   }
 }
 
@@ -23200,6 +23224,8 @@ function bindEvents() {
       void machtileClaimDispatchPool(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
       return;
     }
+    const poolRelease = event.target.closest("[data-pool-release]");
+    if (poolRelease) { void machtileReleaseDispatchPoolClaim(poolRelease.dataset.poolRelease); return; }
     const poolReturn = event.target.closest("[data-pool-return]");
     if (poolReturn) { void machtileReturnDispatchPool(poolReturn.dataset.poolReturn); return; }
     const cardSelectProcess = event.target.closest("[data-card-select-process]");
