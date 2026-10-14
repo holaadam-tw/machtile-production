@@ -327,6 +327,10 @@
     "value": "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.",
     "_draft": true
   },
+  "pool_return_factory_note": {
+    "value": "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)",
+    "_draft": true
+  },
   "inspection_status_loading": {
     "value": "Đang tải trạng thái kiểm tra",
     "_draft": true

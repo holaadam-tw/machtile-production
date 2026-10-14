@@ -58,6 +58,7 @@
   "eligible_machines": "可做機台 {{machines}}",
   "not_in_list": "（{{machine}} 不在清單）",
   "returned_waiting_claim": "退回待接",
+  "pool_return_factory_note": "已派到工廠，退回請找生管（Factory 總覽）",
   "work_start_first": "首次開工",
   "daily_start": "今日開工",
   "finish_work": "收工/完工",

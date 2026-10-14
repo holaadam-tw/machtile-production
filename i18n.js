@@ -62,6 +62,7 @@
       eligible_machines: "可做機台 {{machines}}",
       not_in_list: "（{{machine}} 不在清單）",
       returned_waiting_claim: "退回待接",
+      pool_return_factory_note: "已派到工廠，退回請找生管（Factory 總覽）",
       work_start_first: "首次開工",
       daily_start: "今日開工",
       finish_work: "收工/完工",
@@ -148,6 +149,7 @@
       eligible_machines: "Máy phù hợp {{machines}}",
       not_in_list: "（{{machine}} không có trong danh sách）",
       returned_waiting_claim: "Trả lại, chờ nhận",
+      pool_return_factory_note: "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)", // _draft
       work_start_first: "Bắt đầu lần đầu",
       daily_start: "Bắt đầu hôm nay",
       finish_work: "Kết thúc / Hoàn tất",

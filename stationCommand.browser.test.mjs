@@ -131,7 +131,8 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     reportUpserts: [],        // field_report_upsert 的 body（今日開工等報工）
     directMode,               // outbox 關掉時直接 POST production_reports：ok（回列）／noRow（201 但沒列）／structRejected（結構化欄位被拒）
     directPosts: [],          // 直接 POST production_reports 的 body
-    todayRows: dailyStartDone ? [{ process_id: id(304), report_type: "dailyStart", created_at: ago(30), started_at: null, ended_at: ago(30), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }] : [],
+    // This fixture means "recorded today" even when the sweep starts shortly after midnight.
+    todayRows: dailyStartDone ? [{ process_id: id(304), report_type: "dailyStart", created_at: new Date(now).toISOString(), started_at: null, ended_at: new Date(now).toISOString(), completed_qty: 0, defect_qty: 0, user_id: users[0].id, operator_ids: [users[0].id] }] : [],
     stationReads: 0,          // 任何對 station_commands 的請求
     submits: [],              // RPC body
     commands: new Map(),      // uuid → row
