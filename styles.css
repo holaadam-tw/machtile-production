@@ -375,6 +375,10 @@ main {
   white-space: nowrap;
 }
 
+.monitor-batch-entry[hidden] {
+  display: none !important;
+}
+
 /* 卡片完成數的來源小字（含舊 MES／待回寫 N／舊 MES 尚無資料） */
 .machine-progress-source {
   display: block;

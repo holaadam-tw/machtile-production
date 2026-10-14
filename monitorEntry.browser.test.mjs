@@ -91,7 +91,7 @@ const testConfig = `window.MACHTILE_CONFIG = {
 
 const blocked = [];
 const seen = [];   // 所有離開本機靜態伺服器的請求網址（含被攔下改用假資料回應的）
-function makeBackend({ progressFails = false } = {}) {
+function makeBackend({ progressFails = false, departmentCodes = ["LATHE", "MILL"], allDepartments = true } = {}) {
   const progressCalls = [];
   async function handle(route) {
     const req = route.request();
@@ -104,7 +104,7 @@ function makeBackend({ progressFails = false } = {}) {
       return json(200, assignedCardFixture(cards, machines));
     }
     if (p === "/rest/v1/rpc/machine_department_context") {
-      return json(200, { tenant_id: T, all_departments: true, department_codes: ["LATHE", "MILL"] });
+      return json(200, { tenant_id: T, all_departments: allDepartments, department_codes: departmentCodes });
     }
     if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
     if (p === "/rest/v1/app_users") {
@@ -124,8 +124,8 @@ function makeBackend({ progressFails = false } = {}) {
   return { handle, progressCalls };
 }
 
-async function newPage(browser, device, { role = "operator", progressFails = false } = {}) {
-  const backend = makeBackend({ progressFails });
+async function newPage(browser, device, { role = "operator", progressFails = false, departmentCodes, allDepartments } = {}) {
+  const backend = makeBackend({ progressFails, ...(departmentCodes ? { departmentCodes } : {}), ...(allDepartments === undefined ? {} : { allDepartments }) });
   const context = await browser.newContext({ ...device, serviceWorkers: "block" });
   await context.addInitScript(([token]) => {
     try {
@@ -266,6 +266,39 @@ for (const role of ["admin", "manager", "planner"]) {
   const { context, page } = await newPage(browser, tabletDevice, { role });
   await waitLoaded(page);
   ok(await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').isVisible() && await page.locator('#dashboardView [data-monitor-batch-entry="mill"]').isVisible(), `${role}：Monitor 頁看得到兩顆入口`);
+  await context.close();
+}
+
+// ================= department access =================
+console.log("== 課別：LATHE-only、MILL-only、all 的入口、抽屜與直接切頁守門 ==");
+for (const scenario of [
+  { name: "LATHE-only", departmentCodes: ["LATHE"], allowed: "lathe", deniedView: "batchMill", deniedRoot: "mill" },
+  { name: "MILL-only", departmentCodes: ["MILL"], allowed: "mill", deniedView: "batchLathe", deniedRoot: "lathe" },
+  { name: "all", departmentCodes: ["LATHE", "MILL"], allDepartments: true, allowed: "all" },
+]) {
+  const { context, page, errors, backend } = await newPage(browser, tabletDevice, {
+    departmentCodes: scenario.departmentCodes,
+    allDepartments: scenario.allDepartments ?? false,
+  });
+  await waitLoaded(page);
+  const latheVisible = await page.locator('#dashboardView [data-monitor-batch-entry="lathe"]').isVisible();
+  const millVisible = await page.locator('#dashboardView [data-monitor-batch-entry="mill"]').isVisible();
+  ok(latheVisible === (scenario.allowed !== "mill") && millVisible === (scenario.allowed !== "lathe"), `${scenario.name}：Monitor 入口符合課別`);
+  ok(await page.locator('#dashboardView [data-open-report]').isVisible(), `${scenario.name}：「+ 現場回報」維持可見`);
+  await page.locator("#adminDrawerBtn").click();
+  const drawerLathe = await page.locator('[data-drawer-module="__batchLathe"]').isVisible();
+  const drawerMill = await page.locator('[data-drawer-module="__batchMill"]').isVisible();
+  ok(drawerLathe === (scenario.allowed !== "mill") && drawerMill === (scenario.allowed !== "lathe"), `${scenario.name}：管理抽屜入口符合課別`);
+  await page.locator("#adminDrawerBackdrop").click({ position: { x: 4, y: 4 } });
+  if (scenario.deniedView) {
+    const callsBefore = backend.progressCalls.length;
+    await page.evaluate((view) => switchView(view), scenario.deniedView);
+    const alert = page.locator(`[data-batch-root="${scenario.deniedRoot}"] [role="alert"]`);
+    ok((await alert.innerText()).trim() === "此帳號沒有這個課別的報工權限", `${scenario.name}：直接切到他課顯示守門文字`);
+    await page.waitForTimeout(100);
+    ok(backend.progressCalls.length === callsBefore, `${scenario.name}：被拒絕時不載入批次資料`);
+  }
+  ok(realErrors(errors).length === 0, `${scenario.name}：沒有 JS 錯誤`, realErrors(errors).join(" | "));
   await context.close();
 }
 

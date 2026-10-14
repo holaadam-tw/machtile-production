@@ -288,6 +288,24 @@ function machtileAvailableDepartments() {
     : codes.map(code => machtileDepartmentLabels[code]);
 }
 
+function machtileBatchDepartmentForView(view) {
+  return view === "batchLathe" ? machtileDepartmentLabels.LATHE
+    : view === "batchMill" ? machtileDepartmentLabels.MILL : "";
+}
+
+function machtileCanAccessBatchView(view) {
+  const department = machtileBatchDepartmentForView(view);
+  if (!department) return true;
+  if (!machtileStrictMode()) return true;
+  return Boolean(machtileDepartmentAccess) && machtileAvailableDepartments().includes(department);
+}
+
+function machtileSyncBatchEntryVisibility() {
+  $$('[data-monitor-batch-entry]').forEach((button) => {
+    button.hidden = !machtileCanAccessBatchView(button.dataset.view);
+  });
+}
+
 function machtileClearDepartmentData() {
   machtileCloseProcessFlow();
   machtileProcessFlows = new Map();
@@ -12896,8 +12914,8 @@ function machtileAdminDrawerGroups() {
     ]});
   }
   groups.push({ title: "更多功能", items: [
-    { key: "__batchLathe", icon: "🧮", label: "車床報工（批次）" },
-    { key: "__batchMill", icon: "🧮", label: "銑床報工（批次）" },
+    ...(machtileCanAccessBatchView("batchLathe") ? [{ key: "__batchLathe", icon: "🧮", label: "車床報工（批次）" }] : []),
+    ...(machtileCanAccessBatchView("batchMill") ? [{ key: "__batchMill", icon: "🧮", label: "銑床報工（批次）" }] : []),
     { key: "__history", icon: "🕘", label: "紀錄查詢" },
     { key: "__reports", icon: "📊", label: "營運分析" },
     { key: "__tv", icon: "📺", label: "現場電視" },
@@ -20424,6 +20442,7 @@ function renderAll() {
   renderReports();
   renderSettings();
   renderSchedule();
+  machtileSyncBatchEntryVisibility();
 }
 
 function applyDashboardFilterParams() {
@@ -20446,6 +20465,11 @@ function switchView(view) {
   // 課別籤全域列：監控與排程共用（DrCoolant 式），其他頁籤收起
   const departmentBar = $("#departmentBar");
   if (departmentBar) departmentBar.hidden = !(view === "dashboard" || view === "schedule");
+  if (!machtileCanAccessBatchView(view)) {
+    const root = panel.querySelector("[data-batch-root]");
+    if (root) root.innerHTML = `<p role="alert">${escapeHtml(machtileTranslate("batch_department_denied"))}</p>`;
+    return;
+  }
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
