@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261014-batch-report-align-r2">
+  <link rel="stylesheet" href="./styles.css?v=20261014-vi-phase1-r2">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -82,9 +82,9 @@
        session is active. -->
   <div id="machtileLoginGate" class="machtile-login-gate">
     <section class="machtile-login-card" aria-label="MachTile unified login progress" aria-live="polite">
-      <p class="eyebrow">MachTile 統一登入</p>
-      <strong>正在檢查登入狀態…</strong>
-      <p>已登入會直接進入，未登入會前往統一登入。</p>
+      <p class="eyebrow" data-i18n="login_title">MachTile 統一登入</p>
+      <strong data-i18n="login_checking">正在檢查登入狀態…</strong>
+      <p data-i18n="login_redirect_hint">已登入會直接進入，未登入會前往統一登入。</p>
     </section>
   </div>
   <div class="app-shell">
@@ -108,6 +108,13 @@
         <span id="dataSourceLabel">Mock data</span>
       </div>
       <div class="topbar-actions">
+        <label class="language-switcher" for="machtileLanguageSelect">
+          <span data-i18n="language_label">語言</span>
+          <select id="machtileLanguageSelect" aria-label="語言">
+            <option value="zh-Hant" data-i18n="language_zh_hant">繁中</option>
+            <option value="vi" data-i18n="language_vi">Tiếng Việt</option>
+          </select>
+        </label>
         <button class="icon-button has-dot" type="button" aria-label="通知">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path>
@@ -156,13 +163,13 @@
         <div class="view-heading">
           <div>
             <p class="eyebrow">Monitor</p>
-            <h1 id="dashboardTitle">機台卡片牆與今日狀態總覽</h1>
+            <h1 id="dashboardTitle" data-i18n="monitor_title">機台卡片牆與今日狀態總覽</h1>
           </div>
           <div class="dashboard-heading-actions monitor-heading-actions">
             <!-- 車床／銑床批次報工入口（owner 2026-10-02：從上方導覽列移到這裡，放在「+ 現場回報」前面） -->
             <button class="primary-action monitor-batch-entry" type="button" data-view="batchLathe" data-monitor-batch-entry="lathe">車床報工（A01–A05）</button>
             <button class="primary-action monitor-batch-entry" type="button" data-view="batchMill" data-monitor-batch-entry="mill">銑床報工（B03–B06）</button>
-            <button class="primary-action" type="button" data-open-report>+ 現場回報</button>
+            <button class="primary-action" type="button" data-open-report>+ <span data-i18n="field_report">現場回報</span></button>
           </div>
         </div>
 
@@ -352,10 +359,10 @@
 
         <form id="reportForm" class="report-form">
           <div class="report-type-tabs" aria-label="回報類型">
-            <button class="report-type-tab active" type="button" data-report-type="workStart">首次開工</button>
-            <button class="report-type-tab" type="button" data-report-type="noon">報工</button>
-            <button class="report-type-tab" type="button" data-report-type="finish">收工/完工</button>
-            <button class="report-type-tab" type="button" data-report-type="abnormal">異常回報</button>
+            <button class="report-type-tab active" type="button" data-report-type="workStart" data-i18n="work_start_first">首次開工</button>
+            <button class="report-type-tab" type="button" data-report-type="noon" data-i18n="report">報工</button>
+            <button class="report-type-tab" type="button" data-report-type="finish" data-i18n="finish_work">收工/完工</button>
+            <button class="report-type-tab" type="button" data-report-type="abnormal" data-i18n="abnormal_report">異常回報</button>
           </div>
 
           <section class="report-section" data-report-section="workStart">
@@ -456,7 +463,7 @@
             <div id="reportCounterPreview" class="report-counter-preview" role="status">累計 -｜上次 -｜這次 -</div>
             <p id="reportCounterRateWarning" class="station-report-rate-warning" role="note" hidden></p>
             <div id="reportCounterManual" class="report-counter-manual" hidden>
-              <p>今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。</p>
+              <p data-i18n="counter_manual_help">今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。</p>
               <label class="field-label" for="reportCounterManualBaseline">手填基準 <small>必填</small></label>
               <input id="reportCounterManualBaseline" class="report-input" type="number" min="0" placeholder="例如：120">
             </div>
@@ -475,11 +482,11 @@
           <textarea id="reportNote" rows="3" placeholder="例如：第 22 件孔徑偏差 +0.05mm，已隔離待確認"></textarea>
 
           <div class="report-actions">
-            <button class="secondary-action" type="button" data-pause-report>暫停加工</button>
+            <button class="secondary-action" type="button" data-pause-report data-i18n="pause_work">暫停加工</button>
             <button class="danger-action" type="button" data-report-type="abnormal">回報異常</button>
           </div>
 
-          <button class="submit-report" type="submit">送出回報</button>
+          <button class="submit-report" type="submit" data-i18n="submit_report">送出回報</button>
         </form>
       </div>
     </section>
@@ -676,6 +683,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script src="./i18n.js?v=20261014-vi-phase1-r1"></script>
   <script src="./routeConstants.js?v=20260514-p0-001"></script>
   <script src="./scheduleCore.js?v=20260716-capacity-calendar"></script>
   <script src="./attentionCenterCore.js?v=20260716-attention-center"></script>
@@ -715,6 +723,6 @@
   <script src="./stationCommandCore.js?v=20261013-hide-daily-start-r1"></script>
   <script src="./stationReportCore.js?v=20261013-single-card-r4"></script>
   <script src="./inspectionLinkCore.js?v=20261013-ireporter-machine-link-p3-r2"></script>
-  <script src="./app.js?v=20261014-batch-report-align-r2"></script>
+  <script src="./app.js?v=20261014-vi-phase1-r2"></script>
 </body>
 </html>

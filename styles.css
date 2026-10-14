@@ -13102,6 +13102,28 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 }
 
 .report-counter-manual[hidden] { display: none; }
+.language-switcher {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.language-switcher select {
+  border: 1px solid var(--line, #d8dee8);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: inherit;
+  min-height: 36px;
+  padding: 0 8px;
+}
+
+@media (max-width: 720px) {
+  .language-switcher span { display: none; }
+  .language-switcher select { max-width: 112px; }
+}
+
 .batch-counter-preview,
 .batch-machine-state {
   margin: 8px 0 0;

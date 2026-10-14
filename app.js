@@ -135,6 +135,13 @@ const config = {
   ...window.MACHTILE_CONFIG,
 };
 
+// Phase 1 i18n is intentionally limited to operator-facing surfaces. Business values,
+// status codes, reasons and request payloads remain in their original form.
+const machtileTranslate = (key, params) => window.MachTileI18n?.t(key, params) || key;
+document.getElementById("machtileLanguageSelect")?.addEventListener("change", (event) => {
+  window.MachTileI18n?.setLanguage(event.currentTarget.value, { reload: true });
+});
+
 let machtileHmcFixedHost = null;
 let machtileHmcPartCatalog = null;
 function machtileGetHmcFixedHost() {
@@ -8208,12 +8215,12 @@ function updateReportCounterPreview() {
   if (rateWarning) { rateWarning.hidden = true; rateWarning.textContent = ""; }
   if (!applies) return;
   if (reportCounterBaselineState.status === "loading") {
-    preview.textContent = "正在讀取今天的機台計數基準…";
+    preview.textContent = machtileTranslate("counter_loading");
     preview.classList.remove("is-error");
     return;
   }
   if (reportCounterBaselineState.status === "error") {
-    preview.textContent = "讀不到今天的機台計數基準，請確認連線後重開報工。";
+    preview.textContent = machtileTranslate("counter_load_error");
     preview.classList.add("is-error");
     manual.hidden = true;
     return;
@@ -8222,11 +8229,16 @@ function updateReportCounterPreview() {
   const current = result.current ?? "-";
   const baseline = result.baseline ?? "-";
   const delta = result.delta ?? "-";
-  preview.textContent = `累計 ${current}｜上次 ${baseline}｜這次 ${delta}${result.valid ? "" : `；${result.message}`}`;
+  const counterError = result.valid ? "" : result.code === "CURRENT_REQUIRED"
+    ? machtileTranslate("counter_current_required")
+    : result.code === "BASELINE_REQUIRED"
+      ? machtileTranslate("counter_baseline_required")
+      : machtileTranslate("counter_non_positive", { current, baseline });
+  preview.textContent = machtileTranslate("counter_preview", { current, baseline, delta, message: counterError ? `；${counterError}` : "" });
   preview.classList.toggle("is-error", !result.valid);
   const rateCheck = reportCounterRateReasonableness(result);
   if (rateWarning && rateCheck?.warn) {
-    rateWarning.textContent = rateCheck.message;
+    rateWarning.textContent = machtileTranslate("counter_rate_warning", { max: rateCheck.maxQty, quantity: rateCheck.reportedQty });
     rateWarning.hidden = false;
   }
   machtileRenderSingleStationReport();
@@ -8366,7 +8378,7 @@ function setReportType(type) {
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
   const completedLabel = $("#completedQtyLabel");
-  if (completedLabel) completedLabel.textContent = reportCounterApplies() ? "機台目前累計數" : "良品數";
+  if (completedLabel) completedLabel.textContent = machtileTranslate(reportCounterApplies() ? "machine_current_counter" : "good_quantity");
   updateReportCounterPreview();
   machtileRenderSingleStationReport();
 }
@@ -11181,7 +11193,7 @@ async function machtileLoadDispatchPool() {
       return;
     }
     console.warn("dispatch pool unavailable", error);
-    Object.assign(machtileDispatchPoolState, { status: "error", items: [], error: "待做池讀取失敗，請重新整理。" });
+    Object.assign(machtileDispatchPoolState, { status: "error", items: [], error: machtileTranslate("pool_load_error") });
   }
 }
 
@@ -11207,20 +11219,20 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const claim = core.claimState(item, { machineCode, status: machine?.status, hasOrder: Boolean(machine?.order) }, config.dispatchPoolMachines);
     const busy = Boolean(machtileDispatchPoolState.claimBusy);
     const disabled = !claim.enabled || busy;
-    const reason = busy ? "接單處理中" : claim.reason;
+    const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
     return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pool-key="${escapeHtml(item.source_key)}">
-        <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">退回待接</span>` : ""}</div>
+        <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
         <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: item.operation_name }))} · ${escapeHtml(item.part_name)}</span>
-        <span>數量 ${escapeHtml(core.quantityText(item.quantity))} · 交期 ${escapeHtml(core.dueText(item.due_date))} · APS 預計開始 ${escapeHtml(core.plannedStartText(item.planned_start))}</span>
-        <span class="pool-eligible">可做機台 ${escapeHtml(eligible)}${item.eligibleHere ? "" : `（${escapeHtml(machine.name)} 不在清單）`}</span>
-        <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? "接單中…" : "接單"}</button>
+        <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
+        <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
+        <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
   }).join("");
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
-    : pool.department ? "<li>目前沒有同課待接的工序。</li>" : "<li>這台沒有設定車床課／銑床課，不列待做池。</li>";
-  return `<h3>待做池（同課）</h3><p class="pool-note">生管放進池子、還沒派機台的工序，依緊急程度 → 交期 → APS 預計開始排序；空閒且在可做清單、並已開 pilot 的機台才能接單。${synced ? `資料時間 ${escapeHtml(synced)}` : ""}</p>
+    : pool.department ? `<li>${escapeHtml(machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
+  return `<h3>${escapeHtml(machtileTranslate("dispatch_pool_same_department"))}</h3><p class="pool-note">${escapeHtml(machtileTranslate("pool_note"))}${synced ? ` ${escapeHtml(machtileTranslate("data_time", { time: synced }))}` : ""}</p>
     <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
 }
 
@@ -11238,7 +11250,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
     deriveMachines();
     renderAll();
     machtileCloseCardSelection();
-    showToast("接單成功，工單已進入這台機台。", "success");
+    showToast(machtileTranslate("claim_success"), "success");
   } catch (error) {
     machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
     if (message) message.textContent = machtileDispatchPoolState.claimMessage;
@@ -11283,7 +11295,7 @@ function machtileCardPoolEntryMarkup(machine) {
   const code = machine?.code || machine?.name || "";
   const count = machtileDispatchPoolForMachine(machine).items.length;
   if (!code || count === 0) return "";
-  return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">待做池（同課）${count} 張</button>`;
+  return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }
 
 function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
@@ -11303,7 +11315,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
   holder.id = "machtileCardSelection";
   holder.className = "card-selection-overlay";
   holder.innerHTML = `<section class="card-selection-panel" role="dialog" aria-modal="true" aria-labelledby="cardSelectionTitle">
-    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${poolOnly ? "待做池" : "選擇工單"}</h2><button type="button" data-close-card-selection aria-label="關閉">✕</button></header>
+    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(poolOnly ? "dispatch_pool_title" : "select_work_order"))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
     ${selectionMarkup}
     ${machtileDispatchPoolSectionMarkup(machine)}
     <p data-card-selection-error role="alert">${poolOnly ? "" : escapeHtml(state.cardProcessError || "")}</p>
@@ -13504,8 +13516,8 @@ function machtileStationCmdParts(machine) {
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
   const buttons = gate.ok ? `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked ? "disabled" : ""}>開工</button>
-          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>停工</button>` : "";
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
+          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";
   return { status, buttons, active: true };
 }
 
@@ -14383,8 +14395,8 @@ function renderMachineCard(machine) {
       ? "同上版"
       : `已上傳${profile.programVersion && profile.programVersion !== "-" ? ` ${profile.programVersion}` : ""}`;
   const reportAction = order && canReport
-    ? `<button type="button" class="machine-report-button" ${reportAttr}>報工</button>`
-    : `<button type="button" class="machine-report-button" data-no-detail disabled>報工</button>`;
+    ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
+    : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
 
   return `
     <article class="machine-tile-card ${status.className} ${deptTone}" ${detailAttr}>
@@ -14399,31 +14411,31 @@ function renderMachineCard(machine) {
           ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}
         </div>
         <div class="machine-header-actions">
-          <span class="status-pill ${escapeHtml(status.className)}">機台 · ${escapeHtml(status.label)}</span>
-          ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">工單 · ${escapeHtml(orderRisk.label)}</span>` : ""}
+          <span class="status-pill ${escapeHtml(status.className)}">${escapeHtml(machtileTranslate("machine_status", { status: status.label }))}</span>
+          ${orderRisk && !["running", "normal"].includes(orderRiskKey) ? `<span class="status-pill ${escapeHtml(orderRisk.className)}">${escapeHtml(machtileTranslate("work_order_status", { status: orderRisk.label }))}</span>` : ""}
           ${order
-            ? `<a class="machine-open-link" data-no-detail ${flowLevel === "full" ? `data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" ` : ""}href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">完整單</a>`
+            ? `<a class="machine-open-link" data-no-detail ${flowLevel === "full" ? `data-flow-open="${escapeHtml(order.id)}" data-flow-current="${escapeHtml(order.processId || '')}" ` : ""}href="${escapeHtml(detailUrl)}" target="_blank" rel="noopener">${escapeHtml(machtileTranslate("details"))}</a>`
             : isHmc
-              ? `<button class="machine-open-link" type="button" data-no-detail data-hmc-machine-detail="${escapeHtml(machine.code || machine.name)}">機台詳情</button>`
+              ? `<button class="machine-open-link" type="button" data-no-detail data-hmc-machine-detail="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("machine_details"))}</button>`
               : ""}
         </div>
       </header>
 
       <div class="machine-job-strip">
-        <span>目前工單</span>
+        <span>${escapeHtml(machtileTranslate("current_work_order"))}</span>
         ${order ? `
           <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>${isOver ? machtileOverQtyTag(order) : ""}
           <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(machtileOperationLabel(order))}</small>
         ` : `
-          <strong>${escapeHtml(machine.note || "無工單指派中")}</strong>
-          <small>${machine.status === "idle" ? "可安排新工單" : "請確認機台狀態"}</small>
+          <strong>${escapeHtml(machine.note || machtileTranslate("no_work_order"))}</strong>
+          <small>${escapeHtml(machtileTranslate(machine.status === "idle" ? "can_assign_work_order" : "check_machine_status"))}</small>
         `}
       </div>
       ${"" /* 原本中段「舊 MES 開工／停工」區塊的位置：已移到卡片底部（保留這一行，沒開功能的機台卡片 HTML 才會跟以前逐字相同） */}
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">選擇工單</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
       ${machtileCardPoolEntryMarkup(machine)}
 
       ${order ? `
@@ -14445,18 +14457,18 @@ function renderMachineCard(machine) {
 
       <div class="machine-metrics">
         <div>
-          <span>完成進度</span>
+          <span>${escapeHtml(machtileTranslate("progress"))}</span>
           <strong${isOver ? ` class="card-progress-over"` : ""}>${order ? `${order.done}/${order.total}` : "-"}</strong>
           ${order ? `
             <small class="card-progress-pct${isOver ? " is-over" : ""}">${percentText}%</small>
             <div class="progress-track card-progress-track${isOver ? " is-over" : ""}" aria-label="完成進度 ${percentText}%">
               <div class="progress-fill" style="width:${barPercent}%"></div>
             </div>
-          ` : "<small>未派工</small>"}
+          ` : `<small>${escapeHtml(machtileTranslate("unassigned"))}</small>`}
           ${order ? machtileCardProgressNote(order) : ""}
         </div>
         <div>
-          <span>交期</span>
+          <span>${escapeHtml(machtileTranslate("due_date"))}</span>
           <strong>${escapeHtml(due.label)}</strong>
           <small>${escapeHtml(due.date)}</small>
         </div>
@@ -14465,12 +14477,12 @@ function renderMachineCard(machine) {
       ${order ? machtileCardCycleGrid(machine, order, profile, delta, dailyQty) : ""}
 
       <details class="machine-card-more" data-no-detail>
-        <summary>${canReport ? "報工入口與建議" : "指派說明"}</summary>
+        <summary>${escapeHtml(machtileTranslate(canReport ? "report_entry_advice" : "assignment_help"))}</summary>
         ${canReport ? `
           <a class="machine-qr-card" data-no-detail href="${escapeHtml(qrReportUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtml(machine.name)} 開啟現場回報">
             <span class="qr-placeholder" aria-hidden="true">↗</span>
             <span>
-              <strong>${isHmc ? "多盤多工件每日盤點" : "開啟報工頁"}</strong>
+              <strong>${isHmc ? "多盤多工件每日盤點" : escapeHtml(machtileTranslate("open_report_page"))}</strong>
               <small>${escapeHtml(reportLinkText)}</small>
             </span>
           </a>
@@ -14481,7 +14493,7 @@ function renderMachineCard(machine) {
           </div>
         `}
         <section class="machine-advice">
-          <div class="advice-title"><span></span>處理建議</div>
+          <div class="advice-title"><span></span>${escapeHtml(machtileTranslate("handling_advice"))}</div>
           <p>${escapeHtml(order ? riskSuggestion(order) : machine.status === "idle" ? "目前空閒，可安排新工單。" : "請先確認機台狀態，再調整派工順序。")}</p>
         </section>
       </details>
