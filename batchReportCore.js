@@ -56,6 +56,24 @@
     return String(value ?? "").trim().toUpperCase();
   }
 
+  // Single-station lathes can only attribute a report to one operator.  The
+  // caller supplies the department resolved from the existing machine master
+  // rule; machine codes are deliberately not part of this decision.
+  function operatorSelectionLimit(machine) {
+    const department = String(machine?.department || machine?.departmentCode || "").trim().toLowerCase();
+    if (department === "lathe" || department.includes("車床")) return 1;
+    if (department === "mill" || department.includes("銑床")) return null;
+    const machineType = String(machine?.machineType || machine?.machine_type || machine?.type || "").trim().toLowerCase();
+    return machineType.includes("車床") || machineType.includes("lathe") || machineType.includes("turning") ? 1 : null;
+  }
+
+  function validateOperatorSelection(machine, operatorIds) {
+    const selected = Array.isArray(operatorIds) ? operatorIds.filter(Boolean) : [];
+    return operatorSelectionLimit(machine) === 1 && selected.length > 1
+      ? { valid: false, code: "LATHE_SINGLE_OPERATOR", max: 1 }
+      : { valid: true, code: null, max: operatorSelectionLimit(machine) };
+  }
+
   // 卡片上的 machine 是 machines.name；正式庫 name＝machine_code（A01…）。保險起見也接受「A01 小瀧澤」式。
   function machineCodeOf(order) {
     const raw = normCode(order?.machineCode || order?.machine);
@@ -457,6 +475,6 @@
     latestMachineTimeByProcess,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, counterCalculation, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate, summarizeStationCommands, batchCommandChoice,
-    operatorChoices, defaultOperatorId, summarizeResults,
+    operatorChoices, defaultOperatorId, summarizeResults, operatorSelectionLimit, validateOperatorSelection,
   };
 });

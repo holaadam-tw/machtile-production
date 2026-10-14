@@ -21611,7 +21611,7 @@ function machtileSelectedOperators(actorAppUserId) {
 // 送出前的閘門：區段有出現時，至少要勾一位「有對照工號」的人員。
 // 回傳提示字串代表擋下，回傳 null 代表放行。
 // 區段不存在時一律放行（維持 dev-nologin / 查詢失敗時的既有行為）。
-function machtileValidateOperatorSelection() {
+function machtileValidateOperatorSelection(machineCode = selectedOrder?.machine) {
   const list = document.getElementById("machtileOperatorList");
   if (!list) return null;
   const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'));
@@ -21619,6 +21619,11 @@ function machtileValidateOperatorSelection() {
   if (!checked.some((i) => i.dataset.mapped === "1")) {
     return "勾選的人員都還沒對照到 SoftNet 工號，產值會歸不到人。請改選已對照的人員，或請管理者先補上工號對照。";
   }
+  const code = String(machineCode || "").trim().toUpperCase();
+  const master = state.machineMasters.find((machine) => String(machine.code || machine.machine_code || "").trim().toUpperCase() === code);
+  const machine = master ? { department: normalizedMachineDepartment(master), machineType: master.type || master.machine_type } : null;
+  const selection = machtileBatchCore()?.validateOperatorSelection(machine, checked.map((input) => input.value));
+  if (selection?.code === "LATHE_SINGLE_OPERATOR") return machtileTranslate("lathe_single_operator_draft");
   return null;
 }
 
@@ -21941,7 +21946,7 @@ async function machtileStationReportSubmitPreview(code) {
   if (!core || !context || machtileStationReportFlowBusy(flow)) return;
   if (machtileSingleStationReportOrder(code)) {
     const validationMessage = validateReportForm(activeReportType);
-    const operatorMessage = machtileValidateOperatorSelection();
+    const operatorMessage = machtileValidateOperatorSelection(code);
     if (validationMessage || operatorMessage) {
       flow.error = validationMessage || operatorMessage;
       machtileRenderStationReportSurfaces();
@@ -23722,7 +23727,7 @@ function bindEvents() {
     }
     // F-2（2026-09-02）：站別帳號登入時，沒選到有對照的真人就不讓送出——
     // 否則產值會掛在機台上，而且回寫 feed 也會把整筆擋下（F-3=A）。
-    const operatorMessage = machtileValidateOperatorSelection();
+    const operatorMessage = machtileValidateOperatorSelection(selectedOrder.machine);
     if (operatorMessage) {
       showToast(operatorMessage);
       return;

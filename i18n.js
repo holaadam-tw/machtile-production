@@ -26,6 +26,7 @@
       batch_command_none: "請至少勾選一台可操作的機台",
       batch_command_no_orders: "此課別目前沒有可操作的工單",
       batch_command_sending: "逐台送出中…",
+      lathe_single_operator_draft: "車床報工一次只能選一位報工人員，請取消其他人員後再送出。",
       select_work_order: "選擇工單",
       details: "完整單",
       machine_details: "機台詳情",
@@ -112,6 +113,7 @@
       batch_command_none: "Vui lòng chọn ít nhất một máy có thể thao tác", // _draft
       batch_command_no_orders: "Hiện không có lệnh sản xuất có thể thao tác trong bộ phận này", // _draft
       batch_command_sending: "Đang gửi lần lượt…", // _draft
+      lathe_single_operator_draft: "Báo cáo máy tiện chỉ được chọn một người vận hành. Vui lòng bỏ chọn những người khác rồi gửi lại.", // _draft
       select_work_order: "Chọn lệnh sản xuất",
       details: "Xem đầy đủ",
       machine_details: "Chi tiết máy",
