@@ -66,6 +66,13 @@
       daily_start: "今日開工",
       finish_work: "收工/完工",
       abnormal_report: "異常回報",
+      inspection_status_loading: "檢驗狀態讀取中",
+      inspection_status_error: "檢驗狀態讀取失敗",
+      inspection_status_missing: "今日未檢驗",
+      inspection_status_skipped: "今日免檢",
+      inspection_status_fail: "今日檢驗異常 {{time}}",
+      inspection_status_pass: "今日已檢驗 {{time}}",
+      inspection_status_open_abnormal: "前往異常回報",
       machine_current_counter: "機台目前累計數",
       good_quantity: "良品數",
       counter_preview: "累計 {{current}}｜上次 {{baseline}}｜這次 {{delta}}{{message}}",
@@ -145,6 +152,13 @@
       daily_start: "Bắt đầu hôm nay",
       finish_work: "Kết thúc / Hoàn tất",
       abnormal_report: "Báo cáo bất thường",
+      inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
+      inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft
+      inspection_status_missing: "Hôm nay chưa kiểm tra", // _draft
+      inspection_status_skipped: "Hôm nay được miễn kiểm tra", // _draft
+      inspection_status_fail: "Kiểm tra hôm nay bất thường {{time}}", // _draft
+      inspection_status_pass: "Hôm nay đã kiểm tra {{time}}", // _draft
+      inspection_status_open_abnormal: "Mở báo cáo bất thường", // _draft
       machine_current_counter: "Số tích lũy hiện tại của máy",
       good_quantity: "Số lượng đạt",
       counter_preview: "Tích lũy {{current}}｜Lần trước {{baseline}}｜Lần này {{delta}}{{message}}",
