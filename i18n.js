@@ -16,6 +16,7 @@
       login_redirect_hint: "已登入會直接進入，未登入會前往統一登入。",
       monitor_title: "機台即時狀態",
       field_report: "現場回報",
+      batch_department_denied: "此帳號沒有這個課別的報工權限",
       report: "報工",
       start_work: "開工",
       stop_work: "停工",
@@ -85,6 +86,7 @@
       login_redirect_hint: "Nếu đã đăng nhập, bạn sẽ vào thẳng hệ thống; nếu chưa, hệ thống sẽ chuyển đến trang đăng nhập.",
       monitor_title: "Trạng thái máy theo thời gian thực",
       field_report: "Báo cáo tại hiện trường",
+      batch_department_denied: "Tài khoản này không có quyền báo cáo cho bộ phận này", // _draft
       report: "Báo cáo",
       start_work: "Bắt đầu",
       stop_work: "Dừng máy",
