@@ -10279,6 +10279,7 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
   await machtileLoadScheduleQueue();
   state.source = "supabase";
   await machtileLoadAssignedCardProcesses();
+  await machtileLoadAssignedDispatchPoolStatuses();
   await machtileLoadInspectionStatuses();
   // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
   await machtileLoadCardLegacyProgress();
@@ -10624,6 +10625,23 @@ async function machtileLoadAssignedCardProcesses() {
 function machtileMachineCardOrders() {
   if (state.source !== "supabase" || !Array.isArray(state.assignedCardOrders)) return state.workOrders || [];
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
+}
+
+async function machtileLoadAssignedDispatchPoolStatuses() {
+  const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
+  const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
+  orders.forEach(order => { order.dispatchPoolStatus = ""; });
+  if (!keys.length) return;
+  try {
+    const quotedKeys = keys.map(key => `"${String(key).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",");
+    const rows = await supabaseFetch(`dispatch_pool_items?select=source_key,status&source_key=in.${encodeURIComponent(`(${quotedKeys})`)}`);
+    if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
+    const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
+    orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
+  } catch (error) {
+    // Fail closed: an unverified claim must never expose a return action.
+    console.warn("dispatch pool assigned status unavailable; hiding return actions", error);
+  }
 }
 
 async function machtileLoadCardLegacyProgress() {
@@ -11351,8 +11369,15 @@ function machtileCanReturnDispatchPool() {
 }
 
 function machtileDispatchPoolReturnMarkup(order, machineCode) {
-  if (!machtileCanReturnDispatchPool() || !order?.dispatchPoolSourceKey || order.done > 0) return "";
-  return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
+  if (!order?.dispatchPoolSourceKey) return "";
+  const isPendingClaim = order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
+  if (machtileCanReturnDispatchPool() && isPendingClaim) {
+    return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
+  }
+  if (!isPendingClaim && (order.dispatchPoolStatus === "gone" || order.processStatus === "running" || order.done > 0)) {
+    return `<small class="pool-return-factory-note">${escapeHtml(machtileTranslate("pool_return_factory_note"))}</small>`;
+  }
+  return "";
 }
 
 async function machtileReturnDispatchPool(sourceKey) {
