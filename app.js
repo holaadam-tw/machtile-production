@@ -13480,6 +13480,10 @@ async function machtileLoadStationCommandAvailability() {
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
+    if (typeof machtileBatchResetCommandSelection === "function") {
+      machtileBatchResetCommandSelection();
+      machtileRenderBatchReport();
+    }
   } catch (error) {
     console.warn("station commands unavailable; start/stop buttons hidden", error);
     machtileStationCmd.availability = "missing";
@@ -21476,6 +21480,10 @@ const machtileBatchState = {
   rows: new Map(),       // machineCode → { processId, current, bad, finished, operatorId, error, result }
   stationReportSettings: { status: "unavailable", machines: {}, failReasonCodesByMachine: {}, error: "" },
   stationReportIdentityByProcess: new Map(),
+  commandType: "start",
+  commandSelected: new Set(),
+  commandResults: new Map(),
+  commandSubmitting: false,
   lastLoadedAt: 0,
 };
 
@@ -22179,6 +22187,7 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.counterBaselineByProcess = counters;
     machtileBatchState.stationShiftByMachine = stationShifts;
+    machtileBatchResetCommandSelection();
     machtileBatchState.progressError = progress.error;
     machtileBatchState.error = "";
     machtileBatchState.lastLoadedAt = Date.now();
@@ -22188,6 +22197,94 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.loading = false;
     machtileRenderBatchReport();
   }
+}
+
+function machtileBatchCommandChoice(code, type = machtileBatchState.commandType) {
+  const order = machtileBatchSelectedOrder(code);
+  const base = machtileBatchCore().batchCommandChoice(type, machtileBatchState.stationShiftByMachine.get(code), Boolean(order));
+  if (!base.eligible) return base;
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machtileStationCmdCore?.eligibility({
+    flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
+  });
+  const reasons = { multi_station_unsupported: "缺少 ManufactureII Id", unavailable: "開停工服務目前不可用", not_operator: "此帳號不可操作", flag_off: "此機台未開放" };
+  return gate?.ok ? base : { eligible: false, checked: false, reason: reasons[gate?.reason] || "工單資料不完整" };
+}
+
+function machtileBatchResetCommandSelection() {
+  const group = machtileBatchCore()?.groupFor(machtileBatchState.group);
+  const selected = new Set();
+  group?.machines.forEach((code) => {
+    if (machtileBatchCommandChoice(code).checked) selected.add(code);
+  });
+  machtileBatchState.commandSelected = selected;
+  machtileBatchState.commandResults = new Map();
+}
+
+async function machtileBatchSendStationCommand(code, type) {
+  const core = machtileStationCmdCore;
+  const order = machtileBatchSelectedOrder(code);
+  const choice = machtileBatchCommandChoice(code, type);
+  if (!choice.eligible) throw new Error(choice.reason);
+  const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
+  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+  if (!fresh.ok) throw new Error(fresh.text);
+  const uuid = core.newUuid(window.crypto);
+  const fields = { commandUuid: uuid, commandType: type, machineCode: code, orderNo: order.id, step: order.stationStep,
+    partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null };
+  const payload = core.submitPayload(fields);
+  const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload) });
+  const row = Array.isArray(result) ? result[0] : result;
+  if (!machtileStationCmdRowIsThis(row, uuid)) throw new Error("伺服器沒有回傳這筆指令，結果未確認");
+  const record = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName, startedAt: Date.now() });
+  const view = core.statusView(row || { status: "pending" }, type, null);
+  record.view = view;
+  record.lastStatus = String(row?.status || "pending");
+  machtileStationCmd.pending[code] = record;
+  machtileStationCmdSavePending();
+  if (view.terminal) machtileStationCmdFinish(code, view); else machtileStationCmdPoll(code);
+  return { payload, view };
+}
+
+async function machtileSubmitBatchStationCommands() {
+  const group = machtileBatchCore()?.groupFor(machtileBatchState.group);
+  if (!group || machtileBatchState.commandSubmitting) return;
+  const type = machtileBatchState.commandType;
+  const codes = group.machines.filter((code) => machtileBatchState.commandSelected.has(code) && machtileBatchCommandChoice(code, type).eligible);
+  if (!codes.length) { showToast(machtileTranslate("batch_command_none")); return; }
+  if (!window.confirm(`${type === "start" ? "批次開工" : "批次停工"}：${codes.join("、")}`)) return;
+  machtileBatchState.commandSubmitting = true;
+  machtileBatchState.commandResults = new Map();
+  machtileRenderBatchReport();
+  for (const code of codes) {
+    try {
+      const { view } = await machtileBatchSendStationCommand(code, type);
+      machtileBatchState.commandResults.set(code, { ok: true, text: `成功：${view.title}${view.text ? `（${view.text}）` : ""}` });
+    } catch (error) {
+      const info = machtileStationCmdCore.submitErrorText(error);
+      machtileBatchState.commandResults.set(code, { ok: false, text: `失敗：${info.text || error.message || "未知錯誤"}` });
+    }
+    machtileRenderBatchReport();
+  }
+  machtileBatchState.commandSubmitting = false;
+  machtileRenderBatchReport();
+}
+
+function machtileBatchCommandPanel(group, busy) {
+  if (state.source !== "supabase") return "";
+  const type = machtileBatchState.commandType;
+  const rows = group.machines.filter((code) => Boolean(machtileBatchSelectedOrder(code))).map((code) => {
+    const choice = machtileBatchCommandChoice(code, type);
+    const result = machtileBatchState.commandResults.get(code);
+    const checked = choice.eligible && machtileBatchState.commandSelected.has(code);
+    return `<label class="batch-command-machine"><input type="checkbox" data-batch-command-select="${code}"${checked ? " checked" : ""}${!choice.eligible || busy ? " disabled" : ""}><strong>${code}</strong><span>${choice.reason || "可操作"}</span>${result ? `<em class="${result.ok ? "is-ok" : "is-error"}" data-batch-command-result="${code}">${escapeHtml(result.text)}</em>` : ""}</label>`;
+  }).join("");
+  const count = [...machtileBatchState.commandSelected].filter((code) => machtileBatchCommandChoice(code, type).eligible).length;
+  return `<section class="batch-command-panel" data-batch-command-panel><h3>${escapeHtml(machtileTranslate("batch_command_title"))}</h3>
+    <div class="batch-command-types"><button type="button" data-batch-command-type="start" class="${type === "start" ? "is-active" : ""}"${busy ? " disabled" : ""}>${escapeHtml(machtileTranslate("batch_start"))}</button><button type="button" data-batch-command-type="stop" class="${type === "stop" ? "is-active" : ""}"${busy ? " disabled" : ""}>${escapeHtml(machtileTranslate("batch_stop"))}</button></div>
+    <div class="batch-command-machines">${rows || `<p>${escapeHtml(machtileTranslate("batch_command_no_orders"))}</p>`}</div>
+    <button type="button" class="primary-action" data-batch-command-submit${busy || !count ? " disabled" : ""}>${machtileBatchState.commandSubmitting ? escapeHtml(machtileTranslate("batch_command_sending")) : `${type === "start" ? escapeHtml(machtileTranslate("batch_start")) : escapeHtml(machtileTranslate("batch_stop"))}（${count} 台）`}</button></section>`;
 }
 
 function machtileBatchStartInfo(order, endedAtIso, mode) {
@@ -22262,7 +22359,7 @@ function machtileRenderBatchReport() {
   if (!core || !group || !holder) return;
   const nowIso = new Date().toISOString();
   const demo = state.source !== "supabase";
-  const busy = machtileBatchState.submitting;
+  const busy = machtileBatchState.submitting || machtileBatchState.commandSubmitting;
   const isDailyStart = machtileBatchState.mode === "dailyStart";
   const tone = group.key === "mill" ? "is-mill" : "is-lathe";
   const userOptions = (selected) => [
@@ -22373,6 +22470,7 @@ function machtileRenderBatchReport() {
     ${!demo && !machtileBatchState.loading && !machtileBatchState.users.length ? `<p class="batch-notice is-error" role="alert">還沒有任何人員對照到舊 MES 工號，請管理者先補上工號對照。</p>` : ""}
     <p class="batch-hint">${modeHint}</p>
     ${machtileBatchState.formError ? `<p class="batch-notice is-error" role="alert">${escapeHtml(machtileBatchState.formError)}</p>` : ""}
+    ${machtileBatchCommandPanel(group, busy)}
     <div class="batch-rows">${rowsHtml}</div>
     <div class="batch-submit-bar">
       <button type="button" class="primary-action batch-submit" data-batch-submit${busy || !sendable ? " disabled" : ""}>${busy ? "送出中…" : escapeHtml(machtileBatchSubmitText(sendable))}</button>
@@ -22542,6 +22640,14 @@ async function machtileSubmitBatchReport() {
 }
 
 function machtileHandleBatchClick(event) {
+  const commandType = event.target.closest("[data-batch-command-type]");
+  if (commandType && !machtileBatchState.commandSubmitting) {
+    machtileBatchState.commandType = commandType.dataset.batchCommandType;
+    machtileBatchResetCommandSelection();
+    machtileRenderBatchReport();
+    return true;
+  }
+  if (event.target.closest("[data-batch-command-submit]")) { machtileSubmitBatchStationCommands(); return true; }
   const previewButton = event.target.closest("[data-station-report-preview]");
   if (previewButton) { machtileStationReportSubmitPreview(previewButton.dataset.stationReportPreview); return true; }
   const confirmButton = event.target.closest("[data-station-report-confirm]");
@@ -22588,6 +22694,12 @@ function machtileBatchRefreshSubmitButton() {
 function machtileHandleBatchInput(event) {
   const t = event.target;
   if (!(t instanceof HTMLElement) || !t.closest("[data-batch-root], #singleStationReportPanel")) return false;
+  if (t.hasAttribute("data-batch-command-select")) {
+    if (t.checked) machtileBatchState.commandSelected.add(t.dataset.batchCommandSelect);
+    else machtileBatchState.commandSelected.delete(t.dataset.batchCommandSelect);
+    machtileRenderBatchReport();
+    return true;
+  }
   if (t.hasAttribute("data-batch-operator-all")) {
     if (event.type !== "change" || !t.value) return true;
     const core = machtileBatchCore();
