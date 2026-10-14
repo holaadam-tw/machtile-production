@@ -326,5 +326,33 @@
   "login_timeout": {
     "value": "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.",
     "_draft": true
+  },
+  "inspection_status_loading": {
+    "value": "Đang tải trạng thái kiểm tra",
+    "_draft": true
+  },
+  "inspection_status_error": {
+    "value": "Không thể tải trạng thái kiểm tra",
+    "_draft": true
+  },
+  "inspection_status_missing": {
+    "value": "Hôm nay chưa kiểm tra",
+    "_draft": true
+  },
+  "inspection_status_skipped": {
+    "value": "Hôm nay được miễn kiểm tra",
+    "_draft": true
+  },
+  "inspection_status_fail": {
+    "value": "Kiểm tra hôm nay bất thường {{time}}",
+    "_draft": true
+  },
+  "inspection_status_pass": {
+    "value": "Hôm nay đã kiểm tra {{time}}",
+    "_draft": true
+  },
+  "inspection_status_open_abnormal": {
+    "value": "Mở báo cáo bất thường",
+    "_draft": true
   }
 }
