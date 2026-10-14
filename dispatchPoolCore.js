@@ -71,6 +71,14 @@
     return { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
   }
 
+  function canRelease(role) {
+    return ["admin", "planner"].includes(text(role).toLowerCase());
+  }
+
+  function releaseArgs(sourceKey) {
+    return { p_source_key: text(sourceKey) };
+  }
+
   function canReturn(role) {
     return ["planner", "admin"].includes(text(role).toLowerCase());
   }
@@ -92,15 +100,47 @@
     return { enabled: true, reason: "" };
   }
 
-  function claimErrorText(error) {
+  const CLAIM_ERROR_TEXT = Object.freeze({
+    UNACKNOWLEDGED_CLAIM_EXISTS: "這張單已有未確認的接單，請找生管釋放。",
+    MACHINE_ALREADY_ASSIGNED: "機台還有未完成的工單。",
+    POOL_ITEM_NOT_WAITING: "這張單已被別台接走。",
+    MACHINE_NOT_IDLE: "機台已不是空閒狀態，請重新整理。",
+    MACHINE_NOT_EMPTY: "機台還有未完成的工單。",
+    MACHINE_NOT_ELIGIBLE: "這台機台不在這張單的可做清單。",
+    MACHINE_DEPARTMENT_MISMATCH: "這張單不屬於這台機台的課別。",
+    DEPARTMENT_ACCESS_DENIED: "你沒有這張單所屬課別的權限。",
+    PROCESS_ALREADY_ASSIGNED: "這道工序已排到其他機台。",
+    POOL_ITEM_INCOMPLETE: "待做池資料不完整，請生管確認。",
+    DISPATCH_POOL_CLAIM_DISABLED: "接單功能尚未由系統端開啟。",
+    AUTH_REQUIRED: "登入已失效，請重新登入。",
+    TENANT_REQUIRED: "找不到公司資料，請重新登入或聯絡管理員。",
+  });
+
+  function errorCode(error) {
     const message = text(error && error.message || error);
-    if (message.includes("POOL_ITEM_NOT_WAITING")) return "這張單已被其他機台接走。";
-    if (message.includes("MACHINE_NOT_EMPTY") || message.includes("MACHINE_NOT_IDLE")) return "機台已不是空閒狀態，請重新整理。";
-    if (message.includes("MACHINE_NOT_ELIGIBLE")) return "這台機台不在這張單的可做清單。";
-    if (message.includes("MACHINE_DEPARTMENT_MISMATCH") || message.includes("DEPARTMENT_ACCESS_DENIED")) return "這張單不屬於此機台或登入者的課別。";
-    if (message.includes("DISPATCH_POOL_CLAIM_DISABLED")) return "接單功能尚未由系統端開啟。";
-    if (message.includes("POOL_ITEM_INCOMPLETE")) return "待做池資料不完整，請生管確認。";
+    const match = message.match(/(?:^|[^A-Z0-9_])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?=[^A-Z0-9_]|$)/);
+    return match ? match[1] : "";
+  }
+
+  function claimErrorText(error) {
+    const code = errorCode(error);
+    if (code) return CLAIM_ERROR_TEXT[code] || code;
     return "接單失敗，請重新整理後再試。";
+  }
+
+  const RELEASE_ERROR_TEXT = Object.freeze({
+    AUTH_REQUIRED: "登入狀態已失效，請重新登入。",
+    TENANT_REQUIRED: "找不到公司資料，請重新登入或聯絡管理員。",
+    DISPATCH_POOL_CLAIM_RELEASE_FORBIDDEN: "只有管理員或生管可以釋放接單。",
+    INVALID_CLAIM_RELEASE_PAYLOAD: "找不到要釋放的派工池項目，請重新整理後再試。",
+    UNACKNOWLEDGED_CLAIM_NOT_FOUND: "這筆接單已被處理或不存在，請重新整理。",
+    CLAIM_RELEASE_CAS_FAILED: "接單狀態已變更，請重新整理後再試。",
+  });
+
+  function releaseErrorText(error) {
+    const code = errorCode(error);
+    if (code) return RELEASE_ERROR_TEXT[code] || code;
+    return "釋放接單失敗，請重新整理後再試。";
   }
 
   function returnErrorText(error) {
@@ -156,10 +196,14 @@
     sortItems,
     itemsForMachine,
     claimArgs,
+    canRelease,
+    releaseArgs,
     canReturn,
     returnArgs,
     claimState,
+    errorCode,
     claimErrorText,
+    releaseErrorText,
     returnErrorText,
     urgencyLabel,
     dueText,
