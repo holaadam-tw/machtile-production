@@ -29,6 +29,7 @@ const b64 = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const jwt = `${b64({ alg: "HS256" })}.${b64({ sub: user.auth, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: T, role: "operator" } })}.sig`;
 const config = `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${FAKE}",supabaseAnonKey:"test",tenantId:"${T}",useSupabase:true,useTenantHeaderAuth:true,stationCommandMachines:["A04","A05","B03"],disableServiceWorker:true};`;
 const calls = [];
+let a05Attempts = 0;
 const stationRows = ["A04", "A05", "B03"].map((machine_code) => ({ machine_code, command_type: "stop", status: "applied", requested_at: "2026-10-14T00:00:00Z", applied_at: "2026-10-14T00:00:00Z" }));
 async function fake(route) {
   const req = route.request(); const url = new URL(req.url()); const p = url.pathname;
@@ -49,7 +50,9 @@ async function fake(route) {
   if (p.endsWith("/station_commands")) return json(url.searchParams.has("limit") ? [] : stationRows);
   if (p.endsWith("/rpc/machtile_submit_station_command")) {
     const body = JSON.parse(req.postData() || "{}"); calls.push(body);
-    if (body.p_machine_code === "A05") return json({ code: "FACTORY_OFFLINE" }, 503);
+    if (body.p_machine_code === "A05" && ++a05Attempts === 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
     return json({ command_uuid: body.p_command_uuid, command_type: body.p_command_type, status: "pending", requested_at: new Date().toISOString() });
   }
   if (p.includes("/rest/v1/")) return json([]);
@@ -66,6 +69,7 @@ const page = await context.newPage();
 page.on("dialog", (dialog) => dialog.accept());
 await page.goto(base, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await page.evaluate(() => { window.MachTileStationCommandCore.SUBMIT_TIMEOUT_MS = 30; });
 await page.locator('.mobile-tab[data-view="batchLathe"]').click();
 const panel = page.locator('[data-batch-root="lathe"] [data-batch-command-panel]');
 await panel.waitFor();
@@ -77,6 +81,18 @@ await panel.locator('[data-batch-command-type="start"]').click();
 await panel.locator('[data-batch-command-submit]').click();
 await page.waitForFunction(() => document.querySelectorAll("[data-batch-command-result]").length === 2);
 ok(calls.length === 2 && calls.every((x) => x.p_command_type === "start" && x.p_expected_index_sn === 1 && x.p_expected_order_no === `WO-${x.p_machine_code}`), "each machine uses shared station-command RPC parameters");
-ok((await panel.locator('[data-batch-command-result="A04"]').innerText()).startsWith("成功：") && (await panel.locator('[data-batch-command-result="A05"]').innerText()).startsWith("失敗："), "partial failure is shown per machine in Chinese");
+ok((await panel.locator('[data-batch-command-result="A04"]').innerText()).startsWith("成功：") && (await panel.locator('[data-batch-command-result="A05"]').innerText()).startsWith("失敗："), "timeout is shown per machine in Chinese");
+ok(await panel.locator('[data-batch-command-select="A04"]').isDisabled() && !(await panel.locator('[data-batch-command-select="A04"]').isChecked())
+  && await panel.locator('[data-batch-command-submit]').isDisabled(), "pending machines stay locked and cannot be selected or submitted again");
+await panel.locator('[data-batch-command-submit]').evaluate((button) => button.click());
+await page.waitForTimeout(100);
+ok(calls.filter((x) => x.p_machine_code === "A04").length === 1, "pressing batch start again while pending cannot create a second UUID");
+const timedOutUuid = calls.find((x) => x.p_machine_code === "A05").p_command_uuid;
+ok(await panel.locator('[data-batch-command-select="A05"]').isDisabled() && await panel.locator('[data-batch-command-retry="A05"]').isVisible(), "timed-out machine is locked but offers same-command retry");
+await panel.locator('[data-batch-command-retry="A05"]').click();
+await page.waitForFunction(() => document.querySelector('[data-batch-command-result="A05"]')?.textContent.startsWith("成功："));
+const a05Calls = calls.filter((x) => x.p_machine_code === "A05");
+ok(a05Calls.length === 2 && a05Calls[0].p_command_uuid === timedOutUuid && a05Calls[1].p_command_uuid === timedOutUuid,
+  "timeout retry reuses the same UUID");
 await context.close(); await browser.close(); await new Promise((resolve) => server.close(resolve));
 console.log(`PASS: ${pass} batch start/stop browser assertions`);

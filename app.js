@@ -22203,6 +22203,10 @@ function machtileBatchCommandChoice(code, type = machtileBatchState.commandType)
   const order = machtileBatchSelectedOrder(code);
   const base = machtileBatchCore().batchCommandChoice(type, machtileBatchState.stationShiftByMachine.get(code), Boolean(order));
   if (!base.eligible) return base;
+  const pending = machtileStationCmd.pending[code];
+  if (pending && !machtileStationCmdUnlocked(pending)) {
+    return { eligible: false, checked: false, reason: pending.unconfirmed ? "等待確認（可用同一筆重送）" : "指令等待中" };
+  }
   const machine = machtileStationCmdMachineByCode(code);
   const gate = machtileStationCmdCore?.eligibility({
     flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
@@ -22222,29 +22226,79 @@ function machtileBatchResetCommandSelection() {
   machtileBatchState.commandResults = new Map();
 }
 
-async function machtileBatchSendStationCommand(code, type) {
+async function machtileBatchSendStationCommand(code, type, retryPending = null) {
   const core = machtileStationCmdCore;
   const order = machtileBatchSelectedOrder(code);
-  const choice = machtileBatchCommandChoice(code, type);
-  if (!choice.eligible) throw new Error(choice.reason);
+  const existing = retryPending || machtileStationCmd.pending[code] || null;
+  if (retryPending) {
+    if (!existing.unconfirmed || existing.commandType !== type) throw new Error("這筆指令不能重送");
+  } else {
+    const choice = machtileBatchCommandChoice(code, type);
+    if (!choice.eligible) throw new Error(choice.reason);
+  }
   const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
   const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
   if (!fresh.ok) throw new Error(fresh.text);
-  const uuid = core.newUuid(window.crypto);
+  const uuid = retryPending ? retryPending.commandUuid : core.newUuid(window.crypto);
+  const startedAt = retryPending ? retryPending.startedAt : Date.now();
   const fields = { commandUuid: uuid, commandType: type, machineCode: code, orderNo: order.id, step: order.stationStep,
     partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null };
   const payload = core.submitPayload(fields);
-  const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload) });
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
+  let result;
+  try {
+    result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
+  } catch (error) {
+    if (timer) clearTimeout(timer);
+    const info = core.submitErrorText(error);
+    if (info.missing) machtileStationCmd.availability = "missing";
+    if (info.retry) {
+      machtileStationCmd.pending[code] = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName,
+        startedAt, unconfirmed: true, serverOffset: null });
+      machtileStationCmdSavePending();
+      machtileStationCmdPoll(code);
+      machtileStationCmdRerender();
+    } else if (machtileStationCmd.pending[code]?.commandUuid === uuid) {
+      delete machtileStationCmd.pending[code];
+      machtileStationCmdSavePending();
+    }
+    throw error;
+  }
+  if (timer) clearTimeout(timer);
   const row = Array.isArray(result) ? result[0] : result;
   if (!machtileStationCmdRowIsThis(row, uuid)) throw new Error("伺服器沒有回傳這筆指令，結果未確認");
-  const record = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName, startedAt: Date.now() });
-  const view = core.statusView(row || { status: "pending" }, type, null);
+  const now = Date.now();
+  const record = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName, startedAt,
+    unconfirmed: false, serverOffset: retryPending ? retryPending.serverOffset : core.serverOffset(row?.requested_at, now) });
+  const view = core.statusView(row || { status: "pending" }, type, core.ageForHint(record, row?.requested_at, now));
   record.view = view;
   record.lastStatus = String(row?.status || "pending");
   machtileStationCmd.pending[code] = record;
+  delete machtileStationCmd.lastResult[code];
   machtileStationCmdSavePending();
   if (view.terminal) machtileStationCmdFinish(code, view); else machtileStationCmdPoll(code);
+  machtileStationCmdRerender();
   return { payload, view };
+}
+
+async function machtileBatchRetryStationCommand(code) {
+  if (machtileBatchState.commandSubmitting) return;
+  const pending = machtileStationCmd.pending[code];
+  if (!pending?.unconfirmed) return;
+  machtileBatchState.commandSubmitting = true;
+  machtileBatchState.commandResults.set(code, { ok: false, text: "使用同一筆指令重送中…" });
+  machtileRenderBatchReport();
+  try {
+    const { view } = await machtileBatchSendStationCommand(code, pending.commandType, pending);
+    machtileBatchState.commandResults.set(code, { ok: true, text: `成功：${view.title}${view.text ? `（${view.text}）` : ""}` });
+  } catch (error) {
+    const info = machtileStationCmdCore.submitErrorText(error);
+    machtileBatchState.commandResults.set(code, { ok: false, text: `失敗：${info.text || error.message || "未知錯誤"}` });
+  } finally {
+    machtileBatchState.commandSubmitting = false;
+    machtileRenderBatchReport();
+  }
 }
 
 async function machtileSubmitBatchStationCommands() {
@@ -22278,7 +22332,9 @@ function machtileBatchCommandPanel(group, busy) {
     const choice = machtileBatchCommandChoice(code, type);
     const result = machtileBatchState.commandResults.get(code);
     const checked = choice.eligible && machtileBatchState.commandSelected.has(code);
-    return `<label class="batch-command-machine"><input type="checkbox" data-batch-command-select="${code}"${checked ? " checked" : ""}${!choice.eligible || busy ? " disabled" : ""}><strong>${code}</strong><span>${choice.reason || "可操作"}</span>${result ? `<em class="${result.ok ? "is-ok" : "is-error"}" data-batch-command-result="${code}">${escapeHtml(result.text)}</em>` : ""}</label>`;
+    const pending = machtileStationCmd.pending[code];
+    const retry = pending?.unconfirmed ? `<button type="button" data-batch-command-retry="${code}"${busy ? " disabled" : ""}>用同一筆重送</button>` : "";
+    return `<label class="batch-command-machine"><input type="checkbox" data-batch-command-select="${code}"${checked ? " checked" : ""}${!choice.eligible || busy ? " disabled" : ""}><strong>${code}</strong><span>${choice.reason || "可操作"}</span>${retry}${result ? `<em class="${result.ok ? "is-ok" : "is-error"}" data-batch-command-result="${code}">${escapeHtml(result.text)}</em>` : ""}</label>`;
   }).join("");
   const count = [...machtileBatchState.commandSelected].filter((code) => machtileBatchCommandChoice(code, type).eligible).length;
   return `<section class="batch-command-panel" data-batch-command-panel><h3>${escapeHtml(machtileTranslate("batch_command_title"))}</h3>
@@ -22640,6 +22696,8 @@ async function machtileSubmitBatchReport() {
 }
 
 function machtileHandleBatchClick(event) {
+  const commandRetry = event.target.closest("[data-batch-command-retry]");
+  if (commandRetry) { machtileBatchRetryStationCommand(commandRetry.dataset.batchCommandRetry); return true; }
   const commandType = event.target.closest("[data-batch-command-type]");
   if (commandType && !machtileBatchState.commandSubmitting) {
     machtileBatchState.commandType = commandType.dataset.batchCommandType;
