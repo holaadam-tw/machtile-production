@@ -11,10 +11,11 @@
 //   - started_at 的規則（回寫橋要求合法的開工時間，cycle time 才不會錯）
 //   - 驗證、報工人、冪等鍵（report_uuid）、送出 payload
 (function attachMachTileBatchReportCore(root, factory) {
-  const api = factory();
+  const counterCore = root?.MachTileReportCounterCore || (typeof require === "function" ? require("./reportCounterCore.js") : null);
+  const api = factory(counterCore);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.MachTileBatchReportCore = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileBatchReportCore() {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileBatchReportCore(counterCore) {
   "use strict";
 
   // 車床 A01–A05；銑床先只放 B03–B06（B01/B02 是臥式多盤，用現有多盤報工畫面）。
@@ -178,7 +179,13 @@
   }
 
   function modeOf(row) {
-    return MODES[row?.mode] ? row.mode : "noon";
+    if (row?.mode === "dailyStart") return "dailyStart";
+    return row?.finished === true ? "finish" : "noon";
+  }
+
+  function counterCalculation(row) {
+    if (!counterCore?.calculate) return { valid: false, code: "COUNTER_CORE_MISSING", message: "累計數計算核心未載入。", current: null, baseline: null, delta: null };
+    return counterCore.calculate(row?.current, row?.baseline);
   }
 
   // 機台加工時間（分＋秒，跟單台「首次開工」的 Cycle time 欄位同一種填法）→ 每件秒數。
@@ -251,29 +258,41 @@
       if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
       if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
       if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
-      return { send: true, empty: false, error: "", good: 0, bad: 0, machineSeconds: null, timeOnly: false };
+      return { send: true, empty: false, error: "", good: 0, bad: 0, current: Number(row.order.done || 0) || 0, baseline: null, machineSeconds: null, timeOnly: false };
     }
-    const good = toInt(row?.good);
+    if (row?.legacyGood !== undefined && row?.legacyGood !== null) {
+      const good = toInt(row.legacyGood);
+      const bad = toInt(row?.bad);
+      if (Number.isNaN(good) || Number.isNaN(bad)) return { send: false, empty: false, error: "數量要填整數" };
+      const goodN = good === null ? 0 : good;
+      const badN = bad === null ? 0 : bad;
+      if (goodN === 0 && badN === 0) return { send: false, empty: true, error: "" };
+      if (!Number.isInteger(goodN) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
+      if (goodN < 0 || badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
+      if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
+      if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
+      if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
+      if (!row?.startedAt) return { send: false, empty: false, error: row?.startedAtReason || "沒有開工時間" };
+      return { send: true, empty: false, error: "", good: goodN, bad: badN, current: Number(row.order.done || 0) || 0, baseline: null, machineSeconds: null, timeOnly: false };
+    }
     const bad = toInt(row?.bad);
-    if (Number.isNaN(good) || Number.isNaN(bad)) return { send: false, empty: false, error: "數量要填整數" };
-    const goodN = good === null ? 0 : good;
+    const hasCurrent = row?.current !== "" && row?.current !== null && row?.current !== undefined;
+    const hasBad = row?.bad !== "" && row?.bad !== null && row?.bad !== undefined && Number(row.bad) !== 0;
+    if (!hasCurrent && !hasBad) return { send: false, empty: true, error: "" };
+    if (Number.isNaN(bad)) return { send: false, empty: false, error: "數量要填整數" };
     const badN = bad === null ? 0 : bad;
-    const time = machineTimeToSend(row);
-    if (goodN === 0 && badN === 0 && !time.error && !time.changed) return { send: false, empty: true, error: "" };
-    if (!Number.isInteger(goodN) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
-    if (goodN < 0 || badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
-    if (goodN > MAX_QTY_PER_REPORT || badN > MAX_QTY_PER_REPORT) return { send: false, empty: false, error: `一次最多 ${MAX_QTY_PER_REPORT} 件，請確認有沒有多打 0` };
-    if (time.error) return { send: false, empty: false, error: time.error };
+    const counter = counterCalculation(row);
+    if (!counter.valid) return { send: false, empty: false, error: counter.message };
+    if (!Number.isInteger(counter.current) || !Number.isInteger(counter.delta) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
+    if (badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
+    if (counter.delta > MAX_QTY_PER_REPORT || badN > MAX_QTY_PER_REPORT) return { send: false, empty: false, error: `一次最多 ${MAX_QTY_PER_REPORT} 件，請確認有沒有多打 0` };
     if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
     if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
-    const timeOnly = goodN === 0 && badN === 0;
-    // 只改機台加工時間（0／0）不會寫回舊 MES（回寫橋 SKIP_ZERO），所以呼叫端明確允許時（卡片小框：
-    // allowUnmappedTimeOnly）不必有舊 MES 工號對照；有數量的報工一律要對照。
-    if (row?.operatorMapped !== true && !(timeOnly && row?.allowUnmappedTimeOnly === true)) {
+    if (row?.operatorMapped !== true) {
       return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
     }
     if (!row?.startedAt) return { send: false, empty: false, error: row?.startedAtReason || "沒有開工時間" };
-    return { send: true, empty: false, error: "", good: goodN, bad: badN, machineSeconds: time.seconds, timeOnly };
+    return { send: true, empty: false, error: "", good: counter.delta, bad: badN, current: counter.current, baseline: counter.baseline, machineSeconds: null, timeOnly: false };
   }
 
   // 冪等：同一列、同樣的輸入 → 同一個 report_uuid（重複按、送到一半斷線再按都一樣）；
@@ -285,11 +304,10 @@
       mode,
       normCode(row?.machineCode),
       String(row?.order?.processId || ""),
-      qty ? String(toInt(row?.good) ?? 0) : "0",
+      String(toInt(row?.legacyGood) ?? toInt(row?.current) ?? 0),
       qty ? String(toInt(row?.bad) ?? 0) : "0",
       String(row?.operatorId || ""),
-      qty ? String(machineTimeToSend(row).seconds ?? "") : "",
-      mode === "finish" ? String(row?.overtime || "") : "",
+      row?.finished === true ? "finish" : "report",
     ].join("|");
   }
 
@@ -327,10 +345,10 @@
     if (!v.send) throw new Error(v.error || "row is not sendable");
     const mode = modeOf(row);
     const order = row.order;
-    const machineQty = Number(order.done || 0) || 0;
+    const machineQty = mode === "dailyStart" ? (Number(order.done || 0) || 0) : v.current;
     const workTotal = Number(order.total || 0) || null;
-    const overtime = mode === "finish" ? (row.overtime === "2030" ? "2030" : "none") : "";
-    const cycle = v.machineSeconds ?? null;
+    const overtime = mode === "finish" ? "none" : "";
+    const cycle = null;
     const payload = {
       report_uuid: reportUuid,
       tenant_id: tenantId || order.tenantId || undefined,
@@ -353,15 +371,39 @@
         overtime_plan: overtime,
         pm_abnormal: "",
         abnormal_type: "",
+        ...(mode === "dailyStart" ? {} : {
+          counter_baseline_qty: v.baseline,
+          counter_baseline_source: row.baselineSource || "report",
+        }),
       },
       work_total_qty: workTotal,
       cycle_time_seconds: cycle,
-      ended_at: v.timeOnly ? row.startedAt : endedAt,
+      ended_at: endedAt,
     };
     if (row.startedAt) payload.started_at = row.startedAt;
     if (!payload.tenant_id) delete payload.tenant_id;
     if (actorAppUserId) payload.user_id = actorAppUserId;
-    return { payload, operators: [row.operatorId], timeOnly: v.timeOnly };
+    return { payload, operators: [row.operatorId], timeOnly: false };
+  }
+
+  function summarizeStationCommands(rows, nowIso) {
+    const applied = (Array.isArray(rows) ? rows : [])
+      .filter((r) => ["start", "stop"].includes(r?.command_type) && (r?.status === "applied" || r?.applied_at))
+      .map((r) => ({ type: r.command_type, at: isoOrNull(r.applied_at || r.requested_at) }))
+      .filter((r) => r.at)
+      .sort((a, b) => a.at.localeCompare(b.at));
+    let open = null;
+    let milliseconds = 0;
+    applied.forEach((entry) => {
+      if (entry.type === "start") open = entry.at;
+      else if (open) { milliseconds += Math.max(0, Date.parse(entry.at) - Date.parse(open)); open = null; }
+    });
+    const now = isoOrNull(nowIso);
+    if (open && now) milliseconds += Math.max(0, Date.parse(now) - Date.parse(open));
+    return {
+      status: open ? "running" : applied.length ? "stopped" : "notStarted",
+      minutes: applied.length ? Math.floor(milliseconds / 60000) : null,
+    };
   }
 
   // 舊名稱保留給既有呼叫端：沒帶 mode 的列當中午報工。
@@ -406,7 +448,7 @@
     MAX_MACHINE_SECONDS, parseMachineTime, splitSeconds, machineTimeToSend, buildRemark, buildReportPayload,
     latestMachineTimeByProcess,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
-    resolveStartedAt, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate,
+    resolveStartedAt, counterCalculation, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate, summarizeStationCommands,
     operatorChoices, defaultOperatorId, summarizeResults,
   };
 });
