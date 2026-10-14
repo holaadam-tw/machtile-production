@@ -1,79 +1,334 @@
 {
-  "language_label": { "value": "Ngôn ngữ", "_draft": true },
-  "language_zh_hant": { "value": "繁中", "_draft": true },
-  "language_vi": { "value": "Tiếng Việt", "_draft": true },
-  "login_title": { "value": "Đăng nhập hợp nhất MachTile", "_draft": true },
-  "login_checking": { "value": "Đang kiểm tra trạng thái đăng nhập…", "_draft": true },
-  "login_redirect_hint": { "value": "Nếu đã đăng nhập, bạn sẽ vào thẳng hệ thống; nếu chưa, hệ thống sẽ chuyển đến trang đăng nhập.", "_draft": true },
-  "monitor_title": { "value": "Trạng thái máy theo thời gian thực", "_draft": true },
-  "field_report": { "value": "Báo cáo tại hiện trường", "_draft": true },
-  "report": { "value": "Báo cáo", "_draft": true },
-  "start_work": { "value": "Bắt đầu", "_draft": true },
-  "stop_work": { "value": "Dừng máy", "_draft": true },
-  "batch_command_title": { "value": "Bắt đầu / dừng hàng loạt", "_draft": true },
-  "batch_start": { "value": "Bắt đầu hàng loạt", "_draft": true },
-  "batch_stop": { "value": "Dừng hàng loạt", "_draft": true },
-  "batch_command_none": { "value": "Vui lòng chọn ít nhất một máy có thể thao tác", "_draft": true },
-  "batch_command_no_orders": { "value": "Hiện không có lệnh sản xuất có thể thao tác trong bộ phận này", "_draft": true },
-  "batch_command_sending": { "value": "Đang gửi lần lượt…", "_draft": true },
-  "select_work_order": { "value": "Chọn lệnh sản xuất", "_draft": true },
-  "details": { "value": "Xem đầy đủ", "_draft": true },
-  "machine_details": { "value": "Chi tiết máy", "_draft": true },
-  "machine_status": { "value": "Máy · {{status}}", "_draft": true },
-  "work_order_status": { "value": "Lệnh · {{status}}", "_draft": true },
-  "current_work_order": { "value": "Lệnh hiện tại", "_draft": true },
-  "no_work_order": { "value": "Chưa có lệnh được giao", "_draft": true },
-  "can_assign_work_order": { "value": "Có thể giao lệnh mới", "_draft": true },
-  "check_machine_status": { "value": "Vui lòng kiểm tra trạng thái máy", "_draft": true },
-  "progress": { "value": "Tiến độ hoàn thành", "_draft": true },
-  "due_date": { "value": "Hạn giao", "_draft": true },
-  "unassigned": { "value": "Chưa giao máy", "_draft": true },
-  "report_entry_advice": { "value": "Lối vào báo cáo và gợi ý", "_draft": true },
-  "assignment_help": { "value": "Hướng dẫn giao việc", "_draft": true },
-  "open_report_page": { "value": "Mở trang báo cáo", "_draft": true },
-  "handling_advice": { "value": "Gợi ý xử lý", "_draft": true },
-  "dispatch_pool_same_department": { "value": "Danh sách chờ (cùng bộ phận)", "_draft": true },
-  "dispatch_pool_count": { "value": "Danh sách chờ (cùng bộ phận) {{count}} phiếu", "_draft": true },
-  "dispatch_pool_title": { "value": "Danh sách chờ", "_draft": true },
-  "close": { "value": "Đóng", "_draft": true },
-  "claim": { "value": "Nhận việc", "_draft": true },
-  "claiming": { "value": "Đang nhận việc…", "_draft": true },
-  "claim_processing": { "value": "Đang xử lý nhận việc", "_draft": true },
-  "claim_success": { "value": "Nhận việc thành công. Lệnh đã được đưa vào máy này.", "_draft": true },
-  "release_claim": { "value": "Giải phóng nhận việc", "_draft": true },
-  "release_claiming": { "value": "Đang giải phóng…", "_draft": true },
-  "release_claim_success": { "value": "Đã giải phóng nhận việc; phiếu này có thể được nhận lại.", "_draft": true },
-  "pool_load_error": { "value": "Không tải được danh sách chờ. Vui lòng làm mới.", "_draft": true },
-  "pool_empty": { "value": "Hiện không có công đoạn chờ nhận trong cùng bộ phận.", "_draft": true },
-  "pool_department_missing": { "value": "Máy này chưa được gán bộ phận tiện/phay nên không hiển thị danh sách chờ.", "_draft": true },
-  "pool_note": { "value": "Các công đoạn do điều độ đưa vào danh sách nhưng chưa giao máy được sắp theo mức khẩn cấp → hạn giao → thời gian APS dự kiến bắt đầu; chỉ máy đang rảnh, đủ điều kiện và đã bật pilot mới có thể nhận việc.", "_draft": true },
-  "data_time": { "value": "Thời gian dữ liệu {{time}}", "_draft": true },
-  "quantity_due_aps": { "value": "Số lượng {{quantity}} · Hạn giao {{due}} · APS dự kiến bắt đầu {{start}}", "_draft": true },
-  "eligible_machines": { "value": "Máy phù hợp {{machines}}", "_draft": true },
-  "not_in_list": { "value": "（{{machine}} không có trong danh sách）", "_draft": true },
-  "returned_waiting_claim": { "value": "Trả lại, chờ nhận", "_draft": true },
-  "pool_return_factory_note": { "value": "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)", "_draft": true },
-  "work_start_first": { "value": "Bắt đầu lần đầu", "_draft": true },
-  "daily_start": { "value": "Bắt đầu hôm nay", "_draft": true },
-  "finish_work": { "value": "Kết thúc / Hoàn tất", "_draft": true },
-  "abnormal_report": { "value": "Báo cáo bất thường", "_draft": true },
-  "machine_current_counter": { "value": "Số tích lũy hiện tại của máy", "_draft": true },
-  "good_quantity": { "value": "Số lượng đạt", "_draft": true },
-  "counter_preview": { "value": "Tích lũy {{current}}｜Lần trước {{baseline}}｜Lần này {{delta}}{{message}}", "_draft": true },
-  "counter_loading": { "value": "Đang đọc mốc bộ đếm máy hôm nay…", "_draft": true },
-  "counter_load_error": { "value": "Không đọc được mốc bộ đếm máy hôm nay. Vui lòng kiểm tra kết nối rồi mở lại báo cáo.", "_draft": true },
-  "counter_current_required": { "value": "Vui lòng nhập số tích lũy hiện tại của máy.", "_draft": true },
-  "counter_baseline_required": { "value": "Hôm nay chưa có mốc bắt đầu hoặc báo cáo; hãy bấm bắt đầu hoặc nhập mốc thủ công.", "_draft": true },
-  "counter_non_positive": { "value": "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.", "_draft": true },
-  "counter_rate_warning": { "value": "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra", "_draft": true },
-  "counter_manual_help": { "value": "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.", "_draft": true },
-  "required": { "value": "Bắt buộc", "_draft": true },
-  "optional": { "value": "Không bắt buộc", "_draft": true },
-  "submit_report": { "value": "Gửi báo cáo", "_draft": true },
-  "pause_work": { "value": "Tạm dừng gia công", "_draft": true },
-  "open_camera": { "value": "Mở camera chụp ảnh", "_draft": true },
-  "no_photo": { "value": "Chưa chụp ảnh", "_draft": true },
-  "common_timeout": { "value": "Kết nối quá thời gian. Vui lòng thử lại sau.", "_draft": true },
-  "common_error": { "value": "Đã xảy ra lỗi. Vui lòng thử lại sau.", "_draft": true },
-  "login_timeout": { "value": "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.", "_draft": true }
+  "hmc_pallet_report_title_draft": {
+    "value": "Báo cáo sản lượng nhiều pallet",
+    "_draft": true
+  },
+  "hmc_pallet_report_hint_draft": {
+    "value": "Nhập lũy kế trong ngày cho từng pallet và từng chi tiết; hệ thống chỉ gửi phần tăng thêm.",
+    "_draft": true
+  },
+  "hmc_pallet_report_submit_draft": {
+    "value": "Gửi báo cáo theo từng pallet",
+    "_draft": true
+  },
+  "hmc_pallet_report_noon_draft": {
+    "value": "Báo cáo buổi trưa (không tháo pallet)",
+    "_draft": true
+  },
+  "hmc_pallet_report_finish_all_draft": {
+    "value": "Hoàn tất toàn bộ và đổi chuyền",
+    "_draft": true
+  },
+  "hmc_pallet_report_finish_partial_draft": {
+    "value": "Hoàn tất một phần và đổi chuyền",
+    "_draft": true
+  },
+  "language_label": {
+    "value": "Ngôn ngữ",
+    "_draft": true
+  },
+  "language_zh_hant": {
+    "value": "繁中",
+    "_draft": true
+  },
+  "language_vi": {
+    "value": "Tiếng Việt",
+    "_draft": true
+  },
+  "login_title": {
+    "value": "Đăng nhập hợp nhất MachTile",
+    "_draft": true
+  },
+  "login_checking": {
+    "value": "Đang kiểm tra trạng thái đăng nhập…",
+    "_draft": true
+  },
+  "login_redirect_hint": {
+    "value": "Nếu đã đăng nhập, bạn sẽ vào thẳng hệ thống; nếu chưa, hệ thống sẽ chuyển đến trang đăng nhập.",
+    "_draft": true
+  },
+  "monitor_title": {
+    "value": "Trạng thái máy theo thời gian thực",
+    "_draft": true
+  },
+  "field_report": {
+    "value": "Báo cáo tại hiện trường",
+    "_draft": true
+  },
+  "report": {
+    "value": "Báo cáo",
+    "_draft": true
+  },
+  "start_work": {
+    "value": "Bắt đầu",
+    "_draft": true
+  },
+  "stop_work": {
+    "value": "Dừng máy",
+    "_draft": true
+  },
+  "batch_command_title": {
+    "value": "Bắt đầu / dừng hàng loạt",
+    "_draft": true
+  },
+  "batch_start": {
+    "value": "Bắt đầu hàng loạt",
+    "_draft": true
+  },
+  "batch_stop": {
+    "value": "Dừng hàng loạt",
+    "_draft": true
+  },
+  "batch_command_none": {
+    "value": "Vui lòng chọn ít nhất một máy có thể thao tác",
+    "_draft": true
+  },
+  "batch_command_no_orders": {
+    "value": "Hiện không có lệnh sản xuất có thể thao tác trong bộ phận này",
+    "_draft": true
+  },
+  "batch_command_sending": {
+    "value": "Đang gửi lần lượt…",
+    "_draft": true
+  },
+  "select_work_order": {
+    "value": "Chọn lệnh sản xuất",
+    "_draft": true
+  },
+  "details": {
+    "value": "Xem đầy đủ",
+    "_draft": true
+  },
+  "machine_details": {
+    "value": "Chi tiết máy",
+    "_draft": true
+  },
+  "machine_status": {
+    "value": "Máy · {{status}}",
+    "_draft": true
+  },
+  "work_order_status": {
+    "value": "Lệnh · {{status}}",
+    "_draft": true
+  },
+  "current_work_order": {
+    "value": "Lệnh hiện tại",
+    "_draft": true
+  },
+  "no_work_order": {
+    "value": "Chưa có lệnh được giao",
+    "_draft": true
+  },
+  "can_assign_work_order": {
+    "value": "Có thể giao lệnh mới",
+    "_draft": true
+  },
+  "check_machine_status": {
+    "value": "Vui lòng kiểm tra trạng thái máy",
+    "_draft": true
+  },
+  "progress": {
+    "value": "Tiến độ hoàn thành",
+    "_draft": true
+  },
+  "due_date": {
+    "value": "Hạn giao",
+    "_draft": true
+  },
+  "unassigned": {
+    "value": "Chưa giao máy",
+    "_draft": true
+  },
+  "report_entry_advice": {
+    "value": "Lối vào báo cáo và gợi ý",
+    "_draft": true
+  },
+  "assignment_help": {
+    "value": "Hướng dẫn giao việc",
+    "_draft": true
+  },
+  "open_report_page": {
+    "value": "Mở trang báo cáo",
+    "_draft": true
+  },
+  "handling_advice": {
+    "value": "Gợi ý xử lý",
+    "_draft": true
+  },
+  "dispatch_pool_same_department": {
+    "value": "Danh sách chờ (cùng bộ phận)",
+    "_draft": true
+  },
+  "dispatch_pool_count": {
+    "value": "Danh sách chờ (cùng bộ phận) {{count}} phiếu",
+    "_draft": true
+  },
+  "dispatch_pool_title": {
+    "value": "Danh sách chờ",
+    "_draft": true
+  },
+  "close": {
+    "value": "Đóng",
+    "_draft": true
+  },
+  "claim": {
+    "value": "Nhận việc",
+    "_draft": true
+  },
+  "claiming": {
+    "value": "Đang nhận việc…",
+    "_draft": true
+  },
+  "claim_processing": {
+    "value": "Đang xử lý nhận việc",
+    "_draft": true
+  },
+  "claim_success": {
+    "value": "Nhận việc thành công. Lệnh đã được đưa vào máy này.",
+    "_draft": true
+  },
+  "release_claim": {
+    "value": "Giải phóng nhận việc",
+    "_draft": true
+  },
+  "release_claiming": {
+    "value": "Đang giải phóng…",
+    "_draft": true
+  },
+  "release_claim_success": {
+    "value": "Đã giải phóng nhận việc; phiếu này có thể được nhận lại.",
+    "_draft": true
+  },
+  "pool_load_error": {
+    "value": "Không tải được danh sách chờ. Vui lòng làm mới.",
+    "_draft": true
+  },
+  "pool_empty": {
+    "value": "Hiện không có công đoạn chờ nhận trong cùng bộ phận.",
+    "_draft": true
+  },
+  "pool_department_missing": {
+    "value": "Máy này chưa được gán bộ phận tiện/phay nên không hiển thị danh sách chờ.",
+    "_draft": true
+  },
+  "pool_note": {
+    "value": "Các công đoạn do điều độ đưa vào danh sách nhưng chưa giao máy được sắp theo mức khẩn cấp → hạn giao → thời gian APS dự kiến bắt đầu; chỉ máy đang rảnh, đủ điều kiện và đã bật pilot mới có thể nhận việc.",
+    "_draft": true
+  },
+  "data_time": {
+    "value": "Thời gian dữ liệu {{time}}",
+    "_draft": true
+  },
+  "quantity_due_aps": {
+    "value": "Số lượng {{quantity}} · Hạn giao {{due}} · APS dự kiến bắt đầu {{start}}",
+    "_draft": true
+  },
+  "eligible_machines": {
+    "value": "Máy phù hợp {{machines}}",
+    "_draft": true
+  },
+  "not_in_list": {
+    "value": "（{{machine}} không có trong danh sách）",
+    "_draft": true
+  },
+  "returned_waiting_claim": {
+    "value": "Trả lại, chờ nhận",
+    "_draft": true
+  },
+  "work_start_first": {
+    "value": "Bắt đầu lần đầu",
+    "_draft": true
+  },
+  "daily_start": {
+    "value": "Bắt đầu hôm nay",
+    "_draft": true
+  },
+  "finish_work": {
+    "value": "Kết thúc / Hoàn tất",
+    "_draft": true
+  },
+  "abnormal_report": {
+    "value": "Báo cáo bất thường",
+    "_draft": true
+  },
+  "machine_current_counter": {
+    "value": "Số tích lũy hiện tại của máy",
+    "_draft": true
+  },
+  "good_quantity": {
+    "value": "Số lượng đạt",
+    "_draft": true
+  },
+  "counter_preview": {
+    "value": "Tích lũy {{current}}｜Lần trước {{baseline}}｜Lần này {{delta}}{{message}}",
+    "_draft": true
+  },
+  "counter_loading": {
+    "value": "Đang đọc mốc bộ đếm máy hôm nay…",
+    "_draft": true
+  },
+  "counter_load_error": {
+    "value": "Không đọc được mốc bộ đếm máy hôm nay. Vui lòng kiểm tra kết nối rồi mở lại báo cáo.",
+    "_draft": true
+  },
+  "counter_current_required": {
+    "value": "Vui lòng nhập số tích lũy hiện tại của máy.",
+    "_draft": true
+  },
+  "counter_baseline_required": {
+    "value": "Hôm nay chưa có mốc bắt đầu hoặc báo cáo; hãy bấm bắt đầu hoặc nhập mốc thủ công.",
+    "_draft": true
+  },
+  "counter_non_positive": {
+    "value": "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.",
+    "_draft": true
+  },
+  "counter_rate_warning": {
+    "value": "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
+    "_draft": true
+  },
+  "counter_manual_help": {
+    "value": "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
+    "_draft": true
+  },
+  "required": {
+    "value": "Bắt buộc",
+    "_draft": true
+  },
+  "optional": {
+    "value": "Không bắt buộc",
+    "_draft": true
+  },
+  "submit_report": {
+    "value": "Gửi báo cáo",
+    "_draft": true
+  },
+  "pause_work": {
+    "value": "Tạm dừng gia công",
+    "_draft": true
+  },
+  "open_camera": {
+    "value": "Mở camera chụp ảnh",
+    "_draft": true
+  },
+  "no_photo": {
+    "value": "Chưa chụp ảnh",
+    "_draft": true
+  },
+  "common_timeout": {
+    "value": "Kết nối quá thời gian. Vui lòng thử lại sau.",
+    "_draft": true
+  },
+  "common_error": {
+    "value": "Đã xảy ra lỗi. Vui lòng thử lại sau.",
+    "_draft": true
+  },
+  "login_timeout": {
+    "value": "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.",
+    "_draft": true
+  },
+  "pool_return_factory_note": {
+    "value": "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)",
+    "_draft": true
+  }
 }
