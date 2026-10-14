@@ -88,5 +88,6 @@
   "no_photo": "尚未拍照",
   "common_timeout": "連線逾時，請稍後重試。",
   "common_error": "發生錯誤，請稍後重試。",
-  "login_timeout": "登入流程已逾時，請重新登入。"
+  "login_timeout": "登入流程已逾時，請重新登入。",
+  "lathe_single_operator_draft": "車床報工一次只能選一位報工人員，請取消其他人員後再送出。"
 }

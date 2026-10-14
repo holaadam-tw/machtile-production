@@ -358,5 +358,9 @@
   "inspection_status_open_abnormal": {
     "value": "Mở báo cáo bất thường",
     "_draft": true
+  },
+  "lathe_single_operator_draft": {
+    "value": "Báo cáo máy tiện chỉ được chọn một người vận hành. Vui lòng bỏ chọn những người khác rồi gửi lại.",
+    "_draft": true
   }
 }

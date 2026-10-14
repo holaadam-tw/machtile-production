@@ -104,6 +104,18 @@ await page.evaluate(() => {
   input.checked = true;
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
+await page.evaluate(secondOperatorId => {
+  const second = document.createElement("input");
+  second.type = "checkbox";
+  second.value = secondOperatorId;
+  second.dataset.mapped = "1";
+  second.checked = true;
+  document.getElementById("machtileOperatorList").append(second);
+}, id(902));
+await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+assert.equal(calls.commands.length, 0, "lathe preview rejects multiple operators before any command is created");
+assert.match(await page.locator("#singleStationReportPanel").innerText(), /車床報工一次只能選一位報工人員/);
+await page.evaluate(() => document.querySelectorAll('#machtileOperatorList input[type="checkbox"]')[1].remove());
 await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 await page.waitForTimeout(500);
 assert.equal(await page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').count(), 1, `${await page.locator("#singleStationReportPanel").innerText()} calls=${JSON.stringify(calls.commands)}`);

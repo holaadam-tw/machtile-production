@@ -7,6 +7,12 @@ const base = { machineCode: "A04", order, current: "145", baseline: 130, baselin
 
 assert.deepEqual(core.GROUPS.lathe.machines, ["A01", "A02", "A03", "A04", "A05"]);
 assert.deepEqual(core.GROUPS.mill.machines, ["B03", "B04", "B05", "B06"]);
+assert.equal(core.operatorSelectionLimit({ department: "車床課", machineType: "CNC" }), 1);
+assert.equal(core.operatorSelectionLimit({ department: "銑床課", machineType: "車床" }), null, "verified department wins over type fallback");
+assert.equal(core.operatorSelectionLimit({ machine_type: "CNC Lathe" }), 1);
+assert.equal(core.operatorSelectionLimit({ machine_type: "Machining Center" }), null);
+assert.deepEqual(core.validateOperatorSelection({ department: "車床課" }, ["u1", "u2"]), { valid: false, code: "LATHE_SINGLE_OPERATOR", max: 1 });
+assert.deepEqual(core.validateOperatorSelection({ department: "銑床課" }, ["u1", "u2"]), { valid: true, code: null, max: null });
 assert.deepEqual(core.counterCalculation(base), counter.calculate(145, 130), "batch must use the shared cumulative-counter core");
 assert.deepEqual(core.validateRow(base), { send: true, empty: false, error: "", good: 15, bad: 2, current: 145, baseline: 130, machineSeconds: null, timeOnly: false });
 assert.equal(core.validateRow({ ...base, current: "130" }).error, "機台累計 130 必須大於上次 130；這次差額需大於 0。");
