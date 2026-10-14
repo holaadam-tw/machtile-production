@@ -13142,3 +13142,5 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .batch-machine-state {
   font-weight: 650;
 }
+.batch-command-panel{margin:12px 0;padding:14px;border:1px solid var(--line,#d8dee8);border-radius:12px;background:var(--panel,#fff)}
+.batch-command-panel h3{margin:0 0 10px}.batch-command-types{display:flex;gap:8px;margin-bottom:10px}.batch-command-types button{min-height:44px;padding:0 18px;border:1px solid #94a3b8;border-radius:9px;background:#fff}.batch-command-types button.is-active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}.batch-command-machines{display:grid;gap:8px;margin:10px 0}.batch-command-machine{display:grid;grid-template-columns:auto 52px 1fr;align-items:center;gap:8px;min-height:44px}.batch-command-machine em{grid-column:2/4;font-style:normal}.batch-command-machine em.is-ok{color:#15803d}.batch-command-machine em.is-error{color:#b91c1c}

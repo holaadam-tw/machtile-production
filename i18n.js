@@ -20,6 +20,12 @@
       report: "報工",
       start_work: "開工",
       stop_work: "停工",
+      batch_command_title: "批次開工／停工",
+      batch_start: "批次開工",
+      batch_stop: "批次停工",
+      batch_command_none: "請至少勾選一台可操作的機台",
+      batch_command_no_orders: "此課別目前沒有可操作的工單",
+      batch_command_sending: "逐台送出中…",
       select_work_order: "選擇工單",
       details: "完整單",
       machine_details: "機台詳情",
@@ -93,6 +99,12 @@
       report: "Báo cáo",
       start_work: "Bắt đầu",
       stop_work: "Dừng máy",
+      batch_command_title: "Bắt đầu / dừng hàng loạt", // _draft
+      batch_start: "Bắt đầu hàng loạt", // _draft
+      batch_stop: "Dừng hàng loạt", // _draft
+      batch_command_none: "Vui lòng chọn ít nhất một máy có thể thao tác", // _draft
+      batch_command_no_orders: "Hiện không có lệnh sản xuất có thể thao tác trong bộ phận này", // _draft
+      batch_command_sending: "Đang gửi lần lượt…", // _draft
       select_work_order: "Chọn lệnh sản xuất",
       details: "Xem đầy đủ",
       machine_details: "Chi tiết máy",

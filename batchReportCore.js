@@ -406,6 +406,14 @@
     };
   }
 
+  function batchCommandChoice(commandType, shift, hasOrder) {
+    if (!hasOrder) return { eligible: false, checked: false, reason: "沒有工單" };
+    const status = shift?.status || "notStarted";
+    if (commandType === "start" && status === "running") return { eligible: false, checked: false, reason: "已開工" };
+    if (commandType === "stop" && status !== "running") return { eligible: false, checked: false, reason: "未開工" };
+    return { eligible: true, checked: true, reason: "" };
+  }
+
   // 舊名稱保留給既有呼叫端：沒帶 mode 的列當中午報工。
   function buildPayload(args) {
     return buildReportPayload(args);
@@ -448,7 +456,7 @@
     MAX_MACHINE_SECONDS, parseMachineTime, splitSeconds, machineTimeToSend, buildRemark, buildReportPayload,
     latestMachineTimeByProcess,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
-    resolveStartedAt, counterCalculation, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate, summarizeStationCommands,
+    resolveStartedAt, counterCalculation, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate, summarizeStationCommands, batchCommandChoice,
     operatorChoices, defaultOperatorId, summarizeResults,
   };
 });

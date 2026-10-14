@@ -47,4 +47,9 @@ assert.deepEqual(core.summarizeStationCommands([{ command_type: "start", status:
   { command_type: "stop", status: "applied", applied_at: "2026-10-14T01:30:00Z" }], "2026-10-14T04:00:00Z"), { status: "stopped", minutes: 90 });
 assert.deepEqual(core.summarizeStationCommands([{ command_type: "start", status: "applied", applied_at: "2026-10-14T02:00:00Z" }],
   "2026-10-14T04:00:00Z"), { status: "running", minutes: 120 });
+assert.deepEqual(core.batchCommandChoice("start", { status: "running" }, true), { eligible: false, checked: false, reason: "已開工" });
+assert.deepEqual(core.batchCommandChoice("start", { status: "stopped" }, true), { eligible: true, checked: true, reason: "" });
+assert.deepEqual(core.batchCommandChoice("stop", { status: "notStarted" }, true), { eligible: false, checked: false, reason: "未開工" });
+assert.deepEqual(core.batchCommandChoice("stop", { status: "running" }, true), { eligible: true, checked: true, reason: "" });
+assert.deepEqual(core.batchCommandChoice("start", { status: "stopped" }, false), { eligible: false, checked: false, reason: "沒有工單" });
 console.log("PASS: batch report cumulative payload, compatibility routes, finish toggle, and station-command shift summary");

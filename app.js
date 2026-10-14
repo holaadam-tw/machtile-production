@@ -13504,6 +13504,10 @@ async function machtileLoadStationCommandAvailability() {
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
+    if (typeof machtileBatchResetCommandSelection === "function") {
+      machtileBatchResetCommandSelection();
+      machtileRenderBatchReport();
+    }
   } catch (error) {
     console.warn("station commands unavailable; start/stop buttons hidden", error);
     machtileStationCmd.availability = "missing";
@@ -14197,18 +14201,69 @@ function machtileStationCmdCanSubmit(sheet) {
   return true;
 }
 
-function machtileStationCmdRecordFor(sheet, extra) {
-  return machtileStationCmdCore.pendingRecord({
-    commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
-    orderNo: sheet.fields.orderNo, step: sheet.fields.step, partNo: sheet.fields.partNo, manufactureIiId: sheet.fields.manufactureIiId,
-    partName: sheet.model.partName, operationName: sheet.model.operationName,
-    startedAt: machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid ? machtileStationCmd.pending[sheet.code].startedAt : Date.now(),
-    ...extra,
+// 單機與批次共用的可重入送出生命週期。呼叫端只提供指令資料及 UI／附加資料回呼；
+// submit、timeout、pending、poll、finish 都只在這裡編排，避免兩條路徑的重試規則漂移。
+async function machtileStationCmdRunSubmission(options) {
+  const core = machtileStationCmdCore;
+  const {
+    commandUuid, commandType, machineCode, fields, recordFields, startedAt,
+    previousRecord = null, attemptNumber = 1, validateRow = null,
+    onError = null, onAccepted = null, afterRecord = null,
+  } = options;
+  const payload = core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = core.submitErrorText(error);
+    const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
+    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload };
+    if (info.missing) machtileStationCmd.availability = "missing";
+    if (info.retry) {
+      machtileStationCmd.pending[machineCode] = core.pendingRecord({
+        commandUuid, commandType, machineCode, ...recordFields, startedAt,
+        unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
+      });
+      machtileStationCmdSavePending();
+      machtileStationCmdPoll(machineCode);
+    } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+      delete machtileStationCmd.pending[machineCode];
+      machtileStationCmdSavePending();
+    }
+    machtileStationCmdRerender();
+    return { ok: false, error, info, payload };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (validateRow && !validateRow(row)) {
+    return { ok: false, error: new Error("伺服器沒有回傳這筆指令，結果未確認"), payload, row };
+  }
+  const acceptedResult = onAccepted ? await onAccepted({ row, previousRecord }) : null;
+  const now = Date.now();
+  const offset = attemptNumber === 1 && row
+    ? core.serverOffset(row.requested_at, now)
+    : (previousRecord?.commandUuid === commandUuid ? previousRecord.serverOffset : null);
+  const record = core.pendingRecord({
+    commandUuid, commandType, machineCode, ...recordFields, startedAt,
+    unconfirmed: false, serverOffset: offset, ...(acceptedResult?.recordExtra || {}),
   });
+  const view = core.statusView(row || { status: "pending" }, commandType, core.ageForHint(record, row?.requested_at, now));
+  record.view = view;
+  record.lastStatus = String(row?.status || "pending");
+  machtileStationCmd.pending[machineCode] = record;
+  delete machtileStationCmd.lastResult[machineCode];
+  machtileStationCmdSavePending();
+  if (afterRecord) await afterRecord({ row, record, view });
+  if (view.terminal) machtileStationCmdFinish(machineCode, view);
+  else machtileStationCmdPoll(machineCode);
+  machtileStationCmdRerender();
+  return { ok: true, payload, row, record, view };
 }
 
 async function machtileStationCmdSubmit() {
-  const core = machtileStationCmdCore;
   const sheet = machtileStationCmd.sheet;
   if (!machtileStationCmdCanSubmit(sheet)) return;
   const existing = machtileStationCmd.pending[sheet.code];
@@ -14216,63 +14271,36 @@ async function machtileStationCmdSubmit() {
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
   const startedAt = existing?.commandUuid === sheet.uuid ? existing.startedAt : Date.now();
-  let row = null;
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
-  try {
-    const payload = core.submitPayload({ commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code, ...sheet.fields });
-    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
-    row = Array.isArray(result) ? result[0] : result;
-  } catch (error) {
-    if (timer) clearTimeout(timer);
-    const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
-    machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
-    if (machtileStationCmd.sheet !== sheet) return;
-    const info = core.submitErrorText(error);
-    if (info.missing) machtileStationCmd.availability = "missing";
-    sheet.phase = "sendError";
-    sheet.errorText = info.text;
-    sheet.canRetry = info.retry;
-    if (info.retry) {
-      // 不知道有沒有送到：記下來（重新整理後也記得），一面查這個 uuid，一面讓他立刻用同一個 uuid 重送
-      // 今日開工數量跟著這筆存：之後查到指令被接受才寫（作業員關掉確認卡、重新整理也一樣）
-      machtileStationCmd.pending[sheet.code] = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: true, serverOffset: null, dailyStart: carried }), startedAt };
-      machtileStationCmdSavePending();
-      machtileStationCmdPoll(sheet.code);
-    } else if (machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid) {
-      // 伺服器明確拒絕了這次請求 → 這個 uuid 沒有建成指令，解鎖
-      delete machtileStationCmd.pending[sheet.code];
-      machtileStationCmdSavePending();
-    }
-    machtileStationCmdRenderSheet();
-    machtileStationCmdRerender();
-    return;
-  }
-  if (timer) clearTimeout(timer);
-  // 上一次送出網路斷時存的數量（從卡片「用同一筆重送」）；確認卡這次自己有填 → 由確認卡寫，存的那份丟掉
-  const carriedDs = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
-  const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
-  machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
-  const now = Date.now();
-  // 伺服器時鐘差：只有第一次送出（新建的列）才準；重送拿到的可能是舊列 → 不算
-  const offset = sheet.attempts === 1 && row ? core.serverOffset(row.requested_at, now) : (existing?.commandUuid === sheet.uuid ? existing.serverOffset : null);
-  const record = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: false, serverOffset: offset }), startedAt };
-  machtileStationCmd.pending[sheet.code] = record;
-  delete machtileStationCmd.lastResult[sheet.code];
-  const view = core.statusView(row || { status: "pending" }, sheet.type, core.ageForHint(record, row?.requested_at, now));
-  record.view = view;
-  record.lastStatus = String(row?.status || "pending");
-  if (carriedDs && !sheetAwaitsAck) record.dailyStart = carriedDs;
-  machtileStationCmdSavePending();
-  if (machtileStationCmd.sheet === sheet) {
-    sheet.phase = "status";
-    sheet.view = view;
-    machtileStationCmdRenderSheet();
-  }
-  if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
-  if (view.terminal) machtileStationCmdFinish(sheet.code, view);
-  else machtileStationCmdPoll(sheet.code);
-  machtileStationCmdRerender();
+  await machtileStationCmdRunSubmission({
+    commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
+    fields: sheet.fields,
+    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName },
+    startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
+    onError: ({ info }) => {
+      const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
+      machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
+      if (machtileStationCmd.sheet !== sheet) return { cancel: true };
+      sheet.phase = "sendError";
+      sheet.errorText = info.text;
+      sheet.canRetry = info.retry;
+      machtileStationCmdRenderSheet();
+      return { recordExtra: { dailyStart: carried } };
+    },
+    onAccepted: ({ row }) => {
+      const carried = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
+      const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
+      machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
+      return { recordExtra: carried && !sheetAwaitsAck ? { dailyStart: carried } : {} };
+    },
+    afterRecord: ({ row, record, view }) => {
+      if (machtileStationCmd.sheet === sheet) {
+        sheet.phase = "status";
+        sheet.view = view;
+        machtileStationCmdRenderSheet();
+      }
+      if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
+    },
+  });
 }
 
 // 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
@@ -21500,6 +21528,10 @@ const machtileBatchState = {
   rows: new Map(),       // machineCode → { processId, current, bad, finished, operatorId, error, result }
   stationReportSettings: { status: "unavailable", machines: {}, failReasonCodesByMachine: {}, error: "" },
   stationReportIdentityByProcess: new Map(),
+  commandType: "start",
+  commandSelected: new Set(),
+  commandResults: new Map(),
+  commandSubmitting: false,
   lastLoadedAt: 0,
 };
 
@@ -22203,6 +22235,7 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.counterBaselineByProcess = counters;
     machtileBatchState.stationShiftByMachine = stationShifts;
+    machtileBatchResetCommandSelection();
     machtileBatchState.progressError = progress.error;
     machtileBatchState.error = "";
     machtileBatchState.lastLoadedAt = Date.now();
@@ -22212,6 +22245,121 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.loading = false;
     machtileRenderBatchReport();
   }
+}
+
+function machtileBatchCommandChoice(code, type = machtileBatchState.commandType) {
+  const order = machtileBatchSelectedOrder(code);
+  const base = machtileBatchCore().batchCommandChoice(type, machtileBatchState.stationShiftByMachine.get(code), Boolean(order));
+  if (!base.eligible) return base;
+  const pending = machtileStationCmd.pending[code];
+  if (pending && !machtileStationCmdUnlocked(pending)) {
+    return { eligible: false, checked: false, reason: pending.unconfirmed ? "等待確認（可用同一筆重送）" : "指令等待中" };
+  }
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machtileStationCmdCore?.eligibility({
+    flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
+  });
+  const reasons = { multi_station_unsupported: "缺少 ManufactureII Id", unavailable: "開停工服務目前不可用", not_operator: "此帳號不可操作", flag_off: "此機台未開放" };
+  return gate?.ok ? base : { eligible: false, checked: false, reason: reasons[gate?.reason] || "工單資料不完整" };
+}
+
+function machtileBatchResetCommandSelection() {
+  const group = machtileBatchCore()?.groupFor(machtileBatchState.group);
+  const selected = new Set();
+  group?.machines.forEach((code) => {
+    if (machtileBatchCommandChoice(code).checked) selected.add(code);
+  });
+  machtileBatchState.commandSelected = selected;
+  machtileBatchState.commandResults = new Map();
+}
+
+async function machtileBatchSendStationCommand(code, type, retryPending = null) {
+  const core = machtileStationCmdCore;
+  const order = machtileBatchSelectedOrder(code);
+  const existing = retryPending || machtileStationCmd.pending[code] || null;
+  if (retryPending) {
+    if (!existing.unconfirmed || existing.commandType !== type) throw new Error("這筆指令不能重送");
+  } else {
+    const choice = machtileBatchCommandChoice(code, type);
+    if (!choice.eligible) throw new Error(choice.reason);
+  }
+  const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
+  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+  if (!fresh.ok) throw new Error(fresh.text);
+  const uuid = retryPending ? retryPending.commandUuid : core.newUuid(window.crypto);
+  const startedAt = retryPending ? retryPending.startedAt : Date.now();
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid: uuid, commandType: type, machineCode: code,
+    fields: { orderNo: order.id, step: order.stationStep, partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null },
+    recordFields: { orderNo: order.id, step: order.stationStep, partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null,
+      partName: fresh.partName, operationName: fresh.operationName },
+    startedAt, previousRecord: existing, attemptNumber: retryPending ? 2 : 1,
+    validateRow: (row) => machtileStationCmdRowIsThis(row, uuid),
+  });
+  if (!result.ok) throw result.error;
+  return { payload: result.payload, view: result.view };
+}
+
+async function machtileBatchRetryStationCommand(code) {
+  if (machtileBatchState.commandSubmitting) return;
+  const pending = machtileStationCmd.pending[code];
+  if (!pending?.unconfirmed) return;
+  machtileBatchState.commandSubmitting = true;
+  machtileBatchState.commandResults.set(code, { ok: false, text: "使用同一筆指令重送中…" });
+  machtileRenderBatchReport();
+  try {
+    const { view } = await machtileBatchSendStationCommand(code, pending.commandType, pending);
+    machtileBatchState.commandResults.set(code, { ok: true, text: `成功：${view.title}${view.text ? `（${view.text}）` : ""}` });
+  } catch (error) {
+    const info = machtileStationCmdCore.submitErrorText(error);
+    machtileBatchState.commandResults.set(code, { ok: false, text: `失敗：${info.text || error.message || "未知錯誤"}` });
+  } finally {
+    machtileBatchState.commandSubmitting = false;
+    machtileRenderBatchReport();
+  }
+}
+
+async function machtileSubmitBatchStationCommands() {
+  const group = machtileBatchCore()?.groupFor(machtileBatchState.group);
+  if (!group || machtileBatchState.commandSubmitting) return;
+  const type = machtileBatchState.commandType;
+  const codes = group.machines.filter((code) => machtileBatchState.commandSelected.has(code) && machtileBatchCommandChoice(code, type).eligible);
+  if (!codes.length) { showToast(machtileTranslate("batch_command_none")); return; }
+  if (!window.confirm(`${type === "start" ? "批次開工" : "批次停工"}：${codes.join("、")}`)) return;
+  machtileBatchState.commandSubmitting = true;
+  machtileBatchState.commandResults = new Map();
+  machtileRenderBatchReport();
+  for (const code of codes) {
+    try {
+      const { view } = await machtileBatchSendStationCommand(code, type);
+      machtileBatchState.commandResults.set(code, { ok: true, text: `成功：${view.title}${view.text ? `（${view.text}）` : ""}` });
+    } catch (error) {
+      const info = machtileStationCmdCore.submitErrorText(error);
+      machtileBatchState.commandResults.set(code, { ok: false, text: `失敗：${info.text || error.message || "未知錯誤"}` });
+    }
+    machtileRenderBatchReport();
+  }
+  machtileBatchState.commandSubmitting = false;
+  machtileRenderBatchReport();
+}
+
+function machtileBatchCommandPanel(group, busy) {
+  if (state.source !== "supabase") return "";
+  const type = machtileBatchState.commandType;
+  const rows = group.machines.filter((code) => Boolean(machtileBatchSelectedOrder(code))).map((code) => {
+    const choice = machtileBatchCommandChoice(code, type);
+    const result = machtileBatchState.commandResults.get(code);
+    const checked = choice.eligible && machtileBatchState.commandSelected.has(code);
+    const pending = machtileStationCmd.pending[code];
+    const retry = pending?.unconfirmed ? `<button type="button" data-batch-command-retry="${code}"${busy ? " disabled" : ""}>用同一筆重送</button>` : "";
+    return `<label class="batch-command-machine"><input type="checkbox" data-batch-command-select="${code}"${checked ? " checked" : ""}${!choice.eligible || busy ? " disabled" : ""}><strong>${code}</strong><span>${choice.reason || "可操作"}</span>${retry}${result ? `<em class="${result.ok ? "is-ok" : "is-error"}" data-batch-command-result="${code}">${escapeHtml(result.text)}</em>` : ""}</label>`;
+  }).join("");
+  const count = [...machtileBatchState.commandSelected].filter((code) => machtileBatchCommandChoice(code, type).eligible).length;
+  return `<section class="batch-command-panel" data-batch-command-panel><h3>${escapeHtml(machtileTranslate("batch_command_title"))}</h3>
+    <div class="batch-command-types"><button type="button" data-batch-command-type="start" class="${type === "start" ? "is-active" : ""}"${busy ? " disabled" : ""}>${escapeHtml(machtileTranslate("batch_start"))}</button><button type="button" data-batch-command-type="stop" class="${type === "stop" ? "is-active" : ""}"${busy ? " disabled" : ""}>${escapeHtml(machtileTranslate("batch_stop"))}</button></div>
+    <div class="batch-command-machines">${rows || `<p>${escapeHtml(machtileTranslate("batch_command_no_orders"))}</p>`}</div>
+    <button type="button" class="primary-action" data-batch-command-submit${busy || !count ? " disabled" : ""}>${machtileBatchState.commandSubmitting ? escapeHtml(machtileTranslate("batch_command_sending")) : `${type === "start" ? escapeHtml(machtileTranslate("batch_start")) : escapeHtml(machtileTranslate("batch_stop"))}（${count} 台）`}</button></section>`;
 }
 
 function machtileBatchStartInfo(order, endedAtIso, mode) {
@@ -22286,7 +22434,7 @@ function machtileRenderBatchReport() {
   if (!core || !group || !holder) return;
   const nowIso = new Date().toISOString();
   const demo = state.source !== "supabase";
-  const busy = machtileBatchState.submitting;
+  const busy = machtileBatchState.submitting || machtileBatchState.commandSubmitting;
   const isDailyStart = machtileBatchState.mode === "dailyStart";
   const tone = group.key === "mill" ? "is-mill" : "is-lathe";
   const userOptions = (selected) => [
@@ -22397,6 +22545,7 @@ function machtileRenderBatchReport() {
     ${!demo && !machtileBatchState.loading && !machtileBatchState.users.length ? `<p class="batch-notice is-error" role="alert">還沒有任何人員對照到舊 MES 工號，請管理者先補上工號對照。</p>` : ""}
     <p class="batch-hint">${modeHint}</p>
     ${machtileBatchState.formError ? `<p class="batch-notice is-error" role="alert">${escapeHtml(machtileBatchState.formError)}</p>` : ""}
+    ${machtileBatchCommandPanel(group, busy)}
     <div class="batch-rows">${rowsHtml}</div>
     <div class="batch-submit-bar">
       <button type="button" class="primary-action batch-submit" data-batch-submit${busy || !sendable ? " disabled" : ""}>${busy ? "送出中…" : escapeHtml(machtileBatchSubmitText(sendable))}</button>
@@ -22566,6 +22715,16 @@ async function machtileSubmitBatchReport() {
 }
 
 function machtileHandleBatchClick(event) {
+  const commandRetry = event.target.closest("[data-batch-command-retry]");
+  if (commandRetry) { machtileBatchRetryStationCommand(commandRetry.dataset.batchCommandRetry); return true; }
+  const commandType = event.target.closest("[data-batch-command-type]");
+  if (commandType && !machtileBatchState.commandSubmitting) {
+    machtileBatchState.commandType = commandType.dataset.batchCommandType;
+    machtileBatchResetCommandSelection();
+    machtileRenderBatchReport();
+    return true;
+  }
+  if (event.target.closest("[data-batch-command-submit]")) { machtileSubmitBatchStationCommands(); return true; }
   const previewButton = event.target.closest("[data-station-report-preview]");
   if (previewButton) { machtileStationReportSubmitPreview(previewButton.dataset.stationReportPreview); return true; }
   const confirmButton = event.target.closest("[data-station-report-confirm]");
@@ -22612,6 +22771,12 @@ function machtileBatchRefreshSubmitButton() {
 function machtileHandleBatchInput(event) {
   const t = event.target;
   if (!(t instanceof HTMLElement) || !t.closest("[data-batch-root], #singleStationReportPanel")) return false;
+  if (t.hasAttribute("data-batch-command-select")) {
+    if (t.checked) machtileBatchState.commandSelected.add(t.dataset.batchCommandSelect);
+    else machtileBatchState.commandSelected.delete(t.dataset.batchCommandSelect);
+    machtileRenderBatchReport();
+    return true;
+  }
   if (t.hasAttribute("data-batch-operator-all")) {
     if (event.type !== "change" || !t.value) return true;
     const core = machtileBatchCore();
