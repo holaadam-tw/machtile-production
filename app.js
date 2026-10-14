@@ -422,6 +422,7 @@ const state = {
   machines: [],
   machineMasters: [],
   source: "mock",
+  inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
 };
 
 const mockOrders = [
@@ -8362,6 +8363,7 @@ function updateNoonAdvice() {
 }
 
 function setReportDefaults(order) {
+  machtileSyncLegacyAfternoonCheck(order);
   const profile = order ? getProgramProfile(order) : null;
   const totalQty = Number(order?.total || 0);
   const doneQty = Number(order?.done || 0);
@@ -8388,6 +8390,16 @@ function setReportDefaults(order) {
   updateReportCounterPreview();
 }
 
+function machtileUsesLegacyAfternoonCheck(order) {
+  return !window.MachTileInspectionLinkCore?.isAllowed?.(order?.machine || "", config.inspectionLinkMachines);
+}
+
+function machtileSyncLegacyAfternoonCheck(order) {
+  const showLegacy = Boolean(order && machtileUsesLegacyAfternoonCheck(order));
+  $$('[data-legacy-afternoon-check]').forEach((node) => { node.hidden = !showLegacy; });
+  if (!showLegacy && activeReportType === "afternoonCheck") activeReportType = "workStart";
+}
+
 // 單台報工選到「已報良品 ≥ 訂單數量」的單：只提醒，不擋報工（owner 2026-10-02）
 function machtileRenderReportOverQty(order) {
   const box = $("#reportOverQty");
@@ -8399,7 +8411,8 @@ function machtileRenderReportOverQty(order) {
 }
 
 function setReportType(type) {
-  activeReportType = reportTypeMeta[type] ? type : "workStart";
+  const requested = type === "afternoonCheck" && !machtileUsesLegacyAfternoonCheck(selectedOrder) ? "workStart" : type;
+  activeReportType = reportTypeMeta[requested] ? requested : "workStart";
   const meta = reportTypeMeta[activeReportType];
   $$(".report-type-tab[data-report-type]").forEach((button) => {
     button.classList.toggle("active", button.dataset.reportType === activeReportType);
@@ -8467,7 +8480,7 @@ function validateReportForm(type) {
     const result = reportCounterCalculation();
     if (!result.valid) return result.message;
   }
-  if (type === "afternoonCheck") {
+  if (type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder)) {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
     if (!checkedRadio("pmAbnormal")) return "請確認是否異常。";
     if (selectedRadioValue("pmAbnormal") === "yes" && !$("#pmAbnormalNote")?.value.trim()) return "有異常時請填寫異常備註。";
@@ -8493,7 +8506,7 @@ function buildReportRemark(type, remark) {
   if (type === "dailyStart") {
     parts.push(`機台已加工數量 ${$("#machineQty")?.value || 0}`);
   }
-  if (type === "afternoonCheck") {
+  if (type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder)) {
     parts.push(selectedRadioValue("pmAbnormal") === "yes" ? "下午檢查有異常" : "下午檢查正常");
     const plan = $("#overtimePlan")?.value;
     if (plan) parts.push(`加班安排 ${plan}`);
@@ -8528,7 +8541,9 @@ function buildReportPayload(type) {
     defect_qty: Number($("#defectQty")?.value || 0),
     has_program_upload: hasFile("programUpload"),
     overtime_plan: $("#overtimePlan")?.value || selectedRadioValue("finishOvertime") || "",
-    pm_abnormal: selectedRadioValue("pmAbnormal") || "",
+    ...(type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder) ? {
+      pm_abnormal: selectedRadioValue("pmAbnormal") || "",
+    } : {}),
     abnormal_type: $("#abnormalType")?.value || "",
   };
 }
@@ -10265,6 +10280,7 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
   state.source = "supabase";
   await machtileLoadAssignedCardProcesses();
   await machtileLoadAssignedDispatchPoolStatuses();
+  await machtileLoadInspectionStatuses();
   // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
   await machtileLoadCardLegacyProgress();
   await machtileLoadCardMachineTimes();
@@ -10704,6 +10720,7 @@ function loadMockData() {
   state.workOrders = mockOrders.map((order) => ({ ...order }));
   state.machineMasters = [];
   state.source = "mock";
+  state.inspectionStatus = { loadState: "idle", latestByTuple: new Map() };
   machtileResetScheduleContracts();
   machtileAttentionState.status = "idle";
   machtileAttentionState.error = "";
@@ -10735,6 +10752,9 @@ function alertCategories(order) {
   if (status === "aiRisk") categories.add("可能延誤");
   if (status === "abnormal" || order.workStatus === "abnormal" || order.processStatus === "abnormal") categories.add("異常");
   if (status === "inspection" || order.workStatus === "waiting_inspection" || order.processStatus === "waiting_inspection") categories.add("待品檢");
+  const inspectionStatus = machtileInspectionStatusForOrder(order);
+  if (inspectionStatus.kind === "fail") categories.add("異常");
+  if (inspectionStatus.kind === "missing-attention") categories.add("待品檢");
   if (dueInfo(order).diffDays === 0) categories.add("今日到期");
   if (status === "stale" || String(order.lastReport || "").includes("尚未")) categories.add("未回報");
   return categories;
@@ -14614,7 +14634,7 @@ function renderMachineCard(machine) {
         </section>
       </details>
 
-      ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
+      ${machtileInspectionStatusMarkup(machine, order)}${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
           ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}
@@ -14623,6 +14643,80 @@ function renderMachineCard(machine) {
       </footer>
     </article>
   `;
+}
+
+function machtileInspectionMachine(order) {
+  const machineName = String(order?.machine || "").trim().toUpperCase();
+  return [...(state.machineMasters || []), ...(state.machines || [])]
+    .find((machine) => [machine.code, machine.name].some((value) => String(value || "").trim().toUpperCase() === machineName)) || null;
+}
+
+function machtileInspectionTuple(order, machine = machtileInspectionMachine(order)) {
+  return { workOrderId: order?.workOrderId, processId: order?.processId, machineId: machine?.id || machine?.dbRowId };
+}
+
+function machtileInspectionEnabled(machine) {
+  return Boolean(window.MachTileInspectionLinkCore?.isAllowed?.(machine?.code || machine?.name || "", config.inspectionLinkMachines));
+}
+
+async function machtileLoadInspectionStatuses() {
+  const core = window.MachTileInspectionStatusCore;
+  const linkCore = window.MachTileInspectionLinkCore;
+  state.inspectionStatus = { loadState: "loading", latestByTuple: new Map() };
+  if (!core || !linkCore) {
+    state.inspectionStatus.loadState = "error";
+    return;
+  }
+  const tuples = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].map((order) => {
+    const machine = machtileInspectionMachine(order);
+    return machine && machtileInspectionEnabled(machine) ? machtileInspectionTuple(order, machine) : null;
+  }).filter(Boolean);
+  const paths = core.queryPaths(tuples, core.taipeiDate());
+  if (!paths.length) {
+    state.inspectionStatus = { loadState: "ready", latestByTuple: new Map() };
+    return;
+  }
+  try {
+    const batches = await Promise.all(paths.map((path) => supabaseFetch(path)));
+    const rows = batches.flatMap((batch) => Array.isArray(batch) ? batch : []);
+    state.inspectionStatus = { loadState: "ready", latestByTuple: core.latestByTuple(rows) };
+  } catch (error) {
+    console.warn("process_inspections batch read unavailable", error);
+    state.inspectionStatus = { loadState: "error", latestByTuple: new Map() };
+  }
+}
+
+function machtileInspectionStatusForOrder(order, machine = machtileInspectionMachine(order), now = new Date()) {
+  const core = window.MachTileInspectionStatusCore;
+  if (!core) return { kind: "hidden", label: "", attention: false };
+  const enabled = Boolean(order && machine && machtileInspectionEnabled(machine));
+  const tuple = machtileInspectionTuple(order, machine);
+  return core.cardStatus({
+    enabled,
+    loadState: state.inspectionStatus?.loadState || "idle",
+    latest: state.inspectionStatus?.latestByTuple?.get(core.tupleKey(tuple)) || null,
+    now,
+  });
+}
+
+function machtileInspectionStatusMarkup(machine, order) {
+  const status = machtileInspectionStatusForOrder(order, machine);
+  if (status.kind === "hidden") return "";
+  const time = status.label.match(/(\d{2}:\d{2})$/)?.[1] || "";
+  const key = {
+    loading: "inspection_status_loading",
+    error: "inspection_status_error",
+    missing: "inspection_status_missing",
+    "missing-attention": "inspection_status_missing",
+    skipped: "inspection_status_skipped",
+    fail: "inspection_status_fail",
+    pass: "inspection_status_pass",
+  }[status.kind];
+  const label = key ? machtileTranslate(key, { time }) : status.label;
+  const content = `<span>${escapeHtml(label)}</span>`;
+  return status.kind === "fail"
+    ? `<button type="button" class="machine-inspection-status is-${status.kind}" data-no-detail data-view="alerts" data-alert-filter="異常" data-alert-order-id="${escapeHtml(order.id)}" aria-label="${escapeHtml(`${label}，${machtileTranslate("inspection_status_open_abnormal")}`)}">${content}</button>`
+    : `<div class="machine-inspection-status is-${status.kind}">${content}</div>`;
 }
 
 function machtileInspectionLinkMarkup(machine, order) {
@@ -14649,7 +14743,7 @@ function alertOrders() {
     .filter((order) => {
       const categories = alertCategories(order);
       const categoryMatches = activeAlertFilter === "全部"
-        ? categories.size > 0 && deriveOrderStatus(order) !== "normal"
+        ? machtileOrderIncludedInAllAlerts(order, categories)
         : categories.has(activeAlertFilter);
       return categoryMatches && machtileAttentionMatchesWorkflow(order);
     })
@@ -14659,12 +14753,18 @@ function alertOrders() {
     });
 }
 
+function machtileOrderIncludedInAllAlerts(order, categories = alertCategories(order)) {
+  if (categories.size === 0) return false;
+  const inspectionKind = machtileInspectionStatusForOrder(order).kind;
+  return deriveOrderStatus(order) !== "normal" || inspectionKind === "missing-attention" || inspectionKind === "fail";
+}
+
 function renderAlerts() {
   const counts = Object.fromEntries(alertFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
     if (!machtileAttentionMatchesWorkflow(order)) return;
     const categories = alertCategories(order);
-    if (categories.size > 0 && deriveOrderStatus(order) !== "normal") counts["全部"] += 1;
+    if (machtileOrderIncludedInAllAlerts(order, categories)) counts["全部"] += 1;
     categories.forEach((category) => {
       if (category in counts) counts[category] += 1;
     });
@@ -14678,7 +14778,7 @@ function renderAlerts() {
 
   const workflowCounts = Object.fromEntries(attentionWorkflowFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
-    if (alertCategories(order).size === 0 || deriveOrderStatus(order) === "normal") return;
+    if (!machtileOrderIncludedInAllAlerts(order)) return;
     attentionWorkflowFilters.forEach((filter) => {
       if (machtileAttentionMatchesWorkflow(order, filter)) workflowCounts[filter] += 1;
     });
@@ -14767,7 +14867,7 @@ function renderAlertCard(order) {
   const selected = machtileAttentionState.selectedKeys.has(sourceKey);
 
   return `
-    <article class="alert-card ${status.className} ${caseState.status === "closed" ? "is-attention-closed" : ""}">
+    <article class="alert-card ${status.className} ${caseState.status === "closed" ? "is-attention-closed" : ""}" data-alert-card-order="${escapeHtml(order.id)}">
       <header class="alert-card-header">
         <div class="alert-title-group">
           <label class="attention-select-control" title="選取後可批次指派或結案">
@@ -23118,7 +23218,17 @@ function bindEvents() {
     if (machtileHandleBatchClick(event)) return;
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
+      if (viewButton.dataset.alertFilter) {
+        activeAlertFilter = viewButton.dataset.alertFilter;
+        activeAttentionStatus = "待處理";
+        renderAlerts();
+      }
       switchView(viewButton.dataset.view);
+      if (viewButton.dataset.alertOrderId) {
+        const target = [...document.querySelectorAll("[data-alert-card-order]")]
+          .find((card) => card.dataset.alertCardOrder === viewButton.dataset.alertOrderId);
+        target?.scrollIntoView({ block: "center" });
+      }
       return;
     }
 
@@ -24596,6 +24706,7 @@ async function machtileTodayTick() {
   try {
     renderStats();
     renderWorkOrders();
+    renderAlerts();
   } catch (error) {
     console.warn("today tiles re-render failed", error);
   }

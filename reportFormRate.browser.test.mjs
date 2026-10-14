@@ -55,7 +55,7 @@ await context.route("**/*", async route => {
     return json(url.pathname.startsWith("/rest/v1/rpc/") ? null : []);
   }
   if (url.origin === new URL(base).origin) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${fake}",supabaseAnonKey:"synthetic",tenantId:"${tenant}",useSupabase:true,useTenantHeaderAuth:true,enableStationReport:false,disableServiceWorker:true,oauthEnabled:false};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${fake}",supabaseAnonKey:"synthetic",tenantId:"${tenant}",useSupabase:true,useTenantHeaderAuth:true,enableStationReport:false,disableServiceWorker:true,oauthEnabled:false,inspectionLinkMachines:["A01"],inspectionLinkBaseUrl:"https://holaadam-tw.github.io/I-Reporter/"};` });
     return route.continue();
   }
   external.push(url.href);
@@ -69,9 +69,35 @@ await page.goto(base, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator("#reportSheet.is-open").waitFor();
-const tabs = await page.locator("#reportForm .report-type-tab").allTextContents();
-check(JSON.stringify(tabs.map(v => v.trim())) === JSON.stringify(["首次開工", "報工", "收工/完工", "異常回報"]), "報工表單只有四分頁且名稱正確");
-check(await page.locator('[data-report-type="dailyStart"], [data-report-type="afternoonCheck"]').count() === 0, "今日開工與下午 4:30 入口已移除");
+const tabs = await page.locator("#reportForm .report-type-tab:visible").allTextContents();
+check(tabs.length === 4 && !tabs.some((value) => value.includes("4:30")), "旗標開啟時報工表單只有四個非 4:30 分頁");
+check(await page.locator('[data-report-type="dailyStart"], [data-report-type="afternoonCheck"]:visible').count() === 0, "旗標開啟時下午 4:30 入口已移除");
+const flagModes = await page.evaluate(() => {
+  config.inspectionLinkMachines = [];
+  setReportDefaults(selectedOrder);
+  const legacyVisible = !document.querySelector('[data-report-type="afternoonCheck"]').hidden;
+  setReportType("afternoonCheck");
+  ["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"].forEach((id) => { document.getElementById(id).checked = true; });
+  document.querySelector('input[name="pmAbnormal"][value="no"]').checked = true;
+  const legacyValidation = validateReportForm("afternoonCheck");
+  const legacyPayload = buildReportPayload("afternoonCheck");
+  const historical = machtileUnifiedEventRow({ event_type: "afternoonCheck", event_at: "2026-10-13T08:30:00Z", written_at: "2026-10-13T08:30:01Z" }, new Map());
+  config.inspectionLinkMachines = ["A01"];
+  setReportDefaults(selectedOrder);
+  setReportType("afternoonCheck");
+  return {
+    legacyVisible,
+    legacyValidation,
+    legacyPayload,
+    historicalType: historical.recordType,
+    newHidden: document.querySelector('[data-report-type="afternoonCheck"]').hidden,
+    activeType: activeReportType,
+  };
+});
+check(flagModes.legacyVisible && flagModes.legacyValidation === "" && flagModes.legacyPayload.pm_abnormal === "no", "旗標關閉時僅保留舊 4:30 fallback");
+check(flagModes.newHidden && flagModes.activeType === "workStart", "旗標開啟時舊 4:30 UI 與狀態不可進入");
+check(flagModes.historicalType === "下午盤點", "afternoonCheck 歷史資料仍可讀取");
+await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
 await page.locator('[data-report-type="noon"]').click();
 await page.waitForFunction(() => document.querySelector("#reportCounterPreview")?.textContent.includes("上次 100"));
 await page.locator("#completedQty").fill("130");
