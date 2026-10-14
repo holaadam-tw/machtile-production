@@ -14588,8 +14588,7 @@ function renderMachineCard(machine) {
         </section>
       </details>
 
-      ${machtileInspectionStatusMarkup(machine, order)}
-      ${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
+      ${machtileInspectionStatusMarkup(machine, order)}${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
           ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}
