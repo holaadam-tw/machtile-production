@@ -9,6 +9,10 @@ const mod = await import(process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(
 const { chromium } = mod.default || mod;
 let pass = 0;
 const ok = (value, label) => { if (!value) throw new Error(label); pass += 1; console.log(`PASS ${label}`); };
+const appSource = await readFile(path.join(root, "app.js"), "utf8");
+const sharedCalls = appSource.match(/machtileStationCmdRunSubmission\s*\(\s*\{/g) || [];
+ok(sharedCalls.length === 2 && (appSource.match(/rpc\/\$\{core\.SUBMIT_RPC\}/g) || []).length === 1,
+  "single-machine and batch paths share one submit lifecycle helper");
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, "http://localhost").pathname === "/" ? "/index.html" : new URL(req.url, "http://localhost").pathname;
   try { const body = await readFile(path.join(root, decodeURIComponent(pathname))); res.writeHead(200); res.end(body); }

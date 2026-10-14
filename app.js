@@ -14201,18 +14201,69 @@ function machtileStationCmdCanSubmit(sheet) {
   return true;
 }
 
-function machtileStationCmdRecordFor(sheet, extra) {
-  return machtileStationCmdCore.pendingRecord({
-    commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
-    orderNo: sheet.fields.orderNo, step: sheet.fields.step, partNo: sheet.fields.partNo, manufactureIiId: sheet.fields.manufactureIiId,
-    partName: sheet.model.partName, operationName: sheet.model.operationName,
-    startedAt: machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid ? machtileStationCmd.pending[sheet.code].startedAt : Date.now(),
-    ...extra,
+// 單機與批次共用的可重入送出生命週期。呼叫端只提供指令資料及 UI／附加資料回呼；
+// submit、timeout、pending、poll、finish 都只在這裡編排，避免兩條路徑的重試規則漂移。
+async function machtileStationCmdRunSubmission(options) {
+  const core = machtileStationCmdCore;
+  const {
+    commandUuid, commandType, machineCode, fields, recordFields, startedAt,
+    previousRecord = null, attemptNumber = 1, validateRow = null,
+    onError = null, onAccepted = null, afterRecord = null,
+  } = options;
+  const payload = core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = core.submitErrorText(error);
+    const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
+    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload };
+    if (info.missing) machtileStationCmd.availability = "missing";
+    if (info.retry) {
+      machtileStationCmd.pending[machineCode] = core.pendingRecord({
+        commandUuid, commandType, machineCode, ...recordFields, startedAt,
+        unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
+      });
+      machtileStationCmdSavePending();
+      machtileStationCmdPoll(machineCode);
+    } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+      delete machtileStationCmd.pending[machineCode];
+      machtileStationCmdSavePending();
+    }
+    machtileStationCmdRerender();
+    return { ok: false, error, info, payload };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (validateRow && !validateRow(row)) {
+    return { ok: false, error: new Error("伺服器沒有回傳這筆指令，結果未確認"), payload, row };
+  }
+  const acceptedResult = onAccepted ? await onAccepted({ row, previousRecord }) : null;
+  const now = Date.now();
+  const offset = attemptNumber === 1 && row
+    ? core.serverOffset(row.requested_at, now)
+    : (previousRecord?.commandUuid === commandUuid ? previousRecord.serverOffset : null);
+  const record = core.pendingRecord({
+    commandUuid, commandType, machineCode, ...recordFields, startedAt,
+    unconfirmed: false, serverOffset: offset, ...(acceptedResult?.recordExtra || {}),
   });
+  const view = core.statusView(row || { status: "pending" }, commandType, core.ageForHint(record, row?.requested_at, now));
+  record.view = view;
+  record.lastStatus = String(row?.status || "pending");
+  machtileStationCmd.pending[machineCode] = record;
+  delete machtileStationCmd.lastResult[machineCode];
+  machtileStationCmdSavePending();
+  if (afterRecord) await afterRecord({ row, record, view });
+  if (view.terminal) machtileStationCmdFinish(machineCode, view);
+  else machtileStationCmdPoll(machineCode);
+  machtileStationCmdRerender();
+  return { ok: true, payload, row, record, view };
 }
 
 async function machtileStationCmdSubmit() {
-  const core = machtileStationCmdCore;
   const sheet = machtileStationCmd.sheet;
   if (!machtileStationCmdCanSubmit(sheet)) return;
   const existing = machtileStationCmd.pending[sheet.code];
@@ -14220,63 +14271,36 @@ async function machtileStationCmdSubmit() {
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
   const startedAt = existing?.commandUuid === sheet.uuid ? existing.startedAt : Date.now();
-  let row = null;
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
-  try {
-    const payload = core.submitPayload({ commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code, ...sheet.fields });
-    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
-    row = Array.isArray(result) ? result[0] : result;
-  } catch (error) {
-    if (timer) clearTimeout(timer);
-    const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
-    machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
-    if (machtileStationCmd.sheet !== sheet) return;
-    const info = core.submitErrorText(error);
-    if (info.missing) machtileStationCmd.availability = "missing";
-    sheet.phase = "sendError";
-    sheet.errorText = info.text;
-    sheet.canRetry = info.retry;
-    if (info.retry) {
-      // 不知道有沒有送到：記下來（重新整理後也記得），一面查這個 uuid，一面讓他立刻用同一個 uuid 重送
-      // 今日開工數量跟著這筆存：之後查到指令被接受才寫（作業員關掉確認卡、重新整理也一樣）
-      machtileStationCmd.pending[sheet.code] = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: true, serverOffset: null, dailyStart: carried }), startedAt };
-      machtileStationCmdSavePending();
-      machtileStationCmdPoll(sheet.code);
-    } else if (machtileStationCmd.pending[sheet.code]?.commandUuid === sheet.uuid) {
-      // 伺服器明確拒絕了這次請求 → 這個 uuid 沒有建成指令，解鎖
-      delete machtileStationCmd.pending[sheet.code];
-      machtileStationCmdSavePending();
-    }
-    machtileStationCmdRenderSheet();
-    machtileStationCmdRerender();
-    return;
-  }
-  if (timer) clearTimeout(timer);
-  // 上一次送出網路斷時存的數量（從卡片「用同一筆重送」）；確認卡這次自己有填 → 由確認卡寫，存的那份丟掉
-  const carriedDs = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
-  const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
-  machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
-  const now = Date.now();
-  // 伺服器時鐘差：只有第一次送出（新建的列）才準；重送拿到的可能是舊列 → 不算
-  const offset = sheet.attempts === 1 && row ? core.serverOffset(row.requested_at, now) : (existing?.commandUuid === sheet.uuid ? existing.serverOffset : null);
-  const record = { ...machtileStationCmdRecordFor(sheet, { unconfirmed: false, serverOffset: offset }), startedAt };
-  machtileStationCmd.pending[sheet.code] = record;
-  delete machtileStationCmd.lastResult[sheet.code];
-  const view = core.statusView(row || { status: "pending" }, sheet.type, core.ageForHint(record, row?.requested_at, now));
-  record.view = view;
-  record.lastStatus = String(row?.status || "pending");
-  if (carriedDs && !sheetAwaitsAck) record.dailyStart = carriedDs;
-  machtileStationCmdSavePending();
-  if (machtileStationCmd.sheet === sheet) {
-    sheet.phase = "status";
-    sheet.view = view;
-    machtileStationCmdRenderSheet();
-  }
-  if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
-  if (view.terminal) machtileStationCmdFinish(sheet.code, view);
-  else machtileStationCmdPoll(sheet.code);
-  machtileStationCmdRerender();
+  await machtileStationCmdRunSubmission({
+    commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
+    fields: sheet.fields,
+    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName },
+    startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
+    onError: ({ info }) => {
+      const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
+      machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
+      if (machtileStationCmd.sheet !== sheet) return { cancel: true };
+      sheet.phase = "sendError";
+      sheet.errorText = info.text;
+      sheet.canRetry = info.retry;
+      machtileStationCmdRenderSheet();
+      return { recordExtra: { dailyStart: carried } };
+    },
+    onAccepted: ({ row }) => {
+      const carried = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
+      const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
+      machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
+      return { recordExtra: carried && !sheetAwaitsAck ? { dailyStart: carried } : {} };
+    },
+    afterRecord: ({ row, record, view }) => {
+      if (machtileStationCmd.sheet === sheet) {
+        sheet.phase = "status";
+        sheet.view = view;
+        machtileStationCmdRenderSheet();
+      }
+      if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
+    },
+  });
 }
 
 // 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
@@ -22265,45 +22289,16 @@ async function machtileBatchSendStationCommand(code, type, retryPending = null) 
   if (!fresh.ok) throw new Error(fresh.text);
   const uuid = retryPending ? retryPending.commandUuid : core.newUuid(window.crypto);
   const startedAt = retryPending ? retryPending.startedAt : Date.now();
-  const fields = { commandUuid: uuid, commandType: type, machineCode: code, orderNo: order.id, step: order.stationStep,
-    partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null };
-  const payload = core.submitPayload(fields);
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
-  let result;
-  try {
-    result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
-  } catch (error) {
-    if (timer) clearTimeout(timer);
-    const info = core.submitErrorText(error);
-    if (info.missing) machtileStationCmd.availability = "missing";
-    if (info.retry) {
-      machtileStationCmd.pending[code] = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName,
-        startedAt, unconfirmed: true, serverOffset: null });
-      machtileStationCmdSavePending();
-      machtileStationCmdPoll(code);
-      machtileStationCmdRerender();
-    } else if (machtileStationCmd.pending[code]?.commandUuid === uuid) {
-      delete machtileStationCmd.pending[code];
-      machtileStationCmdSavePending();
-    }
-    throw error;
-  }
-  if (timer) clearTimeout(timer);
-  const row = Array.isArray(result) ? result[0] : result;
-  if (!machtileStationCmdRowIsThis(row, uuid)) throw new Error("伺服器沒有回傳這筆指令，結果未確認");
-  const now = Date.now();
-  const record = core.pendingRecord({ ...fields, partName: fresh.partName, operationName: fresh.operationName, startedAt,
-    unconfirmed: false, serverOffset: retryPending ? retryPending.serverOffset : core.serverOffset(row?.requested_at, now) });
-  const view = core.statusView(row || { status: "pending" }, type, core.ageForHint(record, row?.requested_at, now));
-  record.view = view;
-  record.lastStatus = String(row?.status || "pending");
-  machtileStationCmd.pending[code] = record;
-  delete machtileStationCmd.lastResult[code];
-  machtileStationCmdSavePending();
-  if (view.terminal) machtileStationCmdFinish(code, view); else machtileStationCmdPoll(code);
-  machtileStationCmdRerender();
-  return { payload, view };
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid: uuid, commandType: type, machineCode: code,
+    fields: { orderNo: order.id, step: order.stationStep, partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null },
+    recordFields: { orderNo: order.id, step: order.stationStep, partNo: fresh.partNo, manufactureIiId: order.manufactureIiId || null,
+      partName: fresh.partName, operationName: fresh.operationName },
+    startedAt, previousRecord: existing, attemptNumber: retryPending ? 2 : 1,
+    validateRow: (row) => machtileStationCmdRowIsThis(row, uuid),
+  });
+  if (!result.ok) throw result.error;
+  return { payload: result.payload, view: result.view };
 }
 
 async function machtileBatchRetryStationCommand(code) {
