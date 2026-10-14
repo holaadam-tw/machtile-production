@@ -31,7 +31,7 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true;
+let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -79,6 +79,9 @@ async function openApp(role, width) {
       }
       if (req.method() !== 'GET') { mutations.push(p); return json(403, { message: 'fixture: unexpected pool write' }); }
       poolQueries.push(u.search);
+      if ((u.searchParams.get('select') || '') === 'source_key,status') {
+        return json(200, assignedPoolStatus ? [{ source_key: order.external_ref, status: assignedPoolStatus }] : []);
+      }
       if (poolMode === 'missing') return json(404, { code: 'PGRST205', message: "Could not find the table 'public.dispatch_pool_items' in the schema cache" });
       if (poolMode === 'error') return json(503, { message: 'fixture pool unavailable' });
       if (poolMode === 'empty') return json(200, []);
@@ -114,11 +117,13 @@ const poolKeys = page => page.locator('#machtileCardSelection [data-card-selecti
 try {
   ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
   ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-b01b06-r1'), 'rollout config cache key is bumped');
+  ok(['app.js', 'i18n.js', 'styles.css'].every(asset => rolloutIndex.includes(`${asset}?v=20261014-hide-return-r1`)), 'return-state app, translations, and styles cache keys are bumped');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
     const { ctx, page } = await openApp('planner', width);
-    ok(poolQueries.length >= 1 && poolQueries.every(q => q.includes('status=eq.waiting') && q.includes('order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast')), `${width}: reads waiting pool rows in owner order`);
+    const waitingPoolQueries = poolQueries.filter(q => q.includes('status=eq.waiting'));
+    ok(waitingPoolQueries.length >= 1 && waitingPoolQueries.every(q => q.includes('order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast')), `${width}: reads waiting pool rows in owner order`);
     ok(await page.locator('[data-card-pool-open]').count() === 0, `${width}: planner keeps 選擇工單 (no operator pool entry)`);
     await page.locator('[data-card-select-open="A01"]').click();
     ok(await page.locator('#machtileCardSelection [data-card-selection-assigned]').count() === 1 && await page.locator('#machtileCardSelection [data-card-selection-unassigned]').count() === 1, `${width}: existing assigned / unassigned sections unchanged`);
@@ -218,6 +223,38 @@ try {
     await ctx.close();
   }
   exposeAssignedOrder = true;
+  // Return action is gated by the live pool projection, not merely work-order origin.
+  poolMode = 'rows'; poolQueries = []; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; assignedPoolStatus = 'claimed';
+  access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  {
+    const claimed = await openApp('planner', 1440);
+    ok(poolQueries.some(q => /select=source_key(?:%2C|,)status/i.test(q) && q.includes('source_key=in.')), 'assigned pool status uses the existing filtered pool-item read');
+    ok(await claimed.page.locator('.machine-tile-card [data-pool-return="01|TESTNEED0001|TEST-SIM-1"]').count() === 1, 'claimed + pending: return-to-pool control is shown');
+    ok(await claimed.page.locator('.machine-tile-card .pool-return-factory-note').count() === 0, 'claimed + pending: factory handoff note is absent');
+    await claimed.ctx.close();
+  }
+  assignedPoolStatus = 'gone';
+  {
+    const applied = await openApp('planner', 1440);
+    ok(await applied.page.locator('.machine-tile-card [data-pool-return]').count() === 0, 'gone/applied: return-to-pool control is hidden');
+    ok((await applied.page.locator('.machine-tile-card .pool-return-factory-note').first().innerText()).includes('已派到工廠'), 'gone/applied: factory handoff note is shown');
+    await applied.ctx.close();
+  }
+  assignedPoolStatus = 'claimed'; proc.status = 'running';
+  {
+    const running = await openApp('planner', 1440);
+    ok(await running.page.locator('.machine-tile-card [data-pool-return]').count() === 0, 'claimed + running process: return-to-pool control is hidden');
+    ok(await running.page.locator('.machine-tile-card .pool-return-factory-note').count() >= 1, 'claimed + running process: factory handoff note is shown');
+    await running.ctx.close();
+  }
+  proc.status = 'pending';
+  assignedPoolStatus = 'claimed'; order.legacy_mes_source = 'app_manual';
+  {
+    const manual = await openApp('planner', 1440);
+    ok(await manual.page.locator('.machine-tile-card [data-pool-return], .machine-tile-card .pool-return-factory-note').count() === 0, 'non-pool source: neither return control nor handoff note is shown');
+    await manual.ctx.close();
+  }
+  order.legacy_mes_source = 'dispatch_pool';
   // Planner returns the claimed A01 item, then another machine reclaims it.
   poolMode = 'rows'; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; returnRequests = []; claimRequests = [];
   access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };

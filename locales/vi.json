@@ -52,6 +52,7 @@
   "eligible_machines": { "value": "Máy phù hợp {{machines}}", "_draft": true },
   "not_in_list": { "value": "（{{machine}} không có trong danh sách）", "_draft": true },
   "returned_waiting_claim": { "value": "Trả lại, chờ nhận", "_draft": true },
+  "pool_return_factory_note": { "value": "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)", "_draft": true },
   "work_start_first": { "value": "Bắt đầu lần đầu", "_draft": true },
   "daily_start": { "value": "Bắt đầu hôm nay", "_draft": true },
   "finish_work": { "value": "Kết thúc / Hoàn tất", "_draft": true },
