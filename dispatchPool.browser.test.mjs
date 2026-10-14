@@ -31,7 +31,7 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], returnRequests = [], exposeAssignedOrder = true;
+let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true;
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -65,6 +65,11 @@ async function openApp(role, width) {
         if (claimWinner) return json(409, { message: 'POOL_ITEM_NOT_WAITING' });
         claimWinner = body.p_machine_code;
         return json(200, { action: 'claimed', source_key: body.p_source_key, machine_code: body.p_machine_code });
+      }
+      if (p === '/rest/v1/rpc/dispatch_pool_claim_release' && req.method() === 'POST') {
+        const body = JSON.parse(req.postData() || '{}'); releaseRequests.push(body); mutations.push(p);
+        if (!['admin', 'planner'].includes(access.role)) return json(403, { message: 'DISPATCH_POOL_CLAIM_RELEASE_FORBIDDEN' });
+        return json(200, { action: 'released', source_key: body.p_source_key });
       }
       if (p === '/rest/v1/rpc/dispatch_pool_return' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}'); returnRequests.push(body); mutations.push(p);
@@ -162,8 +167,32 @@ try {
     ok(await page.locator('#machtileCardSelection [data-card-selection-assigned], #machtileCardSelection [data-card-select-process]').count() === 0, 'operator: no selection buttons in pool-only dialog');
     ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0002|TEST-SIM-2', '01|TESTNEED0001|TEST-SIM-1']), 'operator: own department items in owner order');
     ok(await page.locator('#machtileCardSelection [data-pool-claim]:not([disabled])').count() === 0, 'operator: claim disabled');
-    ok(await page.locator('[data-pool-return]').count() === 0, 'operator: no return-to-pool control anywhere');
+    ok(await page.locator('[data-pool-return], [data-pool-release]').count() === 0, 'operator: no return-to-pool or release-claim control anywhere');
     await page.screenshot({ path: path.join(out, 'operator-a02-390.png') });
+    await ctx.close();
+  }
+
+  // Claim release is visible to admin/planner only and sends exactly the source key.
+  poolMode = 'rows'; releaseRequests = [];
+  for (const role of ['admin', 'planner']) {
+    access = { tenant_id: tenant, role, all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+    const { ctx, page } = await openApp(role, 1440);
+    await page.locator('[data-card-select-open="A01"]').click();
+    const release = page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-release]');
+    ok(await release.count() === 1 && (await release.innerText()).includes('釋放接單'), `${role}: release-claim control is visible`);
+    if (role === 'planner') {
+      await release.click();
+      await page.waitForFunction(() => document.body.innerText.includes('已釋放接單'));
+      ok(JSON.stringify(releaseRequests.at(-1)) === JSON.stringify({ p_source_key: '01|TESTNEED0001|TEST-SIM-1' }), 'planner: release RPC sends source key only');
+      ok(poolQueries.length >= 1 && await page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"]').count() === 1, 'planner: successful release reloads the pool');
+    }
+    await ctx.close();
+  }
+  access = { tenant_id: tenant, role: 'manager', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  {
+    const { ctx, page } = await openApp('manager', 1440);
+    await page.locator('[data-card-select-open="A01"]').click();
+    ok(await page.locator('[data-pool-release]').count() === 0, 'manager: release-claim control is not rendered');
     await ctx.close();
   }
 
@@ -226,12 +255,12 @@ try {
     ok(await leftButton.isEnabled() && await rightButton.isEnabled(), 'race: both empty eligible pilot machines can attempt the same item');
     await Promise.all([leftButton.click(), rightButton.click()]);
     await Promise.all([
-      left.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被其他機台接走')),
-      right.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被其他機台接走')),
+      left.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被別台接走')),
+      right.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被別台接走')),
     ]);
     const messages = [(await left.page.locator('body').innerText()), (await right.page.locator('body').innerText())];
     ok(claimRequests.length === 2 && new Set(claimRequests.map(x => x.p_machine_code)).size === 2, 'race: two distinct machines sent one atomic claim each');
-    ok(messages.filter(x => x.includes('接單成功')).length === 1 && messages.filter(x => x.includes('已被其他機台接走')).length === 1, 'race: exactly one browser wins and loser sees the reason');
+    ok(messages.filter(x => x.includes('接單成功')).length === 1 && messages.filter(x => x.includes('已被別台接走')).length === 1, 'race: exactly one browser wins and loser sees the reason');
     await left.ctx.close(); await right.ctx.close();
   }
   dispatchPoolMachines = []; claimWinner = ''; poolMode = 'empty';
@@ -260,7 +289,7 @@ try {
     await ctx.close();
   }
   console.log('non-GET calls seen (read-only RPCs of other panels): ' + [...new Set(mutations)].join(','));
-  ok(mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_claim').length === 3 && mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_return').length === 1 && !mutations.some(p => /work_order_upsert|machine_queue/.test(p)), 'only expected atomic claim/return writes were sent');
+  ok(mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_claim').length === 3 && mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_claim_release').length === 1 && mutations.filter(p => p === '/rest/v1/rpc/dispatch_pool_return').length === 1 && !mutations.some(p => /work_order_upsert|machine_queue/.test(p)), 'only expected atomic claim/release/return writes were sent');
   ok(blocked.length === 0, 'no real backend or non-GET local request: ' + blocked.join(','));
   ok(errors.length === 0, 'no JS errors: ' + errors.join(' | '));
   console.log(`${checks}/${checks} dispatch pool view checks passed`);
