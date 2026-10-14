@@ -1,0 +1,210 @@
+(function (root) {
+  "use strict";
+
+  const STORAGE_KEY = "machtile.language";
+  const DEFAULT_LANGUAGE = "zh-Hant";
+  const SUPPORTED_LANGUAGES = [DEFAULT_LANGUAGE, "vi"];
+  const warned = new Set();
+
+  const dictionaries = {
+    "zh-Hant": {
+      language_label: "語言",
+      language_zh_hant: "繁中",
+      language_vi: "Tiếng Việt",
+      login_title: "MachTile 統一登入",
+      login_checking: "正在檢查登入狀態…",
+      login_redirect_hint: "已登入會直接進入，未登入會前往統一登入。",
+      monitor_title: "機台即時狀態",
+      field_report: "現場回報",
+      report: "報工",
+      start_work: "開工",
+      stop_work: "停工",
+      select_work_order: "選擇工單",
+      details: "完整單",
+      machine_details: "機台詳情",
+      machine_status: "機台 · {{status}}",
+      work_order_status: "工單 · {{status}}",
+      current_work_order: "目前工單",
+      no_work_order: "無工單指派中",
+      can_assign_work_order: "可安排新工單",
+      check_machine_status: "請確認機台狀態",
+      progress: "完成進度",
+      due_date: "交期",
+      unassigned: "未派工",
+      report_entry_advice: "報工入口與建議",
+      assignment_help: "指派說明",
+      open_report_page: "開啟報工頁",
+      handling_advice: "處理建議",
+      dispatch_pool_same_department: "待做池（同課）",
+      dispatch_pool_count: "待做池（同課）{{count}} 張",
+      dispatch_pool_title: "待做池",
+      close: "關閉",
+      claim: "接單",
+      claiming: "接單中…",
+      claim_processing: "接單處理中",
+      claim_success: "接單成功，工單已進入這台機台。",
+      pool_load_error: "待做池讀取失敗，請重新整理。",
+      pool_empty: "目前沒有同課待接的工序。",
+      pool_department_missing: "這台沒有設定車床課／銑床課，不列待做池。",
+      pool_note: "生管放進池子、還沒派機台的工序，依緊急程度 → 交期 → APS 預計開始排序；空閒且在可做清單、並已開 pilot 的機台才能接單。",
+      data_time: "資料時間 {{time}}",
+      quantity_due_aps: "數量 {{quantity}} · 交期 {{due}} · APS 預計開始 {{start}}",
+      eligible_machines: "可做機台 {{machines}}",
+      not_in_list: "（{{machine}} 不在清單）",
+      returned_waiting_claim: "退回待接",
+      work_start_first: "首次開工",
+      daily_start: "今日開工",
+      finish_work: "收工/完工",
+      abnormal_report: "異常回報",
+      machine_current_counter: "機台目前累計數",
+      good_quantity: "良品數",
+      counter_preview: "累計 {{current}}｜上次 {{baseline}}｜這次 {{delta}}{{message}}",
+      counter_loading: "正在讀取今天的機台計數基準…",
+      counter_load_error: "讀不到今天的機台計數基準，請確認連線後重開報工。",
+      counter_current_required: "請填寫機台目前累計數。",
+      counter_baseline_required: "今天尚無開工或報工基準；請先按開工，或手填基準。",
+      counter_non_positive: "機台累計 {{current}} 必須大於上次 {{baseline}}；這次差額需大於 0。",
+      counter_rate_warning: "照工時這段時間最多約 {{max}} 件，你報 {{quantity}} 件，請確認",
+      counter_manual_help: "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
+      required: "必填",
+      optional: "選填",
+      submit_report: "送出報工",
+      pause_work: "暫停加工",
+      open_camera: "開啟相機拍照",
+      no_photo: "尚未拍照",
+      common_timeout: "連線逾時，請稍後重試。",
+      common_error: "發生錯誤，請稍後重試。",
+      login_timeout: "登入流程已逾時，請重新登入。"
+    },
+    vi: {
+      language_label: "Ngôn ngữ",
+      language_zh_hant: "繁中",
+      language_vi: "Tiếng Việt",
+      login_title: "Đăng nhập hợp nhất MachTile",
+      login_checking: "Đang kiểm tra trạng thái đăng nhập…",
+      login_redirect_hint: "Nếu đã đăng nhập, bạn sẽ vào thẳng hệ thống; nếu chưa, hệ thống sẽ chuyển đến trang đăng nhập.",
+      monitor_title: "Trạng thái máy theo thời gian thực",
+      field_report: "Báo cáo tại hiện trường",
+      report: "Báo cáo",
+      start_work: "Bắt đầu",
+      stop_work: "Dừng máy",
+      select_work_order: "Chọn lệnh sản xuất",
+      details: "Xem đầy đủ",
+      machine_details: "Chi tiết máy",
+      machine_status: "Máy · {{status}}",
+      work_order_status: "Lệnh · {{status}}",
+      current_work_order: "Lệnh hiện tại",
+      no_work_order: "Chưa có lệnh được giao",
+      can_assign_work_order: "Có thể giao lệnh mới",
+      check_machine_status: "Vui lòng kiểm tra trạng thái máy",
+      progress: "Tiến độ hoàn thành",
+      due_date: "Hạn giao",
+      unassigned: "Chưa giao máy",
+      report_entry_advice: "Lối vào báo cáo và gợi ý",
+      assignment_help: "Hướng dẫn giao việc",
+      open_report_page: "Mở trang báo cáo",
+      handling_advice: "Gợi ý xử lý",
+      dispatch_pool_same_department: "Danh sách chờ (cùng bộ phận)",
+      dispatch_pool_count: "Danh sách chờ (cùng bộ phận) {{count}} phiếu",
+      dispatch_pool_title: "Danh sách chờ",
+      close: "Đóng",
+      claim: "Nhận việc",
+      claiming: "Đang nhận việc…",
+      claim_processing: "Đang xử lý nhận việc",
+      claim_success: "Nhận việc thành công. Lệnh đã được đưa vào máy này.",
+      pool_load_error: "Không tải được danh sách chờ. Vui lòng làm mới.",
+      pool_empty: "Hiện không có công đoạn chờ nhận trong cùng bộ phận.",
+      pool_department_missing: "Máy này chưa được gán bộ phận tiện/phay nên không hiển thị danh sách chờ.",
+      pool_note: "Các công đoạn do điều độ đưa vào danh sách nhưng chưa giao máy được sắp theo mức khẩn cấp → hạn giao → thời gian APS dự kiến bắt đầu; chỉ máy đang rảnh, đủ điều kiện và đã bật pilot mới có thể nhận việc.",
+      data_time: "Thời gian dữ liệu {{time}}",
+      quantity_due_aps: "Số lượng {{quantity}} · Hạn giao {{due}} · APS dự kiến bắt đầu {{start}}",
+      eligible_machines: "Máy phù hợp {{machines}}",
+      not_in_list: "（{{machine}} không có trong danh sách）",
+      returned_waiting_claim: "Trả lại, chờ nhận",
+      work_start_first: "Bắt đầu lần đầu",
+      daily_start: "Bắt đầu hôm nay",
+      finish_work: "Kết thúc / Hoàn tất",
+      abnormal_report: "Báo cáo bất thường",
+      machine_current_counter: "Số tích lũy hiện tại của máy",
+      good_quantity: "Số lượng đạt",
+      counter_preview: "Tích lũy {{current}}｜Lần trước {{baseline}}｜Lần này {{delta}}{{message}}",
+      counter_loading: "Đang đọc mốc bộ đếm máy hôm nay…",
+      counter_load_error: "Không đọc được mốc bộ đếm máy hôm nay. Vui lòng kiểm tra kết nối rồi mở lại báo cáo.",
+      counter_current_required: "Vui lòng nhập số tích lũy hiện tại của máy.",
+      counter_baseline_required: "Hôm nay chưa có mốc bắt đầu hoặc báo cáo; hãy bấm bắt đầu hoặc nhập mốc thủ công.",
+      counter_non_positive: "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.",
+      counter_rate_warning: "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
+      counter_manual_help: "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
+      required: "Bắt buộc",
+      optional: "Không bắt buộc",
+      submit_report: "Gửi báo cáo",
+      pause_work: "Tạm dừng gia công",
+      open_camera: "Mở camera chụp ảnh",
+      no_photo: "Chưa chụp ảnh",
+      common_timeout: "Kết nối quá thời gian. Vui lòng thử lại sau.",
+      common_error: "Đã xảy ra lỗi. Vui lòng thử lại sau.",
+      login_timeout: "Quá thời gian đăng nhập. Vui lòng đăng nhập lại."
+    }
+  };
+
+  function storedLanguage() {
+    try {
+      const value = root.localStorage && root.localStorage.getItem(STORAGE_KEY);
+      return SUPPORTED_LANGUAGES.includes(value) ? value : DEFAULT_LANGUAGE;
+    } catch (_) { return DEFAULT_LANGUAGE; }
+  }
+
+  let language = storedLanguage();
+
+  function interpolate(value, params) {
+    return String(value).replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_, key) => (
+      Object.prototype.hasOwnProperty.call(params || {}, key) ? String(params[key]) : `{{${key}}}`
+    ));
+  }
+
+  function t(key, params) {
+    let value = dictionaries[language] && dictionaries[language][key];
+    if (value == null) {
+      value = dictionaries[DEFAULT_LANGUAGE][key];
+      if (!warned.has(key)) {
+        warned.add(key);
+        if (root.console && typeof root.console.warn === "function") root.console.warn(`[i18n] Missing ${language} translation: ${key}; using zh-Hant.`);
+      }
+    }
+    if (value == null) {
+      if (!warned.has(`unknown:${key}`)) {
+        warned.add(`unknown:${key}`);
+        if (root.console && typeof root.console.warn === "function") root.console.warn(`[i18n] Unknown translation key: ${key}.`);
+      }
+      return key;
+    }
+    return interpolate(value, params || {});
+  }
+
+  function applyDocument(doc) {
+    if (!doc) return;
+    doc.documentElement.lang = language;
+    doc.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
+    doc.querySelectorAll("[data-i18n-aria-label]").forEach((node) => { node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel)); });
+    const select = doc.getElementById("machtileLanguageSelect");
+    if (select) select.value = language;
+  }
+
+  function setLanguage(next, options) {
+    if (!SUPPORTED_LANGUAGES.includes(next)) return false;
+    language = next;
+    try { if (root.localStorage) root.localStorage.setItem(STORAGE_KEY, next); } catch (_) { /* storage unavailable */ }
+    applyDocument(root.document);
+    if (options && options.reload && root.location && typeof root.location.reload === "function") root.location.reload();
+    return true;
+  }
+
+  const api = { t, setLanguage, getLanguage: () => language, applyDocument, dictionaries, STORAGE_KEY, DEFAULT_LANGUAGE };
+  root.MachTileI18n = api;
+  root.machtileT = t;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  if (root.document) {
+    if (root.document.readyState === "loading") root.document.addEventListener("DOMContentLoaded", () => applyDocument(root.document), { once: true });
+    else applyDocument(root.document);
+  }
+})(typeof window !== "undefined" ? window : globalThis);
