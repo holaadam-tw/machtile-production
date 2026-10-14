@@ -23981,13 +23981,14 @@ async function machtileResumeInit() {
 
 // ---- Monitor 機台卡片：機台加工時間直接填、今日開工狀態、每日估算（owner 2026-10-02）----
 // 1. 點卡片「機台加工時間」→ 小框填分／秒（作業員看機台控制器螢幕上的每件加工時間）→ 儲存＝送一筆 0／0 的報工，
-//    只帶 cycle_time_seconds。payload 直接用批次報工的 batchReportCore.buildReportPayload（中午報工類型、只改時間），
+//    只帶 cycle_time_seconds。PR #93 後批次改用累計數契約，這裡改由 cardMachineTimeCore 組專用 payload，
 //    started_at＝ended_at＝上一筆報工的時間（不推進起算點）、report_uuid 冪等、報工人＝登入者。
 // 2. 卡片底部改成這道工序「今天」的狀態：今日已開工 08:05・姓名／今日已收工 17:00／今日尚未開工。
 //    資料＝production_reports 今天（台灣時區）的 dailyStart／finish 最新一筆。讀不到 → 原本的顯示。
 // 3. 每日估算的上下料時間：cardEstimateCore（實績中位數 ≥ 3 筆，否則車床 60／銑床 180 秒預設）。
 // 全部只讀＋前端計算；寫入只有第 1 項（跟批次報工同一支 field_report_upsert）。
 const machtileCardEstimateCore = () => (typeof window === "undefined" ? null : window.MachTileCardEstimateCore);
+const machtileCardMachineTimeCore = () => (typeof window === "undefined" ? null : window.MachTileCardMachineTimeCore);
 const MACHTILE_CARD_CT_DRAFT_KEY = "machtile-card-machine-time-drafts";
 const MACHTILE_CARD_FETCH_TIMEOUT_MS = 4000;
 const machtileCardState = {
@@ -24313,7 +24314,8 @@ function machtileCardCtAfterSaved(processId, seconds) {
 async function machtileSaveCardMachineTime() {
   const ed = machtileCardState.editor;
   const bcore = machtileBatchCore();
-  if (!ed || !bcore || ed.loading || ed.saving || ed.readOnly) return;
+  const timeCore = machtileCardMachineTimeCore();
+  if (!ed || !bcore || !timeCore || ed.loading || ed.saving || ed.readOnly) return;
   ed.minutes = document.getElementById("cardCtMinutes")?.value ?? "";
   ed.seconds = document.getElementById("cardCtSeconds")?.value ?? "";
   ed.error = "";
@@ -24340,30 +24342,20 @@ async function machtileSaveCardMachineTime() {
     endedAt,
   });
   const model = {
-    mode: "noon",
     machineCode: ed.machineCode,
     order,
-    good: "",
-    bad: "",
-    ctDefault,
-    ctMinutes: ed.minutes,
-    ctSeconds: ed.seconds,
-    overtime: "",
     operatorId: ed.actorId,
-    operatorMapped: ed.operatorMapped,
-    allowUnmappedTimeOnly: true,
+    cycleTimeSeconds: parsed.seconds,
     startedAt: start.startedAt,
-    startedAtReason: start.startedAt ? "" : "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。",
   };
-  const v = bcore.validateRow(model);
-  if (v.empty) { ed.error = "時間跟目前一樣，不用儲存。"; machtileRenderCardCtSheet(); return; }
-  if (!v.send || !v.timeOnly) { ed.error = v.error || "不能儲存"; machtileRenderCardCtSheet(); return; }
+  if (parsed.seconds === ctDefault) { ed.error = "時間跟目前一樣，不用儲存。"; machtileRenderCardCtSheet(); return; }
+  if (!model.startedAt) { ed.error = "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。"; machtileRenderCardCtSheet(); return; }
 
   ed.saving = true;
   machtileRenderCardCtSheet();
   const drafts = machtileCardCtReadDrafts();
   const prev = drafts[ed.processId];
-  const id = bcore.ensureReportUuid(prev, model, () => crypto.randomUUID());
+  const id = timeCore.ensureReportUuid(prev, { processId: order.processId, actorAppUserId: ed.actorId, cycleTimeSeconds: parsed.seconds }, () => crypto.randomUUID());
   // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致（同批次）
   const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : model.startedAt;
   const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
@@ -24372,7 +24364,8 @@ async function machtileSaveCardMachineTime() {
   let status = "sent";
   let message = "";
   try {
-    const built = bcore.buildReportPayload({ row: { ...model, startedAt }, actorAppUserId: ed.actorId, endedAt: end, reportUuid: id.reportUuid, tenantId: order.tenantId });
+    const built = timeCore.buildPayload({ order, actorAppUserId: ed.actorId, endedAt: end, startedAt, reportUuid: id.reportUuid,
+      tenantId: order.tenantId, cycleTimeSeconds: parsed.seconds });
     const box = machtileOutboxEnabled() ? await machtileGetOutbox() : null;
     await machtileBatchSendOne(box, built.payload, built.operators);
     if (box) {

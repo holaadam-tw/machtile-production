@@ -118,12 +118,11 @@ eq("13:00 整 → 下一個是 17:15", c.msUntilNextBoundary(at("13:00")), (17 *
 eq("21:00 → 下一個是午夜", c.msUntilNextBoundary(at("21:00")), 3 * 60 * 60000);
 
 console.log("== 只改機台加工時間的 0／0 noon 不算中午報工（owner 2026-10-02）==");
-// 用批次／卡片小框實際送出的 payload（batchReportCore.buildReportPayload）確認特徵
-const b = require("./batchReportCore.js");
+// PR #93（7f581fb）後批次報工改用累計數契約；只改時間由卡片專用 core 組 payload。
+const timeCore = require("./cardMachineTimeCore.js");
 const order = { workOrderId: "wo3", processId: "p3", tenantId: "t", processStatus: "running", done: 0, total: 400 };
-const baseRow = { mode: "noon", machineCode: "A03", order, ctDefault: 95, overtime: "", operatorId: "u1", operatorMapped: true, startedAt: iso("08:10") };
-const timeOnly = b.buildReportPayload({ row: { ...baseRow, good: "", bad: "", ctMinutes: "1", ctSeconds: "40" }, actorAppUserId: "u1", endedAt: iso("12:30"), reportUuid: "r1", tenantId: "t" });
-const realQty = b.buildReportPayload({ row: { ...baseRow, good: "5", bad: "", ctMinutes: "", ctSeconds: "" }, actorAppUserId: "u1", endedAt: iso("12:30"), reportUuid: "r2", tenantId: "t" });
+const timeOnly = timeCore.buildPayload({ order, actorAppUserId: "u1", endedAt: iso("12:30"), startedAt: iso("08:10"), reportUuid: "r1", tenantId: "t", cycleTimeSeconds: 100 });
+const realQty = { payload: { ...timeOnly.payload, report_uuid: "r2", completed_qty: 5, report_payload: { ...timeOnly.payload.report_payload, completed_qty: 5 }, started_at: iso("08:10"), ended_at: iso("12:30") } };
 eq("實際 payload：只改時間＝noon、0／0、started_at＝ended_at", [timeOnly.timeOnly, timeOnly.payload.report_type, timeOnly.payload.completed_qty, timeOnly.payload.defect_qty, timeOnly.payload.started_at === timeOnly.payload.ended_at], [true, "noon", 0, 0, true]);
 eq("isTimeOnlyReport(只改時間的 payload) → true", c.isTimeOnlyReport(timeOnly.payload), true);
 eq("isTimeOnlyReport(有數量的中午報工 payload) → false", c.isTimeOnlyReport(realQty.payload), false);
