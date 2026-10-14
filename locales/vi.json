@@ -1,4 +1,7 @@
 {
+  "hmc_pallet_report_title_draft": "Báo cáo sản lượng nhiều pallet",
+  "hmc_pallet_report_hint_draft": "Nhập lũy kế trong ngày cho từng pallet và từng chi tiết; hệ thống chỉ gửi phần tăng thêm.",
+  "hmc_pallet_report_submit_draft": "Gửi báo cáo theo từng pallet",
   "language_label": { "value": "Ngôn ngữ", "_draft": true },
   "language_zh_hant": { "value": "繁中", "_draft": true },
   "language_vi": { "value": "Tiếng Việt", "_draft": true },

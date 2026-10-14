@@ -41,6 +41,7 @@ const config = {
   // exact Dev project + signed identity are also required by app-host.js.
   hmcFixedStagingEnabled: true,
   hmcFixedStagingWrites: true,
+  enableHmcPalletReport: false,
   // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
   // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
   // available only through an explicitly approved calendar exception.
@@ -4063,6 +4064,18 @@ function renderHmcReportRoute() {
 }
 
 // HMC field-facing route: keep the shop-floor page quantity-first and login-free.
+const hmcPalletReportState = { status: "idle", message: "", reportCount: 0, completedQty: 0, defectQty: 0 };
+function hmcPalletReportEnabled() {
+  if (config.enableHmcPalletReport !== true || state.source !== "supabase") return false;
+  const machine=state.machineMasters.find((row)=>row.code===hmcRouteMachineKey()||row.machine_code===hmcRouteMachineKey());
+  return ["B01","B02"].includes(hmcRouteMachineKey())&&String(machine?.machine_type||machine?.type||"").includes("臥式");
+}
+function hmcPalletReportPanel() {
+  if(!hmcPalletReportEnabled())return ""; const busy=hmcPalletReportState.status==="saving";
+  return `<section class="hmc-submit-panel hmc-pallet-report-submit"><strong>正式多盤報工</strong><p>每個交換盤／工件各寫一筆正式報工；輸入本日累計，系統只送出增加量。</p><label class="hmc-field"><span>報工時點</span><select id="hmcPalletReportType"><option value="noon">中午報工</option><option value="finish">收工／完工</option></select></label>${hmcPalletReportState.message?`<p role="status">${escapeHtml(hmcPalletReportState.message)}</p>`:""}<button type="button" data-hmc-submit-pallet-report ${busy?"disabled":""}>${busy?"送出中…":"送出逐盤正式報工"}</button></section>`;
+}
+function buildHmcPalletReportPayload(){const items=hmcSelectedItems().flatMap(({pallet,work,key})=>{const current=Number(hmcQuantities()[key]??work.dbTodayCompletedQty??0),baseline=Number(work.dbTodayCompletedQty||0),completedQty=current-baseline,defectQty=Number(hmcDefects()[key]||0);return completedQty<=0&&defectQty<=0?[]:[{worklist_item_id:work.dbRowId,report_uuid:crypto.randomUUID(),completed_qty:completedQty,defect_qty:defectQty,counter_current_qty:current,counter_baseline_qty:baseline,pallet_no:pallet.palletNo}]});return{p_worklist_id:hmcCurrentWorklistReadState().worklist?.id||null,p_work_date:hmcDailyQuantityWorkDate(),p_report_type:$("#hmcPalletReportType")?.value||"noon",p_items:items,p_remark:$("#hmcHandoverNote")?.value.trim()||null};}
+async function submitHmcPalletReport(){if(!hmcPalletReportEnabled()||hmcPalletReportState.status==="saving")return;const payload=buildHmcPalletReportPayload();if(!payload.p_worklist_id||!payload.p_items.length){hmcPalletReportState.message="請至少替一個工件輸入高於今日已存的累計數，或填本次不良數。";renderHmcReportRoute();return;}hmcPalletReportState.status="saving";hmcPalletReportState.message="";renderHmcReportRoute();try{const result=await supabaseFetch("rpc/hmc_submit_pallet_reports",{method:"POST",body:JSON.stringify(payload)});hmcPalletReportState.status="success";hmcPalletReportState.reportCount=Number(result?.report_count||0);hmcPalletReportState.completedQty=Number(result?.completed_qty||0);hmcPalletReportState.defectQty=Number(result?.defect_qty||0);hmcPalletReportState.message=`已建立 ${hmcPalletReportState.reportCount} 筆正式報工；良品 ${hmcPalletReportState.completedQty}、不良 ${hmcPalletReportState.defectQty}。`;hmcClearDailyQuantityReadCache();requestHmcDailyQuantityRead();}catch(error){hmcPalletReportState.status="error";hmcPalletReportState.message=error?.message||"多盤報工失敗。";}renderHmcReportRoute();}
 function hmcDailyQuantityStats() {
   const selected = hmcSelectedItems();
   const selectedPalletCount = new Set(selected.map((item) => item.pallet.palletId)).size;
@@ -7941,6 +7954,7 @@ function renderHmcReportRoute() {
 
           <section id="hmcReportPreview" class="hmc-preview" aria-live="polite"></section>
           ${hmcDailyCheckSavePanel()}
+          ${hmcPalletReportPanel()}
         </section>
       </div>
     </section>
@@ -8030,6 +8044,7 @@ function bindHmcReportEvents() {
       updateHmcReportPreview();
     });
   });
+  $("[data-hmc-submit-pallet-report]")?.addEventListener("click",()=>{void submitHmcPalletReport();});
   $("[data-hmc-save-daily-check]")?.addEventListener("click", async () => {
     const build = buildHmcDailyCheckPayload();
     if (!build.ok) {

@@ -1,4 +1,7 @@
 {
+  "hmc_pallet_report_title_draft": "正式多盤報工",
+  "hmc_pallet_report_hint_draft": "每盤／每工件各自填本日累計，系統只送出增加量。",
+  "hmc_pallet_report_submit_draft": "送出逐盤正式報工",
   "language_label": "語言",
   "language_zh_hant": "繁中",
   "language_vi": "Tiếng Việt",
