@@ -179,6 +179,7 @@
   }
 
   function modeOf(row) {
+    if (row?.mode === "dailyStart") return "dailyStart";
     return row?.finished === true ? "finish" : "noon";
   }
 
@@ -252,6 +253,28 @@
   //     只改機台加工時間＝送一筆 0／0 的報工（只帶時間），時段長度 0、接在上一筆後面，不會吃掉工時。
   function validateRow(row) {
     const mode = modeOf(row);
+    if (mode === "dailyStart") {
+      if (row?.selected !== true) return { send: false, empty: true, error: "" };
+      if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
+      if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
+      if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
+      return { send: true, empty: false, error: "", good: 0, bad: 0, current: Number(row.order.done || 0) || 0, baseline: null, machineSeconds: null, timeOnly: false };
+    }
+    if (row?.legacyGood !== undefined && row?.legacyGood !== null) {
+      const good = toInt(row.legacyGood);
+      const bad = toInt(row?.bad);
+      if (Number.isNaN(good) || Number.isNaN(bad)) return { send: false, empty: false, error: "數量要填整數" };
+      const goodN = good === null ? 0 : good;
+      const badN = bad === null ? 0 : bad;
+      if (goodN === 0 && badN === 0) return { send: false, empty: true, error: "" };
+      if (!Number.isInteger(goodN) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
+      if (goodN < 0 || badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
+      if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
+      if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
+      if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
+      if (!row?.startedAt) return { send: false, empty: false, error: row?.startedAtReason || "沒有開工時間" };
+      return { send: true, empty: false, error: "", good: goodN, bad: badN, current: Number(row.order.done || 0) || 0, baseline: null, machineSeconds: null, timeOnly: false };
+    }
     const bad = toInt(row?.bad);
     const hasCurrent = row?.current !== "" && row?.current !== null && row?.current !== undefined;
     const hasBad = row?.bad !== "" && row?.bad !== null && row?.bad !== undefined && Number(row.bad) !== 0;
@@ -281,7 +304,7 @@
       mode,
       normCode(row?.machineCode),
       String(row?.order?.processId || ""),
-      String(toInt(row?.current) ?? 0),
+      String(toInt(row?.legacyGood) ?? toInt(row?.current) ?? 0),
       qty ? String(toInt(row?.bad) ?? 0) : "0",
       String(row?.operatorId || ""),
       row?.finished === true ? "finish" : "report",
@@ -322,7 +345,7 @@
     if (!v.send) throw new Error(v.error || "row is not sendable");
     const mode = modeOf(row);
     const order = row.order;
-    const machineQty = Number(order.done || 0) || 0;
+    const machineQty = mode === "dailyStart" ? (Number(order.done || 0) || 0) : v.current;
     const workTotal = Number(order.total || 0) || null;
     const overtime = mode === "finish" ? "none" : "";
     const cycle = null;
@@ -341,15 +364,17 @@
         report_type: mode,
         work_total_qty: workTotal,
         cycle_time_seconds: cycle,
-        machine_qty: v.current,
+        machine_qty: machineQty,
         completed_qty: v.good,
         defect_qty: v.bad,
         has_program_upload: false,
         overtime_plan: overtime,
         pm_abnormal: "",
         abnormal_type: "",
-        counter_baseline_qty: v.baseline,
-        counter_baseline_source: row.baselineSource || "report",
+        ...(mode === "dailyStart" ? {} : {
+          counter_baseline_qty: v.baseline,
+          counter_baseline_source: row.baselineSource || "report",
+        }),
       },
       work_total_qty: workTotal,
       cycle_time_seconds: cycle,

@@ -11678,6 +11678,14 @@ body.report-work-route-mode .machtile-route-brand-bar {
   box-shadow: 0 6px 16px rgba(0, 103, 255, 0.28);
 }
 .batch-mode-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.batch-compat-entry {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+}
 .batch-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .batch-switch { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; overflow: hidden; background: var(--surface); }
 .batch-switch-btn { min-height: 48px; padding: 0 18px; border: 0; background: var(--surface); color: var(--text); font-size: 16px; font-weight: 700; cursor: pointer; }

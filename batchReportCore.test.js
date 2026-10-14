@@ -29,9 +29,22 @@ assert.equal(finish.report_payload.overtime_plan, "none");
 assert.match(finish.remark, /^\[收工 \/ 完工\]/);
 assert.notEqual(core.rowFingerprint(base), core.rowFingerprint({ ...base, finished: true }));
 
+const dailyStartRow = { ...base, mode: "dailyStart", selected: true, order: { ...order, done: 96 } };
+assert.equal(core.validateRow({ ...dailyStartRow, selected: false }).empty, true);
+assert.deepEqual(core.validateRow(dailyStartRow), { send: true, empty: false, error: "", good: 0, bad: 0, current: 96, baseline: null, machineSeconds: null, timeOnly: false });
+const dailyStart = core.buildReportPayload({ row: dailyStartRow, actorAppUserId: "actor", endedAt: "2026-10-14T01:00:00.000Z", reportUuid: "r3" }).payload;
+assert.equal(dailyStart.report_type, "dailyStart");
+assert.equal(dailyStart.report_payload.machine_qty, 96);
+assert.equal("counter_baseline_qty" in dailyStart.report_payload, false);
+
+const legacyNoon = core.buildReportPayload({ row: { ...base, current: "", legacyGood: "3" }, actorAppUserId: "actor", endedAt: "2026-10-14T01:00:00.000Z", reportUuid: "r4" }).payload;
+assert.equal(legacyNoon.report_type, "noon");
+assert.equal(legacyNoon.completed_qty, 3);
+assert.equal(legacyNoon.process_id, "p1");
+
 assert.deepEqual(core.summarizeStationCommands([], "2026-10-14T04:00:00Z"), { status: "notStarted", minutes: null });
 assert.deepEqual(core.summarizeStationCommands([{ command_type: "start", status: "applied", applied_at: "2026-10-14T00:00:00Z" },
   { command_type: "stop", status: "applied", applied_at: "2026-10-14T01:30:00Z" }], "2026-10-14T04:00:00Z"), { status: "stopped", minutes: 90 });
 assert.deepEqual(core.summarizeStationCommands([{ command_type: "start", status: "applied", applied_at: "2026-10-14T02:00:00Z" }],
   "2026-10-14T04:00:00Z"), { status: "running", minutes: 120 });
-console.log("PASS: batch report cumulative payload, finish toggle, and station-command shift summary");
+console.log("PASS: batch report cumulative payload, compatibility routes, finish toggle, and station-command shift summary");
