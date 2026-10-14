@@ -13122,6 +13122,8 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 @media (max-width: 720px) {
   .language-switcher span { display: none; }
   .language-switcher select { max-width: 112px; }
+}
+
 .batch-counter-preview,
 .batch-machine-state {
   margin: 8px 0 0;
