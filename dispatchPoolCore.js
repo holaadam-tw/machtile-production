@@ -72,7 +72,7 @@
   }
 
   function canRelease(role) {
-    return ["admin", "manager", "planner"].includes(text(role).toLowerCase());
+    return ["admin", "planner"].includes(text(role).toLowerCase());
   }
 
   function releaseArgs(sourceKey) {
@@ -126,6 +126,21 @@
     const code = errorCode(error);
     if (code) return CLAIM_ERROR_TEXT[code] || code;
     return "接單失敗，請重新整理後再試。";
+  }
+
+  const RELEASE_ERROR_TEXT = Object.freeze({
+    AUTH_REQUIRED: "登入狀態已失效，請重新登入。",
+    TENANT_REQUIRED: "找不到公司資料，請重新登入或聯絡管理員。",
+    DISPATCH_POOL_CLAIM_RELEASE_FORBIDDEN: "只有管理員或生管可以釋放接單。",
+    INVALID_CLAIM_RELEASE_PAYLOAD: "找不到要釋放的派工池項目，請重新整理後再試。",
+    UNACKNOWLEDGED_CLAIM_NOT_FOUND: "這筆接單已被處理或不存在，請重新整理。",
+    CLAIM_RELEASE_CAS_FAILED: "接單狀態已變更，請重新整理後再試。",
+  });
+
+  function releaseErrorText(error) {
+    const code = errorCode(error);
+    if (code) return RELEASE_ERROR_TEXT[code] || code;
+    return "釋放接單失敗，請重新整理後再試。";
   }
 
   function returnErrorText(error) {
@@ -188,6 +203,7 @@
     claimState,
     errorCode,
     claimErrorText,
+    releaseErrorText,
     returnErrorText,
     urgencyLabel,
     dueText,

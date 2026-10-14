@@ -11296,7 +11296,7 @@ async function machtileReleaseDispatchPoolClaim(sourceKey) {
     machtileDispatchPoolState.claimMessage = machtileTranslate("release_claim_success");
     showToast(machtileDispatchPoolState.claimMessage, "success");
   } catch (error) {
-    machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
+    machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.releaseErrorText(error);
     showToast(machtileDispatchPoolState.claimMessage, "error");
     await machtileLoadDispatchPool();
   } finally {

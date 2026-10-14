@@ -46,7 +46,7 @@ eq("沒給 options＝生管：全部同課照列", c.itemsForMachine(pool, { dep
 
 console.log("== claim（旗標＋空閒＋eligible）==");
 eq("RPC 參數只帶一張單與一台機", c.claimArgs(" pool-1 ", " A01 "), { p_source_key: "pool-1", p_machine_code: "A01" });
-eq("釋放角色含 admin/manager/planner，不含 operator", ["operator", "manager", "planner", "admin"].map(c.canRelease), [false, true, true, true]);
+eq("只有 admin/planner 可釋放，不含 operator/manager", ["operator", "manager", "planner", "admin"].map(c.canRelease), [false, false, true, true]);
 eq("釋放 RPC 只帶 source key", c.releaseArgs(" pool-1 "), { p_source_key: "pool-1" });
 eq("只有 planner/admin 可退回", ["operator", "manager", "planner", "admin"].map(c.canReturn), [false, false, true, true]);
 eq("退回 RPC 參數去除前後空白", c.returnArgs(" pool-1 ", " 排程調整 "), { p_source_key: "pool-1", p_reason: "排程調整" });
@@ -73,6 +73,16 @@ for (const [message, expected] of Object.entries(claimErrors)) eq(`錯誤碼 ${m
 eq("可解析 PostgREST 狀態碼前綴與中文訊息", c.errorCode(new Error("409 UNACKNOWLEDGED_CLAIM_EXISTS: 已有接單")), "UNACKNOWLEDGED_CLAIM_EXISTS");
 eq("可解析 PostgREST JSON 錯誤本文", c.errorCode(new Error('409 {"message":"POOL_ITEM_NOT_WAITING"}')), "POOL_ITEM_NOT_WAITING");
 eq("未知錯誤碼原樣顯示", c.claimErrorText(new Error("409 FUTURE_CLAIM_RULE: 新規則")), "FUTURE_CLAIM_RULE");
+const releaseErrors = {
+  AUTH_REQUIRED: "登入狀態已失效，請重新登入。",
+  TENANT_REQUIRED: "找不到公司資料，請重新登入或聯絡管理員。",
+  "DISPATCH_POOL_CLAIM_RELEASE_FORBIDDEN: 僅限管理員或生管": "只有管理員或生管可以釋放接單。",
+  INVALID_CLAIM_RELEASE_PAYLOAD: "找不到要釋放的派工池項目，請重新整理後再試。",
+  "UNACKNOWLEDGED_CLAIM_NOT_FOUND: 找不到可釋放紀錄": "這筆接單已被處理或不存在，請重新整理。",
+  CLAIM_RELEASE_CAS_FAILED: "接單狀態已變更，請重新整理後再試。",
+};
+for (const [message, expected] of Object.entries(releaseErrors)) eq(`釋放錯誤 ${message.split(":")[0]} 使用白話`, c.releaseErrorText(new Error(message)), expected);
+eq("釋放未知新錯誤碼保留原碼", c.releaseErrorText(new Error("FUTURE_RELEASE_RULE")), "FUTURE_RELEASE_RULE");
 eq("已開工不可退回", c.returnErrorText(new Error("CLAIM_ALREADY_STARTED")), "工序已開工或已有報工，不能退回池子。");
 eq("operator 不可退回", c.returnErrorText(new Error("DISPATCH_POOL_RETURN_FORBIDDEN")), "只有生管或管理員可以退回池子。");
 

@@ -68,7 +68,7 @@ async function openApp(role, width) {
       }
       if (p === '/rest/v1/rpc/dispatch_pool_claim_release' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}'); releaseRequests.push(body); mutations.push(p);
-        if (!['admin', 'manager', 'planner'].includes(access.role)) return json(403, { message: 'DEPARTMENT_ACCESS_DENIED' });
+        if (!['admin', 'planner'].includes(access.role)) return json(403, { message: 'DISPATCH_POOL_CLAIM_RELEASE_FORBIDDEN' });
         return json(200, { action: 'released', source_key: body.p_source_key });
       }
       if (p === '/rest/v1/rpc/dispatch_pool_return' && req.method() === 'POST') {
@@ -172,9 +172,9 @@ try {
     await ctx.close();
   }
 
-  // Claim release is visible to admin/manager/planner only and sends exactly the source key.
+  // Claim release is visible to admin/planner only and sends exactly the source key.
   poolMode = 'rows'; releaseRequests = [];
-  for (const role of ['admin', 'manager', 'planner']) {
+  for (const role of ['admin', 'planner']) {
     access = { tenant_id: tenant, role, all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
     const { ctx, page } = await openApp(role, 1440);
     await page.locator('[data-card-select-open="A01"]').click();
@@ -186,6 +186,13 @@ try {
       ok(JSON.stringify(releaseRequests.at(-1)) === JSON.stringify({ p_source_key: '01|TESTNEED0001|TEST-SIM-1' }), 'planner: release RPC sends source key only');
       ok(poolQueries.length >= 1 && await page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"]').count() === 1, 'planner: successful release reloads the pool');
     }
+    await ctx.close();
+  }
+  access = { tenant_id: tenant, role: 'manager', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  {
+    const { ctx, page } = await openApp('manager', 1440);
+    await page.locator('[data-card-select-open="A01"]').click();
+    ok(await page.locator('[data-pool-release]').count() === 0, 'manager: release-claim control is not rendered');
     await ctx.close();
   }
 
