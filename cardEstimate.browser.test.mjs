@@ -300,16 +300,16 @@ console.log("== 手機（Pixel 7）==");
   ok(sent.started_at === last && sent.ended_at === last, "started_at＝ended_at＝上一筆報工的時間（不推進起算點）", `${sent.started_at} / ${sent.ended_at} vs ${last}`);
   ok(sent.user_id === users[0].id && JSON.stringify(sent.operators) === JSON.stringify([users[0].id]), "報工人＝登入者（user_id、operators）");
   ok(sent.report_type === "noon" && sent.report_payload?.cycle_time_seconds === 100 && sent.process_id === id(301) && sent.work_order_id === id(101), "類型與工序正確");
-  // payload 跟批次報工「只改時間」逐欄一樣：在頁面裡用批次的 buildReportPayload 以同樣輸入再組一次比對
+  // PR #93 後批次報工改用累計數；卡片時間由專用 core 以同樣輸入重組比對。
   const expected = await page.evaluate(([s, uid]) => {
-    const core = window.MachTileBatchReportCore;
+    const core = window.MachTileCardMachineTimeCore;
     const order = { workOrderId: s.work_order_id, processId: s.process_id, tenantId: s.tenant_id, processStatus: s.status_after_report, done: s.report_payload.machine_qty, total: s.report_payload.work_total_qty };
-    const row = { mode: "noon", machineCode: "A01", order, good: "", bad: "", ctDefault: 95, ctMinutes: "1", ctSeconds: "40", overtime: "", operatorId: uid, operatorMapped: true, startedAt: s.started_at };
-    const built = core.buildReportPayload({ row, actorAppUserId: uid, endedAt: new Date().toISOString(), reportUuid: s.report_uuid, tenantId: s.tenant_id });
+    const built = core.buildPayload({ order, actorAppUserId: uid, endedAt: new Date().toISOString(), startedAt: s.started_at,
+      reportUuid: s.report_uuid, tenantId: s.tenant_id, cycleTimeSeconds: 100 });
     return { ...built.payload, operators: built.operators };
   }, [sent, users[0].id]);
   const norm = (o) => JSON.stringify(Object.keys(o).sort().reduce((a, k) => ({ ...a, [k]: o[k] }), {}));
-  ok(norm(expected) === norm(sent), "payload 跟批次報工「只改時間」逐欄相同（同一個 buildReportPayload）", `\n        card  ${norm(sent)}\n        batch ${norm(expected)}`);
+  ok(norm(expected) === norm(sent), "payload 跟卡片時間專用 core 逐欄相同", `\n        card    ${norm(sent)}\n        expected ${norm(expected)}`);
   ok((await grid("A01")).includes("1分40秒"), "存完卡片立刻顯示新的值 1分40秒", await grid("A01"));
   ok((await grid("A01")).match(/每日估算\s*\n?\s*124 件/), "每日估算跟著更新：25800 ÷（100＋108）＝ 124", await grid("A01"));
   await cardOf(page, "A01").screenshot({ path: path.join(outDir, "04-phone-card-a01-saved.png") });
@@ -352,16 +352,16 @@ console.log("== 登入者沒有對照舊 MES 工號（系統管理者）→ 也�
   ok(sent.user_id === users[0].id && JSON.stringify(sent.operators) === JSON.stringify([users[0].id]), "報工人＝登入者本人（user_id、operators 都是 app_users.id）", JSON.stringify({ user_id: sent.user_id, operators: sent.operators }));
   ok(!users.some((u) => u.legacy_user_id && JSON.stringify(sent).includes(u.legacy_user_id)), "payload 裡沒有任何舊 MES 工號（不捏造）");
   const expected = await page.evaluate(([s, uid]) => {
-    const core = window.MachTileBatchReportCore;
+    const core = window.MachTileCardMachineTimeCore;
     const order = { workOrderId: s.work_order_id, processId: s.process_id, tenantId: s.tenant_id, processStatus: s.status_after_report, done: s.report_payload.machine_qty, total: s.report_payload.work_total_qty };
-    const row = { mode: "noon", machineCode: "A01", order, good: "", bad: "", ctDefault: 95, ctMinutes: "1", ctSeconds: "40", overtime: "", operatorId: uid, operatorMapped: false, allowUnmappedTimeOnly: true, startedAt: s.started_at };
-    const built = core.buildReportPayload({ row, actorAppUserId: uid, endedAt: new Date().toISOString(), reportUuid: s.report_uuid, tenantId: s.tenant_id });
+    const built = core.buildPayload({ order, actorAppUserId: uid, endedAt: new Date().toISOString(), startedAt: s.started_at,
+      reportUuid: s.report_uuid, tenantId: s.tenant_id, cycleTimeSeconds: 100 });
     return { ...built.payload, operators: built.operators };
   }, [sent, users[0].id]);
   const norm = (o) => JSON.stringify(Object.keys(o).sort().reduce((a, k) => ({ ...a, [k]: o[k] }), {}));
-  ok(norm(expected) === norm(sent), "payload 跟批次「只改時間」逐欄相同", `
+  ok(norm(expected) === norm(sent), "payload 跟卡片時間專用 core 逐欄相同", `
         card  ${norm(sent)}
-        batch ${norm(expected)}`);
+        expected ${norm(expected)}`);
   ok((await cardOf(page, "A01").locator(".cycle-mini-grid").innerText()).includes("1分40秒"), "存完卡片顯示新的值 1分40秒");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
