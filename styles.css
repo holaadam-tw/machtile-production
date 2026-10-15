@@ -13040,6 +13040,8 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .machine-tile-actions .station-cmd-button { min-width: 0; border: 1px solid transparent; color: #fff; cursor: pointer; }
 .machine-tile-actions .station-cmd-button.is-start { border-color: var(--green-strong); background: var(--green-strong); }
 .machine-tile-actions .station-cmd-button.is-stop { border-color: #b42318; background: #b42318; }
+.machine-tile-actions .machine-finish-button { min-height: 44px; min-width: 0; padding: 8px 16px; border: 1px solid #6f42c1; border-radius: var(--radius); background: #6f42c1; color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
+.report-section .radio-card[hidden] { display: none !important; }
 .machine-tile-actions .station-cmd-button:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: 1; }
 .station-cmd-status.is-wait { color: var(--blue); }
 .station-cmd-status.is-ok { color: var(--green-strong); }

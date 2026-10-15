@@ -68,7 +68,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:true,disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -99,6 +99,7 @@ await page.locator('[data-station-report-reason="A04"]').selectOption("尺寸不
 await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 assert.equal(calls.commands.length, 0, "smart preview rejects an unselected mapped operator");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /請勾選實際操作的人員/);
+assert.match(await page.locator("#toast").innerText(), /請勾選實際操作的人員/, "blocked smart report also shows a toast");
 await page.evaluate(() => {
   const input = document.querySelector('#machtileOperatorList input[type="checkbox"]');
   input.checked = true;
@@ -162,15 +163,45 @@ currentMachine = "A04";
 const finishValidation = await context.newPage();
 await finishValidation.goto(base, { waitUntil: "domcontentloaded" });
 await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
-await finishValidation.locator("[data-open-report]:visible").first().click();
-await finishValidation.locator('[data-report-type="finish"]').click();
-await finishValidation.locator("#completedQty").fill("958");
+await finishValidation.locator("[data-open-report]:visible").first().waitFor();
+await finishValidation.waitForFunction(() => state.workOrders?.length && state.machines?.length);
+await finishValidation.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').count(), 1, "enabled finish flag shows one machine-card finish button");
+assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').innerText(), "完工");
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForTimeout(200);
+const finishOpenState = await finishValidation.evaluate(() => ({ open: document.querySelector("#reportSheet")?.classList.contains("is-open"), toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
+assert.equal(finishOpenState.open, true, `finish card button opens finish report: ${JSON.stringify(finishOpenState)}`);
+assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
+assert.equal(await finishValidation.locator('input[name="finishOvertime"][value="none"]').isChecked(), true, "hidden overtime field defaults to none");
+await finishValidation.evaluate(operatorId => {
+  const list = document.createElement("div");
+  list.id = "machtileOperatorList";
+  list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`;
+  document.body.append(list);
+}, id(901));
+await finishValidation.locator("#completedQty").fill("920");
 await finishValidation.locator("#defectQty").fill("0");
 await finishValidation.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "zero delta remains clickable so it can explain why submission is blocked");
+const zeroCommandsBefore = calls.commands.length;
+await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+assert.equal(calls.commands.length, zeroCommandsBefore, "zero quantity is blocked before creating a command");
+assert.equal(await finishValidation.locator("#toast").innerText(), await finishValidation.locator("#singleStationReportPanel [role=alert]").innerText(), "zero-quantity block is visible both as toast and inline red text");
+await finishValidation.locator("#completedQty").fill("958");
+await finishValidation.locator("#defectQty").fill("0");
 const finishCommandsBefore = calls.commands.length;
-await finishValidation.locator('[data-station-report-preview="A04"]').click();
-assert.equal(calls.commands.length, finishCommandsBefore, "finish preview rejects a missing overtime choice");
-assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /請確認是否加班/);
+await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await finishValidation.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+assert.equal(calls.commands.length, finishCommandsBefore + 1, "finish preview no longer requires an overtime choice");
+assert.equal(await finishValidation.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.reportPayload.finish_scope), "all");
+assert.equal(await finishValidation.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.reportPayload.overtime_plan), "");
+assert.doesNotMatch(await finishValidation.evaluate(() => buildReportRemark("finish", "")), /一般下班 17:00/);
 await finishValidation.close();
 
 currentMachine = "A04"; guardEnabled = false;

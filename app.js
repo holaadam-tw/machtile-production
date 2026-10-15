@@ -29,6 +29,8 @@ const config = {
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
   stationCommandMachines: [],
+  // 機台卡「完工」捷徑：只開啟既有 finish 報工，不直接關舊 MES 站；正式 config.js 未開前完全隱藏。
+  enableFinishButton: false,
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   inspectionLinkMachines: [],
@@ -8485,9 +8487,6 @@ function validateReportForm(type) {
     if (!checkedRadio("pmAbnormal")) return "請確認是否異常。";
     if (selectedRadioValue("pmAbnormal") === "yes" && !$("#pmAbnormalNote")?.value.trim()) return "有異常時請填寫異常備註。";
   }
-  if (type === "finish") {
-    if (!checkedRadio("finishOvertime")) return "請確認是否加班。";
-  }
   if (type === "abnormal") {
     if (!$("#abnormalType")?.value) return "請選擇異常類型。";
   }
@@ -8511,9 +8510,7 @@ function buildReportRemark(type, remark) {
     const plan = $("#overtimePlan")?.value;
     if (plan) parts.push(`加班安排 ${plan}`);
   }
-  if (type === "finish") {
-    parts.push(selectedRadioValue("finishOvertime") === "2030" ? "加班收工 20:30" : "一般下班 17:00");
-  }
+  if (type === "finish" && selectedRadioValue("finishOvertime") === "2030") parts.push("加班收工 20:30");
   if (type === "abnormal") {
     parts.push(`異常類型 ${$("#abnormalType")?.value || "-"}`);
   }
@@ -8540,7 +8537,8 @@ function buildReportPayload(type) {
     } : {}),
     defect_qty: Number($("#defectQty")?.value || 0),
     has_program_upload: hasFile("programUpload"),
-    overtime_plan: $("#overtimePlan")?.value || selectedRadioValue("finishOvertime") || "",
+    overtime_plan: $("#overtimePlan")?.value || (selectedRadioValue("finishOvertime") === "2030" ? "2030" : ""),
+    ...(type === "finish" ? { finish_scope: "all" } : {}),
     ...(type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder) ? {
       pm_abnormal: selectedRadioValue("pmAbnormal") || "",
     } : {}),
@@ -13532,6 +13530,10 @@ function machtileStationCmdActiveFor(machineCode) {
     && machtileStationCmdCore.enabledForMachine(machtileStationCmdFlag(), machineCode);
 }
 
+function machtileFinishButtonEnabled() {
+  return config.enableFinishButton === true;
+}
+
 function machtileStationCmdSavePending() {
   const plain = {};
   Object.keys(machtileStationCmd.pending).forEach((code) => {
@@ -14533,6 +14535,9 @@ function renderMachineCard(machine) {
   const reportAction = order && canReport
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
+  const finishAction = machtileFinishButtonEnabled() && order && canReport
+    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate("finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
+    : "";
 
   return `
     <article class="machine-tile-card ${status.className} ${deptTone}" ${detailAttr}>
@@ -14637,7 +14642,7 @@ function renderMachineCard(machine) {
       ${machtileInspectionStatusMarkup(machine, order)}${stationCmd.status}<footer class="machine-tile-footer${stationCmd.active ? " has-station-cmd" : ""}">
         ${machtileCardFooterStatus(order, machine)}
         <div class="machine-tile-actions">
-          ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}
+          ${reportAction}${machtileInspectionLinkMarkup(machine, order)}${stationCmd.buttons}${finishAction}
           ${isHmc ? `<a class="machine-hmc-report-link" data-no-detail href="${escapeHtml(hmcUrl)}">多盤多工件每日盤點</a>` : ""}
         </div>
       </footer>
@@ -21941,7 +21946,7 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     ${flow.error ? `<p class="batch-notice is-error" role="alert">${escapeHtml(flow.error)}</p>` : ""}
     <label class="station-report-reason"><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>
     <label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed && !oldOrderNoteAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>
-    <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || !row.good && !row.bad ? " disabled" : ""}>${flow.phase === "waiting-preview" ? "等待套用端預覽…" : "先預覽，不寫入舊 MES"}</button>
+    <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${flow.phase === "waiting-preview" ? "等待套用端預覽…" : "先預覽，不寫入舊 MES"}</button>
     ${resultHtml}
   </section>`;
 }
@@ -21968,13 +21973,19 @@ async function machtileStationReportSubmitPreview(code) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const context = machtileStationReportContext(order, code);
-  if (!core || !context || machtileStationReportFlowBusy(flow)) return;
+  const block = (message) => {
+    flow.error = message;
+    showToast(message);
+    machtileRenderStationReportSurfaces();
+  };
+  if (!core) { block("智慧報工尚未載入，請重新整理後再試。"); return; }
+  if (!context) { block("智慧報工缺少舊 MES 對照資料，本次未送出；請重新整理或通知主管。"); return; }
+  if (machtileStationReportFlowBusy(flow)) { block("上一筆智慧報工仍在處理，請稍候查看結果。"); return; }
   if (machtileSingleStationReportOrder(code)) {
     const validationMessage = validateReportForm(activeReportType);
     const operatorMessage = machtileValidateOperatorSelection(code);
     if (validationMessage || operatorMessage) {
-      flow.error = validationMessage || operatorMessage;
-      machtileRenderStationReportSurfaces();
+      block(validationMessage || operatorMessage);
       return;
     }
     const reportType = activeReportType === "finish" ? "finish" : "noon";
@@ -21990,8 +22001,7 @@ async function machtileStationReportSubmitPreview(code) {
   try {
     args = core.buildSubmitArgs(form, crypto.randomUUID(), true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) {
-    flow.error = error.message || "報工資料不完整。";
-    machtileRenderStationReportSurfaces();
+    block(error.message || "報工資料不完整。");
     return;
   }
   flow.args = args;
@@ -23221,6 +23231,15 @@ function bindEvents() {
 
   document.addEventListener("click", (event) => {
     if (machtileHandleBatchClick(event)) return;
+    const finishButton = event.target.closest('.machine-finish-button[data-open-report-type="finish"]');
+    if (finishButton) {
+      openReport(finishButton.dataset.report || "", {
+        reportType: "finish",
+        machine: finishButton.dataset.reportMachine || "",
+        processId: finishButton.dataset.reportProcess || "",
+      });
+      return;
+    }
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       if (viewButton.dataset.alertFilter) {

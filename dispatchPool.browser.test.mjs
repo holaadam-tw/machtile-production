@@ -117,7 +117,7 @@ const poolKeys = page => page.locator('#machtileCardSelection [data-card-selecti
 try {
   ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
   ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-b01b06-r1'), 'rollout config cache key is bumped');
-  ok(['app.js', 'i18n.js'].every(asset => rolloutIndex.includes(`${asset}?v=20261015-lathe-single-operator-r1`)) && rolloutIndex.includes('styles.css?v=20261014-apps-m4'), 'return-state app, translations, and styles cache keys are bumped');
+  ok(['app.js', 'i18n.js', 'styles.css'].every(asset => rolloutIndex.includes(`${asset}?v=20261015-finish-r1`)), 'return-state app, translations, and styles cache keys are bumped');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };

@@ -67,6 +67,14 @@
     "value": "Dừng máy",
     "_draft": true
   },
+  "finish_button": {
+    "value": "Hoàn tất",
+    "_draft": true
+  },
+  "finish_work_hint": {
+    "value": "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp",
+    "_draft": true
+  },
   "batch_command_title": {
     "value": "Bắt đầu / dừng hàng loạt",
     "_draft": true
