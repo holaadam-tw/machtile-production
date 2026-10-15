@@ -16,6 +16,7 @@
   const URGENCY_LABEL = Object.freeze({ 1: "緊急 1", 2: "緊急 2", 3: "緊急 3", 4: "緊急 4" });
 
   const text = (v) => (v === null || v === undefined ? "" : String(v).trim());
+  const displayName = (v) => text(v) || "未提供";
 
   function departmentCodeOf(departmentName) {
     return DEPARTMENT_CODE_BY_NAME[text(departmentName)] || "";
@@ -209,6 +210,7 @@
     dueText,
     plannedStartText,
     quantityText,
+    displayName,
     latestSyncedAt,
   });
 });

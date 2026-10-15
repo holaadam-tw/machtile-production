@@ -96,6 +96,8 @@ eq("預計開始未提供", c.plannedStartText(""), "未提供");
 eq("數量", c.quantityText(120), "120");
 eq("數量 null → 未提供（不補 1）", c.quantityText(null), "未提供");
 eq("數量 0 → 未提供", c.quantityText(0), "未提供");
+eq("名稱 null → 未提供", c.displayName(null), "未提供");
+eq("名稱空白 → 未提供", c.displayName("   "), "未提供");
 eq("最近同步時間", c.latestSyncedAt([{ synced_at: "2026-10-07T01:00:00Z" }, { synced_at: "2026-10-07T02:30:00Z" }]), "10/07 10:30");
 eq("沒有同步時間", c.latestSyncedAt([]), "");
 
