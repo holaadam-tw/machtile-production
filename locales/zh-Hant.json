@@ -16,6 +16,8 @@
   "report": "報工",
   "start_work": "開工",
   "stop_work": "停工",
+  "finish_button": "完工",
+  "finish_work_hint": "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
   "batch_command_title": "批次開工／停工",
   "batch_start": "批次開工",
   "batch_stop": "批次停工",

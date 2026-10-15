@@ -67,6 +67,8 @@
       work_start_first: "首次開工",
       daily_start: "今日開工",
       finish_work: "收工/完工",
+      finish_button: "完工",
+      finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -155,6 +157,8 @@
       work_start_first: "Bắt đầu lần đầu",
       daily_start: "Bắt đầu hôm nay",
       finish_work: "Kết thúc / Hoàn tất",
+      finish_button: "Hoàn tất",
+      finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft
