@@ -37,6 +37,7 @@ const requestUrls = [];
 let currentMachine = "A04";
 let guardFails = false;
 let guardEnabled = true;
+let finishButtonEnabled = true;
 let finalSubmitFails = false;
 let reconciledCommand = null;
 let closeCommand = null;
@@ -78,7 +79,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:true,enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -91,6 +92,7 @@ await page.waitForFunction(() => typeof machtileRenderSingleStationReport === "f
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator('[data-report-type="noon"]').click();
+assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
 await page.locator("#defectQty").fill("2");
 await page.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
@@ -183,10 +185,17 @@ await finishValidation.evaluate(() => {
 });
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').count(), 1, "enabled finish flag shows one machine-card finish button");
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').innerText(), "完工");
+await finishValidation.locator('.machine-report-button:visible').click();
+assert.equal(await finishValidation.locator('.report-type-tab[data-report-type="noon"]').getAttribute("class").then(value => value.includes("active")), true, "machine-card report button opens directly on routine report");
+await finishValidation.evaluate(() => closeReport());
 await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
 await finishValidation.waitForTimeout(200);
-const finishOpenState = await finishValidation.evaluate(() => ({ open: document.querySelector("#reportSheet")?.classList.contains("is-open"), toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
-assert.equal(finishOpenState.open, true, `finish card button opens finish report: ${JSON.stringify(finishOpenState)}`);
+const finishOpenState = await finishValidation.evaluate(() => ({ finishOpen: document.querySelector("#finishSheet")?.classList.contains("is-open"), reportOpen: document.querySelector("#reportSheet")?.classList.contains("is-open"), activeReportType, formHost: document.querySelector("#reportForm")?.parentElement?.id, toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
+assert.equal(finishOpenState.finishOpen, true, `finish card button opens independent finish screen: ${JSON.stringify(finishOpenState)}`);
+assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
+assert.equal(finishOpenState.activeReportType, "finish");
+assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
+assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "良品數", "independent finish screen labels the production input as good quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
 assert.equal(await finishValidation.locator('input[name="finishOvertime"][value="none"]').isChecked(), true, "hidden overtime field defaults to none");
 await finishValidation.evaluate(operatorId => {
@@ -198,6 +207,10 @@ await finishValidation.evaluate(operatorId => {
 await finishValidation.locator("#completedQty").fill("920");
 await finishValidation.locator("#defectQty").fill("0");
 await finishValidation.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-desktop.png") });
+await finishValidation.setViewportSize({ width: 390, height: 1200 });
+await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-mobile.png") });
+await finishValidation.setViewportSize({ width: 800, height: 1100 });
 assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "zero delta remains clickable so it can explain why submission is blocked");
 const zeroCommandsBefore = calls.commands.length;
 await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
@@ -222,6 +235,20 @@ assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
 assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站，下一道已進池/);
 await finishValidation.close();
+
+finishButtonEnabled = false;
+const finishFlagOff = await context.newPage();
+await finishFlagOff.goto(base, { waitUntil: "domcontentloaded" });
+await finishFlagOff.waitForFunction(() => state.workOrders?.length && state.machines?.length);
+await finishFlagOff.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+assert.equal(await finishFlagOff.locator('.machine-finish-button').count(), 0, "disabled finish flag removes machine-card finish button");
+await finishFlagOff.close();
+finishButtonEnabled = true;
 
 currentMachine = "A04"; guardEnabled = false;
 const disabledGuard = await context.newPage();

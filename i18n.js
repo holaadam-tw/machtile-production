@@ -68,6 +68,9 @@
       daily_start: "今日開工",
       finish_work: "收工/完工",
       finish_button: "完工",
+      finish_screen_eyebrow: "完工回報",
+      finish_screen_title: "完工",
+      finish_screen_hint: "填寫良品與不良數；有不良時必須選擇原因。",
       finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
@@ -158,6 +161,9 @@
       daily_start: "Bắt đầu hôm nay",
       finish_work: "Kết thúc / Hoàn tất",
       finish_button: "Hoàn tất",
+      finish_screen_eyebrow: "Báo cáo hoàn tất", // _draft
+      finish_screen_title: "Hoàn tất", // _draft
+      finish_screen_hint: "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.", // _draft
       finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft

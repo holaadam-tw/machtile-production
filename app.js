@@ -8435,7 +8435,7 @@ function setReportType(type) {
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
   const completedLabel = $("#completedQtyLabel");
-  if (completedLabel) completedLabel.textContent = machtileTranslate(reportCounterApplies() ? "machine_current_counter" : "good_quantity");
+  if (completedLabel) completedLabel.textContent = machtileTranslate(activeReportType === "finish" ? "good_quantity" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity"));
   updateReportCounterPreview();
   machtileRenderSingleStationReport();
 }
@@ -14569,7 +14569,7 @@ function renderMachineCard(machine) {
   const isHmc = isHmcMachine(machine);
   const hmcUrl = isHmc ? hmcReportRouteUrl(machine) : "";
   const canReport = isReportableMachineName(machine.name) && (!order || isOrderReportable(order));
-  const reportAttr = order && canReport ? `data-report="${escapeHtml(order.id)}" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}"` : "";
+  const reportAttr = order && canReport ? `data-report="${escapeHtml(order.id)}" data-report-type="noon" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}"` : "";
   const reportUrl = canReport ? machineReportUrl(machine) : "";
   const qrReportUrl = reportUrl ? publicReportUrlOnLocalhost(reportUrl) : "";
   const reportLinkText = isHmc
@@ -20747,6 +20747,10 @@ function setSelectedOrder(order) {
 }
 
 function openReport(orderId, options = {}) {
+  machtileRestoreReportForm();
+  $("#finishSheet")?.classList.remove("is-open");
+  $("#finishSheet")?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("finish-sheet-mode");
   resetReportFileInputs();
   const machineName = options.machine || "";
   // 只帶機台（機台 QR）→ 預設＝卡片目前顯示的那張（這台最近有活動的單），不再是清單裡交期最早的那張
@@ -20797,8 +20801,34 @@ function openReport(orderId, options = {}) {
   ($("#workTotalQty") || $("#completedQty")).focus();
 }
 
+function machtileRestoreReportForm() {
+  const form = $("#reportForm");
+  const home = $("#reportFormHome");
+  if (form && home && form.parentElement !== home) home.append(form);
+}
+
+function openFinishReport(orderId, options = {}) {
+  openReport(orderId, { ...options, reportType: "finish" });
+  if (!$("#reportSheet")?.classList.contains("is-open") || activeReportType !== "finish") return;
+  $("#finishMachine").textContent = $("#reportMachine")?.textContent || options.machine || "—";
+  $("#finishPart").textContent = $("#reportPart")?.textContent || "—";
+  $("#finishWorkNo").textContent = $("#reportWorkNo")?.textContent || "—";
+  $("#finishFormHost")?.append($("#reportForm"));
+  $("#reportSheet").classList.remove("is-open");
+  $("#reportSheet").setAttribute("aria-hidden", "true");
+  $("#finishSheet").classList.add("is-open");
+  $("#finishSheet").setAttribute("aria-hidden", "false");
+  document.body.classList.add("finish-sheet-mode");
+  machtileRenderSingleStationReport();
+  $("#completedQty")?.focus();
+}
+
 function closeReport() {
   const returnDetailOrderId = activeReportReturnDetailOrderId;
+  machtileRestoreReportForm();
+  $("#finishSheet")?.classList.remove("is-open");
+  $("#finishSheet")?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("finish-sheet-mode");
   $("#reportSheet").classList.remove("is-open");
   $("#reportSheet").classList.remove("route-sheet");
   document.body.classList.remove("route-mode");
@@ -23296,8 +23326,7 @@ function bindEvents() {
     if (machtileHandleBatchClick(event)) return;
     const finishButton = event.target.closest('.machine-finish-button[data-open-report-type="finish"]');
     if (finishButton) {
-      openReport(finishButton.dataset.report || "", {
-        reportType: "finish",
+      openFinishReport(finishButton.dataset.report || "", {
         machine: finishButton.dataset.reportMachine || "",
         processId: finishButton.dataset.reportProcess || "",
       });
@@ -23662,6 +23691,11 @@ function bindEvents() {
     }
 
     if (event.target.closest("[data-close-report]")) {
+      closeReport();
+      return;
+    }
+
+    if (event.target.closest("[data-close-finish]")) {
       closeReport();
       return;
     }

@@ -70,8 +70,8 @@ await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.tex
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator("#reportSheet.is-open").waitFor();
 const tabs = await page.locator("#reportForm .report-type-tab:visible").allTextContents();
-check(tabs.length === 4 && !tabs.some((value) => value.includes("4:30")), "旗標開啟時報工表單只有四個非 4:30 分頁");
-check(await page.locator('[data-report-type="dailyStart"], [data-report-type="afternoonCheck"]:visible').count() === 0, "旗標開啟時下午 4:30 入口已移除");
+check(tabs.length === 3 && !tabs.some((value) => value.includes("4:30") || value.includes("完工")), "例行報工只留首次開工、報工、異常回報");
+check(await page.locator('[data-report-type="dailyStart"], [data-report-type="finish"], [data-report-type="afternoonCheck"]:visible').count() === 0, "例行報工沒有今日開工、完工與 4:30 重複入口");
 const flagModes = await page.evaluate(() => {
   config.inspectionLinkMachines = [];
   setReportDefaults(selectedOrder);
@@ -139,11 +139,11 @@ check(sourceCoverage.start.source === "dailyStart" && sourceCoverage.report.sour
 check((await page.locator('[data-report-section="noon"]').innerText()).includes("照機台計數器填累計數量") && !(await page.locator('[data-report-section="noon"]').innerText()).includes("中午"), "報工說明沒有時間字樣且維持累計語意");
 check((await page.locator('label[for="completedQty"]').innerText()).startsWith("機台目前累計數") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("這次不良數"), "報工欄位區分機台累計與這次不良");
 await page.screenshot({ path: path.join(screenshotDir, "20261013-report-cumulative-counter-800px.png"), fullPage: true });
-await page.locator('[data-report-type="finish"]').click();
-check((await page.locator("#reportCounterPreview").innerText()) === "累計 145｜上次 130｜這次 15" && (await page.locator("#completedQtyLabel").innerText()) === "機台目前累計數", "收工分頁套用相同累計差額規則");
+await page.evaluate(() => setReportType("finish"));
+check((await page.locator("#reportCounterPreview").innerText()) === "累計 145｜上次 130｜這次 15" && (await page.locator("#completedQtyLabel").innerText()) === "機台目前累計數", "獨立完工畫面套用相同累計差額規則");
 
 counterReports = [{ report_type: "noon", created_at: new Date(Date.now() - 600_000).toISOString(), report_payload: { machine_qty: 130 } }];
-await page.locator('[data-report-type="noon"]').click();
+await page.evaluate(() => setReportType("noon"));
 await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
 await page.evaluate(() => {
   document.querySelector("#cycleMinutes").value = "0";

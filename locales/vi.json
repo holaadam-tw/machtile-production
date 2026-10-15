@@ -71,6 +71,18 @@
     "value": "Hoàn tất",
     "_draft": true
   },
+  "finish_screen_eyebrow": {
+    "value": "Báo cáo hoàn tất",
+    "_draft": true
+  },
+  "finish_screen_title": {
+    "value": "Hoàn tất",
+    "_draft": true
+  },
+  "finish_screen_hint": {
+    "value": "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.",
+    "_draft": true
+  },
   "finish_work_hint": {
     "value": "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp",
     "_draft": true
