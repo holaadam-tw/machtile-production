@@ -39,6 +39,17 @@
     return { valid: true, code: "OK", message: "", current, baseline, delta };
   }
 
+  function finishTotal(totalValue, reportedValue) {
+    const total = finiteCounter(totalValue);
+    const reported = finiteCounter(reportedValue);
+    if (total === null) return { valid: false, code: "TOTAL_REQUIRED", message: "請填寫這一道總完成數。", total, reported, delta: null };
+    if (reported === null) return { valid: false, code: "REPORTED_REQUIRED", message: "讀不到這一道已報數量，請重新整理後再試。", total, reported, delta: null };
+    const delta = total - reported;
+    if (delta < 0) return { valid: false, code: "TOTAL_BELOW_REPORTED", message: `總數不能小於已報的 ${reported} 件；報錯請用報工修正`, total, reported, delta };
+    if (total === 0 && reported === 0) return { valid: false, code: "ZERO_TOTAL", message: "這一道還沒有報工數量，不能完工關站；請先報工", total, reported, delta };
+    return { valid: true, code: "OK", message: "", total, reported, delta };
+  }
+
   function rateReasonableness({ cycleSeconds, startedAt, now, reportedQty } = {}) {
     const seconds = Number(cycleSeconds);
     const startMs = Date.parse(startedAt);
@@ -51,5 +62,5 @@
       message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "" };
   }
 
-  return { latestBaseline, calculate, rateReasonableness };
+  return { latestBaseline, calculate, finishTotal, rateReasonableness };
 });

@@ -8237,7 +8237,18 @@ function reportCounterEffectiveBaseline() {
 }
 
 function reportCounterCalculation() {
+  if (activeReportType === "finish") {
+    return window.MachTileReportCounterCore.finishTotal($("#completedQty")?.value, machtileFinishReportedQty());
+  }
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
+}
+
+// 完工「已報」跟 Monitor 卡片完全同源：重用 batchReportCore.cardProgress。
+function machtileFinishReportedQty(order = selectedOrder) {
+  const core = machtileBatchCore();
+  const row = order?.processId ? machtileCardPickState.progressByProcess?.get?.(String(order.processId)) || null : null;
+  if (core?.cardProgress) return core.cardProgress(Number(order?.appDone ?? order?.done ?? 0), row, Date.now()).done;
+  return Number(order?.done || 0);
 }
 
 function reportCounterRateReasonableness(result = reportCounterCalculation()) {
@@ -8255,10 +8266,11 @@ function updateReportCounterPreview() {
   const rateWarning = $("#reportCounterRateWarning");
   if (!preview || !manual) return;
   const applies = reportCounterApplies();
-  preview.hidden = !applies;
-  manual.hidden = !applies || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
+  const finish = activeReportType === "finish";
+  preview.hidden = !applies || finish;
+  manual.hidden = !applies || finish || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
   if (rateWarning) { rateWarning.hidden = true; rateWarning.textContent = ""; }
-  if (!applies) return;
+  if (!applies || finish) { machtileRenderSingleStationReport(); return; }
   if (reportCounterBaselineState.status === "loading") {
     preview.textContent = machtileTranslate("counter_loading");
     preview.classList.remove("is-error");
@@ -8298,7 +8310,7 @@ async function loadReportCounterBaseline(order = selectedOrder) {
     updateReportCounterPreview();
     return;
   }
-  const today = new Date().toISOString().slice(0, 10);
+  const today = hmcTodayDateIso();
   try {
     const rows = await supabaseFetch(`production_reports?select=report_type,report_payload,created_at&process_id=eq.${encodeURIComponent(processId)}&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=100`);
     if (selectedOrder?.processId !== processId) return;
@@ -8380,7 +8392,7 @@ function setReportDefaults(order) {
   if (machineQtyInput) machineQtyInput.value = doneQty || 0;
   // 2026-10-01：「這次良品」預設 0。舊版預設帶「已完成數」，欄位又寫「累計」，照預設送出時
   // 回寫橋會把整個累計當成這次的量再加一次。
-  if (completedInput) completedInput.value = 0;
+  if (completedInput) completedInput.value = activeReportType === "finish" ? machtileFinishReportedQty(order) : 0;
   if (defectInput) defectInput.value = 0;
   machtileRenderReportOverQty(order);
   // 沒有這張單的時間就留白，不可以沿用上一張單（審查 M1）
@@ -8435,7 +8447,11 @@ function setReportType(type) {
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
   const completedLabel = $("#completedQtyLabel");
-  if (completedLabel) completedLabel.textContent = machtileTranslate(activeReportType === "finish" ? "good_quantity" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity"));
+  if (completedLabel) completedLabel.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_good" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity"));
+  const reported = $("#finishReportedQty");
+  if (reported) { reported.hidden = activeReportType !== "finish"; reported.textContent = machtileTranslate("finish_reported_qty", { quantity: machtileFinishReportedQty() }); }
+  const qtyHelp = $("#reportQtyHelp");
+  if (qtyHelp) qtyHelp.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_help" : "counter_qty_help");
   updateReportCounterPreview();
   machtileRenderSingleStationReport();
 }
@@ -8480,8 +8496,8 @@ function validateReportForm(type) {
     if (completed < 0 || defects < 0) return "良品與這次不良數不可小於 0。";
   }
   if (reportCounterApplies(type)) {
-    if (reportCounterBaselineState.status === "loading") return "正在讀取今天的機台計數基準，請稍候。";
-    if (reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
+    if (type !== "finish" && reportCounterBaselineState.status === "loading") return "正在讀取今天的機台計數基準，請稍候。";
+    if (type !== "finish" && reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
     const result = reportCounterCalculation();
     if (!result.valid) return result.message;
   }
@@ -8532,9 +8548,9 @@ function buildReportPayload(type) {
     } : {}),
     work_total_qty: Number($("#workTotalQty")?.value || 0) || null,
     cycle_time_seconds: reportCycleSecondsToSend(type),
-    machine_qty: counter ? counter.current : Number($("#machineQty")?.value || 0),
+    machine_qty: type === "finish" ? null : (counter ? counter.current : Number($("#machineQty")?.value || 0)),
     completed_qty: counter ? counter.delta : Number($("#completedQty")?.value || 0),
-    ...(counter ? {
+    ...(counter && type !== "finish" ? {
       counter_baseline_qty: counter.baseline,
       counter_baseline_source: reportCounterBaselineState.baseline?.source || "manual",
     } : {}),
@@ -20798,6 +20814,8 @@ function openReport(orderId, options = {}) {
     ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
     : requestedType;
   setReportType(availableType);
+  if (availableType === "finish" && $("#completedQty")) $("#completedQty").value = machtileFinishReportedQty(order);
+  updateReportCounterPreview();
   if (!order) setReportDefaults(null);
   void loadReportCounterBaseline(order);
   $("#reportSheet").classList.toggle("route-sheet", Boolean(options.routeMode));
@@ -22094,6 +22112,38 @@ async function machtileStationReportSubmitPreview(code) {
       reportPayload: buildReportPayload(reportType),
       operators: machtileSelectedOperators(machtileBatchState.actorId),
     };
+    // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
+    // 仍建立 completed_qty=0 的正式 finish 紀錄，再沿用既有 close command 收尾。
+    if (reportType === "finish" && Number(row.good) === 0 && Number(row.bad) === 0) {
+      const zeroCommandUuid = crypto.randomUUID();
+      flow.phase = "submitting-report";
+      flow.error = "";
+      machtileRenderStationReportSurfaces();
+      try {
+        const saved = await submitReport(0, 0, buildReportRemark("finish", row.reportNote || ""), "finish", {
+          order, reportUuid: zeroCommandUuid, reportPayload: flow.singleReport.reportPayload,
+          operators: flow.singleReport.operators, requireStructured: true,
+        });
+        if (!saved.wroteCloud || !saved.reportId) throw new Error("完工紀錄未確認寫入");
+        flow.result = { command_uuid: zeroCommandUuid, command_type: "report", status: "applied", good_qty: 0, fail_qty: 0 };
+        flow.report = flow.result;
+        flow.phase = "finished";
+        const closeArgs = {
+          p_command_uuid: zeroCommandUuid,
+          p_expected_order_no: context.expectedOrderNo,
+          p_expected_index_sn: context.expectedIndexSn,
+          p_expected_part_no: context.expectedPartNo,
+          p_manufacture_ii_id: context.manufactureIiId,
+          p_expected_simulation_id: context.expectedSimulationId,
+        };
+        await machtileFinishCloseAfterAppliedReport(code, closeArgs, zeroCommandUuid);
+      } catch (error) {
+        flow.phase = "blocked";
+        flow.error = `單純收尾未完成：${error.message || error}`;
+      }
+      machtileRenderStationReportSurfaces();
+      return;
+    }
   }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
     reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: null };
@@ -23164,7 +23214,7 @@ async function submitReport(completed, defects, remark, reportType, options = {}
     tenant_id: order.tenantId,
     work_order_id: order.workOrderId,
     process_id: order.processId,
-    report_date: new Date().toISOString().slice(0, 10),
+    report_date: hmcTodayDateIso(),
     completed_qty: completed,
     defect_qty: defects,
     status_after_report: order.processStatus || "running",

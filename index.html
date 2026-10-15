@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261015-finish-dialog-r1">
+  <link rel="stylesheet" href="./styles.css?v=20261015-finish-total-r1">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -480,8 +480,8 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
-            <label class="field-label" for="completedQty"><span id="completedQtyLabel">機台目前累計數</span> <small>必填</small></label>
-            <p class="report-qty-help">報工請照機台計數器填累計數量</p>
+            <label class="field-label" for="completedQty"><span id="completedQtyLabel">機台目前累計數</span> <small>必填</small> <span id="finishReportedQty" class="finish-reported-qty" hidden></span></label>
+            <p id="reportQtyHelp" class="report-qty-help">報工請照機台計數器填累計數量</p>
             <div class="stepper">
               <button type="button" data-step="completedQty" data-delta="-1">−</button>
               <input id="completedQty" type="number" min="0" value="5">
@@ -774,6 +774,6 @@
   <script src="./stationCommandCore.js?v=20261015-finish-close-r4"></script>
   <script src="./stationReportCore.js?v=20261013-single-card-r4"></script>
   <script src="./inspectionLinkCore.js?v=20261013-ireporter-machine-link-p3-r2"></script>
-  <script src="./app.js?v=20261015-finish-dialog-r2"></script>
+  <script src="./app.js?v=20261015-finish-total-r1"></script>
 </body>
 </html>

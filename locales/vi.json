@@ -83,6 +83,10 @@
     "value": "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.",
     "_draft": true
   },
+  "finish_total_good": { "value": "Tổng số hoàn thành của công đoạn này (đạt)", "_draft": true },
+  "finish_reported_qty": { "value": "Đã báo {{quantity}} sản phẩm", "_draft": true },
+  "finish_total_help": { "value": "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", "_draft": true },
+  "counter_qty_help": { "value": "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", "_draft": true },
   "finish_work_hint": {
     "value": "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp",
     "_draft": true

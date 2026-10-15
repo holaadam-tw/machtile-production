@@ -11906,6 +11906,7 @@ body .machtile-session-badge .machtile-session-toggle {
 }
 /* 單台報工：數量欄說明 */
 .report-qty-help { margin: -4px 0 6px; color: var(--muted); font-size: 12px; }
+.finish-reported-qty { margin-left: 8px; color: var(--muted); font-weight: 800; white-space: nowrap; }
 
 /* 卡片完成進度：百分比與色條同色、色條放在百分比正下方（2026-10-02 owner） */
 .machine-metrics small.card-progress-pct { color: var(--brand-blue); font-size: 14px; font-weight: 800; }
@@ -13054,7 +13055,6 @@ body.finish-sheet-mode #reportForm .report-type-tabs,
 body.finish-sheet-mode #reportForm [data-report-section]:not(#quantitySection),
 body.finish-sheet-mode #reportForm label[for="reportNote"],
 body.finish-sheet-mode #reportForm #reportNote,
-body.finish-sheet-mode #reportForm .report-qty-help,
 body.finish-sheet-mode #reportForm .report-actions { display: none !important; }
 body.finish-sheet-mode #reportForm #quantitySection { display: grid; }
 body.finish-sheet-mode #reportForm .submit-report { background: #6f42c1; }

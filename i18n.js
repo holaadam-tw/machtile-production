@@ -71,6 +71,10 @@
       finish_screen_eyebrow: "完工回報",
       finish_screen_title: "完工",
       finish_screen_hint: "填寫良品與不良數；有不良時必須選擇原因。",
+      finish_total_good: "這一道總完成數（良品）",
+      finish_reported_qty: "已報 {{quantity}} 件",
+      finish_total_help: "填這一道從頭到尾的良品總數；系統只補報尚未回報的差額。",
+      counter_qty_help: "報工請照機台計數器填累計數量",
       finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
       finish_close_applied: "已關站",
       finish_close_applied_short: "少 {{quantity}} 件，已關站",
@@ -172,6 +176,10 @@
       finish_screen_eyebrow: "Báo cáo hoàn tất", // _draft
       finish_screen_title: "Hoàn tất", // _draft
       finish_screen_hint: "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.", // _draft
+      finish_total_good: "Tổng số hoàn thành của công đoạn này (đạt)", // _draft
+      finish_reported_qty: "Đã báo {{quantity}} sản phẩm", // _draft
+      finish_total_help: "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", // _draft
+      counter_qty_help: "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", // _draft
       finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
       finish_close_applied: "Đã đóng công đoạn", // _draft
       finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn", // _draft

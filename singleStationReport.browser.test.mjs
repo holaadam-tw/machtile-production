@@ -195,7 +195,8 @@ assert.equal(finishOpenState.finishOpen, true, `finish card button opens indepen
 assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
 assert.equal(finishOpenState.activeReportType, "finish");
 assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
-assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "良品數", "independent finish screen labels the production input as good quantity");
+assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
+assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
 assert.equal(await finishValidation.locator('input[name="finishOvertime"][value="none"]').isChecked(), true, "hidden overtime field defaults to none");
 await finishValidation.evaluate(operatorId => {
@@ -204,18 +205,18 @@ await finishValidation.evaluate(operatorId => {
   list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`;
   document.body.append(list);
 }, id(901));
-await finishValidation.locator("#completedQty").fill("920");
+await finishValidation.locator("#completedQty").fill("919");
 await finishValidation.locator("#defectQty").fill("0");
 await finishValidation.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
 await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-desktop.png") });
 await finishValidation.setViewportSize({ width: 390, height: 1200 });
 await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-mobile.png") });
 await finishValidation.setViewportSize({ width: 800, height: 1100 });
-assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "zero delta remains clickable so it can explain why submission is blocked");
+assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "total below reported remains clickable so validation can explain why submission is blocked");
 const zeroCommandsBefore = calls.commands.length;
 await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
-assert.equal(calls.commands.length, zeroCommandsBefore, "zero quantity is blocked before creating a command");
-assert.equal(await finishValidation.locator("#toast").innerText(), await finishValidation.locator("#singleStationReportPanel [role=alert]").innerText(), "zero-quantity block is visible both as toast and inline red text");
+assert.equal(calls.commands.length, zeroCommandsBefore, "total below reported is blocked before creating a command");
+assert.match(await finishValidation.locator("#toast").innerText(), /總數不能小於已報的 920 件；報錯請用報工修正/, "below-reported block gives the approved correction guidance");
 await finishValidation.locator("#completedQty").fill("958");
 await finishValidation.locator("#defectQty").fill("0");
 const finishCommandsBefore = calls.commands.length;
@@ -233,7 +234,7 @@ assert.equal(calls.closeCommands[0].p_command_type, "close");
 assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
-assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站，下一道已進池/);
+assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站[\s\S]*完工報工已保留；舊 MES 已關站/);
 await finishValidation.close();
 
 finishButtonEnabled = false;
