@@ -76,10 +76,10 @@
     return flag.all || flag.machines.includes(code);
   }
 
-  function finishCloseDecision({ enabled, machines, machineCode, reportType, resultKind } = {}) {
+  function finishCloseDecision({ enabled, machines, machineCode, reportType, serverStatus } = {}) {
     if (enabled !== true || !enabledForMachine(parseFlag(machines), machineCode)) return { send: false, reason: "flag_off" };
     if (reportType !== "finish") return { send: false, reason: "not_finish" };
-    if (resultKind !== "applied" && resultKind !== "applied-late") return { send: false, reason: "report_not_applied" };
+    if (serverStatus !== "applied") return { send: false, reason: "report_not_applied" };
     return { send: true, reason: "" };
   }
 
@@ -382,6 +382,7 @@
     // 套用端速查表（#785 runbook）：OUTCOME_UNKNOWN／INTERNAL_ERROR＝舊 MES 有沒有改「不確定」，不能說沒生效
     OUTCOME_UNKNOWN: "舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
     INTERNAL_ERROR: "工廠套用時出錯，舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
+    STILL_RUNNING: "這筆仍在生產中，沒有關站；請重新整理後再試，或請生管確認。",
     // 管理員路徑：伺服器在建指令前就拒絕（舊 MES 沒動）。正常是 submit 錯誤；萬一出現在 reject_code 也給同樣白話。
     ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
     ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",

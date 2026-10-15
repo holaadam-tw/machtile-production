@@ -13539,7 +13539,7 @@ function machtileFinishButtonEnabled() {
 
 function machtileFinishCloseEnabled(machineCode) {
   return Boolean(machtileStationCmdCore?.finishCloseDecision({ enabled: config.enableFinishClose,
-    machines: config.finishCloseMachines, machineCode, reportType: "finish", resultKind: "applied" }).send);
+    machines: config.finishCloseMachines, machineCode, reportType: "finish", serverStatus: "applied" }).send);
 }
 
 function machtileFinishCloseSetResult(code, view) {
@@ -13554,9 +13554,9 @@ function machtileFinishCloseSetResult(code, view) {
 
 async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUuid) {
   const flow = machtileStationReportState(machtileBatchRow(code));
-  const resultKind = machtileStationReportCore()?.resultCard(flow.result)?.kind;
   const decision = machtileStationCmdCore?.finishCloseDecision({ enabled: config.enableFinishClose,
-    machines: config.finishCloseMachines, machineCode: code, reportType: flow.singleReport?.reportType, resultKind });
+    machines: config.finishCloseMachines, machineCode: code, reportType: flow.singleReport?.reportType,
+    serverStatus: flow.result?.status });
   if (!decision?.send) return;
   if (flow.close?.reportCommandUuid === reportCommandUuid) return;
   flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid };

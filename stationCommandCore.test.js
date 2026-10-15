@@ -33,10 +33,12 @@ const allCncMachines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", 
 const allCncFlag = c.parseFlag(allCncMachines);
 eq("11 台 CNC 名單逐台開啟", allCncMachines.map((machine) => c.enabledForMachine(allCncFlag, machine)), Array(11).fill(true));
 eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), false);
-eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: false, reason: "flag_off" });
-eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: false, reason: "flag_off" });
-eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: true, reason: "" });
-eq("完工關站：報工 rejected 不送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "hard" }), { send: false, reason: "report_not_applied" });
+eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
+eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
+eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: true, reason: "" });
+for (const status of ["applied-late", "rejected", "previewed", "unknown"]) {
+  eq(`完工關站：server ${status} 不送`, c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: status }), { send: false, reason: "report_not_applied" });
+}
 
 console.log("== 單台報工今日開工分頁 ==");
 eq("名單內 A04 → 隱藏今日開工", c.dailyStartReportVisible(flagA04, "A04"), false);
