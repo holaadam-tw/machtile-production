@@ -2958,6 +2958,7 @@ body.route-mode {
 }
 
 .report-sheet .report-panel {
+  box-sizing: border-box;
   position: relative;
   top: auto;
   right: auto;
@@ -13008,6 +13009,7 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-heading span, .station-report-hint { color: #53697b; font-size: 12px; }
 .station-report-hint { margin: 0; }
 .station-report-reason, .station-report-note { display: grid; gap: 4px; color: #34495b; font-size: 12px; font-weight: 700; }
+.report-fail-reason[hidden], .station-report-reason[hidden] { display: none !important; }
 .station-report-reason select, .station-report-note textarea { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid #c6d2dc; border-radius: 5px; background: #fff; color: #263545; font: inherit; }
 .station-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .station-report-action { min-height: 36px; }
@@ -13065,6 +13067,8 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
   .finish-machine-card strong { font-size: 21px; }
   body.finish-sheet-mode #reportForm .stepper input { min-width: 0; }
 }
+
+.report-layout > *, .report-form, .report-actions > button { min-width: 0; }
 .machine-tile-actions .station-cmd-button:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: 1; }
 .station-cmd-status.is-wait { color: var(--blue); }
 .station-cmd-status.is-ok { color: var(--green-strong); }

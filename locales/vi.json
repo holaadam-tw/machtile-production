@@ -422,5 +422,21 @@
   "lathe_single_operator_draft": {
     "value": "Báo cáo máy tiện chỉ được chọn một người vận hành. Vui lòng bỏ chọn những người khác rồi gửi lại.",
     "_draft": true
+  },
+  "report_fail_reason_label": {
+    "value": "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)",
+    "_draft": true
+  },
+  "report_fail_reason_placeholder": {
+    "value": "Chọn lý do lỗi",
+    "_draft": true
+  },
+  "report_fail_reason_required": {
+    "value": "Khi có số lượng lỗi, phải chọn lý do lỗi.",
+    "_draft": true
+  },
+  "report_fail_reason_other_note_required": {
+    "value": "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.",
+    "_draft": true
   }
 }

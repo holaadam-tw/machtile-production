@@ -7,6 +7,7 @@ import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.env.MACHTILE_SCREENSHOT_DIR || "D:/04_SoftNet/ops/codex-inbox/shots";
 await mkdir(shots, { recursive: true });
+await mkdir("D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots", { recursive: true });
 const moduleSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const imported = await import(moduleSpec);
 const { chromium } = imported.default || imported;
@@ -48,7 +49,7 @@ await context.route("**/*", async route => {
   if (url.origin === fake) {
     requestUrls.push(url.href);
     const json = body => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
-    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: "A04", report_enabled: guardEnabled, report_enabled_machines: { A04: guardEnabled }, fail_reason_codes: ["尺寸不良"] });
+    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: "A04", report_enabled: guardEnabled, report_enabled_machines: { A04: guardEnabled }, fail_reason_codes: ["尺寸不良", "外觀", "刀具崩", "試刀", "材料不良", "其他"] });
     if (url.pathname.endsWith("/v_work_order_cards")) return json([{ id: workOrderId, tenant_id: tenantId, work_order_no: "XX01202604140011", part_no: "GQ7Q", part_name: "試點件", quantity: 1000, due_date: "2026-10-20", priority: "normal", work_order_status: "in_progress", current_process_id: processId, current_process_name: "車床", current_process_status: "running", machine_name: currentMachine, qty_completed: 920, qty_defect: 0, progress_percent: 92, last_report_at: "2026-10-13T03:00:00Z", current_process_off_station: false }]);
     if (url.pathname.endsWith("/v_machine_management_cards")) return json([{ id: id(201), machine_code: currentMachine, machine_name: currentMachine, machine_type: "車床", status: "running", display_order: 1 }]);
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
@@ -96,6 +97,8 @@ assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="
 await page.locator("#completedQty").fill("958");
 await page.locator("#defectQty").fill("2");
 await page.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+assert.equal(await page.locator("#reportFailReasonField").isHidden(), true, "A04 smart report does not show a duplicate general fail-reason field");
+assert.equal(await page.locator('.station-report-reason:visible').count(), 1, "A04 with defects shows exactly one fail-reason field");
 
 const routeState = await page.evaluate(() => ({ allowlisted: machtileSingleStationReportAllowlisted("A04"), active: machtileSingleStationReportActive(), panelHidden: document.querySelector("#singleStationReportPanel").hidden, submitHidden: document.querySelector("#reportForm .submit-report").hidden }));
 assert.equal(routeState.submitHidden, true, `allowlisted station hides legacy submit: ${JSON.stringify(routeState)}`);
@@ -136,6 +139,7 @@ assert.equal(calls.commands.length, 1, "preview creates one command");
 assert.equal(calls.commands[0].p_preview, true);
 assert.equal(calls.commands[0].p_good_qty, 38);
 assert.equal(calls.commands[0].p_fail_qty, 2);
+assert.equal(calls.commands[0].p_fail_reason_code, "尺寸不良");
 assert.deepEqual(await page.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.operators), [id(901)], "selected mapped operator is frozen into the smart-report flow");
 assert.equal(calls.reports.length, 0, "preview never records production report");
 
@@ -154,6 +158,7 @@ assert.equal(calls.commands[1].p_fail_qty, 2);
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
 assert.equal(calls.reports[0].completed_qty, 38);
 assert.equal(calls.reports[0].defect_qty, 2);
+assert.equal(calls.reports[0].report_payload.fail_reason_code, "尺寸不良", "A04 production report payload preserves the smart-report fail reason");
 const happyUuid = calls.commands[1].p_command_uuid;
 await page.evaluate(() => machtileRecordSingleStationProductionReport("A04", machtileBatchRow("A04").stationReport.args));
 assert.equal(calls.reports.length, 1, "same successful command_uuid does not duplicate production_reports");
@@ -161,7 +166,7 @@ assert.equal(calls.reports[0].report_uuid, happyUuid);
 await page.screenshot({ path: path.join(shots, "20261013-single-station-smart-report-800px.png"), fullPage: true });
 
 await page.close();
-currentMachine = "A03";
+currentMachine = "A01";
 const outsider = await context.newPage();
 await outsider.goto(base, { waitUntil: "domcontentloaded" });
 await outsider.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
@@ -169,6 +174,23 @@ await outsider.locator("[data-open-report]:visible").first().click();
 await outsider.locator('[data-report-type="noon"]').click();
 assert.equal(await outsider.locator("#reportForm .submit-report").isVisible(), true, "non-allowlisted station keeps legacy submit");
 assert.equal(await outsider.locator("#singleStationReportPanel").isHidden(), true);
+await outsider.locator("#completedQty").fill("958");
+await outsider.locator("#defectQty").fill("0");
+assert.equal(await outsider.locator("#reportFailReasonField").isHidden(), true, "zero defects hides the general fail-reason field");
+assert.equal(Boolean(await outsider.evaluate(() => validateReportForm("noon"))), false, "zero defects needs no reason");
+await outsider.locator("#defectQty").fill("3");
+const generalReasonState = await outsider.evaluate(() => ({ hidden: document.querySelector("#reportFailReasonField").hidden, active: machtileSingleStationReportActive(), machineCode: machtileSingleStationReportState.machineCode, defect: document.querySelector("#defectQty").value, type: activeReportType }));
+assert.equal(await outsider.locator("#reportFailReasonField").isVisible(), true, `non-smart machine with defects shows the fail-reason field: ${JSON.stringify(generalReasonState)}`);
+assert.equal(await outsider.evaluate(() => validateReportForm("noon")), "有不良數時，需選擇不良原因");
+await outsider.locator("#reportFailReason").selectOption("其他");
+assert.match(await outsider.evaluate(() => validateReportForm("noon")), /備註必須填寫一句說明/);
+await outsider.locator("#reportNote").fill("刀具撞傷");
+assert.equal(Boolean(await outsider.evaluate(() => validateReportForm("noon"))), false);
+assert.equal(await outsider.evaluate(() => buildReportPayload("noon").fail_reason_code), "其他", "non-smart report stores reason in report_payload");
+await outsider.setViewportSize({ width: 390, height: 844 });
+await outsider.evaluate(() => { document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0; const layout = document.querySelector("#reportSheet .report-layout"); layout.scrollLeft = 0; layout.scrollTop = 0; });
+await outsider.locator("#reportFailReasonField").scrollIntoViewIfNeeded();
+await outsider.screenshot({ path: "D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots/defect-reason-mobile.png" });
 await outsider.close();
 
 currentMachine = "A04";

@@ -316,6 +316,7 @@ console.log("== 手機（Pixel 7）==");
 
   console.log("-- 報工畫面的估算跟卡片一致 --");
   await cardOf(page, "A04").locator("[data-report]").click();
+  await page.locator('[data-report-type="workStart"]:not([data-report])').click();
   await page.locator("#reportEstimate").waitFor();
   await page.waitForTimeout(300);
   const est = await page.locator("#reportEstimate").innerText();

@@ -3107,9 +3107,23 @@ async function hmcDevAnonRpcFetch(functionName, body) {
   return payload;
 }
 
+const MACHTILE_FACTORY_TIME_ZONE = "Asia/Taipei";
+
+function machtileFactoryDateIso(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MACHTILE_FACTORY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function hmcTodayDateIso() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return machtileFactoryDateIso();
 }
 
 function hmcNonNegativeInteger(value, fallback = 0) {
@@ -8394,6 +8408,8 @@ function setReportDefaults(order) {
   // 回寫橋會把整個累計當成這次的量再加一次。
   if (completedInput) completedInput.value = activeReportType === "finish" ? machtileFinishReportedQty(order) : 0;
   if (defectInput) defectInput.value = 0;
+  if ($("#reportFailReason")) $("#reportFailReason").value = "";
+  machtileUpdateReportFailReason();
   machtileRenderReportOverQty(order);
   // 沒有這張單的時間就留白，不可以沿用上一張單（審查 M1）
   setReportCycleSeconds(profile?.pureCycleSec || 0);
@@ -8453,7 +8469,31 @@ function setReportType(type) {
   const qtyHelp = $("#reportQtyHelp");
   if (qtyHelp) qtyHelp.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_help" : "counter_qty_help");
   updateReportCounterPreview();
+  machtileUpdateReportFailReason();
   machtileRenderSingleStationReport();
+}
+
+function machtileReportFailReasons() {
+  return Array.from(machtileStationReportCore()?.FAIL_REASON_DEFAULTS || []);
+}
+
+function machtileGeneralFailReasonApplies() {
+  return !machtileSingleStationReportActive();
+}
+
+function machtileUpdateReportFailReason() {
+  const field = $("#reportFailReasonField");
+  const select = $("#reportFailReason");
+  if (!field || !select) return;
+  const reasons = machtileReportFailReasons();
+  if (!select.options.length) {
+    select.innerHTML = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...reasons.map((reason) =>
+      `<option value="${escapeHtml(reason)}">${escapeHtml(reason)}</option>`)].join("");
+  }
+  const visible = Number($("#defectQty")?.value || 0) > 0 && machtileGeneralFailReasonApplies();
+  field.hidden = !visible;
+  select.disabled = !visible;
+  if (!visible) select.value = "";
 }
 
 function fileForInput(inputId) {
@@ -8494,6 +8534,11 @@ function validateReportForm(type) {
   }
   if (["dailyStart", "noon", "finish"].includes(type)) {
     if (completed < 0 || defects < 0) return "良品與這次不良數不可小於 0。";
+  }
+  if (defects > 0 && machtileGeneralFailReasonApplies()) {
+    const reason = $("#reportFailReason")?.value || "";
+    if (!reason) return machtileTranslate("report_fail_reason_required");
+    if (reason === "其他" && !$("#reportNote")?.value.trim()) return machtileTranslate("report_fail_reason_other_note_required");
   }
   if (reportCounterApplies(type)) {
     if (type !== "finish" && reportCounterBaselineState.status === "loading") return "正在讀取今天的機台計數基準，請稍候。";
@@ -8555,6 +8600,7 @@ function buildReportPayload(type) {
       counter_baseline_source: reportCounterBaselineState.baseline?.source || "manual",
     } : {}),
     defect_qty: Number($("#defectQty")?.value || 0),
+    fail_reason_code: Number($("#defectQty")?.value || 0) > 0 ? ($("#reportFailReason")?.value || null) : null,
     has_program_upload: hasFile("programUpload"),
     overtime_plan: $("#overtimePlan")?.value || (selectedRadioValue("finishOvertime") === "2030" ? "2030" : ""),
     ...(type === "finish" ? { finish_scope: "all" } : {}),
@@ -16059,7 +16105,7 @@ async function machtileRenderOperationalTracking(days = 30) {
   holder.innerHTML = '<p class="admin-module-note">正在載入營運追蹤（真資料）...</p>';
   const from = new Date(Date.now() - (safeDays - 1) * 86400000);
   from.setHours(0, 0, 0, 0);
-  const fromDate = from.toISOString().slice(0, 10);
+  const fromDate = machtileFactoryDateIso(from);
   const nowIso = new Date().toISOString();
 
   try {
@@ -16165,7 +16211,7 @@ async function machtileRenderTimeStats() {
   const holder = document.getElementById("machtileTimeStats");
   if (!holder) return;
   try {
-    const fromDate = new Date(Date.now() - 13 * 24 * 3600000).toISOString().slice(0, 10);
+    const fromDate = machtileFactoryDateIso(new Date(Date.now() - 13 * 24 * 3600000));
     const [reports, checks] = await Promise.all([
       supabaseFetch(`production_reports?select=report_date,completed_qty,defect_qty,cycle_time_seconds,report_type,machine_id,work_orders(work_order_no,part_name)&report_date=gte.${fromDate}&order=report_date.desc&limit=2000`),
       supabaseFetch(`hmc_daily_worklist_item_quantities?select=work_date,machine_code,completed_qty,defect_qty&daily_check_status=in.(confirmed,converted)&work_date=gte.${fromDate}&limit=2000`),
@@ -21881,8 +21927,10 @@ function machtileRenderSingleStationReport() {
   }
   if (!machtileStationReportCore()?.reportMachineEnabled(settings.machines, code)) {
     holder.hidden = true; holder.innerHTML = ""; submit.hidden = false; submit.disabled = false;
+    machtileUpdateReportFailReason();
     return;
   }
+  machtileUpdateReportFailReason();
   const row = machtileSyncSingleStationReportRow();
   holder.innerHTML = row && order ? machtileRenderStationReportPanel(code, order, row, false) : '<p class="batch-notice is-error" role="alert">工單資料不完整；已阻擋智慧報工。</p>';
 }
@@ -22054,15 +22102,16 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   const finalApplied = result?.kind === "applied" || result?.kind === "applied-late";
   const formAllowed = !busy && !phaseBusy && flow.phase !== "blocked" && flow.phase !== "previewed" && !finalApplied && !noContext;
   const oldOrderNoteAllowed = !busy && !phaseBusy && result?.kind === "preview-soft" && result.guardCode === "OLD_ORDER_NEWER_OPEN";
+  if (noContext) console.info("station report context incomplete", { machineCode: code, orderId: order?.id || null, missingContext });
   const contextMessage = noContext
-    ? `已選工單 ${order?.id || "—"}／機台 ${code}／畫面工序 ${order?.process || "—"}${order?.stationStep ? `（APP 工序序號 ${order.stationStep}）` : ""}。缺少：${missingContext.join("、") || "合約識別資料"}；不會用 APP process_order 代替舊 MES IndexSN。`
+    ? "這張單的舊 MES 資料不完整，暫時不能用智慧報工，請通知生管。"
     : "送出前會先由套用端唯讀預覽；預覽完成以前不會建立正式報工。";
   return `<section class="station-report-panel" aria-label="${escapeHtml(code)} 智慧報工">
     <div class="station-report-heading"><strong>智慧報工</strong><span>套用端預覽 → 確認</span></div>
     <p class="station-report-hint">${escapeHtml(contextMessage)}</p>
     ${routeSummary}
     ${flow.error ? `<p class="batch-notice is-error" role="alert">${escapeHtml(flow.error)}</p>` : ""}
-    <label class="station-report-reason"><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>
+    <label class="station-report-reason"${Number(row.bad || 0) > 0 ? "" : " hidden"}><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>
     <label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed && !oldOrderNoteAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>
     <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${flow.phase === "waiting-preview" ? "等待套用端預覽…" : "先預覽，不寫入舊 MES"}</button>
     ${resultHtml}
@@ -22212,6 +22261,7 @@ async function machtileRecordSingleStationProductionReport(code, args) {
       ...(flow.singleReport?.reportPayload || buildReportPayload(reportType)),
       completed_qty: args.p_good_qty,
       defect_qty: args.p_fail_qty,
+      fail_reason_code: args.p_fail_reason_code || null,
       station_command_uuid: commandUuid,
     };
     await submitReport(args.p_good_qty, args.p_fail_qty, args.p_report_note || "", reportType, {
@@ -22411,7 +22461,7 @@ async function machtileBatchFetchCounters(processIds) {
   const map = new Map();
   const ids = [...new Set((processIds || []).map(String).filter(isUuid))];
   if (state.source !== "supabase" || !ids.length) return map;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = machtileFactoryDateIso();
   const rows = await supabaseFetch(`production_reports?select=process_id,report_type,report_payload,created_at&process_id=in.(${ids.map(encodeURIComponent).join(",")})&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=1000`);
   ids.forEach((id) => map.set(id, window.MachTileReportCounterCore.latestBaseline((rows || []).filter((r) => String(r.process_id) === id))));
   return map;
@@ -22420,7 +22470,7 @@ async function machtileBatchFetchCounters(processIds) {
 async function machtileBatchFetchStationShifts(machineCodes, nowIso = new Date().toISOString()) {
   const map = new Map();
   if (state.source !== "supabase" || !machineCodes.length) return map;
-  const taiwanDay = machtileBatchCore().localDate(nowIso);
+  const taiwanDay = machtileFactoryDateIso(nowIso);
   const start = new Date(`${taiwanDay}T00:00:00+08:00`).toISOString();
   const path = `station_commands?select=machine_code,command_type,status,requested_at,applied_at&machine_code=in.(${machineCodes.map(encodeURIComponent).join(",")})&command_type=in.(start,stop)&requested_at=gte.${encodeURIComponent(start)}&order=requested_at.asc`;
   const rows = await supabaseFetch(path);
@@ -23294,7 +23344,7 @@ async function submitPauseReport(reason) {
     tenant_id: selectedOrder.tenantId,
     work_order_id: selectedOrder.workOrderId,
     process_id: selectedOrder.processId,
-    report_date: new Date().toISOString().slice(0, 10),
+    report_date: machtileFactoryDateIso(),
     completed_qty: 0,
     defect_qty: 0,
     status_after_report: "paused",
@@ -23584,7 +23634,7 @@ function bindEvents() {
       return;
     }
 
-    const reportTypeButton = event.target.closest("[data-report-type]");
+    const reportTypeButton = event.target.closest("[data-report-type]:not([data-report])");
     if (reportTypeButton) {
       setReportType(reportTypeButton.dataset.reportType);
       return;
@@ -23872,6 +23922,7 @@ function bindEvents() {
       input.value = value;
       updateNoonAdvice();
       updateReportCounterPreview();
+      machtileUpdateReportFailReason();
     });
   });
 
@@ -23883,6 +23934,7 @@ function bindEvents() {
       updateReportEstimate();
       updateNoonAdvice();
       updateReportCounterPreview();
+      if (id === "defectQty") machtileUpdateReportFailReason();
     });
   });
 

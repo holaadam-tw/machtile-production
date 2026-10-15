@@ -102,6 +102,10 @@
       counter_non_positive: "機台累計 {{current}} 必須大於上次 {{baseline}}；這次差額需大於 0。",
       counter_rate_warning: "照工時這段時間最多約 {{max}} 件，你報 {{quantity}} 件，請確認",
       counter_manual_help: "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
+      report_fail_reason_label: "不良原因（有不良時必選）",
+      report_fail_reason_placeholder: "選擇不良原因",
+      report_fail_reason_required: "有不良數時，需選擇不良原因",
+      report_fail_reason_other_note_required: "選擇其他不良原因時，備註必須填寫一句說明",
       required: "必填",
       optional: "選填",
       submit_report: "送出報工",
@@ -207,6 +211,10 @@
       counter_non_positive: "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.",
       counter_rate_warning: "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
       counter_manual_help: "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
+      report_fail_reason_label: "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)", // _draft
+      report_fail_reason_placeholder: "Chọn lý do lỗi", // _draft
+      report_fail_reason_required: "Khi có số lượng lỗi, phải chọn lý do lỗi.", // _draft
+      report_fail_reason_other_note_required: "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.", // _draft
       required: "Bắt buộc",
       optional: "Không bắt buộc",
       submit_report: "Gửi báo cáo",
