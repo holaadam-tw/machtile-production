@@ -68,6 +68,8 @@ window.MACHTILE_CONFIG = {
   dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // I-Reporter process-record entry on machine cards. Empty is the safe default.
   inspectionLinkMachines: [],
+  // 2026-10-15 owner：機台卡「完工」鍵（完工＝收工；PR #103）。
+  enableFinishButton: true,
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
