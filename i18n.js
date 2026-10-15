@@ -106,6 +106,7 @@
       report_fail_reason_placeholder: "選擇不良原因",
       report_fail_reason_required: "有不良數時，需選擇不良原因",
       report_fail_reason_other_note_required: "選擇其他不良原因時，備註必須填寫一句說明",
+      report_fail_reason_note_label: "其他原因說明",
       required: "必填",
       optional: "選填",
       submit_report: "送出報工",
@@ -215,6 +216,7 @@
       report_fail_reason_placeholder: "Chọn lý do lỗi", // _draft
       report_fail_reason_required: "Khi có số lượng lỗi, phải chọn lý do lỗi.", // _draft
       report_fail_reason_other_note_required: "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.", // _draft
+      report_fail_reason_note_label: "Giải thích lý do khác", // _draft
       required: "Bắt buộc",
       optional: "Không bắt buộc",
       submit_report: "Gửi báo cáo",

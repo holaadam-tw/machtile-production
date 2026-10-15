@@ -438,5 +438,9 @@
   "report_fail_reason_other_note_required": {
     "value": "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.",
     "_draft": true
+  },
+  "report_fail_reason_note_label": {
+    "value": "Giải thích lý do khác",
+    "_draft": true
   }
 }

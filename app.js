@@ -4084,7 +4084,7 @@ function renderHmcReportRoute() {
 }
 
 // HMC field-facing route: keep the shop-floor page quantity-first and login-free.
-const hmcPalletReportState = { status: "idle", message: "", reportCount: 0, completedQty: 0, defectQty: 0 };
+const hmcPalletReportState = { status: "idle", message: "", reportCount: 0, completedQty: 0, defectQty: 0, failReasonCode: "" };
 function hmcPalletReportEnabled() {
   if (config.enableHmcPalletReport !== true || state.source !== "supabase") return false;
   const machine=state.machineMasters.find((row)=>row.code===hmcRouteMachineKey()||row.machine_code===hmcRouteMachineKey());
@@ -4098,10 +4098,12 @@ function hmcPalletReportPanel() {
   const noon=machtileTranslate("hmc_pallet_report_noon_draft");
   const finishAll=machtileTranslate("hmc_pallet_report_finish_all_draft");
   const finishPartial=machtileTranslate("hmc_pallet_report_finish_partial_draft");
-  return `<section class="hmc-submit-panel hmc-pallet-report-submit"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(hint)}</p><label class="hmc-field"><span>報工方式</span><select id="hmcPalletReportAction"><option value="noon">${escapeHtml(noon)}</option><option value="finish-all">${escapeHtml(finishAll)}</option><option value="finish-partial">${escapeHtml(finishPartial)}</option></select></label><p class="hmc-field-help">全部完成：數量達計畫後完成該工序並下盤。部分完成：只下盤換線，工序保持進行中。兩種都不會關閉整台機器。</p>${hmcPalletReportState.message?`<p role="status">${escapeHtml(hmcPalletReportState.message)}</p>`:""}<button type="button" data-hmc-submit-pallet-report ${busy?"disabled":""}>${escapeHtml(busy?`${submit}…`:submit)}</button></section>`;
+  const hasDefects=hmcSelectedItems().some(({key})=>Number(hmcDefects()[key]||0)>0);
+  const reasonOptions=[`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`,...machtileReportFailReasons().map((reason)=>`<option value="${escapeHtml(reason)}"${hmcPalletReportState.failReasonCode===reason?" selected":""}>${escapeHtml(reason)}</option>`)].join("");
+  return `<section class="hmc-submit-panel hmc-pallet-report-submit"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(hint)}</p><label class="hmc-field"><span>報工方式</span><select id="hmcPalletReportAction"><option value="noon">${escapeHtml(noon)}</option><option value="finish-all">${escapeHtml(finishAll)}</option><option value="finish-partial">${escapeHtml(finishPartial)}</option></select></label><label class="hmc-field" data-hmc-pallet-fail-reason-field${hasDefects?"":" hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_label"))}</span><select data-hmc-pallet-fail-reason>${reasonOptions}</select></label><p class="hmc-field-help">全部完成：數量達計畫後完成該工序並下盤。部分完成：只下盤換線，工序保持進行中。兩種都不會關閉整台機器。</p>${hmcPalletReportState.message?`<p role="status">${escapeHtml(hmcPalletReportState.message)}</p>`:""}<button type="button" data-hmc-submit-pallet-report ${busy?"disabled":""}>${escapeHtml(busy?`${submit}…`:submit)}</button></section>`;
 }
-function buildHmcPalletReportPayload(){const items=hmcSelectedItems().flatMap(({pallet,work,key})=>{const current=Number(hmcQuantities()[key]??work.dbTodayCompletedQty??0),baseline=Number(work.dbTodayCompletedQty||0),completedQty=current-baseline,defectQty=Number(hmcDefects()[key]||0);return completedQty<=0&&defectQty<=0?[]:[{worklist_item_id:work.dbRowId,report_uuid:crypto.randomUUID(),completed_qty:completedQty,defect_qty:defectQty,counter_current_qty:current,counter_baseline_qty:baseline,pallet_no:pallet.palletNo}]});const action=$("#hmcPalletReportAction")?.value||"noon",finish=action.startsWith("finish-");return{p_worklist_id:hmcCurrentWorklistReadState().worklist?.id||null,p_work_date:hmcDailyQuantityWorkDate(),p_report_type:finish?"finish":"noon",p_items:items,p_remark:$("#hmcHandoverNote")?.value.trim()||null,p_finish_scope:finish?action.slice(7):null};}
-async function submitHmcPalletReport(){if(!hmcPalletReportEnabled()||hmcPalletReportState.status==="saving")return;const payload=buildHmcPalletReportPayload();if(!payload.p_worklist_id||!payload.p_items.length){hmcPalletReportState.message="請至少替一個工件輸入高於今日已存的累計數，或填本次不良數。";renderHmcReportRoute();return;}hmcPalletReportState.status="saving";hmcPalletReportState.message="";renderHmcReportRoute();try{const result=await supabaseFetch("rpc/hmc_submit_pallet_reports",{method:"POST",body:JSON.stringify(payload)});hmcPalletReportState.status="success";hmcPalletReportState.reportCount=Number(result?.report_count||0);hmcPalletReportState.completedQty=Number(result?.completed_qty||0);hmcPalletReportState.defectQty=Number(result?.defect_qty||0);hmcPalletReportState.message=`已建立 ${hmcPalletReportState.reportCount} 筆正式報工；良品 ${hmcPalletReportState.completedQty}、不良 ${hmcPalletReportState.defectQty}。`;hmcClearDailyQuantityReadCache();requestHmcDailyQuantityRead();}catch(error){hmcPalletReportState.status="error";hmcPalletReportState.message=error?.message||"多盤報工失敗。";}renderHmcReportRoute();}
+function buildHmcPalletReportPayload(){const reason=String(hmcPalletReportState.failReasonCode||"").trim();const items=hmcSelectedItems().flatMap(({pallet,work,key})=>{const current=Number(hmcQuantities()[key]??work.dbTodayCompletedQty??0),baseline=Number(work.dbTodayCompletedQty||0),completedQty=current-baseline,defectQty=Number(hmcDefects()[key]||0);return completedQty<=0&&defectQty<=0?[]:[{worklist_item_id:work.dbRowId,report_uuid:crypto.randomUUID(),completed_qty:completedQty,defect_qty:defectQty,fail_reason_code:defectQty>0?reason:null,counter_current_qty:current,counter_baseline_qty:baseline,pallet_no:pallet.palletNo}]});const action=$("#hmcPalletReportAction")?.value||"noon",finish=action.startsWith("finish-");return{p_worklist_id:hmcCurrentWorklistReadState().worklist?.id||null,p_work_date:hmcDailyQuantityWorkDate(),p_report_type:finish?"finish":"noon",p_items:items,p_remark:$("#hmcHandoverNote")?.value.trim()||null,p_finish_scope:finish?action.slice(7):null};}
+async function submitHmcPalletReport(){if(!hmcPalletReportEnabled()||hmcPalletReportState.status==="saving")return;const payload=buildHmcPalletReportPayload();if(!payload.p_worklist_id||!payload.p_items.length){hmcPalletReportState.message="請至少替一個工件輸入高於今日已存的累計數，或填本次不良數。";renderHmcReportRoute();return;}const hasDefects=payload.p_items.some((item)=>Number(item.defect_qty)>0),reason=hmcPalletReportState.failReasonCode,note=String(payload.p_remark||"").trim();if(hasDefects&&!machtileReportFailReasons().includes(reason)){hmcPalletReportState.message=machtileTranslate("report_fail_reason_required");renderHmcReportRoute();return;}if(hasDefects&&reason==="其他"&&!note){hmcPalletReportState.message=machtileTranslate("report_fail_reason_other_note_required");renderHmcReportRoute();return;}hmcPalletReportState.status="saving";hmcPalletReportState.message="";renderHmcReportRoute();try{const result=await supabaseFetch("rpc/hmc_submit_pallet_reports",{method:"POST",body:JSON.stringify(payload)});hmcPalletReportState.status="success";hmcPalletReportState.reportCount=Number(result?.report_count||0);hmcPalletReportState.completedQty=Number(result?.completed_qty||0);hmcPalletReportState.defectQty=Number(result?.defect_qty||0);hmcPalletReportState.message=`已建立 ${hmcPalletReportState.reportCount} 筆正式報工；良品 ${hmcPalletReportState.completedQty}、不良 ${hmcPalletReportState.defectQty}。`;hmcClearDailyQuantityReadCache();requestHmcDailyQuantityRead();}catch(error){hmcPalletReportState.status="error";hmcPalletReportState.message=error?.message||"多盤報工失敗。";}renderHmcReportRoute();}
 function hmcDailyQuantityStats() {
   const selected = hmcSelectedItems();
   const selectedPalletCount = new Set(selected.map((item) => item.pallet.palletId)).size;
@@ -8061,7 +8063,13 @@ function bindHmcReportEvents() {
       hmcDefects()[field.dataset.hmcWorkKey] = field.value;
       resetHmcDailyCheckSaveState();
       updateHmcReportPreview();
+      const hasDefects = $$(".hmc-selected-defect-qty").some((input) => Number(input.value || 0) > 0);
+      document.querySelector("[data-hmc-pallet-fail-reason-field]")?.toggleAttribute("hidden", !hasDefects);
     });
+  });
+  document.querySelector("[data-hmc-pallet-fail-reason]")?.addEventListener("change", (event) => {
+    hmcPalletReportState.failReasonCode = event.target.value;
+    hmcPalletReportState.message = "";
   });
   $$(".hmc-selected-skip").forEach((field) => {
     field.addEventListener("change", () => {
@@ -22764,6 +22772,8 @@ function machtileBatchRowModel(code, endedAtIso) {
     current: row.current,
     good: counter.valid ? counter.delta : "",
     bad: row.bad,
+    failReasonCode: row.failReasonCode,
+    reportNote: row.reportNote,
     baseline: baseline?.qty ?? null,
     baselineSource: baseline?.source || "report",
     counter,
@@ -22852,6 +22862,9 @@ function machtileRenderBatchReport() {
     const shift = machtileBatchState.stationShiftByMachine.get(code) || { status: "notStarted", minutes: null };
     const statusText = { running: "運轉中", stopped: "停工", notStarted: "未開工" }[shift.status] || "未開工";
     const preview = model.counter;
+    const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...machtileReportFailReasons().map((reason) =>
+      `<option value="${escapeHtml(reason)}"${row.failReasonCode === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
+    const hasBatchDefect = Number(row.bad || 0) > 0;
     const inputsHtml = isDailyStart ? `
         <div class="batch-inputs">
           <label class="batch-check"><input type="checkbox" data-batch-select="${code}"${row.selected ? " checked" : ""}${disabled}><span>今日開工</span></label>
@@ -22862,6 +22875,8 @@ function machtileRenderBatchReport() {
           <input class="batch-compat-entry" type="number" data-batch-good="${code}" value="${escapeHtml(row.legacyGood ?? "")}" aria-label="${code} 舊版本次良品相容入口"${disabled}>
           <label class="batch-qty is-good"><span>機台目前累計數</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
           <label class="batch-qty is-bad"><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
+          <label class="batch-reason" data-batch-reason-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_label"))}</span><select data-batch-reason="${code}"${disabled}>${failReasonOptions}</select></label>
+          <label class="batch-note" data-batch-note-field="${code}"${hasBatchDefect && row.failReasonCode === "其他" ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_note_label"))}</span><textarea rows="2" data-batch-note="${code}" placeholder="${escapeHtml(machtileTranslate("report_fail_reason_other_note_required"))}"${disabled}>${escapeHtml(row.reportNote)}</textarea></label>
           <label class="batch-check"><input type="checkbox" data-batch-finished="${code}"${row.finished ? " checked" : ""}${disabled}><span>完工</span></label>
           <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
         </div>
@@ -22991,7 +23006,7 @@ async function machtileSubmitBatchReport() {
     toSend.forEach(({ model }) => {
       const row = machtileBatchRow(model.machineCode);
       row.result = { status: "sent", message: "示範模式：沒有寫入" };
-      row.current = ""; row.good = ""; row.legacyGood = null; row.bad = ""; row.finished = false;
+      row.current = ""; row.good = ""; row.legacyGood = null; row.bad = ""; row.failReasonCode = ""; row.reportNote = ""; row.finished = false;
       if (mode === "dailyStart") row.selected = false;
     });
     machtileRenderBatchReport();
@@ -23063,6 +23078,8 @@ async function machtileSubmitBatchReport() {
       row.good = "";
       row.legacyGood = null;
       row.bad = "";
+      row.failReasonCode = "";
+      row.reportNote = "";
       row.finished = false;
       if (mode === "dailyStart") row.selected = false;
       row.error = "";
@@ -23146,7 +23163,7 @@ function machtileHandleBatchInput(event) {
     machtileRenderBatchReport();
     return true;
   }
-  const code = t.dataset.batchCurrent || t.dataset.batchGood || t.dataset.batchBad || t.dataset.batchOperator || t.dataset.batchOrder
+  const code = t.dataset.batchCurrent || t.dataset.batchGood || t.dataset.batchBad || t.dataset.batchReason || t.dataset.batchNote || t.dataset.batchOperator || t.dataset.batchOrder
     || t.dataset.batchSelect
     || t.dataset.batchFinished
     || t.dataset.stationReportReason || t.dataset.stationReportNote;
@@ -23163,6 +23180,8 @@ function machtileHandleBatchInput(event) {
     row.legacyGood = t.value;
   }
   if (t.dataset.batchBad) row.bad = t.value;
+  if (t.dataset.batchReason) row.failReasonCode = t.value;
+  if (t.dataset.batchNote) row.reportNote = t.value;
   if (t.dataset.batchOperator) row.operatorId = t.value;
   if (t.dataset.batchOrder) { row.processId = t.value; row.current = ""; row.legacyGood = null; }
   if (t.dataset.batchFinished) row.finished = t.checked;
@@ -23179,13 +23198,18 @@ function machtileHandleBatchInput(event) {
       ["previewed", "finished"].includes(flow.phase) && coreResultWasNotApplied(flow.result)) {
     flow.phase = "idle"; flow.result = null; flow.preview = null; flow.args = null; flow.error = "";
   }
-  if (event.type === "change" && (t.dataset.batchOperator || t.dataset.batchOrder || t.dataset.batchFinished || t.dataset.batchSelect)) {
+  if (event.type === "change" && (t.dataset.batchOperator || t.dataset.batchOrder || t.dataset.batchFinished || t.dataset.batchSelect || t.dataset.batchReason)) {
     machtileRenderBatchReport();
     return true;
   }
   // 打數字時不重畫整頁（游標不會跳走），只更新送出按鈕的台數
   machtileBatchRefreshSubmitButton();
   const article = t.closest(".batch-row");
+  if (t.dataset.batchBad) {
+    const visible = Number(t.value || 0) > 0;
+    article?.querySelector(`[data-batch-reason-field="${code}"]`)?.toggleAttribute("hidden", !visible);
+    article?.querySelector(`[data-batch-note-field="${code}"]`)?.toggleAttribute("hidden", !(visible && row.failReasonCode === "其他"));
+  }
   if (t.dataset.batchCurrent) {
     const model = machtileBatchRowModel(code, new Date().toISOString());
     const preview = article?.querySelector("[data-batch-counter-preview]");

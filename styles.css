@@ -11804,8 +11804,8 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .batch-pending { padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 13px; font-weight: 700; }
 .batch-pending.is-stale { background: var(--red-soft); color: #9f1d1d; }
 .batch-inputs { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
-.batch-qty, .batch-operator, .batch-ct { display: grid; gap: 4px; font-size: 14px; font-weight: 700; color: #344054; min-width: 0; }
-.batch-operator, .batch-ct, .batch-check { grid-column: 1 / -1; }
+.batch-qty, .batch-operator, .batch-ct, .batch-reason, .batch-note { display: grid; gap: 4px; font-size: 14px; font-weight: 700; color: #344054; min-width: 0; }
+.batch-operator, .batch-ct, .batch-check, .batch-reason, .batch-note { grid-column: 1 / -1; }
 .batch-qty input, .batch-ct input {
   min-height: 60px;
   width: 100%;
@@ -11820,7 +11820,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 .batch-qty.is-good input { border-color: rgba(21, 128, 61, 0.45); }
 .batch-qty.is-bad input { border-color: rgba(217, 45, 32, 0.4); }
-.batch-qty input:focus, .batch-ct input:focus, .batch-operator select:focus {
+.batch-qty input:focus, .batch-ct input:focus, .batch-operator select:focus, .batch-reason select:focus, .batch-note textarea:focus {
   outline: none;
   border-color: var(--brand-blue);
   box-shadow: 0 0 0 4px rgba(0, 103, 255, 0.18);
@@ -11829,8 +11829,9 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .batch-ct-inputs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .batch-ct-inputs span { color: var(--muted); font-size: 14px; font-weight: 700; white-space: nowrap; }
 .batch-ct input { min-height: 52px; font-size: 22px; }
-.batch-operator select { min-height: 52px; width: 100%; font-size: 17px; padding: 0 10px; border-radius: var(--radius); border: 2px solid var(--border-strong); background: var(--surface); color: var(--text); }
-.batch-qty input:disabled, .batch-ct input:disabled, .batch-operator select:disabled { background: var(--gray-soft); border-color: var(--border); }
+.batch-operator select, .batch-reason select, .batch-note textarea { min-height: 52px; width: 100%; font-size: 17px; padding: 10px; border-radius: var(--radius); border: 2px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.batch-note textarea { resize: vertical; }
+.batch-qty input:disabled, .batch-ct input:disabled, .batch-operator select:disabled, .batch-reason select:disabled, .batch-note textarea:disabled { background: var(--gray-soft); border-color: var(--border); }
 .batch-check {
   display: flex;
   gap: 12px;

@@ -14,8 +14,11 @@ assert.match(app, /if \(!reason\) return machtileTranslate\("report_fail_reason_
 assert.match(app, /reason === "其他"/);
 assert.match(app, /fail_reason_code: Number\(\$\("#defectQty"\)/);
 assert.match(app, /fail_reason_code: args\.p_fail_reason_code \|\| null/);
+assert.match(app, /data-batch-reason=/);
+assert.match(app, /data-batch-note=/);
+assert.match(app, /fail_reason_code:defectQty>0\?reason:null/);
 assert.match(app, /machtileGeneralFailReasonApplies\(\)[\s\S]*!machtileSingleStationReportActive\(\)/);
-for (const key of ["report_fail_reason_label", "report_fail_reason_placeholder", "report_fail_reason_required", "report_fail_reason_other_note_required"]) {
+for (const key of ["report_fail_reason_label", "report_fail_reason_placeholder", "report_fail_reason_required", "report_fail_reason_other_note_required", "report_fail_reason_note_label"]) {
   assert.equal(typeof zh[key], "string", `${key} zh-Hant`);
   assert.equal(typeof vi[key]?.value, "string", `${key} vi`);
   assert.equal(vi[key]?._draft, true, `${key} vi draft marker`);
