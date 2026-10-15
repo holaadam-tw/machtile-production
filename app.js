@@ -31,6 +31,9 @@ const config = {
   stationCommandMachines: [],
   // 機台卡「完工」捷徑：只開啟既有 finish 報工，不直接關舊 MES 站；正式 config.js 未開前完全隱藏。
   enableFinishButton: false,
+  // 完工報工 applied 後自動派關站；雙旗標且機台白名單都符合才送，安全預設全關。
+  enableFinishClose: false,
+  finishCloseMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   inspectionLinkMachines: [],
@@ -13534,6 +13537,60 @@ function machtileFinishButtonEnabled() {
   return config.enableFinishButton === true;
 }
 
+function machtileFinishCloseEnabled(machineCode) {
+  return Boolean(machtileStationCmdCore?.finishCloseDecision({ enabled: config.enableFinishClose,
+    machines: config.finishCloseMachines, machineCode, reportType: "finish", resultKind: "applied" }).send);
+}
+
+function machtileFinishCloseSetResult(code, view) {
+  const row = machtileBatchRow(code);
+  const flow = machtileStationReportState(row);
+  flow.close = {
+    phase: view?.phase || "rejected",
+    title: view?.phase === "applied" ? "已關站，下一道已進池" : (view?.title || "關站未完成"),
+    message: view?.phase === "applied" ? "完工報工已保留；舊 MES 已關站。" : (view?.detail || view?.text || "完工報工已成功，但關站未完成。"),
+  };
+}
+
+async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUuid) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const resultKind = machtileStationReportCore()?.resultCard(flow.result)?.kind;
+  const decision = machtileStationCmdCore?.finishCloseDecision({ enabled: config.enableFinishClose,
+    machines: config.finishCloseMachines, machineCode: code, reportType: flow.singleReport?.reportType, resultKind });
+  if (!decision?.send) return;
+  if (flow.close?.reportCommandUuid === reportCommandUuid) return;
+  flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid };
+  machtileRenderStationReportSurfaces();
+  const commandUuid = crypto.randomUUID();
+  await machtileStationCmdRunSubmission({
+    commandUuid,
+    commandType: "close",
+    machineCode: code,
+    fields: {
+      orderNo: args.p_expected_order_no,
+      step: args.p_expected_index_sn,
+      partNo: args.p_expected_part_no,
+      manufactureIiId: args.p_manufacture_ii_id,
+      expectedSimulationId: args.p_expected_simulation_id,
+    },
+    recordFields: {
+      orderNo: args.p_expected_order_no,
+      step: args.p_expected_index_sn,
+      partNo: args.p_expected_part_no,
+      manufactureIiId: args.p_manufacture_ii_id,
+      expectedSimulationId: args.p_expected_simulation_id,
+      finishCloseReportCommandUuid: reportCommandUuid,
+    },
+    startedAt: Date.now(),
+    onError: ({ info }) => {
+      flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid };
+    },
+    afterRecord: ({ view }) => {
+      if (view.terminal) machtileFinishCloseSetResult(code, view);
+    },
+  });
+}
+
 function machtileStationCmdSavePending() {
   const plain = {};
   Object.keys(machtileStationCmd.pending).forEach((code) => {
@@ -14380,6 +14437,7 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   const sheet = machtileStationCmd.sheet;
   if (sheet && sheet.code === code && sheet.uuid === record.commandUuid) {
     sheet.phase = "status";
@@ -14536,7 +14594,7 @@ function renderMachineCard(machine) {
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
   const finishAction = machtileFinishButtonEnabled() && order && canReport
-    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate("finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
+    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
   return `
@@ -21931,6 +21989,10 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     if (flow.phase === "blocked" && flow.args) resultHtml += `<button type="button" class="secondary-action station-report-action" data-station-report-reconcile="${escapeHtml(code)}">查詢原報工狀態</button>`;
     if (result.kind === "applied" || result.kind === "applied-late") resultHtml += `<button type="button" class="secondary-action station-report-action" data-station-report-new="${escapeHtml(code)}">下一筆（清空數量）</button>`;
   }
+  if (flow.close) {
+    const closeTone = flow.close.phase === "applied" ? "success" : flow.close.phase === "pending" ? "pending" : "warning";
+    resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p></div>`;
+  }
   const noContext = !context;
   const phaseBusy = ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report"].includes(flow.phase);
   const finalApplied = result?.kind === "applied" || result?.kind === "applied-late";
@@ -22101,6 +22163,7 @@ async function machtileStationReportSendFinal(code, args) {
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
   await machtileRecordSingleStationProductionReport(code, args);
+  await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
   machtileRenderStationReportSurfaces();
 }
 

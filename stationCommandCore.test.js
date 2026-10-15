@@ -33,6 +33,10 @@ const allCncMachines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", 
 const allCncFlag = c.parseFlag(allCncMachines);
 eq("11 台 CNC 名單逐台開啟", allCncMachines.map((machine) => c.enabledForMachine(allCncFlag, machine)), Array(11).fill(true));
 eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), false);
+eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: false, reason: "flag_off" });
+eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: false, reason: "flag_off" });
+eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "applied" }), { send: true, reason: "" });
+eq("完工關站：報工 rejected 不送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", resultKind: "hard" }), { send: false, reason: "report_not_applied" });
 
 console.log("== 單台報工今日開工分頁 ==");
 eq("名單內 A04 → 隱藏今日開工", c.dailyStartReportVisible(flagA04, "A04"), false);
@@ -138,10 +142,14 @@ eq("合約欄位齊全", c.submitPayload({ commandUuid: UUID, commandType: "star
 });
 eq("料號沒有 → null", c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: 1, partNo: null }).p_expected_part_no, null);
 eq("多工站帶 Id", c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "B03", orderNo: "X", step: 1, manufactureIiId: "77" }).p_manufacture_ii_id, "77");
+eq("close 帶預期 SimulationId", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1" }).p_expected_simulation_id, "SIM-1");
+throws("close 缺 SimulationId", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1 }), "NO_SIMULATION_ID");
 throws("壞 uuid", () => c.submitPayload({ commandUuid: "x", commandType: "start", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_UUID");
 throws("不支援的指令（換單）", () => c.submitPayload({ commandUuid: UUID, commandType: "switch", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_TYPE");
 throws("沒有第幾道", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: null }), "NO_STEP");
 throws("沒有工單", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "", step: 1 }), "NO_ORDER");
+eq("close applied 顯示已關站下一道進池", c.statusView({ status: "applied" }, "close", 0).title, "已關站，下一道已進池");
+eq("close rejected 保留伺服器白話原因", c.statusView({ status: "rejected", reject_code: "LEGACY_REJECTED", reject_message: "這是最後一道，關站會結工單，請生管處理" }, "close", 0).detail, "這是最後一道，關站會結工單，請生管處理");
 
 console.log("== 錯誤分類 ==");
 eq("表不存在 PGRST205 → missing", c.isMissingResourceError(new Error('404 {"code":"PGRST205","message":"Could not find the table"}')), true);

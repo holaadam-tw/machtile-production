@@ -29,8 +29,8 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileStationCommandCore() {
   "use strict";
 
-  const COMMAND_TYPES = Object.freeze(["start", "stop"]);
-  const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工" });
+  const COMMAND_TYPES = Object.freeze(["start", "stop", "close"]);
+  const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站" });
   const TERMINAL = Object.freeze(["applied", "rejected", "expired"]);
   // 合約 r2 §2 的伺服器常數（App 只用來寫提示與決定何時停止輪詢，不用來判結果）
   const MAX_APPLY_AGE_MS = 3 * 60 * 1000;      // max_apply_age()
@@ -74,6 +74,13 @@
     const code = normCode(machineCode);
     if (!code) return false;
     return flag.all || flag.machines.includes(code);
+  }
+
+  function finishCloseDecision({ enabled, machines, machineCode, reportType, resultKind } = {}) {
+    if (enabled !== true || !enabledForMachine(parseFlag(machines), machineCode)) return { send: false, reason: "flag_off" };
+    if (reportType !== "finish") return { send: false, reason: "not_finish" };
+    if (resultKind !== "applied" && resultKind !== "applied-late") return { send: false, reason: "report_not_applied" };
+    return { send: true, reason: "" };
   }
 
   // 有卡片「開工／停工」的機台，開工確認卡已順便記今日開工；單台報工不再顯示重複的「今日開工」分頁。
@@ -265,7 +272,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -273,7 +280,7 @@
     if (!text(orderNo)) throw new Error("NO_ORDER");
     const n = Number(step);
     if (!Number.isInteger(n) || n <= 0) throw new Error("NO_STEP");
-    return {
+    const payload = {
       p_command_uuid: commandUuid,
       p_command_type: commandType,
       p_machine_code: code,
@@ -282,6 +289,11 @@
       p_expected_part_no: text(partNo) || null,
       p_manufacture_ii_id: text(manufactureIiId) || null,
     };
+    if (commandType === "close") {
+      if (!text(expectedSimulationId)) throw new Error("NO_SIMULATION_ID");
+      payload.p_expected_simulation_id = text(expectedSimulationId);
+    }
+    return payload;
   }
 
   // ---------------------------------------------------------------- 錯誤分類
@@ -414,7 +426,7 @@
     const action = TYPE_LABEL[type] || "指令";
     const status = text(row && row.status).toLowerCase();
     if (status === "applied") {
-      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : "已套用", text: `舊 MES 已${action}。` };
+      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? "已關站，下一道已進池" : "已套用", text: `舊 MES 已${action}。` };
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
@@ -468,6 +480,8 @@
       partName: text(rec.partName),
       operationName: text(rec.operationName),
       manufactureIiId: text(rec.manufactureIiId) || null,
+      expectedSimulationId: text(rec.expectedSimulationId) || null,
+      finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
@@ -607,7 +621,7 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, dailyStartReportVisible, reportTypeForMachine,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
