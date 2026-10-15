@@ -72,6 +72,14 @@
       finish_screen_title: "完工",
       finish_screen_hint: "填寫良品與不良數；有不良時必須選擇原因。",
       finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
+      finish_close_applied: "已關站",
+      finish_close_applied_short: "少 {{quantity}} 件，已關站",
+      finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
+      finish_close_rejected_title: "關站未完成",
+      finish_close_zero_reported: "這一道還沒有報工數量，不能完工關站；請先報工",
+      finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
+      finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
+      finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -165,6 +173,14 @@
       finish_screen_title: "Hoàn tất", // _draft
       finish_screen_hint: "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.", // _draft
       finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
+      finish_close_applied: "Đã đóng công đoạn", // _draft
+      finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn", // _draft
+      finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
+      finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft
+      finish_close_zero_reported: "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.", // _draft
+      finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
+      finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
+      finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft

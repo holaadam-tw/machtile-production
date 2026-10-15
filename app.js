@@ -13545,10 +13545,18 @@ function machtileFinishCloseEnabled(machineCode) {
 function machtileFinishCloseSetResult(code, view) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
+  const applied = view?.phase === "applied";
+  const shortQty = Number(view?.shortQty || 0);
+  const title = applied
+    ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
+    : machtileTranslate("finish_close_rejected_title");
+  const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running" })[view?.code];
   flow.close = {
     phase: view?.phase || "rejected",
-    title: view?.phase === "applied" ? "已關站，下一道已進池" : (view?.title || "關站未完成"),
-    message: view?.phase === "applied" ? "完工報工已保留；舊 MES 已關站。" : (view?.detail || view?.text || "完工報工已成功，但關站未完成。"),
+    title,
+    message: applied
+      ? machtileTranslate("finish_close_applied_detail")
+      : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
   };
 }
 
@@ -14458,7 +14466,7 @@ function machtileStationCmdPoll(code) {
     const current = machtileStationCmd.pending[code];
     if (!current || current.commandUuid !== record.commandUuid) return;
     try {
-      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,applied_at&command_uuid=eq.${current.commandUuid}`);
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,legacy_snapshot,applied_at&command_uuid=eq.${current.commandUuid}`);
       const row = Array.isArray(rows) ? rows[0] : null;
       if (machtileStationCmd.pending[code] !== current) return;
       if (row) {

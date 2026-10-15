@@ -91,6 +91,38 @@
     "value": "Sau khi báo cáo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa bước tiếp theo vào hàng chờ",
     "_draft": true
   },
+  "finish_close_applied": {
+    "value": "Đã đóng công đoạn",
+    "_draft": true
+  },
+  "finish_close_applied_short": {
+    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn",
+    "_draft": true
+  },
+  "finish_close_applied_detail": {
+    "value": "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.",
+    "_draft": true
+  },
+  "finish_close_rejected_title": {
+    "value": "Chưa đóng được công đoạn",
+    "_draft": true
+  },
+  "finish_close_zero_reported": {
+    "value": "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.",
+    "_draft": true
+  },
+  "finish_close_lock_timeout": {
+    "value": "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.",
+    "_draft": true
+  },
+  "finish_close_still_running": {
+    "value": "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.",
+    "_draft": true
+  },
+  "finish_close_unknown": {
+    "value": "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.",
+    "_draft": true
+  },
   "batch_command_title": {
     "value": "Bắt đầu / dừng hàng loạt",
     "_draft": true

@@ -37,6 +37,7 @@ import { createRequire } from "node:module";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const stationCore = createRequire(import.meta.url)("./stationCommandCore.js");
 const outDir = process.env.STATION_CMD_E2E_OUT || path.join(root, ".e2e-out", "station-command");
+const finishCloseShot = "D:\\04_SoftNet\\ops\\codex-inbox\\20261015-app-finish-dialog-shots\\close-result-mobile.png";
 const baselineRef = process.env.STATION_CMD_BASELINE_REF || "origin/main";
 const modSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const pw = await import(modSpec);
@@ -621,6 +622,7 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     await cardOf(page, "B03").locator('[data-station-cmd="stop"]').click();
     await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
     await sheet(page).locator("[data-station-cmd-confirm]").click();
+    for (let i = 0; i < 20 && be.submits.length === 0; i++) await page.waitForTimeout(50);
     ok(be.submits.at(-1)?.p_manufacture_ii_id === "C011E0ZE2YZJ", `${W}：B03 停工送出卡片的 ManufactureII Id`);
     await sheet(page).locator("[data-station-cmd-close]").click();
     ok(await page.locator("#workOrderGrid [data-station-cmd]").count() === eligibleFixtureMachines.length * 2, `${W}：只有具備完整工序資料的 fixture 出現按鈕`);
@@ -1585,6 +1587,45 @@ console.log("\n== 390px：重讀 5xx 期間別台平板記了今日開工 → �
   ok(be.reportUpserts.length === 0 && be.directPosts.length === 0 && dailyStartRows(be, id(304)).length === 1, `多平板＋重讀失敗 → 沒有第二筆（寫入 ${be.reportUpserts.length}）`);
   ok(Object.keys(await readDsQueue(page)).length === 0, "數量清掉");
   ok(realErrors(errors).length === 0, "沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],' });
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(500);
+  const cases = [
+    ["ZERO_REPORTED", { status: "rejected", reject_code: "ZERO_REPORTED" }, "這一道還沒有報工數量，不能完工關站；請先報工"],
+    ["LOCK_TIMEOUT", { status: "rejected", reject_code: "LOCK_TIMEOUT" }, "這次沒有關成（系統忙），可以再按一次"],
+    ["STILL_RUNNING", { status: "rejected", reject_code: "STILL_RUNNING" }, "這筆仍在生產中，沒有關站；請先停工再試。"],
+    ["applied ShortQty > 0", { status: "applied", legacy_snapshot: { ShortQty: 7 } }, "少 7 件，已關站"],
+    ["applied ShortQty = 0", { status: "applied", legacy_snapshot: { ShortQty: 0 } }, "已關站"],
+  ];
+  for (const [label, outcome, expected] of cases) {
+    await page.evaluate((row) => {
+      machtileSingleStationReportState.loading = false;
+      machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+      const view = MachTileStationCommandCore.statusView(row, "close", 0);
+      machtileFinishCloseSetResult("A04", view);
+      machtileRenderStationReportSurfaces();
+    }, outcome);
+    const result = page.locator("#finishSheet .finish-close-result");
+    await result.waitFor({ timeout: 10000 });
+    const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
+    ok(shown.includes(expected), `${label} → 完工畫面顯示「${expected}」`, shown);
+  }
+  await page.evaluate(() => {
+    const view = MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { ShortQty: 7 } }, "close", 0);
+    machtileFinishCloseSetResult("A04", view);
+    machtileRenderStationReportSurfaces();
+  });
+  await mkdir(path.dirname(finishCloseShot), { recursive: true });
+  await page.locator("#finishSheet .finish-close-result").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: finishCloseShot });
+  ok(realErrors(errors).length === 0, "完工結果畫面沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
