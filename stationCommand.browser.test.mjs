@@ -38,6 +38,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const stationCore = createRequire(import.meta.url)("./stationCommandCore.js");
 const outDir = process.env.STATION_CMD_E2E_OUT || path.join(root, ".e2e-out", "station-command");
 const finishCloseShot = "D:\\04_SoftNet\\ops\\codex-inbox\\20261015-app-finish-dialog-shots\\close-result-mobile.png";
+const nextStepShotDir = "D:\\04_SoftNet\\ops\\codex-inbox\\20261016-next-step-claim-shots";
 const baselineRef = process.env.STATION_CMD_BASELINE_REF || "origin/main";
 const modSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const pw = await import(modSpec);
@@ -145,6 +146,10 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     procOverride: {},         // 開卡重讀工序時改寫某台的列（例：已離站、沒有料號）
     progressRows: [],
     otherWrites: [],
+    poolRows: [],
+    poolReads: 0,
+    claimBodies: [],
+    claimError: "",
   };
   be.handle = async (route) => {
     const req = route.request();
@@ -193,6 +198,16 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (be.submitRowMode === "noUuid") { const { command_uuid, ...rest } = row; return json(200, rest); }
       if (be.submitRowMode === "wrongUuid") return json(200, { ...row, command_uuid: "99999999-9999-4999-8999-999999999999" });
       return json(200, row);
+    }
+    if (p === "/rest/v1/dispatch_pool_items") {
+      be.poolReads++;
+      return json(200, be.poolRows);
+    }
+    if (p === "/rest/v1/rpc/dispatch_pool_claim") {
+      const body = JSON.parse(req.postData() || "{}");
+      be.claimBodies.push(body);
+      if (be.claimError) return json(400, { code: "P0001", message: be.claimError });
+      return json(200, { claimed: true });
     }
     // 開卡時重讀單一工序（id=eq.）
     if (p === "/rest/v1/work_order_processes" && /(^|[?&])id=eq\./.test(q)) {
@@ -338,8 +353,10 @@ const fieldText = async (page, key) => (await sheet(page).locator(`[data-station
 
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch();
+const nextStepOnly = process.env.MACHTILE_NEXT_STEP_ONLY === "1";
 
 // ---------------------------------------------------------------------------------------------
+if (!nextStepOnly) {
 for (const vp of ["desktop", "tablet", "phone"]) {
   const W = VIEWPORTS[vp].viewport.width;
   console.log(`\n== ${W}px：旗標關（預設）＝跟現在一模一樣 ==`);
@@ -1629,6 +1646,117 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
   await page.screenshot({ path: finishCloseShot });
   ok(realErrors(errors).length === 0, "完工結果畫面沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
+}
+}
+
+console.log("\n== 390px：關站成功後下一道接單提示（fake backend） ==");
+await mkdir(nextStepShotDir, { recursive: true });
+async function openNextStepScenario({ enabled = true, next = "eligible", maxWait = 500, claimError = "" } = {}) {
+  const be = makeBackend();
+  be.claimError = claimError;
+  const configExtra = `enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"], enableNextStepClaimPrompt: ${enabled}, nextStepClaimPollIntervalMs: 30, nextStepClaimMaxWaitMs: ${maxWait}, dispatchPoolMachines: ["A04"],`;
+  const opened = await newPage(browser, "phone", { backend: be, configExtra });
+  await opened.page.evaluate(({ orderNo, processId }) => {
+    openFinishReport(orderNo, { machine: "A04", processId });
+  }, { orderNo: procs[1].wo, processId: id(304) });
+  await opened.page.waitForTimeout(500);
+  await opened.page.evaluate(({ orderNo, processId, nextKind }) => {
+    selectedOrder = state.workOrders.find((order) => order.id === orderNo);
+    activeReportType = "finish";
+    machtileSingleStationReportState.machineCode = "A04";
+    machtileSingleStationReportState.processId = processId;
+    machtileSingleStationReportState.loading = false;
+    finishReportedState = { status: "ready", quantity: 208, processId };
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    const routes = {
+      eligible: [{ id: processId, process_order: 5, process_name: "CNC 車床二序", process_type: "cnc", status: "completed", station_codes: "A04" }, { id: "next-a04", process_order: 6, process_name: "車床精加工", process_type: "cnc", status: "pending", station_codes: "A04,A05" }],
+      notEligible: [{ id: processId, process_order: 5, process_name: "CNC 車床二序", process_type: "cnc", status: "completed", station_codes: "A04" }, { id: "next-a03", process_order: 6, process_name: "車床精加工", process_type: "cnc", status: "pending", station_codes: "A03,A05" }],
+      other: [{ id: processId, process_order: 5, process_name: "CNC 車床二序", process_type: "cnc", status: "completed", station_codes: "A04" }, { id: "next-b03", process_order: 6, process_name: "銑床加工", process_type: "cnc", status: "pending", station_codes: "B03,B04" }],
+      outsourced: [{ id: processId, process_order: 5, process_name: "CNC 車床二序", process_type: "cnc", status: "completed", station_codes: "A04" }, { id: "next-out", process_order: 6, process_name: "表面處理", process_type: "outsourced", status: "pending", station_codes: "", supplier_name: "測試委外廠" }],
+      final: [{ id: processId, process_order: 5, process_name: "CNC 車床二序", process_type: "cnc", status: "completed", station_codes: "A04" }],
+    };
+    machtileProcessFlows.set(orderNo, { quantity: 600, processes: routes[nextKind] });
+    const view = MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { ShortQty: 0 } }, "close", 0);
+    machtileFinishCloseSetResult("A04", view);
+    machtileRenderStationReportSurfaces();
+    document.getElementById("finishFormHost")?.append(document.getElementById("reportForm"));
+    document.getElementById("finishSheet")?.classList.add("is-open");
+    document.getElementById("finishSheet")?.setAttribute("aria-hidden", "false");
+    document.body.classList.add("finish-sheet-mode");
+  }, { orderNo: procs[1].wo, processId: id(304), nextKind: next });
+  be.poolReads = 0;
+  return { ...opened, be };
+}
+
+{
+  const x = await openNextStepScenario({ next: "eligible" });
+  const prompt = x.page.locator("#finishSheet [data-next-step-claim-prompt]");
+  await prompt.waitFor();
+  ok((await prompt.innerText()).includes("下一道：第 6/2 道") === false, "下一道序號使用路線位置，不誤用 legacy IndexSN");
+  ok((await prompt.innerText()).includes("下一道：第 2/2 道 車床精加工（車床課）"), "同課同機：顯示下一道與課別");
+  ok((await prompt.innerText()).includes("下一道進池中…"), "同課同機：尚未進池顯示等待");
+  x.be.poolRows = [{ source_key: "FWC:NEXT:A04", work_order_no: procs[1].wo, process_order: 6, department_code: "LATHE", eligible_machine_codes: ["A04", "A05"], status: "waiting" }];
+  const button = x.page.locator('#finishSheet [data-next-step-claim="FWC:NEXT:A04"]');
+  await button.waitFor({ timeout: 3000 });
+  ok((await button.innerText()).includes("在 A04（本機）接下一道"), "輪詢出現後顯示手動接單按鈕");
+  await x.page.locator("#finishSheet .finish-close-result").screenshot({ path: path.join(nextStepShotDir, "01-same-department-ready.png") });
+  await button.click();
+  await x.page.locator("#finishSheet [data-next-step-claim-prompt]").filter({ hasText: "已接單，請按開工" }).waitFor({ timeout: 5000 });
+  ok(x.be.claimBodies.length === 1 && x.be.claimBodies[0].p_source_key === "FWC:NEXT:A04" && x.be.claimBodies[0].p_machine_code === "A04", "按下後走既有 dispatch_pool_claim 且只送一次");
+  await x.context.close();
+}
+
+for (const scenario of [
+  ["notEligible", "下一道為同課別，但本機不在可接機台內", "02-same-department-not-eligible.png"],
+  ["other", "已進銑床課待做池，由該課機台接單", "03-other-department.png"],
+  ["outsourced", "下一道是委外製程", "04-outsourced.png"],
+  ["final", "本道是最後一道，沒有下一道", "05-final-step.png"],
+]) {
+  const x = await openNextStepScenario({ next: scenario[0] });
+  const prompt = x.page.locator("#finishSheet [data-next-step-claim-prompt]");
+  await prompt.waitFor();
+  ok((await prompt.innerText()).includes(scenario[1]), `${scenario[0]}：顯示正確白話`);
+  ok(await prompt.locator("[data-next-step-claim]").count() === 0 && x.be.claimBodies.length === 0, `${scenario[0]}：不提供／不自動接單`);
+  await x.page.locator("#finishSheet .finish-close-result").screenshot({ path: path.join(nextStepShotDir, scenario[2]) });
+  await x.context.close();
+}
+
+{
+  const x = await openNextStepScenario({ next: "eligible", maxWait: 120 });
+  await x.page.locator("#finishSheet [data-next-step-claim-prompt]").filter({ hasText: "下一道尚未進池" }).waitFor({ timeout: 3000 });
+  ok(x.be.claimBodies.length === 0, "輪詢逾時：不自動接單");
+  await x.page.locator("#finishSheet .finish-close-result").screenshot({ path: path.join(nextStepShotDir, "06-timeout.png") });
+  await x.context.close();
+}
+
+{
+  const x = await openNextStepScenario({ next: "eligible", claimError: "POOL_ITEM_NOT_WAITING" });
+  x.be.poolRows = [{ source_key: "FWC:TAKEN", work_order_no: procs[1].wo, process_order: 6, department_code: "LATHE", eligible_machine_codes: ["A04"], status: "waiting" }];
+  const button = x.page.locator('#finishSheet [data-next-step-claim="FWC:TAKEN"]');
+  await button.waitFor({ timeout: 3000 });
+  await button.click();
+  await x.page.locator("#finishSheet [data-next-step-claim-prompt]").filter({ hasText: "已被別台接走" }).waitFor({ timeout: 3000 });
+  ok(x.be.claimBodies.length === 1, "接單 RPC 失敗：不重送");
+  await x.page.locator("#finishSheet .finish-close-result").screenshot({ path: path.join(nextStepShotDir, "07-claim-failed.png") });
+  await x.context.close();
+}
+
+{
+  const x = await openNextStepScenario({ enabled: false, next: "eligible" });
+  await x.page.waitForTimeout(150);
+  ok(await x.page.locator("#finishSheet [data-next-step-claim-prompt]").count() === 0, "旗標關：不顯示任何下一道新內容");
+  await x.page.locator("#finishSheet .finish-close-result").screenshot({ path: path.join(nextStepShotDir, "08-flag-off.png") });
+  await x.context.close();
+}
+
+{
+  const x = await openNextStepScenario({ next: "eligible", maxWait: 500 });
+  await x.page.locator("#finishSheet [data-next-step-claim-prompt]").waitFor();
+  await x.page.evaluate(() => closeReport());
+  const reads = x.be.poolReads;
+  await x.page.waitForTimeout(150);
+  ok(x.be.poolReads === reads, "關掉完工畫面立即停止輪詢");
+  await x.context.close();
 }
 
 await browser.close();
