@@ -31,6 +31,7 @@ const token = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: id(801), 
 let checks = 0;
 let counterReports = [{ report_type: "dailyStart", created_at: "2026-10-13T00:10:00.000Z", report_payload: { machine_qty: 100 } }];
 let submittedPayload = null;
+let finishProgressMode = "ready";
 function check(value, label) { assert.ok(value, label); checks++; console.log(`PASS ${label}`); }
 
 const browser = await chromium.launch();
@@ -46,7 +47,7 @@ await context.route("**/*", async route => {
     if (url.pathname === "/rest/v1/rpc/machine_department_context") return json({ tenant_id: tenant, role: "operator", is_bridge: false, all_departments: false, department_codes: ["LATHE"] });
     if (url.pathname === "/rest/v1/v_work_order_cards") return json([card]);
     if (url.pathname === "/rest/v1/v_machine_management_cards") return json([{ id: id(201), machine_code: "A01", machine_name: "A01", machine_type: "車床", status: "idle", display_order: 1 }]);
-    if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: processId, legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-12T09:00:00.000Z", actual_start_at: "2026-10-12T00:00:00.000Z" }]);
+    if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json(finishProgressMode === "missing" ? [] : [{ process_id: processId, legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-12T09:00:00.000Z", actual_start_at: "2026-10-12T00:00:00.000Z" }]);
     if (url.pathname === "/rest/v1/production_reports" && request.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(counterReports);
     if (url.pathname === "/rest/v1/production_reports" && request.method() === "POST") {
       submittedPayload = request.postDataJSON();
@@ -141,31 +142,51 @@ check((await page.locator('label[for="completedQty"]').innerText()).startsWith("
 await page.screenshot({ path: path.join(screenshotDir, "20261013-report-cumulative-counter-800px.png"), fullPage: true });
 await page.evaluate(() => {
   const processId = "00000000-0000-4000-8000-000000000301";
-  if (!machtileCardPickState.progressByProcess) machtileCardPickState.progressByProcess = new Map();
-  machtileCardPickState.progressByProcess.set(processId, { process_id: processId, legacy_output: 280, legacy_fail: 0, pending_output: 20, pending_fail: 0, pending_count: 1 });
+  selectedOrder.appDone = 0;
+  selectedOrder.done = 38;
+  selectedOrder.progressSource = { done: 38, appDone: 0, source: "legacy", legacyKnown: true, legacyOutput: 38, legacyFail: 0, pendingOutput: 0, pendingFail: 0, pendingCount: 0, totalFail: 0, label: "含舊 MES" };
+  machtileCardPickState.progressByProcess = new Map();
+  document.querySelector("#completedQty").value = "0";
   openFinishReport("RATE-WO-001", { processId });
 });
 await page.locator("#finishSheet.is-open").waitFor();
-check((await page.locator("#completedQtyLabel").innerText()) === "這一道總完成數（良品）" && (await page.locator("#finishReportedQty").innerText()) === "已報 300 件", "完工欄位與卡片共用舊 MES 280＋待回寫 20 的已報數");
+await page.waitForFunction(() => document.querySelector("#finishReportedQty")?.textContent === "已報 38 件");
+check((await page.locator("#completedQtyLabel").innerText()) === "這一道總完成數（良品）" && (await page.locator("#finishReportedQty").innerText()) === "已報 38 件", "完工欄位在 progress map 空白時直接重用卡片顯示的舊 MES 38");
 check(await page.locator("#reportCounterPreview").isHidden() && await page.locator("#reportCounterManual").isHidden() && !(await page.locator("#finishSheet").innerText()).includes("機台目前累計數"), "4 完工不顯示或讀取機台累計與歸零選項");
 const finishCases = await page.evaluate(() => {
   const input = document.querySelector("#completedQty");
   const run = total => { input.value = String(total); return { validation: validateReportForm("finish"), payload: buildReportPayload("finish"), calc: reportCounterCalculation() }; };
-  return { midday: run(560), unchanged: run(300), lower: run(299), zero: MachTileReportCounterCore.finishTotal(0, 0), over: run(320) };
+  return { final: run(1113), unchanged: run(38), lower: run(37), zero: MachTileReportCounterCore.finishTotal(0, 0), over: run(40) };
 });
-check(finishCases.midday.validation === "" && finishCases.midday.payload.completed_qty === 260 && finishCases.midday.payload.machine_qty === null, "1 中午 300、總數 560 僅送補報 260");
+check(finishCases.final.validation === "" && finishCases.final.payload.completed_qty === 1075 && finishCases.final.payload.machine_qty === null, "1 卡片已報 38、完工填 1113 → 只補報 1075");
 check(finishCases.unchanged.validation === "" && finishCases.unchanged.payload.completed_qty === 0, "2 沒再做時補報 0 仍可送");
-check(finishCases.midday.calc.reported === 300, "3 跨日且今天無開工／盤點仍使用整道累計已報");
-check(finishCases.lower.validation === "總數不能小於已報的 300 件；報錯請用報工修正", "5 總數小於已報時擋下並指引報工修正");
-check(finishCases.midday.calc.reported === 300, "6 換人收尾不影響整道已報來源");
-check(finishCases.midday.calc.reported === 300, "7 電子紙舊 MES 280 也包含在已報中");
+check(finishCases.final.calc.reported === 38, "3 跨日且今天無開工／盤點仍使用整道累計已報");
+check(finishCases.lower.validation === "總數不能小於已報的 38 件；報錯請用報工修正", "5 總數小於已報時擋下並指引報工修正");
+check(finishCases.final.calc.reported === 38, "6 換人收尾不影響整道已報來源");
+check(finishCases.final.calc.reported === 38, "7 電子紙舊 MES 38 也包含在已報中");
 check(finishCases.zero.message === "這一道還沒有報工數量，不能完工關站；請先報工", "8 從頭到尾零件時擋下");
-check(finishCases.over.validation === "" && finishCases.over.payload.completed_qty === 20, "9 已報或實際總數超計畫時不阻擋");
-await page.locator("#completedQty").fill("560");
+check(finishCases.over.validation === "" && finishCases.over.payload.completed_qty === 2, "9 已報或實際總數超計畫時不阻擋");
+await page.locator("#completedQty").fill("1113");
 await page.locator("#finishSheet .finish-panel").screenshot({ path: path.join(screenshotDir, "finish-total-desktop.png") });
 await page.setViewportSize({ width: 390, height: 844 });
 await page.locator("#finishSheet .finish-panel").screenshot({ path: path.join(screenshotDir, "finish-total-mobile.png") });
 await page.setViewportSize({ width: 800, height: 1000 });
+finishProgressMode = "missing";
+submittedPayload = null;
+await page.evaluate(() => {
+  closeReport();
+  selectedOrder.progressSource = null;
+  selectedOrder.done = 0;
+  selectedOrder.appDone = 0;
+  machtileCardPickState.progressByProcess = new Map();
+  openFinishReport("RATE-WO-001", { processId: selectedOrder.processId });
+});
+await page.waitForFunction(() => document.querySelector("#finishReportedQty")?.textContent.includes("讀不到已報數"));
+check(await page.locator("#reportForm .submit-report").isDisabled(), "讀不到已報數時送出鍵停用（fail closed）");
+check((await page.evaluate(() => validateReportForm("finish"))) === "讀不到已報數，請重新整理。", "讀不到已報數時驗證層也阻擋送出");
+await page.locator("#reportForm").evaluate(form => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+await page.waitForTimeout(50);
+check(submittedPayload === null, "讀不到已報數時沒有 production_reports POST");
 await page.evaluate(() => openReport("RATE-WO-001", { reportType: "noon" }));
 
 counterReports = [{ report_type: "noon", created_at: new Date(Date.now() - 600_000).toISOString(), report_payload: { machine_qty: 130 } }];
