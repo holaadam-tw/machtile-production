@@ -75,6 +75,10 @@
     "value": "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp",
     "_draft": true
   },
+  "finish_work_close_hint": {
+    "value": "Sau khi báo cáo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa bước tiếp theo vào hàng chờ",
+    "_draft": true
+  },
   "batch_command_title": {
     "value": "Bắt đầu / dừng hàng loạt",
     "_draft": true

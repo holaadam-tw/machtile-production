@@ -32,13 +32,14 @@ const previewResult = {
     order_start: "2026-10-01", effective_need: 1000,
   } } } },
 };
-const calls = { commands: [], reports: [] };
+const calls = { commands: [], reports: [], closeCommands: [] };
 const requestUrls = [];
 let currentMachine = "A04";
 let guardFails = false;
 let guardEnabled = true;
 let finalSubmitFails = false;
 let reconciledCommand = null;
+let closeCommand = null;
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -63,12 +64,21 @@ await context.route("**/*", async route => {
         ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: { ...previewResult, command_uuid: body.p_command_uuid } }
         : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty });
     }
-    if (url.pathname.endsWith("/station_commands") && req.method() === "GET") return json(reconciledCommand ? [reconciledCommand] : []);
+    if (url.pathname.endsWith("/rpc/machtile_submit_station_command")) {
+      const body = req.postDataJSON(); calls.closeCommands.push(body);
+      closeCommand = { command_uuid: body.p_command_uuid, command_type: "close", status: "applied", reject_code: null, reject_message: null };
+      return json(closeCommand);
+    }
+    if (url.pathname.endsWith("/station_commands") && req.method() === "GET") {
+      const requested = url.searchParams.get("command_uuid") || "";
+      if (closeCommand && requested.includes(closeCommand.command_uuid)) return json([closeCommand]);
+      return json(reconciledCommand ? [reconciledCommand] : []);
+    }
     if (url.pathname.endsWith("/production_reports") && req.method() === "POST") { calls.reports.push(req.postDataJSON()); return json([calls.reports.at(-1)]); }
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:true,disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:true,enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -202,6 +212,15 @@ assert.equal(calls.commands.length, finishCommandsBefore + 1, "finish preview no
 assert.equal(await finishValidation.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.reportPayload.finish_scope), "all");
 assert.equal(await finishValidation.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.reportPayload.overtime_plan), "");
 assert.doesNotMatch(await finishValidation.evaluate(() => buildReportRemark("finish", "")), /一般下班 17:00/);
+const finishConfirm = finishValidation.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
+await finishConfirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
+await finishValidation.waitForFunction(() => machtileBatchRow("A04").stationReport.close?.phase === "applied", null, { timeout: 10000 });
+assert.equal(calls.closeCommands.length, 1, "finish applied submits exactly one close command");
+assert.equal(calls.closeCommands[0].p_command_type, "close");
+assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
+assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
+assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
+assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站，下一道已進池/);
 await finishValidation.close();
 
 currentMachine = "A04"; guardEnabled = false;
