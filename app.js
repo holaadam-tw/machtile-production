@@ -34,6 +34,8 @@ const config = {
   // 完工報工 applied 後自動派關站；雙旗標且機台白名單都符合才送，安全預設全關。
   enableFinishClose: false,
   finishCloseMachines: [],
+  // 關站成功後提示下一道並等待派工池；正式 config.js 未開前完全不讀池、不顯示。
+  enableNextStepClaimPrompt: false,
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   inspectionLinkMachines: [],
@@ -11462,11 +11464,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   machtileDispatchPoolState.claimMessage = "";
   holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
   try {
-    const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
-    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
-    await loadFromSupabase({ preserveDepartmentOnFailure: true });
-    deriveMachines();
-    renderAll();
+    await machtileDispatchPoolClaimRequest(sourceKey, machineCode);
     machtileCloseCardSelection();
     showToast(machtileTranslate("claim_success"), "success");
   } catch (error) {
@@ -11479,6 +11477,15 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
     const machine = machtileScheduleMachine(machineCode);
     if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
   }
+}
+
+// One claim path for both 「選擇工單」 and the post-close next-step prompt.
+async function machtileDispatchPoolClaimRequest(sourceKey, machineCode) {
+  const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
+  await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
+  await loadFromSupabase({ preserveDepartmentOnFailure: true });
+  deriveMachines();
+  renderAll();
 }
 
 async function machtileReleaseDispatchPoolClaim(sourceKey) {
@@ -13680,6 +13687,109 @@ function machtileFinishCloseEnabled(machineCode) {
     machines: config.finishCloseMachines, machineCode, reportType: "finish", serverStatus: "applied" }).send);
 }
 
+const MACHTILE_NEXT_STEP_POLL_MS = 20 * 1000;
+const MACHTILE_NEXT_STEP_MAX_MS = 8 * 60 * 1000;
+let machtileNextStepTimer = null;
+let machtileNextStepPollToken = 0;
+
+function machtileStopNextStepClaimPolling() {
+  machtileNextStepPollToken += 1;
+  clearTimeout(machtileNextStepTimer);
+  machtileNextStepTimer = null;
+}
+
+function machtileNextStepDepartment(step) {
+  const codes = String(step?.station_codes || "").split(/[,，、\s]+/).map(value => value.trim().toUpperCase()).filter(Boolean);
+  const labels = [...new Set(codes.map(code => {
+    const machine = (state.machineMasters || []).find(item => String(item.code || item.name || "").toUpperCase() === code);
+    return machine ? normalizedMachineDepartment(machine) : "";
+  }).filter(label => ["車床課", "銑床課"].includes(label)))];
+  if (labels.length === 1) return { label: labels[0], codes };
+  const kind = window.MachTileProcessFlow?.operationDepartment(step);
+  return { label: kind === "lathe" ? "車床課" : kind === "mill" ? "銑床課" : "課別未確認", codes };
+}
+
+function machtileNextStepModel(code) {
+  const order = machtileStationReportOrderForCode(code);
+  const route = machtileProcessFlows.get(order?.id);
+  if (!order || !route || !window.MachTileProcessFlow?.steps) return { phase: "unverified" };
+  const steps = window.MachTileProcessFlow.steps(route.processes, order.processId, route.quantity);
+  const currentIndex = steps.findIndex(step => step.current);
+  if (currentIndex < 0) return { phase: "unverified" };
+  const next = steps[currentIndex + 1];
+  if (!next) return { phase: "final" };
+  const department = machtileNextStepDepartment(next);
+  const base = { orderNo: order.id, processOrder: Number(next.process_order), step: currentIndex + 2,
+    total: steps.length, name: next.name, department: department.label, eligibleCodes: department.codes };
+  if (next.outsourced) return { ...base, phase: "outsourced" };
+  if (!Number.isInteger(base.processOrder) || !department.codes.length || department.label === "課別未確認") return { ...base, phase: "unverified" };
+  const machine = (state.machineMasters || state.machines || []).find(item => String(item.code || item.name || "").toUpperCase() === code);
+  const normalizedHere = machine ? normalizedMachineDepartment(machine) : "";
+  const hereDepartment = ["車床課", "銑床課"].includes(normalizedHere) ? normalizedHere : (machine ? departmentForMachine(machine) : "");
+  if (hereDepartment !== department.label) return { ...base, phase: "other-department" };
+  if (!department.codes.includes(String(code).toUpperCase())) return { ...base, phase: "not-eligible" };
+  return { ...base, phase: "polling", machineCode: String(code).toUpperCase(), startedAt: Date.now(), sourceKey: "", error: "" };
+}
+
+function machtileNextStepMarkup(nextStep) {
+  if (!nextStep) return "";
+  const label = nextStep.step ? `<strong>${escapeHtml(machtileTranslate("next_step_label", {
+    step: nextStep.step, total: nextStep.total, name: nextStep.name, department: nextStep.department,
+  }))}</strong>` : "";
+  const textKey = ({ final: "next_step_final", outsourced: "next_step_outsourced", unverified: "next_step_unverified",
+    "not-eligible": "next_step_not_eligible", "other-department": "next_step_other_department", polling: "next_step_pooling",
+    timeout: "next_step_timeout", claimed: "next_step_claimed" })[nextStep.phase];
+  const message = nextStep.phase === "ready" ? "" : machtileTranslate(textKey || "next_step_unverified", { department: nextStep.department });
+  const action = nextStep.phase === "ready"
+    ? `<button type="button" class="primary-action" data-next-step-claim="${escapeHtml(nextStep.sourceKey)}" data-next-step-machine="${escapeHtml(nextStep.machineCode)}">${escapeHtml(machtileTranslate("next_step_claim_here", { machine: nextStep.machineCode }))}</button>` : "";
+  return `<div class="next-step-claim" data-next-step-claim-prompt>${label}<p class="is-muted" role="status">${escapeHtml(nextStep.error || message)}</p>${action}</div>`;
+}
+
+function machtileStartNextStepClaimPrompt(code) {
+  if (config.enableNextStepClaimPrompt !== true) return;
+  machtileStopNextStepClaimPolling();
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const model = machtileNextStepModel(code);
+  flow.close.nextStep = model;
+  machtileRenderStationReportSurfaces();
+  if (model.phase !== "polling") return;
+  const token = machtileNextStepPollToken;
+  const intervalMs = Number(config.nextStepClaimPollIntervalMs) > 0 ? Number(config.nextStepClaimPollIntervalMs) : MACHTILE_NEXT_STEP_POLL_MS;
+  const maxMs = Number(config.nextStepClaimMaxWaitMs) > 0 ? Number(config.nextStepClaimMaxWaitMs) : MACHTILE_NEXT_STEP_MAX_MS;
+  const poll = async () => {
+    if (token !== machtileNextStepPollToken || flow.close?.nextStep !== model) return;
+    if (Date.now() - model.startedAt >= maxMs) {
+      model.phase = "timeout"; machtileRenderStationReportSurfaces(); return;
+    }
+    try {
+      const rows = await supabaseFetch(`dispatch_pool_items?select=source_key,work_order_no,process_order,department_code,eligible_machine_codes,status&work_order_no=eq.${encodeURIComponent(model.orderNo)}&process_order=eq.${model.processOrder}&status=eq.waiting&limit=1`);
+      const item = Array.isArray(rows) ? rows[0] : null;
+      if (item && Array.isArray(item.eligible_machine_codes) && item.eligible_machine_codes.map(value => String(value).toUpperCase()).includes(model.machineCode)) {
+        model.phase = "ready"; model.sourceKey = item.source_key; machtileRenderStationReportSurfaces(); return;
+      }
+    } catch (error) { console.warn("next step pool poll failed", error); }
+    if (token === machtileNextStepPollToken) machtileNextStepTimer = setTimeout(poll, intervalMs);
+  };
+  void poll();
+}
+
+async function machtileClaimNextStep(sourceKey, machineCode) {
+  const flow = machtileStationReportState(machtileBatchRow(machineCode));
+  const model = flow.close?.nextStep;
+  if (!model || model.phase !== "ready" || model.sourceKey !== sourceKey) return;
+  model.phase = "claiming"; model.error = machtileTranslate("claim_processing"); machtileRenderStationReportSurfaces();
+  try {
+    await machtileDispatchPoolClaimRequest(sourceKey, machineCode);
+    model.phase = "claimed"; model.error = "";
+    showToast(machtileTranslate("claim_success"), "success");
+  } catch (error) {
+    model.phase = "ready";
+    model.error = machtileDispatchPoolCore.claimErrorText(error);
+    showToast(model.error, "error");
+  }
+  machtileRenderStationReportSurfaces();
+}
+
 function machtileFinishCloseSetResult(code, view) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
@@ -13696,6 +13806,7 @@ function machtileFinishCloseSetResult(code, view) {
       ? machtileTranslate("finish_close_applied_detail")
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
   };
+  if (applied) machtileStartNextStepClaimPrompt(code);
 }
 
 async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUuid) {
@@ -20973,6 +21084,7 @@ function openFinishReport(orderId, options = {}) {
 
 function closeReport() {
   const returnDetailOrderId = activeReportReturnDetailOrderId;
+  machtileStopNextStepClaimPolling();
   machtileRestoreReportForm();
   $("#finishSheet")?.classList.remove("is-open");
   $("#finishSheet")?.setAttribute("aria-hidden", "true");
@@ -22176,7 +22288,7 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   }
   if (flow.close) {
     const closeTone = flow.close.phase === "applied" ? "success" : flow.close.phase === "pending" ? "pending" : "warning";
-    resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p></div>`;
+    resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p>${machtileNextStepMarkup(flow.close.nextStep)}</div>`;
   }
   const noContext = !context;
   const phaseBusy = ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report"].includes(flow.phase);
@@ -23167,6 +23279,11 @@ async function machtileSubmitBatchReport() {
 }
 
 function machtileHandleBatchClick(event) {
+  const nextStepClaim = event.target.closest("[data-next-step-claim]");
+  if (nextStepClaim) {
+    void machtileClaimNextStep(nextStepClaim.dataset.nextStepClaim, nextStepClaim.dataset.nextStepMachine);
+    return true;
+  }
   const commandRetry = event.target.closest("[data-batch-command-retry]");
   if (commandRetry) { machtileBatchRetryStationCommand(commandRetry.dataset.batchCommandRetry); return true; }
   const commandType = event.target.closest("[data-batch-command-type]");

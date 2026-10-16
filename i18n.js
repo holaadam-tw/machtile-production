@@ -84,6 +84,16 @@
       finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
       finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
       finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
+      next_step_label: "下一道：第 {{step}}/{{total}} 道 {{name}}（{{department}}）",
+      next_step_pooling: "下一道進池中…",
+      next_step_claim_here: "在 {{machine}}（本機）接下一道",
+      next_step_claimed: "已接單，請按開工",
+      next_step_timeout: "下一道尚未進池，可稍後在『選擇工單』接單",
+      next_step_not_eligible: "下一道為同課別，但本機不在可接機台內，請由可接機台接單",
+      next_step_other_department: "已進{{department}}待做池，由該課機台接單",
+      next_step_outsourced: "下一道是委外製程，由生管安排發包，不需在本機接單",
+      next_step_final: "本道是最後一道，沒有下一道",
+      next_step_unverified: "下一道製程資料尚未驗證，請稍後到『選擇工單』確認",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -194,6 +204,16 @@
       finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
       finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
       finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
+      next_step_label: "Công đoạn tiếp theo: bước {{step}}/{{total}} {{name}} ({{department}})", // _draft
+      next_step_pooling: "Đang chờ công đoạn tiếp theo vào danh sách…", // _draft
+      next_step_claim_here: "Nhận công đoạn tiếp theo tại {{machine}} (máy này)", // _draft
+      next_step_claimed: "Đã nhận việc; vui lòng bấm Bắt đầu", // _draft
+      next_step_timeout: "Công đoạn tiếp theo chưa vào danh sách; có thể nhận sau tại “Chọn lệnh sản xuất”", // _draft
+      next_step_not_eligible: "Công đoạn tiếp theo cùng bộ phận nhưng máy này không thuộc danh sách máy được nhận", // _draft
+      next_step_other_department: "Đã chuyển vào danh sách chờ của {{department}}; máy thuộc bộ phận đó sẽ nhận", // _draft
+      next_step_outsourced: "Công đoạn tiếp theo là gia công ngoài; bộ phận kế hoạch sẽ sắp xếp", // _draft
+      next_step_final: "Đây là công đoạn cuối; không có công đoạn tiếp theo", // _draft
+      next_step_unverified: "Chưa xác minh được dữ liệu công đoạn tiếp theo; vui lòng kiểm tra sau tại “Chọn lệnh sản xuất”", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft

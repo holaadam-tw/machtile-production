@@ -13019,6 +13019,10 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-result.is-success { border-color: #75bd91; background: #f2fbf5; }
 .station-report-result.is-warning { border-color: #e5b65c; background: #fff9eb; }
 .station-report-result.is-error { border-color: #e39a94; background: #fff5f4; }
+.next-step-claim { margin-top: 10px; padding-top: 10px; border-top: 1px solid #cfe5d6; }
+.next-step-claim p { margin: 4px 0; }
+.next-step-claim button { width: 100%; margin-top: 8px; min-height: 44px; }
+.next-step-claim .is-muted { color: #52606d; }
 .station-report-confirm-card { display: grid; gap: 8px; padding: 18px; border: 2px solid #174d78; border-radius: 10px; background: #fff; font-size: 22px; line-height: 1.35; }
 .station-report-confirm-card > strong { font-size: 36px; }
 .station-report-confirm-card b { font-size: 32px; }

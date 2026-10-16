@@ -73,6 +73,8 @@ window.MACHTILE_CONFIG = {
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
   finishCloseMachines: ["A04"],
+  // 關站成功後「要在這台接下一道嗎？」；本包只佈建，不開正式旗標。
+  enableNextStepClaimPrompt: false,
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
