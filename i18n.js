@@ -68,7 +68,22 @@
       daily_start: "今日開工",
       finish_work: "收工/完工",
       finish_button: "完工",
+      finish_screen_eyebrow: "完工回報",
+      finish_screen_title: "完工",
+      finish_screen_hint: "填寫良品與不良數；有不良時必須選擇原因。",
+      finish_total_good: "這一道總完成數（良品）",
+      finish_reported_qty: "已報 {{quantity}} 件",
+      finish_total_help: "填這一道從頭到尾的良品總數；系統只補報尚未回報的差額。",
+      counter_qty_help: "報工請照機台計數器填累計數量",
       finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
+      finish_close_applied: "已關站",
+      finish_close_applied_short: "少 {{quantity}} 件，已關站",
+      finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
+      finish_close_rejected_title: "關站未完成",
+      finish_close_zero_reported: "這一道還沒有報工數量，不能完工關站；請先報工",
+      finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
+      finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
+      finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -87,6 +102,11 @@
       counter_non_positive: "機台累計 {{current}} 必須大於上次 {{baseline}}；這次差額需大於 0。",
       counter_rate_warning: "照工時這段時間最多約 {{max}} 件，你報 {{quantity}} 件，請確認",
       counter_manual_help: "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
+      report_fail_reason_label: "不良原因（有不良時必選）",
+      report_fail_reason_placeholder: "選擇不良原因",
+      report_fail_reason_required: "有不良數時，需選擇不良原因",
+      report_fail_reason_other_note_required: "選擇其他不良原因時，備註必須填寫一句說明",
+      report_fail_reason_note_label: "其他原因說明",
       required: "必填",
       optional: "選填",
       submit_report: "送出報工",
@@ -158,7 +178,22 @@
       daily_start: "Bắt đầu hôm nay",
       finish_work: "Kết thúc / Hoàn tất",
       finish_button: "Hoàn tất",
+      finish_screen_eyebrow: "Báo cáo hoàn tất", // _draft
+      finish_screen_title: "Hoàn tất", // _draft
+      finish_screen_hint: "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.", // _draft
+      finish_total_good: "Tổng số hoàn thành của công đoạn này (đạt)", // _draft
+      finish_reported_qty: "Đã báo {{quantity}} sản phẩm", // _draft
+      finish_total_help: "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", // _draft
+      counter_qty_help: "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", // _draft
       finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
+      finish_close_applied: "Đã đóng công đoạn", // _draft
+      finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn", // _draft
+      finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
+      finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft
+      finish_close_zero_reported: "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.", // _draft
+      finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
+      finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
+      finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft
@@ -177,6 +212,11 @@
       counter_non_positive: "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.",
       counter_rate_warning: "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
       counter_manual_help: "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
+      report_fail_reason_label: "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)", // _draft
+      report_fail_reason_placeholder: "Chọn lý do lỗi", // _draft
+      report_fail_reason_required: "Khi có số lượng lỗi, phải chọn lý do lỗi.", // _draft
+      report_fail_reason_other_note_required: "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.", // _draft
+      report_fail_reason_note_label: "Giải thích lý do khác", // _draft
       required: "Bắt buộc",
       optional: "Không bắt buộc",
       submit_report: "Gửi báo cáo",

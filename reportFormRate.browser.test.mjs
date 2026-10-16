@@ -46,7 +46,7 @@ await context.route("**/*", async route => {
     if (url.pathname === "/rest/v1/rpc/machine_department_context") return json({ tenant_id: tenant, role: "operator", is_bridge: false, all_departments: false, department_codes: ["LATHE"] });
     if (url.pathname === "/rest/v1/v_work_order_cards") return json([card]);
     if (url.pathname === "/rest/v1/v_machine_management_cards") return json([{ id: id(201), machine_code: "A01", machine_name: "A01", machine_type: "車床", status: "idle", display_order: 1 }]);
-    if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: processId, legacy_output: 0, legacy_fail: 0, last_report_at: "2026-10-13T01:00:00.000Z", actual_start_at: "2026-10-13T00:00:00.000Z" }]);
+    if (url.pathname === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: processId, legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-12T09:00:00.000Z", actual_start_at: "2026-10-12T00:00:00.000Z" }]);
     if (url.pathname === "/rest/v1/production_reports" && request.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(counterReports);
     if (url.pathname === "/rest/v1/production_reports" && request.method() === "POST") {
       submittedPayload = request.postDataJSON();
@@ -70,8 +70,8 @@ await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.tex
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator("#reportSheet.is-open").waitFor();
 const tabs = await page.locator("#reportForm .report-type-tab:visible").allTextContents();
-check(tabs.length === 4 && !tabs.some((value) => value.includes("4:30")), "旗標開啟時報工表單只有四個非 4:30 分頁");
-check(await page.locator('[data-report-type="dailyStart"], [data-report-type="afternoonCheck"]:visible').count() === 0, "旗標開啟時下午 4:30 入口已移除");
+check(tabs.length === 3 && !tabs.some((value) => value.includes("4:30") || value.includes("完工")), "例行報工只留首次開工、報工、異常回報");
+check(await page.locator('[data-report-type="dailyStart"], [data-report-type="finish"], [data-report-type="afternoonCheck"]:visible').count() === 0, "例行報工沒有今日開工、完工與 4:30 重複入口");
 const flagModes = await page.evaluate(() => {
   config.inspectionLinkMachines = [];
   setReportDefaults(selectedOrder);
@@ -139,11 +139,37 @@ check(sourceCoverage.start.source === "dailyStart" && sourceCoverage.report.sour
 check((await page.locator('[data-report-section="noon"]').innerText()).includes("照機台計數器填累計數量") && !(await page.locator('[data-report-section="noon"]').innerText()).includes("中午"), "報工說明沒有時間字樣且維持累計語意");
 check((await page.locator('label[for="completedQty"]').innerText()).startsWith("機台目前累計數") && (await page.locator('label[for="defectQty"]').innerText()).startsWith("這次不良數"), "報工欄位區分機台累計與這次不良");
 await page.screenshot({ path: path.join(screenshotDir, "20261013-report-cumulative-counter-800px.png"), fullPage: true });
-await page.locator('[data-report-type="finish"]').click();
-check((await page.locator("#reportCounterPreview").innerText()) === "累計 145｜上次 130｜這次 15" && (await page.locator("#completedQtyLabel").innerText()) === "機台目前累計數", "收工分頁套用相同累計差額規則");
+await page.evaluate(() => {
+  const processId = "00000000-0000-4000-8000-000000000301";
+  if (!machtileCardPickState.progressByProcess) machtileCardPickState.progressByProcess = new Map();
+  machtileCardPickState.progressByProcess.set(processId, { process_id: processId, legacy_output: 280, legacy_fail: 0, pending_output: 20, pending_fail: 0, pending_count: 1 });
+  openFinishReport("RATE-WO-001", { processId });
+});
+await page.locator("#finishSheet.is-open").waitFor();
+check((await page.locator("#completedQtyLabel").innerText()) === "這一道總完成數（良品）" && (await page.locator("#finishReportedQty").innerText()) === "已報 300 件", "完工欄位與卡片共用舊 MES 280＋待回寫 20 的已報數");
+check(await page.locator("#reportCounterPreview").isHidden() && await page.locator("#reportCounterManual").isHidden() && !(await page.locator("#finishSheet").innerText()).includes("機台目前累計數"), "4 完工不顯示或讀取機台累計與歸零選項");
+const finishCases = await page.evaluate(() => {
+  const input = document.querySelector("#completedQty");
+  const run = total => { input.value = String(total); return { validation: validateReportForm("finish"), payload: buildReportPayload("finish"), calc: reportCounterCalculation() }; };
+  return { midday: run(560), unchanged: run(300), lower: run(299), zero: MachTileReportCounterCore.finishTotal(0, 0), over: run(320) };
+});
+check(finishCases.midday.validation === "" && finishCases.midday.payload.completed_qty === 260 && finishCases.midday.payload.machine_qty === null, "1 中午 300、總數 560 僅送補報 260");
+check(finishCases.unchanged.validation === "" && finishCases.unchanged.payload.completed_qty === 0, "2 沒再做時補報 0 仍可送");
+check(finishCases.midday.calc.reported === 300, "3 跨日且今天無開工／盤點仍使用整道累計已報");
+check(finishCases.lower.validation === "總數不能小於已報的 300 件；報錯請用報工修正", "5 總數小於已報時擋下並指引報工修正");
+check(finishCases.midday.calc.reported === 300, "6 換人收尾不影響整道已報來源");
+check(finishCases.midday.calc.reported === 300, "7 電子紙舊 MES 280 也包含在已報中");
+check(finishCases.zero.message === "這一道還沒有報工數量，不能完工關站；請先報工", "8 從頭到尾零件時擋下");
+check(finishCases.over.validation === "" && finishCases.over.payload.completed_qty === 20, "9 已報或實際總數超計畫時不阻擋");
+await page.locator("#completedQty").fill("560");
+await page.locator("#finishSheet .finish-panel").screenshot({ path: path.join(screenshotDir, "finish-total-desktop.png") });
+await page.setViewportSize({ width: 390, height: 844 });
+await page.locator("#finishSheet .finish-panel").screenshot({ path: path.join(screenshotDir, "finish-total-mobile.png") });
+await page.setViewportSize({ width: 800, height: 1000 });
+await page.evaluate(() => openReport("RATE-WO-001", { reportType: "noon" }));
 
 counterReports = [{ report_type: "noon", created_at: new Date(Date.now() - 600_000).toISOString(), report_payload: { machine_qty: 130 } }];
-await page.locator('[data-report-type="noon"]').click();
+await page.evaluate(() => setReportType("noon"));
 await page.evaluate(() => loadReportCounterBaseline(selectedOrder));
 await page.evaluate(() => {
   document.querySelector("#cycleMinutes").value = "0";

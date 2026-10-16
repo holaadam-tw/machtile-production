@@ -71,12 +71,60 @@
     "value": "Hoàn tất",
     "_draft": true
   },
+  "finish_screen_eyebrow": {
+    "value": "Báo cáo hoàn tất",
+    "_draft": true
+  },
+  "finish_screen_title": {
+    "value": "Hoàn tất",
+    "_draft": true
+  },
+  "finish_screen_hint": {
+    "value": "Nhập số lượng đạt và lỗi; khi có sản phẩm lỗi phải chọn nguyên nhân.",
+    "_draft": true
+  },
+  "finish_total_good": { "value": "Tổng số hoàn thành của công đoạn này (đạt)", "_draft": true },
+  "finish_reported_qty": { "value": "Đã báo {{quantity}} sản phẩm", "_draft": true },
+  "finish_total_help": { "value": "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", "_draft": true },
+  "counter_qty_help": { "value": "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", "_draft": true },
   "finish_work_hint": {
     "value": "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp",
     "_draft": true
   },
   "finish_work_close_hint": {
     "value": "Sau khi báo cáo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa bước tiếp theo vào hàng chờ",
+    "_draft": true
+  },
+  "finish_close_applied": {
+    "value": "Đã đóng công đoạn",
+    "_draft": true
+  },
+  "finish_close_applied_short": {
+    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn",
+    "_draft": true
+  },
+  "finish_close_applied_detail": {
+    "value": "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.",
+    "_draft": true
+  },
+  "finish_close_rejected_title": {
+    "value": "Chưa đóng được công đoạn",
+    "_draft": true
+  },
+  "finish_close_zero_reported": {
+    "value": "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.",
+    "_draft": true
+  },
+  "finish_close_lock_timeout": {
+    "value": "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.",
+    "_draft": true
+  },
+  "finish_close_still_running": {
+    "value": "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.",
+    "_draft": true
+  },
+  "finish_close_unknown": {
+    "value": "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.",
     "_draft": true
   },
   "batch_command_title": {
@@ -373,6 +421,26 @@
   },
   "lathe_single_operator_draft": {
     "value": "Báo cáo máy tiện chỉ được chọn một người vận hành. Vui lòng bỏ chọn những người khác rồi gửi lại.",
+    "_draft": true
+  },
+  "report_fail_reason_label": {
+    "value": "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)",
+    "_draft": true
+  },
+  "report_fail_reason_placeholder": {
+    "value": "Chọn lý do lỗi",
+    "_draft": true
+  },
+  "report_fail_reason_required": {
+    "value": "Khi có số lượng lỗi, phải chọn lý do lỗi.",
+    "_draft": true
+  },
+  "report_fail_reason_other_note_required": {
+    "value": "Khi chọn Khác, phải ghi một câu giải thích trong phần ghi chú.",
+    "_draft": true
+  },
+  "report_fail_reason_note_label": {
+    "value": "Giải thích lý do khác",
     "_draft": true
   }
 }

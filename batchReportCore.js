@@ -12,10 +12,11 @@
 //   - 驗證、報工人、冪等鍵（report_uuid）、送出 payload
 (function attachMachTileBatchReportCore(root, factory) {
   const counterCore = root?.MachTileReportCounterCore || (typeof require === "function" ? require("./reportCounterCore.js") : null);
-  const api = factory(counterCore);
+  const stationCore = () => root?.MachTileStationReportCore || (typeof require === "function" ? require("./stationReportCore.js") : null);
+  const api = factory(counterCore, stationCore);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.MachTileBatchReportCore = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileBatchReportCore(counterCore) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileBatchReportCore(counterCore, stationCore) {
   "use strict";
 
   // 車床 A01–A05；銑床先只放 B03–B06（B01/B02 是臥式多盤，用現有多盤報工畫面）。
@@ -37,6 +38,16 @@
   });
   const MODE_ORDER = Object.freeze(["dailyStart", "noon", "finish"]);
   const FINISH_OVERTIME = Object.freeze({ none: "一般下班 17:00", "2030": "加班收工 20:30" });
+  const failReasonCodes = () => stationCore()?.FAIL_REASON_DEFAULTS || [];
+
+  function validateFailReason(row, bad) {
+    const reason = String(row?.failReasonCode || "").trim();
+    if (bad === 0 && reason) return { reason: "", error: "沒有不良品時不可帶不良原因" };
+    if (bad === 0) return { reason: "", error: "" };
+    if (!reason || !failReasonCodes().includes(reason)) return { reason, error: "有不良數時，需選擇不良原因" };
+    if (reason === "其他" && !String(row?.reportNote || "").trim()) return { reason, error: "選擇其他不良原因時，備註必須填寫一句說明" };
+    return { reason, error: "" };
+  }
   // 機台加工時間（每件秒數）上限：擋手滑（一件 24 小時以上的不收）。
   const MAX_MACHINE_SECONDS = 24 * 3600;
   // 一次報工的數量上限：擋手滑多打一個 0（不是業務規則；真的超過就分兩次報）。
@@ -287,6 +298,8 @@
       if (goodN === 0 && badN === 0) return { send: false, empty: true, error: "" };
       if (!Number.isInteger(goodN) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
       if (goodN < 0 || badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
+      const failReason = validateFailReason(row, badN);
+      if (failReason.error) return { send: false, empty: false, error: failReason.error };
       if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
       if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
       if (row?.operatorMapped !== true) return { send: false, empty: false, error: "這位報工人還沒對照舊 MES 工號，產值歸不到人" };
@@ -303,6 +316,8 @@
     if (!counter.valid) return { send: false, empty: false, error: counter.message };
     if (!Number.isInteger(counter.current) || !Number.isInteger(counter.delta) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
     if (badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
+    const failReason = validateFailReason(row, badN);
+    if (failReason.error) return { send: false, empty: false, error: failReason.error };
     if (counter.delta > MAX_QTY_PER_REPORT || badN > MAX_QTY_PER_REPORT) return { send: false, empty: false, error: `一次最多 ${MAX_QTY_PER_REPORT} 件，請確認有沒有多打 0` };
     if (!row?.order?.processId || !row?.order?.workOrderId) return { send: false, empty: false, error: "這台目前沒有派工，不能報工" };
     if (!row?.operatorId) return { send: false, empty: false, error: "請選報工人" };
@@ -324,6 +339,8 @@
       String(row?.order?.processId || ""),
       String(toInt(row?.legacyGood) ?? toInt(row?.current) ?? 0),
       qty ? String(toInt(row?.bad) ?? 0) : "0",
+      qty ? String(row?.failReasonCode || "") : "",
+      qty ? String(row?.reportNote || "").trim() : "",
       String(row?.operatorId || ""),
       row?.finished === true ? "finish" : "report",
     ].join("|");
@@ -336,7 +353,7 @@
   }
 
   // 備註：照單台 buildReportRemark（批次畫面沒有備註欄，所以只有前綴＋固定段落）。
-  function buildRemark(mode, { machineQty = 0, overtime = "" } = {}) {
+  function buildRemark(mode, { machineQty = 0, overtime = "", reportNote = "" } = {}) {
     const m = MODES[mode] ? mode : "noon";
     const parts = [`[${MODES[m].label}]`];
     if (m === "dailyStart") {
@@ -344,6 +361,7 @@
       // 2026-10-05 owner：首件檢查只在首次開工做，今日開工（單台／批次）都不再宣告首件完成。
     }
     if (m === "finish") parts.push(overtime === "2030" ? FINISH_OVERTIME["2030"] : FINISH_OVERTIME.none);
+    if (String(reportNote).trim()) parts.push(String(reportNote).trim());
     return parts.join("；");
   }
 
@@ -376,7 +394,7 @@
       completed_qty: v.good,
       defect_qty: v.bad,
       status_after_report: order.processStatus || "running",
-      remark: buildRemark(mode, { machineQty, overtime }),
+      remark: buildRemark(mode, { machineQty, overtime, reportNote: row.reportNote }),
       report_type: mode,
       report_payload: {
         report_type: mode,
@@ -385,6 +403,7 @@
         machine_qty: machineQty,
         completed_qty: v.good,
         defect_qty: v.bad,
+        fail_reason_code: v.bad > 0 ? String(row.failReasonCode || "").trim() : null,
         has_program_upload: false,
         overtime_plan: overtime,
         pm_abnormal: "",

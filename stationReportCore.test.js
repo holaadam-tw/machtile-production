@@ -132,6 +132,8 @@ check("invalid quantities, unknown reason, invalid ack and missing G4 note fail 
   assert.throws(() => core.buildSubmitArgs(validInput({ failReasonCode: "invented" }), UUID_PREVIEW, true), { code: "INVALID_FAIL_REASON" });
   assert.throws(() => core.buildSubmitArgs(validInput({ acks: ["NOT_ALLOWED"] }), UUID_PREVIEW), { code: "INVALID_ACK" });
   assert.throws(() => core.buildSubmitArgs(validInput({ acks: ["OLD_ORDER_NEWER_OPEN"] }), UUID_PREVIEW), { code: "REPORT_NOTE_REQUIRED" });
+  assert.throws(() => core.buildSubmitArgs(validInput({ failReasonCode: "其他", reportNote: "" }), UUID_PREVIEW, true), { code: "REPORT_NOTE_REQUIRED" });
+  assert.equal(core.buildSubmitArgs(validInput({ failReasonCode: "其他", reportNote: "刀具撞傷" }), UUID_PREVIEW, true).p_fail_reason_code, "其他");
 });
 
 check("missing legacy identity fields block submit rather than guessing mappings", () => {

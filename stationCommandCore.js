@@ -382,7 +382,9 @@
     // 套用端速查表（#785 runbook）：OUTCOME_UNKNOWN／INTERNAL_ERROR＝舊 MES 有沒有改「不確定」，不能說沒生效
     OUTCOME_UNKNOWN: "舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
     INTERNAL_ERROR: "工廠套用時出錯，舊 MES 有沒有改不確定，請先看機台電子紙或問生管核對，再決定要不要重按",
-    STILL_RUNNING: "這筆仍在生產中，沒有關站；請重新整理後再試，或請生管確認。",
+    ZERO_REPORTED: "這一道還沒有報工數量，不能完工關站；請先報工",
+    LOCK_TIMEOUT: "這次沒有關成（系統忙），可以再按一次",
+    STILL_RUNNING: "這筆仍在生產中，沒有關站；請先停工再試。",
     // 管理員路徑：伺服器在建指令前就拒絕（舊 MES 沒動）。正常是 submit 錯誤；萬一出現在 reject_code 也給同樣白話。
     ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
     ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
@@ -406,7 +408,7 @@
     "COMMAND_INVALID", "STALE_COMMAND", "STATION_NOT_ENABLED", "STATION_NOT_FOUND", "STATION_TYPE_MISMATCH", "STATION_NOT_SET",
     "ORDER_MISMATCH", "INDEX_SN_MISMATCH", "PART_NO_MISMATCH", "MII_NOT_FOUND", "MII_CLOSED", "OPERATOR_NOT_SET", "OPERATOR_UNKNOWN",
     "ALREADY_RUNNING", "ALREADY_STOPPED", "NOT_STARTED", "WORK_ORDER_NOT_FOUND", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID",
-    "RMS_UNAVAILABLE", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT", "OPERATOR_LIST_TOO_LONG", "NEED_PAUSED",
+    "RMS_UNAVAILABLE", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT", "STILL_RUNNING", "ZERO_REPORTED", "OPERATOR_LIST_TOO_LONG", "NEED_PAUSED",
     "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED",
   ]);
   const UNTOUCHED_FALLBACK_TEXT = "舊 MES 沒有套用這次指令。";
@@ -420,6 +422,23 @@
     return { text: base, code: key, detail: detail && detail !== base ? detail : "" };
   }
 
+  function legacySnapshot(row) {
+    const raw = row && (row.legacy_snapshot ?? row.legacySnapshot);
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    if (typeof raw !== "string" || !raw.trim()) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  }
+
+  function closeShortQty(row) {
+    const snapshot = legacySnapshot(row);
+    const raw = snapshot.ShortQty ?? snapshot.shortQty;
+    const qty = Number(raw);
+    return Number.isFinite(qty) && qty > 0 ? qty : 0;
+  }
+
   // ---------------------------------------------------------------- 狀態
   // 結果只看伺服器 status。ageMs＝伺服器時鐘上的年齡（可為 null）：超過 max_apply_age 只多一句提示，仍是等待中。
   function statusView(row, commandType, ageMs) {
@@ -427,7 +446,8 @@
     const action = TYPE_LABEL[type] || "指令";
     const status = text(row && row.status).toLowerCase();
     if (status === "applied") {
-      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? "已關站，下一道已進池" : "已套用", text: `舊 MES 已${action}。` };
+      const shortQty = type === "close" ? closeShortQty(row) : 0;
+      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站` : "已關站") : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty } : {}) };
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
@@ -626,7 +646,7 @@
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
-    isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText,
+    isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,

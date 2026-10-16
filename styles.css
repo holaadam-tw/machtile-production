@@ -2958,6 +2958,7 @@ body.route-mode {
 }
 
 .report-sheet .report-panel {
+  box-sizing: border-box;
   position: relative;
   top: auto;
   right: auto;
@@ -11803,8 +11804,8 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .batch-pending { padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 13px; font-weight: 700; }
 .batch-pending.is-stale { background: var(--red-soft); color: #9f1d1d; }
 .batch-inputs { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
-.batch-qty, .batch-operator, .batch-ct { display: grid; gap: 4px; font-size: 14px; font-weight: 700; color: #344054; min-width: 0; }
-.batch-operator, .batch-ct, .batch-check { grid-column: 1 / -1; }
+.batch-qty, .batch-operator, .batch-ct, .batch-reason, .batch-note { display: grid; gap: 4px; font-size: 14px; font-weight: 700; color: #344054; min-width: 0; }
+.batch-operator, .batch-ct, .batch-check, .batch-reason, .batch-note { grid-column: 1 / -1; }
 .batch-qty input, .batch-ct input {
   min-height: 60px;
   width: 100%;
@@ -11819,7 +11820,7 @@ body.report-work-route-mode .machtile-route-brand-bar {
 }
 .batch-qty.is-good input { border-color: rgba(21, 128, 61, 0.45); }
 .batch-qty.is-bad input { border-color: rgba(217, 45, 32, 0.4); }
-.batch-qty input:focus, .batch-ct input:focus, .batch-operator select:focus {
+.batch-qty input:focus, .batch-ct input:focus, .batch-operator select:focus, .batch-reason select:focus, .batch-note textarea:focus {
   outline: none;
   border-color: var(--brand-blue);
   box-shadow: 0 0 0 4px rgba(0, 103, 255, 0.18);
@@ -11828,8 +11829,9 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .batch-ct-inputs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .batch-ct-inputs span { color: var(--muted); font-size: 14px; font-weight: 700; white-space: nowrap; }
 .batch-ct input { min-height: 52px; font-size: 22px; }
-.batch-operator select { min-height: 52px; width: 100%; font-size: 17px; padding: 0 10px; border-radius: var(--radius); border: 2px solid var(--border-strong); background: var(--surface); color: var(--text); }
-.batch-qty input:disabled, .batch-ct input:disabled, .batch-operator select:disabled { background: var(--gray-soft); border-color: var(--border); }
+.batch-operator select, .batch-reason select, .batch-note textarea { min-height: 52px; width: 100%; font-size: 17px; padding: 10px; border-radius: var(--radius); border: 2px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.batch-note textarea { resize: vertical; }
+.batch-qty input:disabled, .batch-ct input:disabled, .batch-operator select:disabled, .batch-reason select:disabled, .batch-note textarea:disabled { background: var(--gray-soft); border-color: var(--border); }
 .batch-check {
   display: flex;
   gap: 12px;
@@ -11906,6 +11908,7 @@ body .machtile-session-badge .machtile-session-toggle {
 }
 /* 單台報工：數量欄說明 */
 .report-qty-help { margin: -4px 0 6px; color: var(--muted); font-size: 12px; }
+.finish-reported-qty { margin-left: 8px; color: var(--muted); font-weight: 800; white-space: nowrap; }
 
 /* 卡片完成進度：百分比與色條同色、色條放在百分比正下方（2026-10-02 owner） */
 .machine-metrics small.card-progress-pct { color: var(--brand-blue); font-size: 14px; font-weight: 800; }
@@ -13007,6 +13010,7 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .station-report-heading span, .station-report-hint { color: #53697b; font-size: 12px; }
 .station-report-hint { margin: 0; }
 .station-report-reason, .station-report-note { display: grid; gap: 4px; color: #34495b; font-size: 12px; font-weight: 700; }
+.report-fail-reason[hidden], .station-report-reason[hidden] { display: none !important; }
 .station-report-reason select, .station-report-note textarea { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid #c6d2dc; border-radius: 5px; background: #fff; color: #263545; font: inherit; }
 .station-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .station-report-action { min-height: 36px; }
@@ -13042,6 +13046,30 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .machine-tile-actions .station-cmd-button.is-stop { border-color: #b42318; background: #b42318; }
 .machine-tile-actions .machine-finish-button { min-height: 44px; min-width: 0; padding: 8px 16px; border: 1px solid #6f42c1; border-radius: var(--radius); background: #6f42c1; color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
 .report-section .radio-card[hidden] { display: none !important; }
+
+/* 卡片完工是獨立、精簡畫面；表單節點本身沿用，確保仍走同一套 submit / station preview / poll。 */
+.finish-panel { width: min(680px, calc(100vw - 24px)); max-height: 94dvh; overflow: auto; }
+.finish-machine-card { display: grid; gap: 4px; margin-bottom: 10px; padding: 14px; border: 1px solid #d9d2ef; border-left: 6px solid #6f42c1; border-radius: var(--radius); background: #faf8ff; }
+.finish-machine-card strong { color: #4d2787; font-size: 24px; }
+.finish-machine-card span { color: var(--text); font-weight: 800; }
+.finish-machine-card code { color: var(--muted); overflow-wrap: anywhere; }
+.finish-screen-hint { margin: 0 0 12px; color: var(--muted); font-weight: 700; }
+body.finish-sheet-mode #reportForm .report-type-tabs,
+body.finish-sheet-mode #reportForm [data-report-section]:not(#quantitySection),
+body.finish-sheet-mode #reportForm label[for="reportNote"],
+body.finish-sheet-mode #reportForm #reportNote,
+body.finish-sheet-mode #reportForm .report-actions { display: none !important; }
+body.finish-sheet-mode #reportForm #quantitySection { display: grid; }
+body.finish-sheet-mode #reportForm .submit-report { background: #6f42c1; }
+body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900; }
+@media (max-width: 560px) {
+  .finish-sheet { align-items: end; padding: 0; }
+  .finish-panel { width: 100%; max-height: 96dvh; border-radius: 20px 20px 0 0; padding: 16px; }
+  .finish-machine-card strong { font-size: 21px; }
+  body.finish-sheet-mode #reportForm .stepper input { min-width: 0; }
+}
+
+.report-layout > *, .report-form, .report-actions > button { min-width: 0; }
 .machine-tile-actions .station-cmd-button:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: 1; }
 .station-cmd-status.is-wait { color: var(--blue); }
 .station-cmd-status.is-ok { color: var(--green-strong); }

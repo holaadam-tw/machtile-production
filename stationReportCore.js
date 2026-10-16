@@ -137,6 +137,9 @@
     if (fail === 0 && x.failReasonCode) throw new ContractError("INVALID_FAIL_REASON", "沒有不良品時不可帶不良原因。");
     const note = String(x.reportNote || "");
     if (note.length > 500) throw new ContractError("INVALID_REPORT_NOTE", "備註不可超過 500 字。");
+    if (fail > 0 && x.failReasonCode === "其他" && !note.trim()) {
+      throw new ContractError("REPORT_NOTE_REQUIRED", "選擇其他不良原因時，備註必須填寫一句說明。");
+    }
     const acks = Array.isArray(x.acks) ? [...new Set(x.acks)] : [];
     if (acks.some((ack) => !ALLOWED_ACKS.includes(ack))) throw new ContractError("INVALID_ACK", "確認項目無效，請重新預覽。");
     if (acks.includes("OLD_ORDER_NEWER_OPEN") && !note.trim()) throw new ContractError("REPORT_NOTE_REQUIRED", "報在舊工單須填原因。");

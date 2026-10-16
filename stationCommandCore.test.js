@@ -150,8 +150,13 @@ throws("壞 uuid", () => c.submitPayload({ commandUuid: "x", commandType: "start
 throws("不支援的指令（換單）", () => c.submitPayload({ commandUuid: UUID, commandType: "switch", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_TYPE");
 throws("沒有第幾道", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: null }), "NO_STEP");
 throws("沒有工單", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "", step: 1 }), "NO_ORDER");
-eq("close applied 顯示已關站下一道進池", c.statusView({ status: "applied" }, "close", 0).title, "已關站，下一道已進池");
+eq("close applied ShortQty > 0 顯示少 N 件，已關站", c.statusView({ status: "applied", legacy_snapshot: { ShortQty: 7 } }, "close", 0).title, "少 7 件，已關站");
+eq("close applied shortQty > 0 相容小寫 JSON", c.statusView({ status: "applied", legacy_snapshot: '{"shortQty":3}' }, "close", 0).title, "少 3 件，已關站");
+eq("close applied ShortQty = 0 顯示已關站", c.statusView({ status: "applied", legacy_snapshot: { ShortQty: 0 } }, "close", 0).title, "已關站");
 eq("close rejected 保留伺服器白話原因", c.statusView({ status: "rejected", reject_code: "LEGACY_REJECTED", reject_message: "這是最後一道，關站會結工單，請生管處理" }, "close", 0).detail, "這是最後一道，關站會結工單，請生管處理");
+eq("close ZERO_REPORTED 顯示 owner 定案白話", c.statusView({ status: "rejected", reject_code: "ZERO_REPORTED" }, "close", 0).text, "這一道還沒有報工數量，不能完工關站；請先報工");
+eq("close LOCK_TIMEOUT 顯示可再按一次", c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "close", 0).text, "這次沒有關成（系統忙），可以再按一次");
+eq("close STILL_RUNNING 照 #892 白話", c.statusView({ status: "rejected", reject_code: "STILL_RUNNING" }, "close", 0).text, "這筆仍在生產中，沒有關站；請先停工再試。");
 
 console.log("== 錯誤分類 ==");
 eq("表不存在 PGRST205 → missing", c.isMissingResourceError(new Error('404 {"code":"PGRST205","message":"Could not find the table"}')), true);
@@ -191,9 +196,9 @@ eq("rejected/LEGACY_APPLIED_LATE → 舊 MES 已改（不說沒生效）", [late
 eq("LEGACY_APPLIED_LATE 文案沒有「沒有生效」", /沒有生效|沒生效|沒有開工/.test(lateApplied.title + lateApplied.text), false);
 const weird = c.statusView({ status: "rejected", reject_code: "WEIRD" }, "stop");
 eq("rejected 未知代碼 → 保守：不說沒生效，請核對", [weird.title, weird.text, weird.tone], ["結果待核對", "沒有完成，舊 MES 狀態請核對", "warn"]);
-eq("rejected 沒動清單內但沒專用文案（LOCK_TIMEOUT）→ 沒有停工＋通用沒套用", (() => { const v = c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "stop"); return [v.title, v.text, v.tone]; })(), ["沒有停工", "舊 MES 沒有套用這次指令。", "bad"]);
+eq("rejected LOCK_TIMEOUT → 沒有停工＋可再按一次", (() => { const v = c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "stop"); return [v.title, v.text, v.tone]; })(), ["沒有停工", "這次沒有關成（系統忙），可以再按一次", "bad"]);
 eq("每個工廠拒絕代碼都有白話", ["ORDER_MISMATCH", "STATION_NOT_SET", "OPERATOR_NOT_SET", "ALREADY_RUNNING", "ALREADY_STOPPED", "RMS_UNAVAILABLE", "APS_SIM_NOT_FOUND", "STALE_COMMAND", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED", "EXPIRED",
-  "NEED_PAUSED", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY", "OPERATOR_LIST_TOO_LONG"].every((k) => c.REJECT_TEXT[k]), true);
+  "NEED_PAUSED", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY", "OPERATOR_LIST_TOO_LONG", "ZERO_REPORTED", "LOCK_TIMEOUT", "STILL_RUNNING"].every((k) => c.REJECT_TEXT[k]), true);
 const opNotSet = c.statusView({ status: "rejected", reject_code: "OPERATOR_NOT_SET" }, "start");
 eq("P3-b OPERATOR_NOT_SET → 「這台還沒設定好作業員」，不說「你還沒掛在名單」", [opNotSet.title, opNotSet.text, /你還沒掛/.test(opNotSet.text)], ["沒有開工", "舊 MES 這台還沒設定好作業員，請找生管。", false]);
 const rv = (code) => c.statusView({ status: "rejected", reject_code: code, reject_message: "detail-" + code }, "start");

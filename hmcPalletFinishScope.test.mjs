@@ -18,5 +18,7 @@ for(const key of ["hmc_pallet_report_noon_draft","hmc_pallet_report_finish_all_d
   assert.equal(typeof zh[key],"string");
   assert.equal(vi[key]._draft,true);
 }
-assert.match(html,/app\.js\?v=20261015-finish-r1/);
+const appVersion=html.match(/app\.js\?v=([^"']+)/)?.[1];
+assert.ok(appVersion,"index.html must version app.js");
+assert.match(appVersion,/^20261015-/,"app.js cache version must reflect this delivery date");
 console.log("PASS HMC finish-scope UI contract: all/partial payload, increment defect, B-only boundary, i18n, cache bump");

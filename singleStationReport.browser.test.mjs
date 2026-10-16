@@ -7,6 +7,7 @@ import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.env.MACHTILE_SCREENSHOT_DIR || "D:/04_SoftNet/ops/codex-inbox/shots";
 await mkdir(shots, { recursive: true });
+await mkdir("D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots", { recursive: true });
 const moduleSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const imported = await import(moduleSpec);
 const { chromium } = imported.default || imported;
@@ -37,6 +38,7 @@ const requestUrls = [];
 let currentMachine = "A04";
 let guardFails = false;
 let guardEnabled = true;
+let finishButtonEnabled = true;
 let finalSubmitFails = false;
 let reconciledCommand = null;
 let closeCommand = null;
@@ -47,7 +49,7 @@ await context.route("**/*", async route => {
   if (url.origin === fake) {
     requestUrls.push(url.href);
     const json = body => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
-    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: "A04", report_enabled: guardEnabled, report_enabled_machines: { A04: guardEnabled }, fail_reason_codes: ["尺寸不良"] });
+    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: "A04", report_enabled: guardEnabled, report_enabled_machines: { A04: guardEnabled }, fail_reason_codes: ["尺寸不良", "外觀", "刀具崩", "試刀", "材料不良", "其他"] });
     if (url.pathname.endsWith("/v_work_order_cards")) return json([{ id: workOrderId, tenant_id: tenantId, work_order_no: "XX01202604140011", part_no: "GQ7Q", part_name: "試點件", quantity: 1000, due_date: "2026-10-20", priority: "normal", work_order_status: "in_progress", current_process_id: processId, current_process_name: "車床", current_process_status: "running", machine_name: currentMachine, qty_completed: 920, qty_defect: 0, progress_percent: 92, last_report_at: "2026-10-13T03:00:00Z", current_process_off_station: false }]);
     if (url.pathname.endsWith("/v_machine_management_cards")) return json([{ id: id(201), machine_code: currentMachine, machine_name: currentMachine, machine_type: "車床", status: "running", display_order: 1 }]);
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
@@ -78,7 +80,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:true,enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -91,9 +93,12 @@ await page.waitForFunction(() => typeof machtileRenderSingleStationReport === "f
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator('[data-report-type="noon"]').click();
+assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
 await page.locator("#defectQty").fill("2");
 await page.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+assert.equal(await page.locator("#reportFailReasonField").isHidden(), true, "A04 smart report does not show a duplicate general fail-reason field");
+assert.equal(await page.locator('.station-report-reason:visible').count(), 1, "A04 with defects shows exactly one fail-reason field");
 
 const routeState = await page.evaluate(() => ({ allowlisted: machtileSingleStationReportAllowlisted("A04"), active: machtileSingleStationReportActive(), panelHidden: document.querySelector("#singleStationReportPanel").hidden, submitHidden: document.querySelector("#reportForm .submit-report").hidden }));
 assert.equal(routeState.submitHidden, true, `allowlisted station hides legacy submit: ${JSON.stringify(routeState)}`);
@@ -134,6 +139,7 @@ assert.equal(calls.commands.length, 1, "preview creates one command");
 assert.equal(calls.commands[0].p_preview, true);
 assert.equal(calls.commands[0].p_good_qty, 38);
 assert.equal(calls.commands[0].p_fail_qty, 2);
+assert.equal(calls.commands[0].p_fail_reason_code, "尺寸不良");
 assert.deepEqual(await page.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.operators), [id(901)], "selected mapped operator is frozen into the smart-report flow");
 assert.equal(calls.reports.length, 0, "preview never records production report");
 
@@ -152,6 +158,7 @@ assert.equal(calls.commands[1].p_fail_qty, 2);
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
 assert.equal(calls.reports[0].completed_qty, 38);
 assert.equal(calls.reports[0].defect_qty, 2);
+assert.equal(calls.reports[0].report_payload.fail_reason_code, "尺寸不良", "A04 production report payload preserves the smart-report fail reason");
 const happyUuid = calls.commands[1].p_command_uuid;
 await page.evaluate(() => machtileRecordSingleStationProductionReport("A04", machtileBatchRow("A04").stationReport.args));
 assert.equal(calls.reports.length, 1, "same successful command_uuid does not duplicate production_reports");
@@ -159,7 +166,7 @@ assert.equal(calls.reports[0].report_uuid, happyUuid);
 await page.screenshot({ path: path.join(shots, "20261013-single-station-smart-report-800px.png"), fullPage: true });
 
 await page.close();
-currentMachine = "A03";
+currentMachine = "A01";
 const outsider = await context.newPage();
 await outsider.goto(base, { waitUntil: "domcontentloaded" });
 await outsider.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
@@ -167,6 +174,23 @@ await outsider.locator("[data-open-report]:visible").first().click();
 await outsider.locator('[data-report-type="noon"]').click();
 assert.equal(await outsider.locator("#reportForm .submit-report").isVisible(), true, "non-allowlisted station keeps legacy submit");
 assert.equal(await outsider.locator("#singleStationReportPanel").isHidden(), true);
+await outsider.locator("#completedQty").fill("958");
+await outsider.locator("#defectQty").fill("0");
+assert.equal(await outsider.locator("#reportFailReasonField").isHidden(), true, "zero defects hides the general fail-reason field");
+assert.equal(Boolean(await outsider.evaluate(() => validateReportForm("noon"))), false, "zero defects needs no reason");
+await outsider.locator("#defectQty").fill("3");
+const generalReasonState = await outsider.evaluate(() => ({ hidden: document.querySelector("#reportFailReasonField").hidden, active: machtileSingleStationReportActive(), machineCode: machtileSingleStationReportState.machineCode, defect: document.querySelector("#defectQty").value, type: activeReportType }));
+assert.equal(await outsider.locator("#reportFailReasonField").isVisible(), true, `non-smart machine with defects shows the fail-reason field: ${JSON.stringify(generalReasonState)}`);
+assert.equal(await outsider.evaluate(() => validateReportForm("noon")), "有不良數時，需選擇不良原因");
+await outsider.locator("#reportFailReason").selectOption("其他");
+assert.match(await outsider.evaluate(() => validateReportForm("noon")), /備註必須填寫一句說明/);
+await outsider.locator("#reportNote").fill("刀具撞傷");
+assert.equal(Boolean(await outsider.evaluate(() => validateReportForm("noon"))), false);
+assert.equal(await outsider.evaluate(() => buildReportPayload("noon").fail_reason_code), "其他", "non-smart report stores reason in report_payload");
+await outsider.setViewportSize({ width: 390, height: 844 });
+await outsider.evaluate(() => { document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0; const layout = document.querySelector("#reportSheet .report-layout"); layout.scrollLeft = 0; layout.scrollTop = 0; });
+await outsider.locator("#reportFailReasonField").scrollIntoViewIfNeeded();
+await outsider.screenshot({ path: "D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots/defect-reason-mobile.png" });
 await outsider.close();
 
 currentMachine = "A04";
@@ -183,10 +207,18 @@ await finishValidation.evaluate(() => {
 });
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').count(), 1, "enabled finish flag shows one machine-card finish button");
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').innerText(), "完工");
+await finishValidation.locator('.machine-report-button:visible').click();
+assert.equal(await finishValidation.locator('.report-type-tab[data-report-type="noon"]').getAttribute("class").then(value => value.includes("active")), true, "machine-card report button opens directly on routine report");
+await finishValidation.evaluate(() => closeReport());
 await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
 await finishValidation.waitForTimeout(200);
-const finishOpenState = await finishValidation.evaluate(() => ({ open: document.querySelector("#reportSheet")?.classList.contains("is-open"), toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
-assert.equal(finishOpenState.open, true, `finish card button opens finish report: ${JSON.stringify(finishOpenState)}`);
+const finishOpenState = await finishValidation.evaluate(() => ({ finishOpen: document.querySelector("#finishSheet")?.classList.contains("is-open"), reportOpen: document.querySelector("#reportSheet")?.classList.contains("is-open"), activeReportType, formHost: document.querySelector("#reportForm")?.parentElement?.id, toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
+assert.equal(finishOpenState.finishOpen, true, `finish card button opens independent finish screen: ${JSON.stringify(finishOpenState)}`);
+assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
+assert.equal(finishOpenState.activeReportType, "finish");
+assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
+assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
+assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
 assert.equal(await finishValidation.locator('input[name="finishOvertime"][value="none"]').isChecked(), true, "hidden overtime field defaults to none");
 await finishValidation.evaluate(operatorId => {
@@ -195,14 +227,18 @@ await finishValidation.evaluate(operatorId => {
   list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`;
   document.body.append(list);
 }, id(901));
-await finishValidation.locator("#completedQty").fill("920");
+await finishValidation.locator("#completedQty").fill("919");
 await finishValidation.locator("#defectQty").fill("0");
 await finishValidation.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
-assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "zero delta remains clickable so it can explain why submission is blocked");
+await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-desktop.png") });
+await finishValidation.setViewportSize({ width: 390, height: 1200 });
+await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: path.join(shots, "20261015-app-finish-dialog-mobile.png") });
+await finishValidation.setViewportSize({ width: 800, height: 1100 });
+assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "total below reported remains clickable so validation can explain why submission is blocked");
 const zeroCommandsBefore = calls.commands.length;
 await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
-assert.equal(calls.commands.length, zeroCommandsBefore, "zero quantity is blocked before creating a command");
-assert.equal(await finishValidation.locator("#toast").innerText(), await finishValidation.locator("#singleStationReportPanel [role=alert]").innerText(), "zero-quantity block is visible both as toast and inline red text");
+assert.equal(calls.commands.length, zeroCommandsBefore, "total below reported is blocked before creating a command");
+assert.match(await finishValidation.locator("#toast").innerText(), /總數不能小於已報的 920 件；報錯請用報工修正/, "below-reported block gives the approved correction guidance");
 await finishValidation.locator("#completedQty").fill("958");
 await finishValidation.locator("#defectQty").fill("0");
 const finishCommandsBefore = calls.commands.length;
@@ -220,8 +256,22 @@ assert.equal(calls.closeCommands[0].p_command_type, "close");
 assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
-assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站，下一道已進池/);
+assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站[\s\S]*完工報工已保留；舊 MES 已關站/);
 await finishValidation.close();
+
+finishButtonEnabled = false;
+const finishFlagOff = await context.newPage();
+await finishFlagOff.goto(base, { waitUntil: "domcontentloaded" });
+await finishFlagOff.waitForFunction(() => state.workOrders?.length && state.machines?.length);
+await finishFlagOff.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+assert.equal(await finishFlagOff.locator('.machine-finish-button').count(), 0, "disabled finish flag removes machine-card finish button");
+await finishFlagOff.close();
+finishButtonEnabled = true;
 
 currentMachine = "A04"; guardEnabled = false;
 const disabledGuard = await context.newPage();

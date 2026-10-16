@@ -81,7 +81,9 @@ async function scenario(outbox) {
   await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
   const open = async type => {
     await page.locator(".fab[data-open-report]").click();
-    await page.locator(`[data-report-type="${type}"]`).click();
+    const typeButton = page.locator(`[data-report-type="${type}"]:not([data-report])`);
+    if (await typeButton.count()) await typeButton.click();
+    else await page.evaluate((reportType) => setReportType(reportType), type);
     const operator = page.locator("#machtileOperatorList input[type=checkbox]").first();
     if (await operator.count()) await operator.check();
   };
