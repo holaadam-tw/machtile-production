@@ -14103,7 +14103,7 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
     code, type: rec.commandType, order, uuid: rec.commandUuid, phase: "sendError", loading: false, fresh, attempts: 1, isRetry: true,
     returnFocus: returnFocus || null, canRetry: true,
     errorText: "上次送出時網路斷了，不知道有沒有送到。按「重送」會用同一筆指令，不會重複。",
-    fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo },
+    fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo, poolItemId: rec.poolItemId },
     model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh,
       actorRole: core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true) ? "admin" : "operator",
       actorName: machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "" }),
@@ -14577,7 +14577,18 @@ async function machtileStationCmdRunSubmission(options) {
     if (timer) clearTimeout(timer);
   }
   if (validateRow && !validateRow(row)) {
-    return { ok: false, error: new Error("伺服器沒有回傳這筆指令，結果未確認"), payload, row };
+    const error = new Error("伺服器沒有回傳這筆指令，結果未確認");
+    const info = { missing: false, retry: true, text: error.message };
+    const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
+    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload, row };
+    machtileStationCmd.pending[machineCode] = core.pendingRecord({
+      commandUuid, commandType, machineCode, ...recordFields, startedAt,
+      unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
+    });
+    machtileStationCmdSavePending();
+    machtileStationCmdPoll(machineCode);
+    machtileStationCmdRerender();
+    return { ok: false, error, info, payload, row };
   }
   const acceptedResult = onAccepted ? await onAccepted({ row, previousRecord }) : null;
   const now = Date.now();
@@ -23276,7 +23287,7 @@ function machtileHandleBatchClick(event) {
   const finishClaim = event.target.closest("[data-standard-finish-claim]");
   if (finishClaim) { void machtileStandardFinishClaim(finishClaim.dataset.standardFinishClaim); return true; }
   const finishOther = event.target.closest("[data-standard-finish-other]");
-  if (finishOther) { const code = finishOther.dataset.standardFinishOther; closeReport(); machtileOpenCardSelection(code); return true; }
+  if (finishOther) { const code = finishOther.dataset.standardFinishOther; closeReport(); machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() }); return true; }
   const finishStart = event.target.closest("[data-standard-finish-start]");
   if (finishStart) {
     const code = finishStart.dataset.standardFinishStart;

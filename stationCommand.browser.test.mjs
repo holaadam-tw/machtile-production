@@ -1687,6 +1687,23 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   }
 
   await page.evaluate(() => {
+    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "other_class", next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: false, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  });
+  await page.locator("#finishSheet [data-standard-finish-other]").click();
+  await page.locator("#machtileCardSelection").waitFor();
+  ok((await page.locator("#machtileCardSelection").innerText()).includes("待做池"), "作業員『選其他工單』可開啟 pool-only picker");
+  ok(await page.locator("#machtileCardSelection [data-card-selection-assigned]").count() === 0, "作業員 picker 不暴露排程編輯清單");
+  await page.evaluate(() => machtileCloseCardSelection());
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    machtileSingleStationReportState.loading = false;
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
+  });
+
+  await page.evaluate(() => {
     machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
     machtileRenderStationReportSurfaces();
   });
@@ -1737,6 +1754,19 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
     ok(await page.locator("#finishSheet [data-standard-finish-claim]").count() === 0, `${label} 後隱藏接下一道主按鈕`);
   }
   be.submitError = null;
+  be.submitRowMode = "wrongUuid";
+  await page.evaluate(() => {
+    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  });
+  await page.locator("#finishSheet [data-standard-finish-claim]").click();
+  await page.locator("#finishSheet").getByText("連線中斷，尚未確認是否接單；請重試。").waitFor();
+  ok(await page.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).close?.claim?.phase) === "error", "回應驗證失敗不會卡在 pending");
+  ok(await page.evaluate(() => machtileStationCmd.pending.A04?.poolItemId) === "pool-next-1", "回應驗證失敗保存 poolItemId 供冪等重試");
+  be.submitRowMode = null;
+  await page.locator("#finishSheet [data-standard-finish-claim]").click();
+  await page.locator("#finishSheet [data-standard-finish-start]").waitFor({ timeout: 10000 });
+
   be.abortNextSubmit = true;
   await page.evaluate(() => {
     machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
@@ -1745,8 +1775,14 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   await page.locator("#finishSheet [data-standard-finish-claim]").click();
   await page.locator("#finishSheet").getByText("連線中斷，尚未確認是否接單；請重試。").waitFor();
   const firstUuid = be.submits.at(-1).p_command_uuid;
-  await page.locator("#finishSheet [data-standard-finish-claim]").click();
-  ok(be.submits.at(-1).p_command_uuid === firstUuid, "網路斷重試沿用同一 command_uuid");
+  ok(await page.evaluate(() => JSON.parse(localStorage.getItem("machtile.stationCmdPending.v1"))?.A04?.poolItemId) === "pool-next-1", "refresh 前 pending claim 已保存 poolItemId");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
+  ok(await page.evaluate(() => machtileStationCmd.pending.A04?.poolItemId) === "pool-next-1", "refresh 後還原 pending claim 的 poolItemId");
+  await page.evaluate(() => machtileStationCmdOpenRetry("A04"));
+  await page.locator("#machtileStationCmdSheet [data-station-cmd-confirm]").click();
+  await page.waitForTimeout(300);
+  ok(be.submits.at(-1).p_command_uuid === firstUuid && be.submits.at(-1).p_pool_item_id === "pool-next-1", "refresh 重試沿用 command_uuid 並保留 poolItemId", JSON.stringify(be.submits.at(-1)));
   const submitsBeforeFlagOff = be.submits.length;
   await page.evaluate(() => {
     config.enableStandardFinishFlow = false;
