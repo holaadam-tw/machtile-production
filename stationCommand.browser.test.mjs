@@ -143,6 +143,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     hangSubmit: false,        // 送出的 RPC 不回（測逾時）
     serverSkewMs: 0,          // 伺服器時間＝真實時間－這個值（模擬平板時鐘快）
     procOverride: {},         // 開卡重讀工序時改寫某台的列（例：已離站、沒有料號）
+    progressRows: [],
     otherWrites: [],
   };
   be.handle = async (route) => {
@@ -272,7 +273,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (m && q.includes("actual_start_at")) return json(200, m[1].split(",").map((pid) => ({ id: pid, process_order: procs.find((x) => id(300 + x.n) === pid)?.step || 1, process_type: "cnc", actual_start_at: null })));
       return json(200, []);
     }
-    if (p === "/rest/v1/rpc/batch_report_progress") return json(200, []);
+    if (p === "/rest/v1/rpc/batch_report_progress") return json(200, be.progressRows);
     const readRpc = /^\/rest\/v1\/rpc\/(batch_report_progress|[a-z_]+_snapshot|[a-z_]+_list)$/.test(p);
     if (method !== "GET" && method !== "HEAD" && !readRpc) be.otherWrites.push(`${method} ${p}`);
     if (p.startsWith("/rest/v1/rpc/")) return json(200, null);
@@ -1593,6 +1594,7 @@ console.log("\n== 390px：重讀 5xx 期間別台平板記了今日開工 → �
 console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
 {
   const be = makeBackend();
+  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
   const { context, page, errors } = await newPage(browser, "phone", { backend: be,
     configExtra: 'enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],' });
   await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });

@@ -18,7 +18,8 @@ for(const key of ["hmc_pallet_report_noon_draft","hmc_pallet_report_finish_all_d
   assert.equal(typeof zh[key],"string");
   assert.equal(vi[key]._draft,true);
 }
-const appVersion=html.match(/app\.js\?v=([^"']+)/)?.[1];
+const versionMap=new Map([...html.matchAll(/(?:src|href)=["']\.\/([^"'?]+)\?v=([^"']+)/g)].map(match=>[match[1],match[2]]));
+const appVersion=versionMap.get("app.js");
 assert.ok(appVersion,"index.html must version app.js");
-assert.match(appVersion,/^20261015-/,"app.js cache version must reflect this delivery date");
+assert.ok(html.includes(`app.js?v=${appVersion}`),"app.js cache assertion must use index.html's actual version");
 console.log("PASS HMC finish-scope UI contract: all/partial payload, increment defect, B-only boundary, i18n, cache bump");

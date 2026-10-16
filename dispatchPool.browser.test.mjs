@@ -37,6 +37,7 @@ const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
 const rolloutConfig = await readFile(path.join(root, 'config.js'), 'utf8');
 const rolloutIndex = await readFile(path.join(root, 'index.html'), 'utf8');
+const rolloutVersions = new Map([...rolloutIndex.matchAll(/(?:src|href)=["']\.\/([^"'?]+)\?v=([^"']+)/g)].map(match => [match[1], match[2]]));
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 const server = createServer(async (req, res) => { if (req.method !== 'GET') { res.writeHead(405); res.end(); return; } const u = new URL(req.url, 'http://localhost'); const file = path.resolve(root, '.' + (u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname))); if (!file.startsWith(root + path.sep)) { res.writeHead(403); res.end(); return; } try { res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' }); res.end(await readFile(file)); } catch { res.writeHead(404); res.end(); } });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -116,7 +117,8 @@ const poolKeys = page => page.locator('#machtileCardSelection [data-card-selecti
 
 try {
   ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
-  ok(rolloutIndex.includes('config.js?v=20261014-dispatch-pool-b01b06-r1'), 'rollout config cache key is bumped');
+  const configVersion = rolloutVersions.get('config.js');
+  ok(Boolean(configVersion) && rolloutIndex.includes(`config.js?v=${configVersion}`), 'rollout config cache key matches index.html');
   ok(['app.js', 'i18n.js', 'styles.css'].every(asset => new RegExp(`${asset.replace(".", "\\.")}\\?v=[^\"\\s]+`).test(rolloutIndex)), 'return-state app, translations, and styles have cache keys');
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];

@@ -8244,6 +8244,7 @@ function setReportCycleSeconds(seconds) {
 let reportCycleTouched = false;
 let reportCyclePrefilledSeconds = null;
 let reportCounterBaselineState = { status: "idle", baseline: null, processId: "" };
+let finishReportedState = { status: "idle", quantity: null, processId: "" };
 
 function reportCounterApplies(type = activeReportType) {
   return type === "noon" || type === "finish";
@@ -8265,12 +8266,77 @@ function reportCounterCalculation() {
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
 }
 
-// 完工「已報」跟 Monitor 卡片完全同源：重用 batchReportCore.cardProgress。
+// 完工「已報」必須跟 Monitor 卡片已顯示的完成進度完全同源。卡片載入時已把
+// batchReportCore.cardProgress 的結果保存在 progressSource；不要再只靠 progressByProcess
+// 重算，因為單台完工入口可能沒有那份 map。沒有可信的 legacy snapshot 時一律 fail closed。
 function machtileFinishReportedQty(order = selectedOrder) {
+  const processId = String(order?.processId || "");
+  if (finishReportedState.status === "ready" && finishReportedState.processId === processId) return finishReportedState.quantity;
+  return null;
+}
+
+function machtileFinishCardProgress(order = selectedOrder) {
   const core = machtileBatchCore();
-  const row = order?.processId ? machtileCardPickState.progressByProcess?.get?.(String(order.processId)) || null : null;
-  if (core?.cardProgress) return core.cardProgress(Number(order?.appDone ?? order?.done ?? 0), row, Date.now()).done;
-  return Number(order?.done || 0);
+  if (!order || !core?.cardProgress) return null;
+  const shown = order.progressSource;
+  if (shown?.legacyKnown && Number.isFinite(Number(shown.done))) return shown;
+  const row = order.processId ? machtileCardPickState.progressByProcess?.get?.(String(order.processId)) || null : null;
+  const progress = row ? core.cardProgress(Number(order.appDone ?? order.done ?? 0), row, Date.now()) : null;
+  return progress?.legacyKnown ? progress : null;
+}
+
+function machtileRenderFinishReportedState() {
+  const reported = $("#finishReportedQty");
+  if (!reported) return;
+  const finish = activeReportType === "finish";
+  reported.hidden = !finish;
+  if (!finish) return;
+  const ready = finishReportedState.status === "ready" && finishReportedState.processId === String(selectedOrder?.processId || "");
+  reported.textContent = ready
+    ? machtileTranslate("finish_reported_qty", { quantity: finishReportedState.quantity })
+    : finishReportedState.status === "loading" ? "讀取中…" : "讀不到已報數，請重新整理";
+  reported.classList.toggle("is-error", !ready && finishReportedState.status !== "loading");
+  const submit = document.querySelector("#reportForm .submit-report");
+  if (submit) submit.disabled = !ready;
+}
+
+async function machtileLoadFinishReportedQty(order = selectedOrder) {
+  const processId = String(order?.processId || "");
+  finishReportedState = { status: "loading", quantity: null, processId };
+  machtileRenderFinishReportedState();
+  machtileRenderSingleStationReport();
+  if (!processId) {
+    finishReportedState = { status: "error", quantity: null, processId };
+    machtileRenderFinishReportedState();
+    machtileRenderSingleStationReport();
+    return;
+  }
+  let progress = machtileFinishCardProgress(order);
+  if (!progress && state.source === "supabase" && isUuid(processId)) {
+    try {
+      const result = await machtileBatchFetchProgress([processId]);
+      if (selectedOrder?.processId !== processId || activeReportType !== "finish") return;
+      const row = !result.error ? result.map.get(processId) || null : null;
+      if (row) {
+        machtileCardPickState.progressByProcess?.set?.(processId, row);
+        progress = machtileBatchCore()?.cardProgress(Number(order.appDone ?? order.done ?? 0), row, Date.now()) || null;
+        if (!progress?.legacyKnown) progress = null;
+      }
+    } catch (error) {
+      console.warn("finish reported progress unavailable", error);
+    }
+  }
+  if (selectedOrder?.processId !== processId || activeReportType !== "finish") return;
+  if (progress && Number.isFinite(Number(progress.done))) {
+    finishReportedState = { status: "ready", quantity: Number(progress.done), processId };
+    order.progressSource = progress;
+    order.done = Number(progress.done);
+    if ($("#completedQty")) $("#completedQty").value = Number(progress.done);
+  } else {
+    finishReportedState = { status: "error", quantity: null, processId };
+  }
+  machtileRenderFinishReportedState();
+  machtileRenderSingleStationReport();
 }
 
 function reportCounterRateReasonableness(result = reportCounterCalculation()) {
@@ -8472,8 +8538,7 @@ function setReportType(type) {
   if (activeReportType === "noon") updateNoonAdvice();
   const completedLabel = $("#completedQtyLabel");
   if (completedLabel) completedLabel.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_good" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity"));
-  const reported = $("#finishReportedQty");
-  if (reported) { reported.hidden = activeReportType !== "finish"; reported.textContent = machtileTranslate("finish_reported_qty", { quantity: machtileFinishReportedQty() }); }
+  machtileRenderFinishReportedState();
   const qtyHelp = $("#reportQtyHelp");
   if (qtyHelp) qtyHelp.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_help" : "counter_qty_help");
   updateReportCounterPreview();
@@ -8549,6 +8614,9 @@ function validateReportForm(type) {
     if (reason === "其他" && !$("#reportNote")?.value.trim()) return machtileTranslate("report_fail_reason_other_note_required");
   }
   if (reportCounterApplies(type)) {
+    if (type === "finish" && (finishReportedState.status !== "ready" || finishReportedState.processId !== String(selectedOrder?.processId || ""))) {
+      return finishReportedState.status === "loading" ? "正在讀取已報數，請稍候。" : "讀不到已報數，請重新整理。";
+    }
     if (type !== "finish" && reportCounterBaselineState.status === "loading") return "正在讀取今天的機台計數基準，請稍候。";
     if (type !== "finish" && reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
     const result = reportCounterCalculation();
@@ -20868,7 +20936,7 @@ function openReport(orderId, options = {}) {
     ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
     : requestedType;
   setReportType(availableType);
-  if (availableType === "finish" && $("#completedQty")) $("#completedQty").value = machtileFinishReportedQty(order);
+  if (availableType === "finish") void machtileLoadFinishReportedQty(order);
   updateReportCounterPreview();
   if (!order) setReportDefaults(null);
   void loadReportCounterBaseline(order);
@@ -21920,10 +21988,15 @@ function machtileRenderSingleStationReport() {
   const order = machtileSingleStationReportOrder(code);
   const eligibleType = ["noon", "finish"].includes(activeReportType);
   const allowlisted = eligibleType && machtileSingleStationReportAllowlisted(code);
+  const finishBlocked = activeReportType === "finish" && (finishReportedState.status !== "ready" || finishReportedState.processId !== String(order?.processId || ""));
   holder.hidden = !allowlisted;
   submit.hidden = allowlisted;
-  submit.disabled = allowlisted;
+  submit.disabled = allowlisted || finishBlocked;
   if (!allowlisted) { holder.innerHTML = ""; return; }
+  if (finishBlocked) {
+    holder.innerHTML = `<p class="batch-notice${finishReportedState.status === "loading" ? "" : " is-error"}" role="alert">${finishReportedState.status === "loading" ? "正在讀取已報數，請稍候。" : "讀不到已報數，請重新整理；本次未送出任何報工。"}</p>`;
+    return;
+  }
   if (machtileSingleStationReportState.loading) {
     holder.innerHTML = '<p class="batch-notice" role="status">正在載入智慧報工 guard…</p>';
     return;
