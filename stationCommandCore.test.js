@@ -353,5 +353,21 @@ eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已�
 eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");
 eq("重讀讀不到：報工提示", c.DAILY_START_UNREADABLE_TEXT, "暫時查不到伺服器今天的紀錄，請稍後再送");
 
+console.log("== 標準完工下一步／claim_next ==");
+const nextBase = { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: true, pool_item_id: "sid|nid|sim", available_qty: 40, plan_qty: 100 };
+eq("四種 case 由 legacy snapshot 解析", ["same_class_here", "other_class", "outsource", "last_step"].map((kind) => c.standardFinishNextStep({ legacy_snapshot: { next_step: { ...nextBase, case: kind } } }).case), ["same_class_here", "other_class", "outsource", "last_step"]);
+eq("沒有 next_step 不自行推論", c.standardFinishNextStep({ legacy_snapshot: { ShortQty: 0 } }), null);
+eq("null 數量保持 null（不誤顯示可做 0）", c.standardFinishNextStep({ legacy_snapshot: { next_step: { case: "last_step", available_qty: null, plan_qty: null } } }), { case: "last_step", nextIndexSn: null, nextName: null, className: null, canClaimHere: false, poolItemId: null, availableQty: null, planQty: null });
+const claimPayload = c.submitPayload({ commandUuid: UUID, commandType: "claim_next", machineCode: "a04", orderNo: order.id, step: 6, partNo: "HCG-06-01", poolItemId: "sid|nid|sim" });
+eq("claim_next payload 契約", claimPayload, { p_command_uuid: UUID, p_command_type: "claim_next", p_machine_code: "A04", p_expected_order_no: order.id, p_expected_index_sn: 6, p_expected_part_no: "HCG-06-01", p_manufacture_ii_id: null, p_pool_item_id: "sid|nid|sim", p_expected_simulation_id: null });
+throws("claim_next 沒 pool id 擋下", () => c.submitPayload({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6 }), "NO_POOL_ITEM_ID");
+const claimApplied = c.statusView({ status: "applied", legacy_snapshot: { claim_next: { claimed: true, can_start: true, machine_code: "A04", pool_item_id: "sid|nid|sim" } } }, "claim_next", 0);
+eq("claim applied 只有 server can_start 才開工", [claimApplied.phase, claimApplied.claimNext.canStart], ["applied", true]);
+const claimBound = c.statusView({ status: "applied", legacy_snapshot: { claim_next: { claimed: true, can_start: true, order_no: order.id, index_sn: 6 } } }, "claim_next", 0);
+eq("claim applied 帶回綁定工單與 canonical 步序", [claimBound.claimNext.orderNo, claimBound.claimNext.indexSn], [order.id, 6]);
+const claimTaken = c.statusView({ status: "rejected", reject_code: "ALREADY_CLAIMED", legacy_snapshot: { claim_next: { claimed_machine_code: "A05" } } }, "claim_next", 0);
+eq("applier rejected 從 legacy_snapshot 帶回實際接走機台", [claimTaken.code, claimTaken.claimNext.claimedMachineCode], ["ALREADY_CLAIMED", "A05"]);
+eq("pendingRecord 保存 claim 冪等重試資料", c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true }).standardFinishClaim, true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

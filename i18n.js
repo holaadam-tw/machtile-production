@@ -84,6 +84,29 @@
       finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
       finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
       finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
+      standard_finish_same_title: "下一道可在這台接著做",
+      standard_finish_same_body: "下一道 {{name}}（{{class}}）已可接單。",
+      standard_finish_other_title: "下一道交給其他課別",
+      standard_finish_other_body: "下一道 {{name}}（{{class}}）不在這台加工。",
+      standard_finish_outsource_title: "下一道為委外加工",
+      standard_finish_outsource_body: "下一道 {{name}} 將交由委外流程處理。",
+      standard_finish_last_title: "這是最後一道",
+      standard_finish_last_body: "此工單的所有加工步驟已完成。",
+      standard_finish_qty: "可做 {{available}}／計畫 {{plan}} 件",
+      standard_finish_claim: "接下一道",
+      standard_finish_claiming: "正在請工廠派到這台…",
+      standard_finish_claim_success: "接單成功，可以直接開工。",
+      standard_finish_retry: "重試接單",
+      standard_finish_network_error: "連線中斷，尚未確認是否接單；請重試。",
+      standard_finish_already_claimed_machine: "下一道已由 {{machine}} 接走，請選其他工單。",
+      standard_finish_already_claimed: "下一道已被其他機台接走，請選其他工單。",
+      standard_finish_not_eligible: "這台機不能接這一道，請選其他工單。",
+      standard_finish_stale: "下一道資料已更新，請重新完工或選其他工單。",
+      standard_finish_disabled: "接下一道功能尚未開放，請選其他工單。",
+      standard_finish_claim_failed: "接下一道失敗，請選其他工單。",
+      standard_finish_sync_pending: "同步中，請稍後",
+      standard_finish_start: "開工",
+      standard_finish_other_order: "選其他工單",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -194,6 +217,29 @@
       finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
       finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
       finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
+      standard_finish_same_title: "Có thể tiếp tục công đoạn kế tiếp trên máy này",
+      standard_finish_same_body: "Công đoạn kế tiếp {{name}} ({{class}}) đã sẵn sàng để nhận.",
+      standard_finish_other_title: "Công đoạn kế tiếp thuộc bộ phận khác",
+      standard_finish_other_body: "Công đoạn kế tiếp {{name}} ({{class}}) không được gia công trên máy này.",
+      standard_finish_outsource_title: "Công đoạn kế tiếp là gia công ngoài",
+      standard_finish_outsource_body: "Công đoạn kế tiếp {{name}} sẽ được xử lý theo quy trình gia công ngoài.",
+      standard_finish_last_title: "Đây là công đoạn cuối",
+      standard_finish_last_body: "Tất cả các công đoạn của lệnh sản xuất này đã hoàn tất.",
+      standard_finish_qty: "Có thể làm {{available}} / kế hoạch {{plan}} sản phẩm",
+      standard_finish_claim: "Nhận công đoạn kế tiếp",
+      standard_finish_claiming: "Đang yêu cầu nhà máy giao cho máy này…",
+      standard_finish_claim_success: "Đã nhận việc; có thể bắt đầu ngay.",
+      standard_finish_retry: "Thử nhận lại",
+      standard_finish_network_error: "Mất kết nối; chưa xác nhận được việc nhận đơn. Vui lòng thử lại.",
+      standard_finish_already_claimed_machine: "Công đoạn kế tiếp đã được máy {{machine}} nhận; vui lòng chọn lệnh khác.", // _draft
+      standard_finish_already_claimed: "Công đoạn kế tiếp đã được máy khác nhận; vui lòng chọn lệnh khác.", // _draft
+      standard_finish_not_eligible: "Máy này không thể nhận công đoạn này; vui lòng chọn lệnh khác.", // _draft
+      standard_finish_stale: "Dữ liệu công đoạn kế tiếp đã thay đổi; vui lòng hoàn tất lại hoặc chọn lệnh khác.", // _draft
+      standard_finish_disabled: "Chức năng nhận công đoạn kế tiếp chưa được mở; vui lòng chọn lệnh khác.", // _draft
+      standard_finish_claim_failed: "Không thể nhận công đoạn kế tiếp; vui lòng chọn lệnh khác.", // _draft
+      standard_finish_sync_pending: "Đang đồng bộ, vui lòng đợi", // _draft
+      standard_finish_start: "Bắt đầu",
+      standard_finish_other_order: "Chọn lệnh khác",
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft
