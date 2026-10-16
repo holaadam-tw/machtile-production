@@ -32,7 +32,8 @@ const user = { id: id(901), name: "測試作業員", legacy_user_id: "TEST-001" 
 const card = { id: id(101), tenant_id: tenant, work_order_no: "TEST-WO-001", customer_name: "測試客戶", part_name: "測試零件", drawing_no: "TEST-DRAWING",
   quantity: 100, due_date: "2026-10-20", priority: "normal", work_order_status: "in_progress", current_process_id: id(301),
   current_process_name: "車削", current_process_status: "running", machine_name: "A01", qty_completed: 0, qty_defect: 0,
-  progress_percent: 0, last_report_at: null, open_risk_level: null, current_process_off_station: false };
+  progress_percent: 38, last_report_at: null, open_risk_level: null, current_process_off_station: false,
+  progressSource: { done: 38, appDone: 0, source: "legacy", legacyKnown: true, legacyOutput: 38, legacyFail: 0, pendingOutput: 0, pendingFail: 0, pendingCount: 0, totalFail: 0, label: "含舊 MES" } };
 const machines = ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"].map((code, i) => ({
   id: id(200 + i), machine_code: code, machine_name: code, machine_type: code.startsWith("A") ? "車床" : "加工中心", location: "", status: "idle", display_order: i }));
 const encode = o => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -45,6 +46,7 @@ const blocked = [];
 const errors = [];
 async function scenario(outbox) {
   const posts = [], uploads = [];
+  let finishProgressMode = "trusted";
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: "block" });
   await context.addInitScript(token => {
     sessionStorage.setItem("machtileAuthSession", JSON.stringify({ version: 1, accessToken: token, refreshToken: "", email: "operator@test.invalid", authMethod: "password", mode: "session", createdAt: Date.now(), rememberUntil: 0 }));
@@ -59,7 +61,7 @@ async function scenario(outbox) {
       if (p === "/rest/v1/rpc/machine_department_context") return json({tenant_id:tenant,role:"operator",is_bridge:false,all_departments:false,department_codes:["LATHE","MILL"]});
       if (p === "/rest/v1/v_work_order_cards") return json([card]);
       if (p === "/rest/v1/v_machine_management_cards") return json(machines);
-      if (p === "/rest/v1/rpc/batch_report_progress") return json([{ process_id: id(301), legacy_output: 0, legacy_fail: 0, last_report_at: null, actual_start_at: null }]);
+      if (p === "/rest/v1/rpc/batch_report_progress") return json(finishProgressMode === "missing" ? [] : [{ process_id: id(301), legacy_output: 38, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date().toISOString(), actual_start_at: new Date().toISOString() }]);
       if (p === "/rest/v1/production_reports" && req.method() === "GET" && (url.searchParams.get("select") || "") === "report_type,report_payload,created_at") return json([{ report_type: "dailyStart", report_payload: { machine_qty: 0 }, created_at: new Date().toISOString() }]);
       if (p === "/rest/v1/rpc/field_report_upsert") { posts.push(JSON.parse(req.postData()).p_payload); return json({ report_id: id(7000 + posts.length), inserted: true }); }
       if (p === "/rest/v1/production_reports" && req.method() === "POST") { posts.push(JSON.parse(req.postData())); return json([{ id: id(7000 + posts.length) }]); }
@@ -154,14 +156,42 @@ async function scenario(outbox) {
   check(await page.locator('[data-report-type="dailyStart"], #machinePhoto').count() === 0, "removed dailyStart and its photo control stay absent");
   check(await page.locator('#startPhoto').count() === 1 && await page.locator('#finishPhoto[required], #abnormalPhoto[required]').count() === 0, "only workStart enforces a required photo; other photo controls are optional");
   await page.evaluate(() => closeReport());
+  await page.evaluate(() => {
+    selectedOrder.appDone = 0;
+    selectedOrder.done = 38;
+    selectedOrder.progressSource = { done: 38, appDone: 0, source: "legacy", legacyKnown: true, legacyOutput: 38, legacyFail: 0, pendingOutput: 0, pendingFail: 0, pendingCount: 0, totalFail: 0, label: "含舊 MES" };
+  });
   await open("finish");
+  await page.evaluate(async () => {
+    selectedOrder.appDone = 0;
+    selectedOrder.done = 38;
+    selectedOrder.progressSource = { done: 38, appDone: 0, source: "legacy", legacyKnown: true, legacyOutput: 38, legacyFail: 0, pendingOutput: 0, pendingFail: 0, pendingCount: 0, totalFail: 0, label: "含舊 MES" };
+    await machtileLoadFinishReportedQty(selectedOrder);
+  });
   await page.locator('input[name="finishOvertime"][value="none"]').check();
-  await page.locator("#completedQty").fill("1");
+  await page.waitForFunction(() => document.querySelector("#finishReportedQty")?.textContent.includes("38"));
+  await page.locator("#completedQty").fill("39");
   check(await page.locator('label[for="finishPhoto"] small').textContent() === "選填", "finish photo is visibly optional");
   await submit();
   await closed();
   check(posts.length === before + 2, "finish without photo submits exactly once");
   check(uploads.length === 1, "finish without photo sends no finish_photo upload");
+  finishProgressMode = "missing";
+  const beforeMissingFinish = posts.length;
+  await open("finish");
+  await page.evaluate(async () => {
+    selectedOrder.progressSource = null;
+    selectedOrder.done = 0;
+    selectedOrder.appDone = 0;
+    machtileCardPickState.progressByProcess = new Map();
+    await machtileLoadFinishReportedQty(selectedOrder);
+  });
+  await page.waitForFunction(() => document.querySelector("#finishReportedQty")?.textContent.includes("讀不到已報數"));
+  check(await page.locator("#reportForm .submit-report").isDisabled(), "missing finish progress disables submit");
+  await page.locator("#reportForm").evaluate(form => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await page.waitForTimeout(50);
+  check(posts.length === beforeMissingFinish, "missing finish progress sends zero POSTs");
+  await page.evaluate(() => closeReport());
   await page.setViewportSize({ width: 390, height: 844 });
   await open("workStart");
   await screenshot("work-start-mobile");
