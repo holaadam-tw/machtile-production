@@ -29,8 +29,8 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileStationCommandCore() {
   "use strict";
 
-  const COMMAND_TYPES = Object.freeze(["start", "stop", "close"]);
-  const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站" });
+  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
+  const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站", claim_next: "接下一道" });
   const TERMINAL = Object.freeze(["applied", "rejected", "expired"]);
   // 合約 r2 §2 的伺服器常數（App 只用來寫提示與決定何時停止輪詢，不用來判結果）
   const MAX_APPLY_AGE_MS = 3 * 60 * 1000;      // max_apply_age()
@@ -272,7 +272,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, poolItemId } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -292,6 +292,11 @@
     if (commandType === "close") {
       if (!text(expectedSimulationId)) throw new Error("NO_SIMULATION_ID");
       payload.p_expected_simulation_id = text(expectedSimulationId);
+    }
+    if (commandType === "claim_next") {
+      if (!text(poolItemId)) throw new Error("NO_POOL_ITEM_ID");
+      payload.p_pool_item_id = text(poolItemId);
+      payload.p_expected_simulation_id = null;
     }
     return payload;
   }
@@ -439,6 +444,28 @@
     return Number.isFinite(qty) && qty > 0 ? qty : 0;
   }
 
+  function standardFinishNextStep(row) {
+    const raw = legacySnapshot(row).next_step;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const kind = text(raw.case);
+    if (!["same_class_here", "other_class", "outsource", "last_step"].includes(kind)) return null;
+    const index = Number(raw.next_index_sn);
+    return { case: kind, nextIndexSn: Number.isInteger(index) && index > 0 ? index : null,
+      nextName: text(raw.next_name) || null, className: text(raw.class_name) || null,
+      canClaimHere: raw.can_claim_here === true, poolItemId: text(raw.pool_item_id) || null,
+      availableQty: raw.available_qty !== null && raw.available_qty !== "" && Number.isInteger(Number(raw.available_qty)) && Number(raw.available_qty) >= 0 ? Number(raw.available_qty) : null,
+      planQty: raw.plan_qty !== null && raw.plan_qty !== "" && Number.isInteger(Number(raw.plan_qty)) && Number(raw.plan_qty) > 0 ? Number(raw.plan_qty) : null };
+  }
+
+  function claimNextResult(row) {
+    const raw = legacySnapshot(row).claim_next;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    return { canStart: raw.can_start === true, claimed: raw.claimed === true,
+      claimedMachineCode: text(raw.claimed_machine_code) || null, machineCode: text(raw.machine_code) || null,
+      poolItemId: text(raw.pool_item_id) || null, orderNo: text(raw.order_no) || null,
+      indexSn: Number.isInteger(Number(raw.index_sn)) && Number(raw.index_sn) > 0 ? Number(raw.index_sn) : null };
+  }
+
   // ---------------------------------------------------------------- 狀態
   // 結果只看伺服器 status。ageMs＝伺服器時鐘上的年齡（可為 null）：超過 max_apply_age 只多一句提示，仍是等待中。
   function statusView(row, commandType, ageMs) {
@@ -447,14 +474,15 @@
     const status = text(row && row.status).toLowerCase();
     if (status === "applied") {
       const shortQty = type === "close" ? closeShortQty(row) : 0;
-      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站` : "已關站") : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty } : {}) };
+      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站` : "已關站") : type === "claim_next" ? "已接下一道" : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty, nextStep: standardFinishNextStep(row) } : {}), ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
       const special = REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
       const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
-      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: r.text, code: r.code, detail: r.detail };
+      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: r.text, code: r.code, detail: r.detail,
+        ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "expired") {
       const r = rejectText("EXPIRED", row.reject_message);
@@ -503,6 +531,8 @@
       manufactureIiId: text(rec.manufactureIiId) || null,
       expectedSimulationId: text(rec.expectedSimulationId) || null,
       finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
+      poolItemId: text(rec.poolItemId) || null,
+      standardFinishClaim: rec.standardFinishClaim === true,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
@@ -646,7 +676,7 @@
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
-    isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty,
+    isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,

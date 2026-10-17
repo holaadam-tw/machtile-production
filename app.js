@@ -34,6 +34,8 @@ const config = {
   // 完工報工 applied 後自動派關站；雙旗標且機台白名單都符合才送，安全預設全關。
   enableFinishClose: false,
   finishCloseMachines: [],
+  enableStandardFinishFlow: false,
+  standardFinishFlowMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   inspectionLinkMachines: [],
@@ -13680,9 +13682,15 @@ function machtileFinishCloseEnabled(machineCode) {
     machines: config.finishCloseMachines, machineCode, reportType: "finish", serverStatus: "applied" }).send);
 }
 
+function machtileStandardFinishEnabled(machineCode) {
+  return config.enableStandardFinishFlow === true
+    && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.standardFinishFlowMachines), machineCode);
+}
+
 function machtileFinishCloseSetResult(code, view) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
+  const closeIdentity = flow.close?.identity || null;
   const applied = view?.phase === "applied";
   const shortQty = Number(view?.shortQty || 0);
   const title = applied
@@ -13695,7 +13703,65 @@ function machtileFinishCloseSetResult(code, view) {
     message: applied
       ? machtileTranslate("finish_close_applied_detail")
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
+    nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
+    claim: null,
+    identity: closeIdentity,
   };
+}
+
+function machtileStandardFinishClaimText(code, detail = "") {
+  const machine = String(detail || "").match(/claimed_machine_code[^A-Z0-9]+([A-Z]\d+)/i)?.[1] || "";
+  const key = ({ ALREADY_CLAIMED: machine ? "standard_finish_already_claimed_machine" : "standard_finish_already_claimed",
+    NOT_ELIGIBLE: "standard_finish_not_eligible", STALE: "standard_finish_stale",
+    CLAIM_NEXT_DISABLED: "standard_finish_disabled" })[String(code || "").toUpperCase()] || "standard_finish_claim_failed";
+  return machtileTranslate(key, { machine });
+}
+
+function machtileStandardFinishErrorCode(error) {
+  const raw = String(error?.message || error || "");
+  return ["ALREADY_CLAIMED", "NOT_ELIGIBLE", "STALE", "CLAIM_NEXT_DISABLED"].find((code) => raw.includes(code))
+    || machtileStationCmdCore.errorCodeOf(error);
+}
+
+function machtileStandardFinishSetClaimResult(code, view) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  if (!flow.close?.nextStep) return;
+  const claimedMachine = view?.claimNext?.claimedMachineCode;
+  flow.close.claim = view?.phase === "applied"
+    ? { phase: "applied", message: machtileTranslate("standard_finish_claim_success"), canStart: view?.claimNext?.canStart === true,
+      orderNo: view?.claimNext?.orderNo || flow.close.identity?.orderNo || null,
+      indexSn: view?.claimNext?.indexSn || flow.close.nextStep?.nextIndexSn || null }
+    : view?.phase === "pending" ? { phase: "pending", message: machtileTranslate("standard_finish_claiming") }
+    : { phase: "error", message: view?.code === "ALREADY_CLAIMED" && claimedMachine
+      ? machtileTranslate("standard_finish_already_claimed_machine", { machine: claimedMachine })
+      : machtileStandardFinishClaimText(view?.code, view?.detail), businessReject: true };
+  machtileRenderStationReportSurfaces();
+}
+
+async function machtileStandardFinishClaim(code) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const next = flow.close?.nextStep;
+  if (!machtileStandardFinishEnabled(code) || next?.case !== "same_class_here" || !next.canClaimHere || !next.poolItemId || flow.close.claim?.phase === "pending") return;
+  const identity = flow.close?.identity;
+  if (!identity?.orderNo || !identity?.partNo) return;
+  let uuid = flow.close.claim?.retry ? flow.close.claim.commandUuid : "";
+  try { uuid ||= machtileStationCmdCore.newUuid(window.crypto); } catch { return; }
+  flow.close.claim = { phase: "pending", message: machtileTranslate("standard_finish_claiming"), commandUuid: uuid };
+  machtileRenderStationReportSurfaces();
+  await machtileStationCmdRunSubmission({ commandUuid: uuid, commandType: "claim_next", machineCode: code,
+    fields: { orderNo: identity.orderNo, step: next.nextIndexSn, partNo: identity.partNo, manufactureIiId: null, poolItemId: next.poolItemId },
+    recordFields: { orderNo: identity.orderNo, step: next.nextIndexSn, partNo: identity.partNo, poolItemId: next.poolItemId, standardFinishClaim: true },
+    startedAt: Date.now(), validateRow: (row) => machtileStationCmdRowIsThis(row, uuid),
+    onError: ({ error, info }) => {
+      const errorCode = machtileStandardFinishErrorCode(error);
+      const businessReject = ["ALREADY_CLAIMED", "NOT_ELIGIBLE", "STALE", "CLAIM_NEXT_DISABLED"].includes(errorCode);
+      const retry = info.retry && !businessReject;
+      flow.close.claim = { phase: "error", message: retry ? machtileTranslate("standard_finish_network_error") : machtileStandardFinishClaimText(errorCode, error?.message), commandUuid: uuid, retry, businessReject };
+      machtileRenderStationReportSurfaces();
+      return retry ? { recordExtra: { standardFinishClaim: true } } : null;
+    },
+    afterRecord: ({ view }) => { machtileStandardFinishSetClaimResult(code, view); },
+  });
 }
 
 async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUuid) {
@@ -13705,7 +13771,8 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
     serverStatus: flow.result?.status });
   if (!decision?.send) return;
   if (flow.close?.reportCommandUuid === reportCommandUuid) return;
-  flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid };
+  const identity = { orderNo: args.p_expected_order_no, partNo: args.p_expected_part_no, indexSn: args.p_expected_index_sn };
+  flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid, identity };
   machtileRenderStationReportSurfaces();
   const commandUuid = crypto.randomUUID();
   await machtileStationCmdRunSubmission({
@@ -13729,7 +13796,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
     },
     startedAt: Date.now(),
     onError: ({ info }) => {
-      flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid };
+      flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid, identity };
     },
     afterRecord: ({ view }) => {
       if (view.terminal) machtileFinishCloseSetResult(code, view);
@@ -14036,7 +14103,7 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
     code, type: rec.commandType, order, uuid: rec.commandUuid, phase: "sendError", loading: false, fresh, attempts: 1, isRetry: true,
     returnFocus: returnFocus || null, canRetry: true,
     errorText: "上次送出時網路斷了，不知道有沒有送到。按「重送」會用同一筆指令，不會重複。",
-    fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo },
+    fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo, poolItemId: rec.poolItemId },
     model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh,
       actorRole: core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true) ? "admin" : "operator",
       actorName: machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "" }),
@@ -14510,7 +14577,18 @@ async function machtileStationCmdRunSubmission(options) {
     if (timer) clearTimeout(timer);
   }
   if (validateRow && !validateRow(row)) {
-    return { ok: false, error: new Error("伺服器沒有回傳這筆指令，結果未確認"), payload, row };
+    const error = new Error("伺服器沒有回傳這筆指令，結果未確認");
+    const info = { missing: false, retry: true, text: error.message };
+    const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
+    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload, row };
+    machtileStationCmd.pending[machineCode] = core.pendingRecord({
+      commandUuid, commandType, machineCode, ...recordFields, startedAt,
+      unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
+    });
+    machtileStationCmdSavePending();
+    machtileStationCmdPoll(machineCode);
+    machtileStationCmdRerender();
+    return { ok: false, error, info, payload, row };
   }
   const acceptedResult = onAccepted ? await onAccepted({ row, previousRecord }) : null;
   const now = Date.now();
@@ -14584,6 +14662,7 @@ function machtileStationCmdFinish(code, view) {
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
+  if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
   const sheet = machtileStationCmd.sheet;
   if (sheet && sheet.code === code && sheet.uuid === record.commandUuid) {
     sheet.phase = "status";
@@ -22177,6 +22256,18 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   if (flow.close) {
     const closeTone = flow.close.phase === "applied" ? "success" : flow.close.phase === "pending" ? "pending" : "warning";
     resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p></div>`;
+    if (flow.close.nextStep) {
+      const next = flow.close.nextStep;
+      const copy = { same_class_here: ["standard_finish_same_title", "standard_finish_same_body"], other_class: ["standard_finish_other_title", "standard_finish_other_body"], outsource: ["standard_finish_outsource_title", "standard_finish_outsource_body"], last_step: ["standard_finish_last_title", "standard_finish_last_body"] }[next.case];
+      if (copy) {
+        const claim = flow.close.claim;
+        const qty = next.availableQty == null ? "" : machtileTranslate("standard_finish_qty", { available: next.availableQty, plan: next.planQty ?? "—" });
+        const primary = next.case === "same_class_here" && next.canClaimHere && next.poolItemId && claim?.phase !== "applied" && !claim?.businessReject
+          ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${claim?.phase === "pending" ? " disabled" : ""}>${escapeHtml(machtileTranslate(claim?.retry ? "standard_finish_retry" : "standard_finish_claim"))}</button>` : "";
+        const start = claim?.phase === "applied" && claim.canStart ? `<button type="button" class="primary-action station-report-action" data-standard-finish-start="${escapeHtml(code)}">${escapeHtml(machtileTranslate("standard_finish_start"))}</button>` : "";
+        resultHtml += `<div class="standard-finish-card is-${escapeHtml(next.case)}" data-standard-finish-case="${escapeHtml(next.case)}"><strong>${escapeHtml(machtileTranslate(copy[0]))}</strong><p>${escapeHtml(machtileTranslate(copy[1], { name: next.nextName || "—", class: next.className || "—" }))}</p>${qty ? `<p>${escapeHtml(qty)}</p>` : ""}${claim ? `<p class="standard-finish-claim-status" role="status">${escapeHtml(claim.message)}</p>` : ""}<div class="station-report-actions">${primary}${start}<button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}">${escapeHtml(machtileTranslate("standard_finish_other_order"))}</button></div></div>`;
+      }
+    }
   }
   const noContext = !context;
   const phaseBusy = ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report"].includes(flow.phase);
@@ -23193,6 +23284,27 @@ function machtileHandleBatchClick(event) {
   if (cancelButton) { machtileStationReportCancel(cancelButton.dataset.stationReportCancel); return true; }
   const nextButton = event.target.closest("[data-station-report-new]");
   if (nextButton) { machtileStationReportNew(nextButton.dataset.stationReportNew); return true; }
+  const finishClaim = event.target.closest("[data-standard-finish-claim]");
+  if (finishClaim) { void machtileStandardFinishClaim(finishClaim.dataset.standardFinishClaim); return true; }
+  const finishOther = event.target.closest("[data-standard-finish-other]");
+  if (finishOther) { const code = finishOther.dataset.standardFinishOther; closeReport(); machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() }); return true; }
+  const finishStart = event.target.closest("[data-standard-finish-start]");
+  if (finishStart) {
+    const code = finishStart.dataset.standardFinishStart;
+    const flow = machtileStationReportState(machtileBatchRow(code));
+    const claimed = { orderNo: flow.close?.claim?.orderNo, indexSn: flow.close?.claim?.indexSn };
+    void loadFromSupabase({ preserveDepartmentOnFailure: true }).then(() => {
+      deriveMachines(); renderAll();
+      const current = machtileCardOrderForMachine(code);
+      if (String(current?.id || "") !== String(claimed.orderNo || "") || Number(current?.stationStep) !== Number(claimed.indexSn)) {
+        showToast(machtileTranslate("standard_finish_sync_pending"));
+        return;
+      }
+      closeReport();
+      machtileStationCmdOpen("start", code, finishStart);
+    });
+    return true;
+  }
   if (event.target.closest("[data-batch-submit]")) { machtileSubmitBatchReport(); return true; }
   if (event.target.closest("[data-batch-refresh]")) { machtileLoadBatchReport(machtileBatchState.group); return true; }
   const modeButton = event.target.closest("[data-batch-mode=\"dailyStart\"]");

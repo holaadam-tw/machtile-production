@@ -20,6 +20,8 @@ window.MACHTILE_CONFIG = {
   useHmcWorklistSupabase: true,
   // Keep closed until the dispatch-pool RUNBOOK gates pass. First pilot: ["A01", "A03"].
   dispatchPoolMachines: [],
+  enableStandardFinishFlow: false,
+  standardFinishFlowMachines: [],
   enableScheduleContracts: false,
   scheduleCalendar: {
     workdays: [1, 2, 3, 4, 5],
