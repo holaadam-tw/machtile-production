@@ -17326,6 +17326,7 @@ function renderSettings() {
       <div class="admin-action-grid" aria-label="主檔與規則設定">
         ${renderAdminActionCard("add", `新增機台 (${managedMachines.length} / 50)`, "新增 CNC、車銑複合、五軸或外包站點", "blue", "add")}
         ${renderAdminActionCard("list", "機台列表管理", "編輯機台資料、狀態與 QR Code", "blue", "list")}
+        ${MachTileMachineHourlyRateCore.canOpen(machtileAuthState.role) ? renderAdminActionCard("time", "機台主檔：時率", "逐台設定元／時，保留修改人與新舊值", "amber", "hourlyRate") : ""}
         ${renderAdminActionCard("time", "產能日曆與保養", "日班、午休、例外加班、假日與機台不可排時段", "green", "calendar")}
         ${renderAdminActionCard("alarm", "警報參數設定", "LINE 通知的開關與門檻（交期/未回報/複核/開工）", "blue", "alarm")}
         ${machtileFlowVisibilityCanEdit() ? renderAdminActionCard("list", "製程路線顯示", "各角色在機台卡片上看得到多少製程路線", "blue", "flowVisibility") : ""}
@@ -17377,6 +17378,7 @@ function adminModuleMeta(moduleKey) {
   const modules = {
     add: ["Machine Create", "新增機台"],
     list: ["Machine List", "機台列表管理"],
+    hourlyRate: ["Machine Hourly Rate", "機台主檔：時率"],
     alarm: ["Alarm Rules", "警報參數設定"],
     flowVisibility: ["Flow Visibility", "製程路線顯示"],
     calendar: ["Capacity Calendar", "產能日曆與保養"],
@@ -17429,6 +17431,8 @@ function renderAdminModuleContent(moduleKey) {
       return renderAddMachineModule();
     case "list":
       return renderMachineListModule();
+    case "hourlyRate":
+      return renderMachineHourlyRateModule();
     case "alarm":
       return renderAlarmRulesModule();
     case "flowVisibility":
@@ -17640,6 +17644,106 @@ function renderMachineListModule() {
       </div>
     </section>
   `;
+}
+
+let machtileMachineHourlyRateState = { status: "idle", machines: [], history: [], message: "" };
+
+function machtileHourlyRateMoney(value) {
+  return value == null || !Number.isFinite(Number(value))
+    ? "未設定"
+    : `${Number(value).toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} 元／時`;
+}
+
+function renderMachineHourlyRateModule() {
+  if (!MachTileMachineHourlyRateCore.canOpen(machtileAuthState.role)) {
+    return '<p class="admin-module-note machine-hourly-rate-error">只有管理員可以管理機台時率。</p>';
+  }
+  if (machtileMachineHourlyRateState.status === "loading" || machtileMachineHourlyRateState.status === "idle") {
+    return '<p class="admin-module-note">正在讀取機台主檔與最近變更紀錄…</p>';
+  }
+  if (machtileMachineHourlyRateState.status === "error") {
+    return `<p class="admin-module-note machine-hourly-rate-error">讀取失敗：${escapeHtml(machtileMachineHourlyRateState.message)}</p>`;
+  }
+  const rows = machtileMachineHourlyRateState.machines;
+  const history = machtileMachineHourlyRateState.history;
+  return `
+    <section class="admin-table-card">
+      <div class="admin-table-head"><strong>機台時率（元／小時）</strong><span>${rows.length} 台，依資料庫主檔</span></div>
+      <p class="admin-module-note">只顯示資料庫目前的機台，不寫死 A01–B06。每次儲存只改一台，並在同一筆資料庫交易留下管理員、新舊值與時間。</p>
+      <div class="admin-table-scroll">
+        <table class="machine-hourly-rate-table">
+          <thead><tr><th>代號</th><th>機台</th><th>目前時率</th><th>新時率</th><th></th></tr></thead>
+          <tbody>${rows.map((machine) => `
+            <tr data-hourly-rate-row="${escapeHtml(machine.id)}">
+              <td><strong>${escapeHtml(machine.code)}</strong></td>
+              <td>${escapeHtml(machine.name)}</td>
+              <td data-hourly-rate-current>${escapeHtml(machtileHourlyRateMoney(machine.hourlyRate))}</td>
+              <td><input type="number" min="0.01" max="${MachTileMachineHourlyRateCore.MAX_HOURLY_RATE}" step="0.01" inputmode="decimal" value="${escapeHtml(machine.hourlyRate ?? "")}" aria-label="${escapeHtml(machine.code)} 新時率"></td>
+              <td><button class="admin-save-button" type="button" data-hourly-rate-save="${escapeHtml(machine.id)}">儲存</button></td>
+            </tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="admin-table-card">
+      <div class="admin-table-head"><strong>最近變更紀錄</strong><span>最近 ${history.length} 筆</span></div>
+      <div class="machine-hourly-rate-history">${history.length ? history.map((item) => `
+        <article>
+          <strong>${escapeHtml(item.machineCode)}</strong>：${escapeHtml(machtileHourlyRateMoney(item.oldRate))} → ${escapeHtml(machtileHourlyRateMoney(item.newRate))}<br>
+          <small>${escapeHtml(item.actorName)} · ${escapeHtml(item.changedAt ? new Date(item.changedAt).toLocaleString("zh-TW") : "時間未提供")}</small>
+        </article>`).join("") : '<p class="admin-module-note">尚無時率變更紀錄。</p>'}</div>
+    </section>`;
+}
+
+function machtileRenderMachineHourlyRateModule() {
+  if ($("#adminModuleSheet")?.getAttribute("aria-hidden") === "false") {
+    $("#adminModuleContent").innerHTML = renderMachineHourlyRateModule();
+    machtileBindMachineHourlyRateActions();
+  }
+}
+
+async function machtileLoadMachineHourlyRateSnapshot() {
+  const payload = await supabaseFetch("rpc/machine_hourly_rate_admin_snapshot", {
+    method: "POST", body: "{}",
+  });
+  const snapshot = MachTileMachineHourlyRateCore.normalizeSnapshot(payload);
+  machtileMachineHourlyRateState = { status: "ready", ...snapshot, message: "" };
+}
+
+function machtileBindMachineHourlyRateActions() {
+  document.querySelectorAll("[data-hourly-rate-save]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const row = button.closest("[data-hourly-rate-row]");
+      const parsed = MachTileMachineHourlyRateCore.parseRate(row?.querySelector("input")?.value);
+      if (!parsed.ok) { showToast(parsed.error); return; }
+      button.disabled = true;
+      try {
+        const result = await supabaseFetch("rpc/machine_hourly_rate_admin_set", {
+          method: "POST",
+          body: JSON.stringify({ p_machine_id: button.dataset.hourlyRateSave, p_hourly_rate: parsed.value }),
+        });
+        showToast(result?.changed === false ? "時率沒有變更" : `${result?.machine_code || "機台"} 時率已儲存並留下紀錄`);
+        await machtileLoadMachineHourlyRateSnapshot();
+        machtileRenderMachineHourlyRateModule();
+      } catch (error) {
+        const message = String(error?.message || error || "");
+        showToast(message.includes("FORBIDDEN") ? "只有管理員可以管理機台時率" : `時率儲存失敗：${message}`);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
+async function machtileInitMachineHourlyRateModule() {
+  if (!MachTileMachineHourlyRateCore.canOpen(machtileAuthState.role)) return;
+  machtileMachineHourlyRateState = { status: "loading", machines: [], history: [], message: "" };
+  machtileRenderMachineHourlyRateModule();
+  try {
+    await machtileLoadMachineHourlyRateSnapshot();
+  } catch (error) {
+    machtileMachineHourlyRateState = { status: "error", machines: [], history: [], message: String(error?.message || error || "未知錯誤") };
+  }
+  machtileRenderMachineHourlyRateModule();
 }
 
 function machtilePlannedModuleNote(text) {
@@ -20810,6 +20914,10 @@ function openMachineAdmin(machineName) {
 }
 
 function openAdminModule(moduleKey) {
+  if (moduleKey === "hourlyRate" && !MachTileMachineHourlyRateCore.canOpen(machtileAuthState.role)) {
+    showToast("只有管理員可以管理機台時率");
+    return;
+  }
   const meta = adminModuleMeta(moduleKey);
   $("#adminModuleEyebrow").textContent = meta.eyebrow;
   $("#adminModuleTitle").textContent = meta.title;
@@ -20823,6 +20931,7 @@ function openAdminModule(moduleKey) {
   if (moduleKey === "calendar") machtileInitCapacityCalendarModule().catch(() => {});
   if (moduleKey === "program") machtileInitCncModule().catch(() => {});
   if (moduleKey === "inspection") machtileInitInspectionModule();
+  if (moduleKey === "hourlyRate") machtileInitMachineHourlyRateModule().catch(() => {});
   $("#adminModuleSheet").classList.add("is-open");
   $("#adminModuleSheet").setAttribute("aria-hidden", "false");
 }
