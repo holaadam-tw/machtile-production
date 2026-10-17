@@ -1637,6 +1637,36 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
 }
 
 console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網 ==");
+
+console.log("\n== 390px：A01 顯示標準完工流程、B01 不顯示 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04", "A01"], enableStandardFinishFlow: true, standardFinishFlowMachines: ["A04", "A01"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04", "A01"],' });
+  const nextStep = { case: "last_step", next_index_sn: null, next_name: null, class_name: null, can_claim_here: false, pool_item_id: null, available_qty: null, plan_qty: null };
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A01", processId }), { orderId: procs[0].wo, processId: id(301) });
+  await page.waitForTimeout(400);
+  await page.evaluate(({ nextStep, orderId, processId }) => {
+    machtileSingleStationReportState.loading = false;
+    finishReportedState = { status: "ready", processId: String(processId), qty: 0 };
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A01: true }, failReasonCodesByMachine: { A01: [] }, error: "" };
+    machtileFinishCloseSetResult("A01", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: nextStep } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  }, { nextStep, orderId: procs[0].wo, processId: id(301) });
+  await page.locator('#finishSheet [data-standard-finish-case="last_step"]').waitFor();
+  ok(await page.locator("#finishSheet [data-standard-finish-case]").count() === 1, "A01 卡片顯示完工標準流程");
+
+  await page.evaluate(({ nextStep }) => {
+    selectedOrder = { ...selectedOrder, machine: "B01" };
+    machtileSingleStationReportState.machineCode = "B01";
+    machtileFinishCloseSetResult("B01", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: nextStep } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  }, { nextStep });
+  ok(await page.locator("#finishSheet [data-standard-finish-case]").count() === 0, "B01 卡片不顯示完工標準流程");
+  ok(realErrors(errors).length === 0, "A01/B01 標準完工 allowlist 情境沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
 {
   const be = makeBackend();
   be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
