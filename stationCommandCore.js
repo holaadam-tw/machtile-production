@@ -454,7 +454,8 @@
       nextName: text(raw.next_name) || null, className: text(raw.class_name) || null,
       canClaimHere: raw.can_claim_here === true, poolItemId: text(raw.pool_item_id) || null,
       availableQty: raw.available_qty !== null && raw.available_qty !== "" && Number.isInteger(Number(raw.available_qty)) && Number(raw.available_qty) >= 0 ? Number(raw.available_qty) : null,
-      planQty: raw.plan_qty !== null && raw.plan_qty !== "" && Number.isInteger(Number(raw.plan_qty)) && Number(raw.plan_qty) > 0 ? Number(raw.plan_qty) : null };
+      planQty: raw.plan_qty !== null && raw.plan_qty !== "" && Number.isInteger(Number(raw.plan_qty)) && Number(raw.plan_qty) > 0 ? Number(raw.plan_qty) : null,
+      totalSteps: raw.total_steps !== null && raw.total_steps !== "" && Number.isInteger(Number(raw.total_steps)) && Number(raw.total_steps) > 0 ? Number(raw.total_steps) : null };
   }
 
   function claimNextResult(row) {

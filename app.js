@@ -36,6 +36,8 @@ const config = {
   finishCloseMachines: [],
   enableStandardFinishFlow: false,
   standardFinishFlowMachines: [],
+  enableFinishClaimStartCombo: false,
+  finishClaimStartComboMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   inspectionLinkMachines: [],
@@ -13687,6 +13689,21 @@ function machtileStandardFinishEnabled(machineCode) {
     && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.standardFinishFlowMachines), machineCode);
 }
 
+function machtileFinishClaimStartComboEnabled(machineCode) {
+  return config.enableFinishClaimStartCombo === true
+    && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.finishClaimStartComboMachines), machineCode);
+}
+
+const MACHTILE_FINISH_COMBO_KEY = "machtile.finishClaimStartCombo.v1";
+function machtileFinishComboRead() {
+  try { return JSON.parse(localStorage.getItem(MACHTILE_FINISH_COMBO_KEY) || "{}") || {}; } catch { return {}; }
+}
+function machtileFinishComboWrite(code, value) {
+  const all = machtileFinishComboRead();
+  if (value) all[code] = value; else delete all[code];
+  try { localStorage.setItem(MACHTILE_FINISH_COMBO_KEY, JSON.stringify(all)); } catch { /* local-only recovery hint */ }
+}
+
 function machtileFinishCloseSetResult(code, view) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
@@ -13725,7 +13742,21 @@ function machtileStandardFinishErrorCode(error) {
 
 function machtileStandardFinishSetClaimResult(code, view) {
   const flow = machtileStationReportState(machtileBatchRow(code));
-  if (!flow.close?.nextStep) return;
+  const combo = machtileFinishComboRead()[code];
+  if (!flow.close?.nextStep) {
+    if (view?.phase === "applied" && combo?.intent === "claim-start" && combo.stage === "claim") {
+      if (view?.claimNext?.canStart !== true) {
+        machtileFinishComboWrite(code, { ...combo, stage: "start-error", message: "CAN_START_FALSE" });
+        showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (CAN_START_FALSE)`);
+        return;
+      }
+      const claimed = { orderNo: view?.claimNext?.orderNo || combo.orderNo || null,
+        indexSn: view?.claimNext?.indexSn || combo.indexSn || null };
+      machtileFinishComboWrite(code, { ...combo, stage: "start" });
+      void machtileStandardFinishAutoStart(code, claimed);
+    }
+    return;
+  }
   const claimedMachine = view?.claimNext?.claimedMachineCode;
   flow.close.claim = view?.phase === "applied"
     ? { phase: "applied", message: machtileTranslate("standard_finish_claim_success"), canStart: view?.claimNext?.canStart === true,
@@ -13736,9 +13767,46 @@ function machtileStandardFinishSetClaimResult(code, view) {
       ? machtileTranslate("standard_finish_already_claimed_machine", { machine: claimedMachine })
       : machtileStandardFinishClaimText(view?.code, view?.detail), businessReject: true };
   machtileRenderStationReportSurfaces();
+  if (view?.phase === "applied" && combo?.intent === "claim-start" && combo.stage === "claim") {
+    if (view?.claimNext?.canStart !== true) {
+      machtileFinishComboWrite(code, { ...combo, stage: "start-error", message: "CAN_START_FALSE" });
+      showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (CAN_START_FALSE)`);
+      return;
+    }
+    machtileFinishComboWrite(code, { ...combo, stage: "start" });
+    void machtileStandardFinishAutoStart(code, flow.close.claim);
+  } else if (view?.phase !== "applied" && combo?.stage === "claim") {
+    machtileFinishComboWrite(code, { ...combo, stage: "claim-error", message: flow.close.claim?.message || "CLAIM_FAILED" });
+  }
 }
 
-async function machtileStandardFinishClaim(code) {
+async function machtileStandardFinishAutoStart(code, claimed) {
+  const combo = machtileFinishComboRead()[code];
+  if (!combo || combo.stage !== "start") return;
+  try {
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines(); renderAll();
+    const current = machtileCardOrderForMachine(code);
+    if (String(current?.id || "") !== String(claimed?.orderNo || combo.orderNo || "") || Number(current?.stationStep) !== Number(claimed?.indexSn || combo.indexSn)) {
+      machtileFinishComboWrite(code, { ...combo, stage: "start-error", message: machtileTranslate("standard_finish_combo_sync_failed") });
+      showToast(machtileTranslate("standard_finish_combo_start_failed"));
+      return;
+    }
+    await machtileStationCmdOpen("start", code, null);
+    const sheet = machtileStationCmd.sheet;
+    if (!sheet || sheet.code !== code || sheet.type !== "start" || !machtileStationCmdCanSubmit(sheet)) throw new Error("START_NOT_READY");
+    sheet.dailyStart = null;
+    sheet.comboStart = true;
+    machtileFinishComboWrite(code, { ...combo, stage: "starting" });
+    await machtileStationCmdSubmit();
+  } catch (error) {
+    const errorCode = machtileStationCmdCore?.errorCodeOf(error) || "START_FAILED";
+    machtileFinishComboWrite(code, { ...combo, stage: "start-error", message: errorCode });
+    showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (${errorCode})`);
+  }
+}
+
+async function machtileStandardFinishClaim(code, intent = "claim-only") {
   const flow = machtileStationReportState(machtileBatchRow(code));
   const next = flow.close?.nextStep;
   if (!machtileStandardFinishEnabled(code) || next?.case !== "same_class_here" || !next.canClaimHere || !next.poolItemId || flow.close.claim?.phase === "pending") return;
@@ -13747,10 +13815,12 @@ async function machtileStandardFinishClaim(code) {
   let uuid = flow.close.claim?.retry ? flow.close.claim.commandUuid : "";
   try { uuid ||= machtileStationCmdCore.newUuid(window.crypto); } catch { return; }
   flow.close.claim = { phase: "pending", message: machtileTranslate("standard_finish_claiming"), commandUuid: uuid };
+  machtileFinishComboWrite(code, { intent, stage: "claim", commandUuid: uuid, orderNo: identity.orderNo,
+    partNo: identity.partNo, indexSn: next.nextIndexSn, at: Date.now() });
   machtileRenderStationReportSurfaces();
   await machtileStationCmdRunSubmission({ commandUuid: uuid, commandType: "claim_next", machineCode: code,
     fields: { orderNo: identity.orderNo, step: next.nextIndexSn, partNo: identity.partNo, manufactureIiId: null, poolItemId: next.poolItemId },
-    recordFields: { orderNo: identity.orderNo, step: next.nextIndexSn, partNo: identity.partNo, poolItemId: next.poolItemId, standardFinishClaim: true },
+    recordFields: { orderNo: identity.orderNo, step: next.nextIndexSn, partNo: identity.partNo, poolItemId: next.poolItemId, standardFinishClaim: true, standardFinishComboIntent: intent },
     startedAt: Date.now(), validateRow: (row) => machtileStationCmdRowIsThis(row, uuid),
     onError: ({ error, info }) => {
       const errorCode = machtileStandardFinishErrorCode(error);
@@ -14623,15 +14693,21 @@ async function machtileStationCmdSubmit() {
   await machtileStationCmdRunSubmission({
     commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
     fields: sheet.fields,
-    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName },
+    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName, ...(sheet.comboStart ? { standardFinishComboStart: true } : {}) },
     startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
-    onError: ({ info }) => {
+    onError: ({ error, info }) => {
       const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
       machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
       if (machtileStationCmd.sheet !== sheet) return { cancel: true };
       sheet.phase = "sendError";
       sheet.errorText = info.text;
       sheet.canRetry = info.retry;
+      if (sheet.comboStart) {
+        const combo = machtileFinishComboRead()[sheet.code] || {};
+        const errorCode = machtileStationCmdCore?.errorCodeOf(error) || "START_FAILED";
+        machtileFinishComboWrite(sheet.code, { ...combo, stage: "start-error", message: errorCode });
+        showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (${errorCode})`);
+      }
       machtileStationCmdRenderSheet();
       return { recordExtra: { dailyStart: carried } };
     },
@@ -14663,6 +14739,13 @@ function machtileStationCmdFinish(code, view) {
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
+  if (record.commandType === "start" && record.standardFinishComboStart) {
+    const combo = machtileFinishComboRead()[code] || {};
+    const applied = view?.phase === "applied";
+    machtileFinishComboWrite(code, { ...combo, stage: applied ? "applied" : "start-error",
+      message: applied ? machtileTranslate("standard_finish_combo_success") : `${machtileTranslate("standard_finish_combo_start_failed")} (${view?.code || view?.phase || "START_FAILED"})` });
+    showToast(applied ? machtileTranslate("standard_finish_combo_success") : `${machtileTranslate("standard_finish_combo_start_failed")} (${view?.code || "START_FAILED"})`);
+  }
   const sheet = machtileStationCmd.sheet;
   if (sheet && sheet.code === code && sheet.uuid === record.commandUuid) {
     sheet.phase = "status";
@@ -22262,10 +22345,13 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
       if (copy) {
         const claim = flow.close.claim;
         const qty = next.availableQty == null ? "" : machtileTranslate("standard_finish_qty", { available: next.availableQty, plan: next.planQty ?? "—" });
-        const primary = next.case === "same_class_here" && next.canClaimHere && next.poolItemId && claim?.phase !== "applied" && !claim?.businessReject
+        const comboEnabled = machtileFinishClaimStartComboEnabled(code) && next.case === "same_class_here" && next.canClaimHere && next.poolItemId && claim?.phase !== "applied" && !claim?.businessReject;
+        const comboBusy = claim?.phase === "pending";
+        const comboQuestion = comboEnabled ? `<section class="standard-finish-combo" role="dialog" aria-label="${escapeHtml(machtileTranslate("standard_finish_combo_title"))}"><p><strong>${escapeHtml(machtileTranslate("standard_finish_combo_question", { done: flow.close.identity?.indexSn ?? "—", next: next.nextIndexSn ?? "—", total: next.totalSteps ?? "—", available: next.availableQty ?? "—" }))}</strong></p>${next.availableQty === 0 ? `<p class="standard-finish-zero-note">${escapeHtml(machtileTranslate("standard_finish_combo_zero"))}</p>` : ""}<div class="station-report-actions">${next.availableQty !== 0 ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim-start="${escapeHtml(code)}"${comboBusy ? " disabled" : ""}>${escapeHtml(machtileTranslate("standard_finish_combo_claim_start"))}</button>` : ""}<button type="button" class="secondary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${comboBusy ? " disabled" : ""}>${escapeHtml(machtileTranslate("standard_finish_combo_claim_only"))}</button><button type="button" class="secondary-action station-report-action" data-standard-finish-decline="${escapeHtml(code)}"${comboBusy ? " disabled" : ""}>${escapeHtml(machtileTranslate("standard_finish_combo_decline"))}</button></div></section>` : "";
+        const primary = !comboEnabled && next.case === "same_class_here" && next.canClaimHere && next.poolItemId && claim?.phase !== "applied" && !claim?.businessReject
           ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${claim?.phase === "pending" ? " disabled" : ""}>${escapeHtml(machtileTranslate(claim?.retry ? "standard_finish_retry" : "standard_finish_claim"))}</button>` : "";
         const start = claim?.phase === "applied" && claim.canStart ? `<button type="button" class="primary-action station-report-action" data-standard-finish-start="${escapeHtml(code)}">${escapeHtml(machtileTranslate("standard_finish_start"))}</button>` : "";
-        resultHtml += `<div class="standard-finish-card is-${escapeHtml(next.case)}" data-standard-finish-case="${escapeHtml(next.case)}"><strong>${escapeHtml(machtileTranslate(copy[0]))}</strong><p>${escapeHtml(machtileTranslate(copy[1], { name: next.nextName || "—", class: next.className || "—" }))}</p>${qty ? `<p>${escapeHtml(qty)}</p>` : ""}${claim ? `<p class="standard-finish-claim-status" role="status">${escapeHtml(claim.message)}</p>` : ""}<div class="station-report-actions">${primary}${start}<button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}">${escapeHtml(machtileTranslate("standard_finish_other_order"))}</button></div></div>`;
+        resultHtml += `<div class="standard-finish-card is-${escapeHtml(next.case)}" data-standard-finish-case="${escapeHtml(next.case)}"><strong>${escapeHtml(machtileTranslate(copy[0]))}</strong><p>${escapeHtml(machtileTranslate(copy[1], { name: next.nextName || "—", class: next.className || "—" }))}</p>${qty ? `<p>${escapeHtml(qty)}</p>` : ""}${comboQuestion}${claim ? `<p class="standard-finish-claim-status" role="status">${escapeHtml(claim.message)}</p>` : ""}<div class="station-report-actions">${primary}${start}<button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}">${escapeHtml(machtileTranslate("standard_finish_other_order"))}</button></div></div>`;
       }
     }
   }
@@ -23286,6 +23372,10 @@ function machtileHandleBatchClick(event) {
   if (nextButton) { machtileStationReportNew(nextButton.dataset.stationReportNew); return true; }
   const finishClaim = event.target.closest("[data-standard-finish-claim]");
   if (finishClaim) { void machtileStandardFinishClaim(finishClaim.dataset.standardFinishClaim); return true; }
+  const finishClaimStart = event.target.closest("[data-standard-finish-claim-start]");
+  if (finishClaimStart) { void machtileStandardFinishClaim(finishClaimStart.dataset.standardFinishClaimStart, "claim-start"); return true; }
+  const finishDecline = event.target.closest("[data-standard-finish-decline]");
+  if (finishDecline) { machtileFinishComboWrite(finishDecline.dataset.standardFinishDecline, { intent: "declined", stage: "declined", at: Date.now() }); closeReport(); return true; }
   const finishOther = event.target.closest("[data-standard-finish-other]");
   if (finishOther) { const code = finishOther.dataset.standardFinishOther; closeReport(); machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() }); return true; }
   const finishStart = event.target.closest("[data-standard-finish-start]");
