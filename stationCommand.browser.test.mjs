@@ -1687,6 +1687,22 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   }
 
   await page.evaluate(() => {
+    config.enableFinishClaimStartCombo = true;
+    config.finishClaimStartComboMachines = ["A04"];
+    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, total_steps: 8 } } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  });
+  ok(await page.locator("#finishSheet [data-standard-finish-claim-start]").isVisible(), "組合旗標開：顯示【接並開工】");
+  ok(await page.locator("#finishSheet [data-standard-finish-claim]").isVisible() && await page.locator("#finishSheet [data-standard-finish-decline]").isVisible(), "組合對話框有【只接，稍後開工】與【不接】");
+  ok((await page.locator("#finishSheet .standard-finish-combo").innerText()).includes("共 8 道"), "組合對話框顯示總道數");
+  await page.evaluate(() => {
+    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 0, total_steps: 8 } } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  });
+  ok(await page.locator("#finishSheet [data-standard-finish-claim-start]").count() === 0, "X=0：不提供【接並開工】");
+  ok((await page.locator("#finishSheet .standard-finish-combo").innerText()).includes("上一道良品數為 0，可接不可報"), "X=0：顯示可接不可報說明");
+
+  await page.evaluate(() => {
     machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "other_class", next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: false, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
     machtileRenderStationReportSurfaces();
   });
@@ -1783,6 +1799,36 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   await page.locator("#machtileStationCmdSheet [data-station-cmd-confirm]").click();
   await page.waitForTimeout(300);
   ok(be.submits.at(-1).p_command_uuid === firstUuid && be.submits.at(-1).p_pool_item_id === "pool-next-1", "refresh 重試沿用 command_uuid 並保留 poolItemId", JSON.stringify(be.submits.at(-1)));
+  const comboAuto = await page.evaluate(async () => {
+    const saved = { loadFromSupabase, deriveMachines, renderAll, machtileCardOrderForMachine, machtileStationCmdOpen, machtileStationCmdCanSubmit, machtileStationCmdSubmit };
+    loadFromSupabase = async () => {};
+    deriveMachines = () => {};
+    renderAll = () => {};
+    machtileCardOrderForMachine = () => ({ id: "XX01202502050012", stationStep: 6 });
+    machtileStationCmdOpen = async () => { machtileStationCmd.sheet = { code: "A04", type: "start", fields: {}, model: {}, dailyStart: { state: "ask" } }; };
+    machtileStationCmdCanSubmit = () => true;
+    let submitted = 0;
+    machtileStationCmdSubmit = async () => { submitted += 1; };
+    machtileFinishComboWrite("A04", { intent: "claim-start", stage: "start", orderNo: "XX01202502050012", indexSn: 6 });
+    await machtileStandardFinishAutoStart("A04", { orderNo: "XX01202502050012", indexSn: 6 });
+    const success = { submitted, dailyStartCleared: machtileStationCmd.sheet.dailyStart === null, state: machtileFinishComboRead().A04?.stage };
+    submitted = 0;
+    machtileStationReportState(machtileBatchRow("A04")).close = null;
+    machtileFinishComboWrite("A04", { intent: "claim-start", stage: "claim", orderNo: "XX01202502050012", indexSn: 6 });
+    machtileStandardFinishSetClaimResult("A04", { phase: "applied", claimNext: { orderNo: "XX01202502050012", indexSn: 6, canStart: true } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const refresh = { submitted, state: machtileFinishComboRead().A04?.stage };
+    machtileStationCmdOpen = async () => { throw new Error("START_TEST_FAIL"); };
+    machtileFinishComboWrite("A04", { intent: "claim-start", stage: "start", orderNo: "XX01202502050012", indexSn: 6 });
+    await machtileStandardFinishAutoStart("A04", { orderNo: "XX01202502050012", indexSn: 6 });
+    const failure = machtileFinishComboRead().A04;
+    Object.assign(window, saved);
+    return { success, refresh, failure };
+  });
+  ok(comboAuto.success.submitted === 1 && comboAuto.success.dailyStartCleared && comboAuto.success.state === "starting", "接並開工成功路徑：claim applied 後沿用既有 start 提交且只送一次", JSON.stringify(comboAuto));
+  ok(comboAuto.refresh.submitted === 1 && comboAuto.refresh.state === "starting", "重新整理後 claim 才 applied：從保存狀態接續 start 且只送一次", JSON.stringify(comboAuto));
+  ok(comboAuto.failure.stage === "start-error", "start 失敗：停在 start-error，不自動重送", JSON.stringify(comboAuto));
+
   const submitsBeforeFlagOff = be.submits.length;
   await page.evaluate(() => {
     config.enableStandardFinishFlow = false;

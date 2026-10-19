@@ -39,6 +39,8 @@ window.MACHTILE_CONFIG = {
   dispatchPoolMachines: [],
   enableStandardFinishFlow: false,
   standardFinishFlowMachines: [],
+  enableFinishClaimStartCombo: false,
+  finishClaimStartComboMachines: [],
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.
   scheduleCalendar: {

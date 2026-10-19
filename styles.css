@@ -13024,6 +13024,9 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .standard-finish-card p { margin: 7px 0 0; }
 .standard-finish-card .station-report-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 .standard-finish-claim-status { font-weight: 700; }
+.standard-finish-combo { margin-top: 12px; padding: 12px; border: 2px solid #174d78; border-radius: 10px; background: #fff; }
+.standard-finish-combo > p:first-child { margin-top: 0; }
+.standard-finish-zero-note { color: #8a3f00; font-weight: 700; }
 @media (max-width: 480px) { .standard-finish-card .station-report-action { width: 100%; min-height: 48px; } }
 .station-report-confirm-card { display: grid; gap: 8px; padding: 18px; border: 2px solid #174d78; border-radius: 10px; background: #fff; font-size: 22px; line-height: 1.35; }
 .station-report-confirm-card > strong { font-size: 36px; }
