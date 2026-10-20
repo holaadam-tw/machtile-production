@@ -101,7 +101,8 @@ assert.equal(await page.locator("#reportFailReasonField").isHidden(), true, "A04
 assert.equal(await page.locator('.station-report-reason:visible').count(), 1, "A04 with defects shows exactly one fail-reason field");
 
 const routeState = await page.evaluate(() => ({ allowlisted: machtileSingleStationReportAllowlisted("A04"), active: machtileSingleStationReportActive(), panelHidden: document.querySelector("#singleStationReportPanel").hidden, submitHidden: document.querySelector("#reportForm .submit-report").hidden }));
-assert.equal(routeState.submitHidden, true, `allowlisted station hides legacy submit: ${JSON.stringify(routeState)}`);
+assert.equal(routeState.submitHidden, false, `allowlisted station keeps the primary submit visible: ${JSON.stringify(routeState)}`);
+assert.equal(await page.locator("#reportForm .submit-report").innerText(), "預覽並送出");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /智慧報工/);
 assert.equal(await page.locator('[data-station-report-reason="A04"]').isEnabled(), true, `${await page.locator("#singleStationReportPanel").innerText()}\n${requestUrls.filter(u => u.includes("work_order_processes")).join("\n")}`);
 await page.evaluate(operatorId => {
@@ -111,10 +112,11 @@ await page.evaluate(operatorId => {
   document.body.append(list);
 }, id(901));
 await page.locator('[data-station-report-reason="A04"]').selectOption("尺寸不良");
-await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await page.locator("#reportForm .submit-report").click();
 assert.equal(calls.commands.length, 0, "smart preview rejects an unselected mapped operator");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /請勾選實際操作的人員/);
 assert.match(await page.locator("#toast").innerText(), /請勾選實際操作的人員/, "blocked smart report also shows a toast");
+assert.match(await page.locator("#reportSubmitError").innerText(), /請勾選實際操作的人員/, "primary submit keeps validation visible");
 await page.evaluate(() => {
   const input = document.querySelector('#machtileOperatorList input[type="checkbox"]');
   input.checked = true;
@@ -132,7 +134,20 @@ await page.locator('#singleStationReportPanel [data-station-report-preview="A04"
 assert.equal(calls.commands.length, 0, "lathe preview rejects multiple operators before any command is created");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /車床報工一次只能選一位報工人員/);
 await page.evaluate(() => document.querySelectorAll('#machtileOperatorList input[type="checkbox"]')[1].remove());
-await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "waiting-preview";
+  flow.previewStartedAt = Date.now() - 5200;
+  machtileRenderStationReportSurfaces();
+});
+assert.match(await page.locator("#singleStationReportPanel .station-report-preview-wait").innerText(), /工廠計算中…\s*5 秒/, "five-second preview wait stays visible at the primary action");
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "idle";
+  flow.previewStartedAt = null;
+  machtileRenderStationReportSurfaces();
+});
+await page.locator("#reportForm .submit-report").click();
 await page.waitForTimeout(500);
 assert.equal(await page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').count(), 1, `${await page.locator("#singleStationReportPanel").innerText()} calls=${JSON.stringify(calls.commands)}`);
 assert.equal(calls.commands.length, 1, "preview creates one command");
@@ -143,23 +158,41 @@ assert.equal(calls.commands[0].p_fail_reason_code, "尺寸不良");
 assert.deepEqual(await page.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.operators), [id(901)], "selected mapped operator is frozen into the smart-report flow");
 assert.equal(calls.reports.length, 0, "preview never records production report");
 
+const previewUuid = calls.commands.at(-1).p_command_uuid;
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "preview-timeout";
+  flow.previewStartedAt = Date.now() - 25000;
+  flow.result = null;
+  machtileRenderStationReportSurfaces();
+});
+assert.match(await page.locator("#singleStationReportPanel").innerText(), /工廠沒有回應，可再按一次/, "25-second preview timeout offers a retry in place");
+await page.locator('#singleStationReportPanel [data-station-report-preview-retry="A04"]').click();
+await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+assert.equal(calls.commands.at(-1).p_command_uuid, previewUuid, "preview retry reuses the same idempotent command_uuid");
+
 const confirm = page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
+assert.equal(await confirm.evaluate(button => button.classList.contains("is-holding")), true, "hold progress starts visibly");
 await page.waitForTimeout(400);
 await confirm.dispatchEvent("pointerup", { pointerType: "mouse", button: 0 });
 await page.waitForTimeout(700);
-assert.equal(calls.commands.length, 1, "short press sends no report command");
+assert.equal(calls.commands.filter(command => !command.p_preview).length, 0, "releasing before 0.8 seconds sends no report command");
+assert.equal(await confirm.evaluate(button => button.classList.contains("is-holding")), false, "released hold clears its progress");
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
-await page.waitForTimeout(1600);
-assert.equal(calls.commands.length, 2, "long press sends one final report command");
-assert.equal(calls.commands[1].p_preview, false);
-assert.equal(calls.commands[1].p_good_qty, 38);
-assert.equal(calls.commands[1].p_fail_qty, 2);
+await page.waitForTimeout(900);
+assert.equal(calls.commands.filter(command => !command.p_preview).length, 1, "0.8-second hold sends one final report command");
+const finalCommand = calls.commands.find(command => !command.p_preview);
+assert.equal(finalCommand.p_preview, false);
+assert.equal(finalCommand.p_good_qty, 38);
+assert.equal(finalCommand.p_fail_qty, 2);
+assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "true", "confirmation closes the report sheet immediately");
+assert.match(await page.locator("#toast").innerText(), /已送出，工廠寫入中|工廠已完成寫入/, "background submission gives immediate or completed feedback");
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
 assert.equal(calls.reports[0].completed_qty, 38);
 assert.equal(calls.reports[0].defect_qty, 2);
 assert.equal(calls.reports[0].report_payload.fail_reason_code, "尺寸不良", "A04 production report payload preserves the smart-report fail reason");
-const happyUuid = calls.commands[1].p_command_uuid;
+const happyUuid = finalCommand.p_command_uuid;
 await page.evaluate(() => machtileRecordSingleStationProductionReport("A04", machtileBatchRow("A04").stationReport.args));
 assert.equal(calls.reports.length, 1, "same successful command_uuid does not duplicate production_reports");
 assert.equal(calls.reports[0].report_uuid, happyUuid);
@@ -236,9 +269,11 @@ await finishValidation.locator("#finishSheet .finish-panel").screenshot({ path: 
 await finishValidation.setViewportSize({ width: 800, height: 1100 });
 assert.equal(await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isEnabled(), true, "total below reported remains clickable so validation can explain why submission is blocked");
 const zeroCommandsBefore = calls.commands.length;
-await finishValidation.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await finishValidation.locator("#reportForm .submit-report").click();
 assert.equal(calls.commands.length, zeroCommandsBefore, "total below reported is blocked before creating a command");
 assert.match(await finishValidation.locator("#toast").innerText(), /總數不能小於已報的 920 件；報錯請用報工修正/, "below-reported block gives the approved correction guidance");
+assert.match(await finishValidation.locator("#reportSubmitError").innerText(), /總數不能小於已報的 920 件/, "quantity validation remains visible above submit");
+assert.equal(await finishValidation.evaluate(() => document.activeElement?.id), "completedQty", "quantity validation scroll target receives focus");
 await finishValidation.locator("#completedQty").fill("958");
 await finishValidation.locator("#defectQty").fill("0");
 const finishCommandsBefore = calls.commands.length;
@@ -256,7 +291,8 @@ assert.equal(calls.closeCommands[0].p_command_type, "close");
 assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
-assert.match(await finishValidation.locator("#singleStationReportPanel").innerText(), /已關站[\s\S]*完工報工已保留；舊 MES 已關站/);
+assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "true", "finish confirmation closes immediately while factory work continues");
+assert.equal(await finishValidation.locator("#stationReportBackgroundStatus").isHidden(), true, "successful background finish clears the persistent status");
 await finishValidation.close();
 
 finishButtonEnabled = false;
@@ -297,10 +333,11 @@ await reconcile.locator('[data-station-report-preview="A04"]').click();
 await reconcile.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
 const reconcileConfirm = reconcile.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
 await reconcileConfirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
-await reconcile.waitForFunction(() => document.querySelector('[data-station-report-reconcile="A04"]'), null, { timeout: 5000 });
+await reconcile.waitForFunction(() => document.querySelector('#stationReportBackgroundStatus.is-error:not([hidden])'), null, { timeout: 5000 });
+assert.match(await reconcile.locator("#stationReportBackgroundStatus").innerText(), /套用結果尚未確認|response lost|請勿重送/, "background failure remains as a visible red persistent warning");
 const reconcileReportsBefore = calls.reports.length;
 const reconcileCommandsBefore = calls.commands.length;
-await reconcile.locator('#singleStationReportPanel [data-station-report-reconcile="A04"]').click();
+await reconcile.evaluate(() => machtileStationReportReconcile("A04"));
 await reconcile.waitForFunction(() => machtileBatchRow("A04").stationProductionReportUuid === machtileBatchRow("A04").stationReport.args.p_command_uuid);
 assert.equal(calls.commands.length, reconcileCommandsBefore, "reconcile reads by UUID without resending command");
 assert.equal(calls.reports.length, reconcileReportsBefore + 1, "reconcile applied records production_reports once");
@@ -318,8 +355,15 @@ await failedGuard.waitForFunction(() => document.getElementById("dataSourceLabel
 await failedGuard.locator("[data-open-report]:visible").first().click();
 await failedGuard.locator('[data-report-type="noon"]').click();
 await failedGuard.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("智慧報工後端尚未同步"));
-const failedState = await failedGuard.evaluate(() => ({ submitHidden: document.querySelector("#reportForm .submit-report").hidden, panelHidden: document.querySelector("#singleStationReportPanel").hidden, allowlisted: machtileSingleStationReportAllowlisted("A04") }));
-assert.equal(failedState.submitHidden, true, `guard failure remains fail-closed: ${JSON.stringify(failedState)}`);
+const failedState = await failedGuard.evaluate(() => ({ submitHidden: document.querySelector("#reportForm .submit-report").hidden, submitDisabled: document.querySelector("#reportForm .submit-report").disabled, panelHidden: document.querySelector("#singleStationReportPanel").hidden, allowlisted: machtileSingleStationReportAllowlisted("A04") }));
+assert.equal(failedState.submitHidden, false, `guard failure keeps its disabled primary action visible: ${JSON.stringify(failedState)}`);
+assert.equal(failedState.submitDisabled, true, "guard failure remains fail-closed");
+assert.match(await failedGuard.locator("#reportSubmitError").innerText(), /智慧報工後端尚未同步/, "guard failure remains visible above submit");
+assert.equal(await failedGuard.locator("[data-station-report-reload-guard]").innerText(), "重新載入設定");
+guardFails = false;
+await failedGuard.locator("[data-station-report-reload-guard]").click();
+await failedGuard.waitForFunction(() => !document.querySelector("#reportForm .submit-report").disabled);
+assert.equal(await failedGuard.locator("#reportForm .submit-report").innerText(), "預覽並送出", "guard reload restores smart primary action");
 assert.deepEqual(errors, []);
 console.log("PASS single station smart report browser contract");
 await browser.close();

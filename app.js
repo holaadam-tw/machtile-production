@@ -22095,6 +22095,10 @@ const machtileSingleStationReportState = {
   processId: "",
 };
 
+const MACHTILE_STATION_REPORT_PREVIEW_TIMEOUT_MS = 20000;
+const MACHTILE_STATION_REPORT_HOLD_MS = 800;
+let machtileStationReportPreviewTicker = null;
+
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
@@ -22121,6 +22125,45 @@ function machtileSingleStationReportActive() {
   return ["noon", "finish"].includes(activeReportType) && machtileSingleStationReportAllowlisted(code)
     && machtileBatchState.stationReportSettings.status === "loaded"
     && core?.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code);
+}
+
+function machtileSetReportSubmitLabel(key) {
+  const submit = document.querySelector("#reportForm .submit-report");
+  if (!submit) return;
+  submit.dataset.i18n = key;
+  submit.textContent = machtileTranslate(key);
+}
+
+function machtileReportValidationTarget(message = "") {
+  if (/工件總數/.test(message)) return document.getElementById("workTotalQty");
+  if (/cycle time/.test(message)) return document.getElementById("cycleMinutes");
+  if (/首件檢查|照片/.test(message)) return document.querySelector('[data-report-section="workStart"]');
+  if (/目前機台已加工數量/.test(message)) return document.getElementById("machineQty");
+  if (/不良原因/.test(message)) return document.getElementById("reportFailReason");
+  if (/備註|說明/.test(message)) return document.getElementById("reportNote");
+  if (/操作的人員|工號|只能選一位/.test(message)) return document.getElementById("machtileOperatorList");
+  if (/總數|良品|已報|累計|計數/.test(message)) return document.getElementById("completedQty");
+  if (/異常類型/.test(message)) return document.getElementById("abnormalType");
+  return document.querySelector("#reportForm .submit-report");
+}
+
+function machtileClearReportSubmitError() {
+  const error = document.getElementById("reportSubmitError");
+  if (!error) return;
+  error.hidden = true;
+  error.textContent = "";
+}
+
+function machtileShowReportSubmitError(message, target = null) {
+  const error = document.getElementById("reportSubmitError");
+  if (error) {
+    error.textContent = message;
+    error.hidden = false;
+  }
+  const field = target || machtileReportValidationTarget(message);
+  field?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  field?.focus?.({ preventScroll: true });
+  showToast(message);
 }
 
 function machtileRenderStationReportSurfaces() {
@@ -22152,30 +22195,59 @@ function machtileRenderSingleStationReport() {
   const allowlisted = eligibleType && machtileSingleStationReportAllowlisted(code);
   const finishBlocked = activeReportType === "finish" && (finishReportedState.status !== "ready" || finishReportedState.processId !== String(order?.processId || ""));
   holder.hidden = !allowlisted;
-  submit.hidden = allowlisted;
-  submit.disabled = allowlisted || finishBlocked;
+  submit.hidden = false;
+  submit.disabled = finishBlocked;
+  machtileSetReportSubmitLabel("submit_report");
   if (!allowlisted) { holder.innerHTML = ""; return; }
+  machtileSetReportSubmitLabel("preview_and_submit");
   if (finishBlocked) {
     holder.innerHTML = `<p class="batch-notice${finishReportedState.status === "loading" ? "" : " is-error"}" role="alert">${finishReportedState.status === "loading" ? "正在讀取已報數，請稍候。" : "讀不到已報數，請重新整理；本次未送出任何報工。"}</p>`;
     return;
   }
   if (machtileSingleStationReportState.loading) {
+    submit.disabled = true;
     holder.innerHTML = '<p class="batch-notice" role="status">正在載入智慧報工 guard…</p>';
     return;
   }
   const settings = machtileBatchState.stationReportSettings;
   if (settings.status !== "loaded") {
-    holder.innerHTML = `<p class="batch-notice is-error" role="alert">${escapeHtml(settings.error || "無法載入智慧報工 guard；已阻擋送出，請重新開啟報工再試。")}</p>`;
+    submit.disabled = true;
+    const message = settings.error || "無法載入智慧報工 guard；已阻擋送出，請重新載入設定後再試。";
+    holder.innerHTML = `<p class="batch-notice is-error" role="alert">${escapeHtml(message)}</p><button type="button" class="secondary-action station-report-action" data-station-report-reload-guard>${escapeHtml(machtileTranslate("reload_guard_config"))}</button>`;
+    const persistent = document.getElementById("reportSubmitError");
+    if (persistent) { persistent.textContent = message; persistent.hidden = false; }
     return;
   }
   if (!machtileStationReportCore()?.reportMachineEnabled(settings.machines, code)) {
-    holder.hidden = true; holder.innerHTML = ""; submit.hidden = false; submit.disabled = false;
+    holder.hidden = true; holder.innerHTML = ""; submit.disabled = false;
+    machtileSetReportSubmitLabel("submit_report");
+    machtileClearReportSubmitError();
     machtileUpdateReportFailReason();
     return;
   }
   machtileUpdateReportFailReason();
   const row = machtileSyncSingleStationReportRow();
+  const flow = row ? machtileStationReportState(row) : null;
+  submit.hidden = ["previewed", "submitting-report", "waiting-report"].includes(flow?.phase)
+    || ["previewed", "preview-soft"].includes(machtileStationReportCore()?.resultCard(flow?.result)?.kind);
   holder.innerHTML = row && order ? machtileRenderStationReportPanel(code, order, row, false) : '<p class="batch-notice is-error" role="alert">工單資料不完整；已阻擋智慧報工。</p>';
+}
+
+function machtileStationReportPreviewElapsed(flow) {
+  return Math.max(0, Math.floor((Date.now() - Number(flow?.previewStartedAt || Date.now())) / 1000));
+}
+
+function machtileStartStationReportPreviewTicker(code) {
+  if (machtileStationReportPreviewTicker) clearInterval(machtileStationReportPreviewTicker);
+  machtileStationReportPreviewTicker = setInterval(() => {
+    const flow = machtileStationReportState(machtileBatchRow(code));
+    if (flow.phase !== "waiting-preview" && flow.phase !== "submitting-preview") {
+      clearInterval(machtileStationReportPreviewTicker);
+      machtileStationReportPreviewTicker = null;
+      return;
+    }
+    machtileRenderStationReportSurfaces();
+  }, 1000);
 }
 
 async function machtileLoadSingleStationReport(order) {
@@ -22322,11 +22394,11 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     resultHtml = `<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
     if (result.kind === "previewed") {
       resultHtml += snapshotReady
-        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認報工</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認報工</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">預覽回傳 guard 欄位不完整；已阻擋正式送出。</p>`;
     } else if (result.kind === "preview-soft") {
       resultHtml += snapshotReady
-        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>長按 1 秒確認照送（${escapeHtml(result.guardLabel)}）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認照送（${escapeHtml(result.guardLabel)}）</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">軟性 guard 預覽資料不完整；已阻擋送出。</p>`;
     } else if (result.kind === "preview-blocked" || result.kind === "preview-invalid") {
       resultHtml += `<p class="batch-notice is-error" role="alert">${escapeHtml(result.guardCode ? `${result.guardLabel}：` : "")}${escapeHtml(result.kind === "preview-invalid" ? "預覽資料不完整；已阻擋正式送出。" : "已阻擋確認送出；可修改數量後重新預覽。")}</p><div class="station-report-actions"><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`;
@@ -22364,6 +22436,12 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
   const contextMessage = noContext
     ? "這張單的舊 MES 資料不完整，暫時不能用智慧報工，請通知生管。"
     : "送出前會先由套用端唯讀預覽；預覽完成以前不會建立正式報工。";
+  const previewWaiting = ["submitting-preview", "waiting-preview"].includes(flow.phase);
+  const previewWaitHtml = previewWaiting
+    ? `<p class="batch-notice station-report-preview-wait" role="status">工廠計算中… <strong>${machtileStationReportPreviewElapsed(flow)}</strong> 秒</p>`
+    : flow.phase === "preview-timeout"
+      ? `<p class="batch-notice is-error" role="alert">工廠沒有回應，可再按一次</p><button type="button" class="primary-action station-report-action" data-station-report-preview-retry="${escapeHtml(code)}">再按一次</button>`
+      : "";
   return `<section class="station-report-panel" aria-label="${escapeHtml(code)} 智慧報工">
     <div class="station-report-heading"><strong>智慧報工</strong><span>套用端預覽 → 確認</span></div>
     <p class="station-report-hint">${escapeHtml(contextMessage)}</p>
@@ -22371,7 +22449,8 @@ function machtileRenderStationReportPanel(code, order, row, busy) {
     ${flow.error ? `<p class="batch-notice is-error" role="alert">${escapeHtml(flow.error)}</p>` : ""}
     <label class="station-report-reason"${Number(row.bad || 0) > 0 ? "" : " hidden"}><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>
     <label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed && !oldOrderNoteAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>
-    <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${flow.phase === "waiting-preview" ? "等待套用端預覽…" : "先預覽，不寫入舊 MES"}</button>
+    ${previewWaitHtml}
+    <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || previewWaiting || flow.phase === "preview-timeout" ? " disabled" : ""}>先預覽，不寫入舊 MES</button>
     ${resultHtml}
   </section>`;
 }
@@ -22382,14 +22461,43 @@ async function machtileStationReportWait(code, commandUuid, kind) {
   const flow = machtileStationReportState(row);
   const client = machtileStationReportCreateClient();
   if (!client) throw new Error("智慧報工介面尚未載入。");
-  const result = await client.waitForTerminal(commandUuid, { intervalMs: 2000, maxAttempts: 90 });
+  const maxAttempts = kind === "preview" ? Math.ceil(MACHTILE_STATION_REPORT_PREVIEW_TIMEOUT_MS / 2000) : 90;
+  const result = await client.waitForTerminal(commandUuid, { intervalMs: 2000, maxAttempts });
   flow.result = result;
   flow.phase = core.isTerminal(result)
     ? (kind === "preview" && result.command_type === "report_preview" && result.status === "previewed" ? "previewed" : "finished")
     : `waiting-${kind}`;
   if (kind === "preview") flow.preview = result;
   if (kind === "report") flow.report = result;
-  flow.error = core.isTerminal(result) ? "" : "套用結果仍未確認；請勿重送，先查詢原識別碼。";
+  if (kind === "preview" && !core.isTerminal(result)) {
+    flow.phase = "preview-timeout";
+    flow.error = "";
+  } else {
+    flow.error = core.isTerminal(result) ? "" : "套用結果仍未確認；請勿重送，先查詢原識別碼。";
+  }
+}
+
+async function machtileStationReportRetryPreview(code) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  if (flow.phase !== "preview-timeout" || !flow.args?.p_command_uuid) return;
+  flow.phase = "submitting-preview";
+  flow.previewStartedAt = Date.now();
+  machtileStartStationReportPreviewTicker(code);
+  machtileRenderStationReportSurfaces();
+  try {
+    const submitted = await machtileStationReportCreateClient().submit(flow.args);
+    const item = Array.isArray(submitted) ? submitted[0] : submitted;
+    flow.preview = item?.command_uuid === flow.args.p_command_uuid ? item : flow.preview;
+    flow.phase = "waiting-preview";
+    if (item && machtileStationReportCore().isTerminal(item)) {
+      flow.result = item;
+      flow.phase = item.command_type === "report_preview" && item.status === "previewed" ? "previewed" : "finished";
+    } else await machtileStationReportWait(code, flow.args.p_command_uuid, "preview");
+  } catch (error) {
+    flow.phase = "preview-timeout";
+    flow.error = "";
+  }
+  machtileRenderStationReportSurfaces();
 }
 
 async function machtileStationReportSubmitPreview(code) {
@@ -22400,7 +22508,8 @@ async function machtileStationReportSubmitPreview(code) {
   const context = machtileStationReportContext(order, code);
   const block = (message) => {
     flow.error = message;
-    showToast(message);
+    if (machtileSingleStationReportOrder(code)) machtileShowReportSubmitError(message);
+    else showToast(message);
     machtileRenderStationReportSurfaces();
   };
   if (!core) { block("智慧報工尚未載入，請重新整理後再試。"); return; }
@@ -22463,7 +22572,10 @@ async function machtileStationReportSubmitPreview(code) {
   }
   flow.args = args;
   flow.phase = "submitting-preview";
+  flow.previewStartedAt = Date.now();
   flow.error = "";
+  machtileClearReportSubmitError();
+  machtileStartStationReportPreviewTicker(code);
   machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
@@ -22501,7 +22613,15 @@ async function machtileStationReportSubmitFinal(code) {
       reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
-  await machtileStationReportSendFinal(code, args);
+  const background = document.getElementById("stationReportBackgroundStatus");
+  if (background) {
+    background.classList.remove("is-error");
+    background.textContent = "已送出，工廠寫入中";
+    background.hidden = false;
+  }
+  closeReport();
+  showToast("已送出，工廠寫入中");
+  void machtileStationReportSendFinal(code, args, { background: true });
 }
 
 async function machtileRecordSingleStationProductionReport(code, args) {
@@ -22537,7 +22657,7 @@ async function machtileRecordSingleStationProductionReport(code, args) {
   }
 }
 
-async function machtileStationReportSendFinal(code, args) {
+async function machtileStationReportSendFinal(code, args, options = {}) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
@@ -22560,6 +22680,18 @@ async function machtileStationReportSendFinal(code, args) {
   }
   await machtileRecordSingleStationProductionReport(code, args);
   await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
+  if (options.background) {
+    const background = document.getElementById("stationReportBackgroundStatus");
+    const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
+    if (applied) {
+      if (background) background.hidden = true;
+      showToast("工廠已完成寫入");
+    } else if (background) {
+      background.classList.add("is-error");
+      background.textContent = flow.error || "工廠寫入失敗，請勿重複報工並通知主管。";
+      background.hidden = false;
+    }
+  }
   machtileRenderStationReportSurfaces();
 }
 
@@ -23356,6 +23488,17 @@ function machtileHandleBatchClick(event) {
   if (event.target.closest("[data-batch-command-submit]")) { machtileSubmitBatchStationCommands(); return true; }
   const previewButton = event.target.closest("[data-station-report-preview]");
   if (previewButton) { machtileStationReportSubmitPreview(previewButton.dataset.stationReportPreview); return true; }
+  const previewRetryButton = event.target.closest("[data-station-report-preview-retry]");
+  if (previewRetryButton) { machtileStationReportRetryPreview(previewRetryButton.dataset.stationReportPreviewRetry); return true; }
+  const reloadGuardButton = event.target.closest("[data-station-report-reload-guard]");
+  if (reloadGuardButton) {
+    const order = machtileSingleStationReportOrder();
+    if (order) {
+      machtileClearReportSubmitError();
+      void machtileLoadSingleStationReport(order);
+    }
+    return true;
+  }
   const confirmButton = event.target.closest("[data-station-report-confirm]");
   if (confirmButton) return true;
   const ackButton = event.target.closest("[data-station-report-ack]");
@@ -23499,20 +23642,25 @@ function machtileHandleBatchInput(event) {
 }
 
 let machtileStationReportHoldTimer = null;
+let machtileStationReportHoldButton = null;
 function machtileCancelStationReportHold() {
   if (machtileStationReportHoldTimer) clearTimeout(machtileStationReportHoldTimer);
   machtileStationReportHoldTimer = null;
+  machtileStationReportHoldButton?.classList.remove("is-holding");
+  machtileStationReportHoldButton = null;
 }
 document.addEventListener("pointerdown", (event) => {
   const button = event.target.closest?.("[data-station-report-confirm],[data-station-report-preview-ack]");
   if (!button || button.disabled) return;
   machtileCancelStationReportHold();
+  machtileStationReportHoldButton = button;
+  button.classList.add("is-holding");
   machtileStationReportHoldTimer = setTimeout(() => {
     machtileStationReportHoldTimer = null;
     if (!button.isConnected || button.disabled) return;
     if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
     else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
-  }, 1000);
+  }, MACHTILE_STATION_REPORT_HOLD_MS);
 });
 for (const eventName of ["pointerup", "pointercancel"]) {
   document.addEventListener(eventName, machtileCancelStationReportHold, true);
@@ -23524,12 +23672,14 @@ document.addEventListener("keydown", (event) => {
   if (!button || button.disabled) return;
   event.preventDefault();
   machtileCancelStationReportHold();
+  machtileStationReportHoldButton = button;
+  button.classList.add("is-holding");
   machtileStationReportHoldTimer = setTimeout(() => {
     machtileStationReportHoldTimer = null;
     if (!button.isConnected || button.disabled) return;
     if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
     else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
-  }, 1000);
+  }, MACHTILE_STATION_REPORT_HOLD_MS);
 });
 document.addEventListener("keyup", (event) => {
   if (["Enter", " "].includes(event.key)) machtileCancelStationReportHold();
@@ -24253,8 +24403,9 @@ function bindEvents() {
 
   $("#reportForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    machtileClearReportSubmitError();
     if (!selectedOrder) {
-      showToast("此機台尚未指派工單，請先由主管排入工單。");
+      machtileShowReportSubmitError("此機台尚未指派工單，請先由主管排入工單。");
       return;
     }
     const smartReportAllowlisted = ["noon", "finish"].includes(activeReportType)
@@ -24265,21 +24416,23 @@ function bindEvents() {
         machtileBatchState.stationReportSettings.machines, selectedOrder.machine
       );
     if (smartReportAllowlisted && !smartReportExplicitlyDisabled) {
-      showToast(machtileSingleStationReportActive()
-        ? "此機台須先在智慧報工區預覽，再長按確認送出。"
-        : "智慧報工 guard 尚未載入；本次未送出任何報工。");
+      if (machtileSingleStationReportActive()) {
+        await machtileStationReportSubmitPreview(String(selectedOrder.machine || "").trim().toUpperCase());
+      } else {
+        machtileShowReportSubmitError("智慧報工 guard 尚未載入；本次未送出任何報工。");
+      }
       return;
     }
     const validationMessage = validateReportForm(activeReportType);
     if (validationMessage) {
-      showToast(validationMessage);
+      machtileShowReportSubmitError(validationMessage);
       return;
     }
     // F-2（2026-09-02）：站別帳號登入時，沒選到有對照的真人就不讓送出——
     // 否則產值會掛在機台上，而且回寫 feed 也會把整筆擋下（F-3=A）。
     const operatorMessage = machtileValidateOperatorSelection(selectedOrder.machine);
     if (operatorMessage) {
-      showToast(operatorMessage);
+      machtileShowReportSubmitError(operatorMessage);
       return;
     }
     // 開了「開工／停工」的機台（owner 2026-10-08「先修」）：同一道今天已有排入待送的今日開工 → 不送第二筆
@@ -24287,17 +24440,17 @@ function bindEvents() {
     if (activeReportType === "dailyStart" && selectedOrder.processId && machtileStationCmdActiveFor(selectedOrder.machine)) {
       const already = await machtileDailyStartExistsToday(selectedOrder.processId);
       if (already === "server") {
-        showToast(machtileStationCmdCore.DAILY_START_ALREADY_TEXT);
+        machtileShowReportSubmitError(machtileStationCmdCore.DAILY_START_ALREADY_TEXT);
         return;
       }
       if (already === "unknown") {   // 讀不到伺服器 → 不能確定今天沒有，不送
-        showToast(machtileStationCmdCore.DAILY_START_UNREADABLE_TEXT);
+        machtileShowReportSubmitError(machtileStationCmdCore.DAILY_START_UNREADABLE_TEXT);
         return;
       }
       if (already === "outbox" || already === "pending") {
         const queued = already === "pending" ? { qty: machtileDailyStartQueueFor(selectedOrder.processId)?.snap.qty }
           : await machtileOutboxPendingDailyStart(selectedOrder.processId);
-        showToast(machtileStationCmdCore.dailyStartBlockedText(queued?.qty));
+        machtileShowReportSubmitError(machtileStationCmdCore.dailyStartBlockedText(queued?.qty));
         return;
       }
     }
