@@ -295,6 +295,14 @@
     "value": "Không tải được danh sách chờ. Vui lòng làm mới.",
     "_draft": true
   },
+  "pool_refreshing": {
+    "value": "Đang cập nhật…",
+    "_draft": true
+  },
+  "pool_refresh_failed_stale": {
+    "value": "Danh sách có thể chưa mới nhất (cập nhật thất bại, hãy thử mở lại).",
+    "_draft": true
+  },
   "pool_empty": {
     "value": "Hiện không có công đoạn chờ nhận trong cùng bộ phận.",
     "_draft": true

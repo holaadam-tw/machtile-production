@@ -11395,26 +11395,60 @@ function machtileCloseCardSelection() {
 // 派工待做池第 2 步（2026-10-07）：Factory 課別待做池「待接／退回待接」的工序（派工橋 → dispatch_pool_items）。
 // RLS 已限同租戶＋自己的課別；這裡再依機台卡課別只列同課。接單另受機台 allowlist、空閒與 eligible list 三道 gate。
 const machtileDispatchPoolCore = typeof window === "undefined" ? null : window.MachTileDispatchPoolCore;
-const machtileDispatchPoolState = { status: "idle", items: [], error: "", claimBusy: "", claimMessage: "" };
+const MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS = 10_000;
+const machtileDispatchPoolState = {
+  status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(), requestSequence: 0,
+};
 
-async function machtileLoadDispatchPool() {
+async function machtileLoadDispatchPool({ preserveItemsOnFailure = false } = {}) {
+  const requestSequence = ++machtileDispatchPoolState.requestSequence;
+  const isLatestRequest = () => requestSequence === machtileDispatchPoolState.requestSequence;
   if (!machtileStrictMode() || !machtileDispatchPoolCore) {
-    Object.assign(machtileDispatchPoolState, { status: "idle", items: [], error: "" });
+    if (isLatestRequest()) Object.assign(machtileDispatchPoolState, { status: "idle", items: [], error: "" });
     return;
   }
   try {
     const rows = await supabaseFetch("dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name,part_no,part_name,quantity,due_date,planned_start,urgency,department_code,eligible_machine_codes,source_status,synced_at&status=eq.waiting&order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast,work_order_no.asc,process_order.asc&limit=500");
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items response invalid");
-    Object.assign(machtileDispatchPoolState, { status: "ready", items: rows, error: "" });
+    if (isLatestRequest()) Object.assign(machtileDispatchPoolState, { status: "ready", items: rows, error: "" });
   } catch (error) {
-    // 表還沒建（migration 未套）＝不顯示這一段；其他錯誤顯示一行，不影響其他功能。絕不沿用舊清單。
-    if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
+    if (!isLatestRequest()) return;
+    // 初次載入失敗不顯示舊資料；打開選單的背景更新失敗則保留畫面上的既有清單。
+    if (!preserveItemsOnFailure && /^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
       Object.assign(machtileDispatchPoolState, { status: "missing", items: [], error: "" });
       return;
     }
     console.warn("dispatch pool unavailable", error);
-    Object.assign(machtileDispatchPoolState, { status: "error", items: [], error: machtileTranslate("pool_load_error") });
+    if (!preserveItemsOnFailure) {
+      Object.assign(machtileDispatchPoolState, { status: "error", items: [], error: machtileTranslate("pool_load_error") });
+      return;
+    }
+    throw error;
   }
+}
+
+function machtileDispatchPoolOpenRefreshState(machine) {
+  const machineCode = String(machine?.code || machine?.name || "");
+  return machtileDispatchPoolState.openRefreshByMachine.get(machineCode) || null;
+}
+
+function machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly) {
+  const code = String(machineCode || "");
+  if (!code || !machtileStrictMode() || !machtileDispatchPoolCore) return null;
+  const now = Date.now();
+  const previous = machtileDispatchPoolState.openRefreshByMachine.get(code);
+  if (previous?.promise || (previous && now - previous.startedAt < MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS)) return previous?.promise || null;
+  const refresh = { startedAt: now, status: "loading", promise: null };
+  machtileDispatchPoolState.openRefreshByMachine.set(code, refresh);
+  refresh.promise = machtileLoadDispatchPool({ preserveItemsOnFailure: true })
+    .then(() => { refresh.status = "ready"; })
+    .catch(() => { refresh.status = "error"; })
+    .finally(() => {
+      refresh.promise = null;
+      const holder = document.getElementById("machtileCardSelection");
+      if (holder?.dataset.machineCode === code) machtileOpenCardSelection(code, { poolOnly, refreshPool: false });
+    });
+  return refresh.promise;
 }
 
 function machtileDispatchPoolForMachine(machine) {
@@ -11433,6 +11467,10 @@ function machtileDispatchPoolSectionMarkup(machine) {
   const pool = machtileDispatchPoolForMachine(machine);
   const synced = core.latestSyncedAt(pool.items);
   const canRelease = core.canRelease(machtileDepartmentAccess?.role || machtileAuthState.role);
+  const openRefresh = machtileDispatchPoolOpenRefreshState(machine);
+  const refreshMessage = openRefresh?.status === "loading"
+    ? machtileTranslate("pool_refreshing")
+    : openRefresh?.status === "error" ? machtileTranslate("pool_refresh_failed_stale") : "";
   const items = pool.items.map(item => {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
@@ -11455,7 +11493,33 @@ function machtileDispatchPoolSectionMarkup(machine) {
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
     : pool.department ? `<li>${escapeHtml(machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
   return `<h3>${escapeHtml(machtileTranslate("dispatch_pool_same_department"))}</h3><p class="pool-note">${escapeHtml(machtileTranslate("pool_note"))}${synced ? ` ${escapeHtml(machtileTranslate("data_time", { time: synced }))}` : ""}</p>
+    ${refreshMessage ? `<p data-pool-refresh-status role="status">${escapeHtml(refreshMessage)}</p>` : ""}
     <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
+}
+
+function machtileUpdateDispatchPoolSelection(machineCode) {
+  const holder = document.getElementById("machtileCardSelection");
+  if (!holder || holder.dataset.machineCode !== String(machineCode || "")
+    || holder.dataset.pending === "true" || machtileDispatchPoolState.claimBusy) return false;
+  const machine = machtileScheduleMachine(machineCode);
+  const currentList = holder.querySelector("[data-card-selection-pool]");
+  if (!machine || !currentList) return false;
+  const next = document.createElement("div");
+  next.innerHTML = machtileDispatchPoolSectionMarkup(machine);
+  const nextList = next.querySelector("[data-card-selection-pool]");
+  if (!nextList) return false;
+  currentList.innerHTML = nextList.innerHTML;
+  for (const selector of ["[data-pool-refresh-status]", "[data-pool-claim-message]"]) {
+    const currentStatus = holder.querySelector(selector);
+    const nextStatus = next.querySelector(selector);
+    if (currentStatus && nextStatus) currentStatus.replaceWith(nextStatus);
+    else if (currentStatus) currentStatus.remove();
+    else if (nextStatus) {
+      if (selector.includes("refresh")) currentList.before(nextStatus);
+      else currentList.after(nextStatus);
+    }
+  }
+  return true;
 }
 
 async function machtileClaimDispatchPool(sourceKey, machineCode) {
@@ -11481,7 +11545,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   } finally {
     machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
-    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
   }
 }
 
@@ -11503,7 +11567,7 @@ async function machtileReleaseDispatchPoolClaim(sourceKey) {
     await machtileLoadDispatchPool();
   } finally {
     machtileDispatchPoolState.claimBusy = "";
-    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
   }
 }
 
@@ -11549,11 +11613,17 @@ function machtileCardPoolEntryMarkup(machine) {
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }
 
-function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
+function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true } = {}) {
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
+  const current = document.getElementById("machtileCardSelection");
+  if (!refreshPool && current?.dataset.machineCode === String(machineCode || "")) {
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
   machtileCloseCardSelection();
+  if (refreshPool) machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly);
   const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
   let selectionMarkup = "";
   if (!poolOnly) {
@@ -11565,6 +11635,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false } = {}) {
   const holder = document.createElement("div");
   holder.id = "machtileCardSelection";
   holder.className = "card-selection-overlay";
+  holder.dataset.machineCode = String(machineCode || "");
   holder.innerHTML = `<section class="card-selection-panel" role="dialog" aria-modal="true" aria-labelledby="cardSelectionTitle">
     <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(poolOnly ? "dispatch_pool_title" : "select_work_order"))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
     ${selectionMarkup}
@@ -11602,6 +11673,7 @@ async function machtileCommitCardSelection(machineCode, processId) {
     errorBox.textContent = machtileWoErrorText(error);
   } finally {
     holder.dataset.pending = "false";
+    machtileUpdateDispatchPoolSelection(machineCode);
     // 待做池的「接這張」第 2 步一律不可按：解除鎖定時不能把它打開。
     holder.querySelectorAll("button").forEach(button => { button.disabled = button.hasAttribute("data-pool-claim"); });
   }
