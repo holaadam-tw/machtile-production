@@ -474,5 +474,13 @@
   "report_fail_reason_note_label": {
     "value": "Giải thích lý do khác",
     "_draft": true
+  },
+  "preview_and_submit": {
+    "value": "Xem trước và gửi",
+    "_draft": true
+  },
+  "reload_guard_config": {
+    "value": "Tải lại cấu hình",
+    "_draft": true
   }
 }

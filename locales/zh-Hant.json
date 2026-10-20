@@ -133,6 +133,8 @@
   "required": "必填",
   "optional": "選填",
   "submit_report": "送出報工",
+  "preview_and_submit": "預覽並送出",
+  "reload_guard_config": "重新載入設定",
   "pause_work": "暫停加工",
   "open_camera": "開啟相機拍照",
   "no_photo": "尚未拍照",
