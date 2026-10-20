@@ -11397,19 +11397,22 @@ function machtileCloseCardSelection() {
 const machtileDispatchPoolCore = typeof window === "undefined" ? null : window.MachTileDispatchPoolCore;
 const MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS = 10_000;
 const machtileDispatchPoolState = {
-  status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(),
+  status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(), requestSequence: 0,
 };
 
 async function machtileLoadDispatchPool({ preserveItemsOnFailure = false } = {}) {
+  const requestSequence = ++machtileDispatchPoolState.requestSequence;
+  const isLatestRequest = () => requestSequence === machtileDispatchPoolState.requestSequence;
   if (!machtileStrictMode() || !machtileDispatchPoolCore) {
-    Object.assign(machtileDispatchPoolState, { status: "idle", items: [], error: "" });
+    if (isLatestRequest()) Object.assign(machtileDispatchPoolState, { status: "idle", items: [], error: "" });
     return;
   }
   try {
     const rows = await supabaseFetch("dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name,part_no,part_name,quantity,due_date,planned_start,urgency,department_code,eligible_machine_codes,source_status,synced_at&status=eq.waiting&order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast,work_order_no.asc,process_order.asc&limit=500");
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items response invalid");
-    Object.assign(machtileDispatchPoolState, { status: "ready", items: rows, error: "" });
+    if (isLatestRequest()) Object.assign(machtileDispatchPoolState, { status: "ready", items: rows, error: "" });
   } catch (error) {
+    if (!isLatestRequest()) return;
     // 初次載入失敗不顯示舊資料；打開選單的背景更新失敗則保留畫面上的既有清單。
     if (!preserveItemsOnFailure && /^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
       Object.assign(machtileDispatchPoolState, { status: "missing", items: [], error: "" });
@@ -11494,6 +11497,31 @@ function machtileDispatchPoolSectionMarkup(machine) {
     <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
 }
 
+function machtileUpdateDispatchPoolSelection(machineCode) {
+  const holder = document.getElementById("machtileCardSelection");
+  if (!holder || holder.dataset.machineCode !== String(machineCode || "")
+    || holder.dataset.pending === "true" || machtileDispatchPoolState.claimBusy) return false;
+  const machine = machtileScheduleMachine(machineCode);
+  const currentList = holder.querySelector("[data-card-selection-pool]");
+  if (!machine || !currentList) return false;
+  const next = document.createElement("div");
+  next.innerHTML = machtileDispatchPoolSectionMarkup(machine);
+  const nextList = next.querySelector("[data-card-selection-pool]");
+  if (!nextList) return false;
+  currentList.innerHTML = nextList.innerHTML;
+  for (const selector of ["[data-pool-refresh-status]", "[data-pool-claim-message]"]) {
+    const currentStatus = holder.querySelector(selector);
+    const nextStatus = next.querySelector(selector);
+    if (currentStatus && nextStatus) currentStatus.replaceWith(nextStatus);
+    else if (currentStatus) currentStatus.remove();
+    else if (nextStatus) {
+      if (selector.includes("refresh")) currentList.before(nextStatus);
+      else currentList.after(nextStatus);
+    }
+  }
+  return true;
+}
+
 async function machtileClaimDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
   const holder = document.getElementById("machtileCardSelection");
@@ -11517,7 +11545,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   } finally {
     machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
-    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
   }
 }
 
@@ -11539,7 +11567,7 @@ async function machtileReleaseDispatchPoolClaim(sourceKey) {
     await machtileLoadDispatchPool();
   } finally {
     machtileDispatchPoolState.claimBusy = "";
-    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule() });
+    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
   }
 }
 
@@ -11589,6 +11617,11 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
+  const current = document.getElementById("machtileCardSelection");
+  if (!refreshPool && current?.dataset.machineCode === String(machineCode || "")) {
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
   machtileCloseCardSelection();
   if (refreshPool) machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly);
   const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
@@ -11640,6 +11673,7 @@ async function machtileCommitCardSelection(machineCode, processId) {
     errorBox.textContent = machtileWoErrorText(error);
   } finally {
     holder.dataset.pending = "false";
+    machtileUpdateDispatchPoolSelection(machineCode);
     // 待做池的「接這張」第 2 步一律不可按：解除鎖定時不能把它打開。
     holder.querySelectorAll("button").forEach(button => { button.disabled = button.hasAttribute("data-pool-claim"); });
   }
