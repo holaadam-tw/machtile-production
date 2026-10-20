@@ -40,6 +40,7 @@ let guardFails = false;
 let guardEnabled = true;
 let finishButtonEnabled = true;
 let finalSubmitFails = false;
+let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
 let closeCommand = null;
 const browser = await chromium.launch();
@@ -62,6 +63,7 @@ await context.route("**/*", async route => {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
         return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "response lost" }) });
       }
+      if (!body.p_preview && finalSubmitDelayMs) await new Promise(resolve => setTimeout(resolve, finalSubmitDelayMs));
       return json(body.p_preview
         ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: { ...previewResult, command_uuid: body.p_command_uuid } }
         : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty });
@@ -180,6 +182,7 @@ await page.waitForTimeout(700);
 assert.equal(calls.commands.filter(command => !command.p_preview).length, 0, "releasing before 0.8 seconds sends no report command");
 assert.equal(await confirm.evaluate(button => button.classList.contains("is-holding")), false, "released hold clears its progress");
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
+finalSubmitDelayMs = 300;
 await page.waitForTimeout(900);
 assert.equal(calls.commands.filter(command => !command.p_preview).length, 1, "0.8-second hold sends one final report command");
 const finalCommand = calls.commands.find(command => !command.p_preview);
@@ -188,7 +191,10 @@ assert.equal(finalCommand.p_good_qty, 38);
 assert.equal(finalCommand.p_fail_qty, 2);
 assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "true", "confirmation closes the report sheet immediately");
 assert.match(await page.locator("#toast").innerText(), /已送出，工廠寫入中|工廠已完成寫入/, "background submission gives immediate or completed feedback");
+await page.evaluate(() => { selectedOrder = { id: "OTHER-WO", processId: "other-process", machine: "A01" }; });
+await page.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"));
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
+assert.equal(calls.reports[0].process_id, processId, "switching machines during background submit still records the originally submitted order");
 assert.equal(calls.reports[0].completed_qty, 38);
 assert.equal(calls.reports[0].defect_qty, 2);
 assert.equal(calls.reports[0].report_payload.fail_reason_code, "尺寸不良", "A04 production report payload preserves the smart-report fail reason");
@@ -196,6 +202,9 @@ const happyUuid = finalCommand.p_command_uuid;
 await page.evaluate(() => machtileRecordSingleStationProductionReport("A04", machtileBatchRow("A04").stationReport.args));
 assert.equal(calls.reports.length, 1, "same successful command_uuid does not duplicate production_reports");
 assert.equal(calls.reports[0].report_uuid, happyUuid);
+assert.equal(await page.locator("#stationReportBackgroundStatus").isVisible(), true, "successful background status remains visible before its five-second timeout");
+await page.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.hidden, null, { timeout: 6000 });
+finalSubmitDelayMs = 0;
 await page.screenshot({ path: path.join(shots, "20261013-single-station-smart-report-800px.png"), fullPage: true });
 
 await page.close();
@@ -292,7 +301,7 @@ assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
 assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "true", "finish confirmation closes immediately while factory work continues");
-assert.equal(await finishValidation.locator("#stationReportBackgroundStatus").isHidden(), true, "successful background finish clears the persistent status");
+assert.match(await finishValidation.locator("#stationReportBackgroundStatus").innerText(), /工廠已完成寫入/, "successful background finish shows a temporary completion status");
 await finishValidation.close();
 
 finishButtonEnabled = false;
@@ -335,6 +344,9 @@ const reconcileConfirm = reconcile.locator('#singleStationReportPanel [data-stat
 await reconcileConfirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
 await reconcile.waitForFunction(() => document.querySelector('#stationReportBackgroundStatus.is-error:not([hidden])'), null, { timeout: 5000 });
 assert.match(await reconcile.locator("#stationReportBackgroundStatus").innerText(), /套用結果尚未確認|response lost|請勿重送/, "background failure remains as a visible red persistent warning");
+assert.equal(await reconcile.locator("[data-station-report-background-dismiss]").innerText(), "知道了", "background failure offers an explicit dismiss action");
+await reconcile.locator("[data-station-report-background-dismiss]").click();
+assert.equal(await reconcile.locator("#stationReportBackgroundStatus").isHidden(), true, "知道了 closes the persistent red warning");
 const reconcileReportsBefore = calls.reports.length;
 const reconcileCommandsBefore = calls.commands.length;
 await reconcile.evaluate(() => machtileStationReportReconcile("A04"));

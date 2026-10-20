@@ -22671,6 +22671,26 @@ async function machtileStationReportSubmitPreview(code) {
   machtileRenderStationReportSurfaces();
 }
 
+let machtileStationReportBackgroundTimer = null;
+function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0 } = {}) {
+  const notice = document.getElementById("stationReportBackgroundStatus");
+  if (!notice) return;
+  if (machtileStationReportBackgroundTimer) clearTimeout(machtileStationReportBackgroundTimer);
+  machtileStationReportBackgroundTimer = null;
+  const text = notice.querySelector("[data-station-report-background-message]");
+  const dismiss = notice.querySelector("[data-station-report-background-dismiss]");
+  if (text) text.textContent = message;
+  notice.classList.toggle("is-error", error);
+  if (dismiss) dismiss.hidden = !error;
+  notice.hidden = !message;
+  if (message && autoHideMs > 0) {
+    machtileStationReportBackgroundTimer = setTimeout(() => {
+      notice.hidden = true;
+      machtileStationReportBackgroundTimer = null;
+    }, autoHideMs);
+  }
+}
+
 async function machtileStationReportSubmitFinal(code) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
@@ -22679,7 +22699,8 @@ async function machtileStationReportSubmitFinal(code) {
   let snapshot;
   try { snapshot = core.buildClientGuardSnapshot(flow.preview); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
-  const context = machtileStationReportContext(machtileStationReportOrderForCode(code), code);
+  const order = machtileStationReportOrderForCode(code);
+  const context = machtileStationReportContext(order, code);
   if (!context) { flow.error = "工序識別資料不完整；已阻擋正式送出。"; machtileRenderStationReportSurfaces(); return; }
   let args;
   try {
@@ -22687,27 +22708,20 @@ async function machtileStationReportSubmitFinal(code) {
       reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
-  const background = document.getElementById("stationReportBackgroundStatus");
-  if (background) {
-    background.classList.remove("is-error");
-    background.textContent = "已送出，工廠寫入中";
-    background.hidden = false;
-  }
+  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");
   closeReport();
   showToast("已送出，工廠寫入中");
-  machtileStationReportSendFinal(code, args, { background: true }).catch((error) => {
-    const notice = document.getElementById("stationReportBackgroundStatus");
-    if (notice) {
-      notice.classList.add("is-error");
-      notice.textContent = `工廠寫入結果未確認：${error?.message || error}。請勿重複報工並通知主管。`;
-      notice.hidden = false;
-    }
+  machtileStationReportSendFinal(code, args, { background: true, order }).catch((error) => {
+    machtileSetStationReportBackgroundStatus(
+      `工廠寫入結果未確認：${error?.message || error}。請勿重複報工並通知主管。`,
+      { error: true },
+    );
   });
 }
 
-async function machtileRecordSingleStationProductionReport(code, args) {
+async function machtileRecordSingleStationProductionReport(code, args, submittedOrder = null) {
   const row = machtileBatchRow(code);
-  const order = machtileSingleStationReportOrder(code);
+  const order = submittedOrder || machtileSingleStationReportOrder(code);
   const flow = machtileStationReportState(row);
   const resultKind = machtileStationReportCore()?.resultCard(row.stationReport?.result)?.kind;
   const commandUuid = args.p_command_uuid;
@@ -22761,7 +22775,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   }
   let followUpFailed = false;
   try {
-    await machtileRecordSingleStationProductionReport(code, args);
+    await machtileRecordSingleStationProductionReport(code, args, options.order);
     await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
   } catch (error) {
     followUpFailed = true;
@@ -22771,12 +22785,13 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     const background = document.getElementById("stationReportBackgroundStatus");
     const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
     if (applied && !followUpFailed) {
-      if (background) background.hidden = true;
+      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
       showToast("工廠已完成寫入");
     } else if (background) {
-      background.classList.add("is-error");
-      background.textContent = flow.error || "工廠寫入失敗，請勿重複報工並通知主管。";
-      background.hidden = false;
+      machtileSetStationReportBackgroundStatus(
+        flow.error || "工廠寫入失敗，請勿重複報工並通知主管。",
+        { error: true },
+      );
     }
   }
   machtileRenderStationReportSurfaces();
@@ -23563,6 +23578,10 @@ async function machtileSubmitBatchReport() {
 }
 
 function machtileHandleBatchClick(event) {
+  if (event.target.closest("[data-station-report-background-dismiss]")) {
+    machtileSetStationReportBackgroundStatus("");
+    return true;
+  }
   const commandRetry = event.target.closest("[data-batch-command-retry]");
   if (commandRetry) { machtileBatchRetryStationCommand(commandRetry.dataset.batchCommandRetry); return true; }
   const commandType = event.target.closest("[data-batch-command-type]");
