@@ -31,7 +31,7 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], dispatchPoolMachines = [], claimWinner = '', claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
+let checks = 0, poolMode = 'rows', poolQueries = [], poolResponseRows = poolRows, poolDelayMs = 0, dispatchPoolMachines = [], claimWinner = '', claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -86,8 +86,9 @@ async function openApp(role, width) {
       if (poolMode === 'missing') return json(404, { code: 'PGRST205', message: "Could not find the table 'public.dispatch_pool_items' in the schema cache" });
       if (poolMode === 'error') return json(503, { message: 'fixture pool unavailable' });
       if (poolMode === 'empty') return json(200, []);
+      if (poolDelayMs && u.searchParams.get('status') === 'eq.waiting') await new Promise(resolve => setTimeout(resolve, poolDelayMs));
       // Server RLS: same tenant AND the caller's departments.
-      return json(200, poolRows.filter(r => !claimWinner || r.source_key !== '01|TESTNEED0001|TEST-SIM-1').filter(r => access.all_departments || access.department_codes.includes(r.department_code)));
+      return json(200, poolResponseRows.filter(r => !claimWinner || r.source_key !== '01|TESTNEED0001|TEST-SIM-1').filter(r => access.all_departments || access.department_codes.includes(r.department_code)));
     }
     if (req.method() !== 'GET' && !['/rest/v1/rpc/batch_report_progress', '/rest/v1/rpc/machine_department_context'].includes(p)) mutations.push(p);
     if (p === '/auth/v1/user') return json(200, { id: auth, email: 'user@test.invalid' });
@@ -120,6 +121,38 @@ try {
   const configVersion = rolloutVersions.get('config.js');
   ok(Boolean(configVersion) && rolloutIndex.includes(`config.js?v=${configVersion}`), 'rollout config cache key matches index.html');
   ok(['app.js', 'i18n.js', 'styles.css'].every(asset => new RegExp(`${asset.replace(".", "\\.")}\\?v=[^\"\\s]+`).test(rolloutIndex)), 'return-state app, translations, and styles have cache keys');
+  // Opening the selector keeps stale rows visible, sends one background GET, and updates in place.
+  // Reopening while that request is active or within ten seconds must not send another GET.
+  poolMode = 'rows'; poolQueries = []; poolResponseRows = poolRows; poolDelayMs = 120;
+  access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  {
+    const { ctx, page } = await openApp('planner', 1440);
+    poolResponseRows = poolRows.filter(row => row.source_key !== '01|TESTNEED0002|TEST-SIM-2');
+    const readsBefore = poolQueries.filter(q => q.includes('status=eq.waiting')).length;
+    await page.locator('[data-card-select-open="A01"]').click();
+    ok((await page.locator('[data-pool-refresh-status]').innerText()).includes('更新中') && await page.locator('[data-pool-key="01|TESTNEED0002|TEST-SIM-2"]').count() === 1, 'open refresh: old rows remain visible with updating status');
+    await page.locator('[data-close-card-selection]').click();
+    await page.locator('[data-card-select-open="A01"]').click();
+    await page.waitForFunction(() => !document.querySelector('[data-pool-refresh-status]'));
+    const readsAfter = poolQueries.filter(q => q.includes('status=eq.waiting')).length;
+    ok(readsAfter === readsBefore + 1 && await page.locator('[data-pool-key="01|TESTNEED0002|TEST-SIM-2"]').count() === 0, 'open refresh: one in-flight GET updates the still-open list in place');
+    await page.locator('[data-close-card-selection]').click();
+    await page.locator('[data-card-select-open="A01"]').click();
+    await page.waitForTimeout(150);
+    ok(poolQueries.filter(q => q.includes('status=eq.waiting')).length === readsAfter, 'open refresh: same machine is debounced for ten seconds');
+    await ctx.close();
+  }
+  poolMode = 'rows'; poolQueries = []; poolResponseRows = poolRows; poolDelayMs = 0;
+  {
+    const { ctx, page } = await openApp('planner', 1440);
+    poolMode = 'error';
+    await page.locator('[data-card-select-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-pool-refresh-status]')?.textContent.includes('清單可能不是最新'));
+    ok(await page.locator('[data-pool-key]').count() === 2, 'open refresh failure: old rows remain visible');
+    ok((await page.locator('[data-pool-refresh-status]').innerText()).includes('更新失敗，可再按一次'), 'open refresh failure: stale-list retry message is visible');
+    await ctx.close();
+  }
+  poolMode = 'rows'; poolQueries = []; poolResponseRows = poolRows; poolDelayMs = 0;
   for (const width of [1440, 390]) {
     poolMode = 'rows'; poolQueries = [];
     access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
