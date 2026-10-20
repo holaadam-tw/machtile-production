@@ -22505,6 +22505,8 @@ async function machtileStationReportSubmitPreview(code) {
   const order = machtileStationReportOrderForCode(code);
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
+  // A timed-out preview must be retried with the same command_uuid, never re-minted.
+  if (flow.phase === "preview-timeout") { await machtileStationReportRetryPreview(code); return; }
   const context = machtileStationReportContext(order, code);
   const block = (message) => {
     flow.error = message;
@@ -22621,7 +22623,14 @@ async function machtileStationReportSubmitFinal(code) {
   }
   closeReport();
   showToast("已送出，工廠寫入中");
-  void machtileStationReportSendFinal(code, args, { background: true });
+  machtileStationReportSendFinal(code, args, { background: true }).catch((error) => {
+    const notice = document.getElementById("stationReportBackgroundStatus");
+    if (notice) {
+      notice.classList.add("is-error");
+      notice.textContent = `工廠寫入結果未確認：${error?.message || error}。請勿重複報工並通知主管。`;
+      notice.hidden = false;
+    }
+  });
 }
 
 async function machtileRecordSingleStationProductionReport(code, args) {
@@ -22678,12 +22687,18 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
       ? "智慧報工後端尚未同步；未建立正式報工。"
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
-  await machtileRecordSingleStationProductionReport(code, args);
-  await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
+  let followUpFailed = false;
+  try {
+    await machtileRecordSingleStationProductionReport(code, args);
+    await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
+  } catch (error) {
+    followUpFailed = true;
+    flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
+  }
   if (options.background) {
     const background = document.getElementById("stationReportBackgroundStatus");
     const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
-    if (applied) {
+    if (applied && !followUpFailed) {
       if (background) background.hidden = true;
       showToast("工廠已完成寫入");
     } else if (background) {
