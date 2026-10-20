@@ -45,6 +45,7 @@
   // 送出 RPC 的逾時（逾時走「不知道有沒有送到」的路，uuid 不變）
   const SUBMIT_TIMEOUT_MS = 20 * 1000;
   const SUBMIT_RPC = "machtile_submit_station_command";
+  const REPLACE_STOPPED_RPC = "machtile_submit_replace_stopped_command";
   const MISSING_PART_NO = "未提供";
 
   function normCode(value) {
@@ -272,7 +273,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, poolItemId } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, poolItemId, replaceStopped } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -296,6 +297,7 @@
     if (commandType === "claim_next") {
       if (!text(poolItemId)) throw new Error("NO_POOL_ITEM_ID");
       payload.p_pool_item_id = text(poolItemId);
+      if (replaceStopped === true) payload.p_replace_stopped = true;
       payload.p_expected_simulation_id = null;
     }
     return payload;
@@ -368,6 +370,9 @@
 
   // 工廠回的拒絕代碼（finish rejected）＋伺服器保留碼（EXPIRED、MANUAL_RELEASED）
   const REJECT_TEXT = Object.freeze({
+    REPLACE_STOPPED_FORBIDDEN: "只有管理員或經理可以改掛已停機工單。",
+    REPLACE_STOPPED_NOT_STOPPED: "機台必須先停機，才能改掛工單。",
+    REPLACE_STOPPED_ALREADY_REPORTED: "這張單已有報工，請先處理。",
     ORDER_MISMATCH: "舊 MES 這台現在不是這張工單（或不是這一道）。請找生管確認；App 不會幫你換單。",
     STATION_NOT_SET: "舊 MES 這台還沒設定工單，請找生管。",
     OPERATOR_NOT_SET: "舊 MES 這台還沒設定好作業員，請找生管。",
@@ -672,7 +677,7 @@
 
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
-    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
+    SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
     SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,

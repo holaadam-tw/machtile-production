@@ -360,7 +360,10 @@ eq("沒有 next_step 不自行推論", c.standardFinishNextStep({ legacy_snapsho
 eq("null 數量與總道數保持 null（不誤顯示 0）", c.standardFinishNextStep({ legacy_snapshot: { next_step: { case: "last_step", available_qty: null, plan_qty: null, total_steps: null } } }), { case: "last_step", nextIndexSn: null, nextName: null, className: null, canClaimHere: false, poolItemId: null, availableQty: null, planQty: null, totalSteps: null });
 eq("解析總道數供組合確認文案使用", c.standardFinishNextStep({ legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, total_steps: 8 } } }).totalSteps, 8);
 const claimPayload = c.submitPayload({ commandUuid: UUID, commandType: "claim_next", machineCode: "a04", orderNo: order.id, step: 6, partNo: "HCG-06-01", poolItemId: "sid|nid|sim" });
-eq("claim_next payload 契約", claimPayload, { p_command_uuid: UUID, p_command_type: "claim_next", p_machine_code: "A04", p_expected_order_no: order.id, p_expected_index_sn: 6, p_expected_part_no: "HCG-06-01", p_manufacture_ii_id: null, p_pool_item_id: "sid|nid|sim", p_expected_simulation_id: null });
+eq("claim_next payload 契約（既有 RPC 不增加參數）", claimPayload, { p_command_uuid: UUID, p_command_type: "claim_next", p_machine_code: "A04", p_expected_order_no: order.id, p_expected_index_sn: 6, p_expected_part_no: "HCG-06-01", p_manufacture_ii_id: null, p_pool_item_id: "sid|nid|sim", p_expected_simulation_id: null });
+eq("改掛 payload 明確帶 true", c.submitPayload({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", replaceStopped: true }).p_replace_stopped, true);
+eq("改掛使用獨立權限收斂 RPC", c.REPLACE_STOPPED_RPC, "machtile_submit_replace_stopped_command");
+eq("已有報工拒絕文案固定", c.REJECT_TEXT.REPLACE_STOPPED_ALREADY_REPORTED, "這張單已有報工，請先處理。");
 throws("claim_next 沒 pool id 擋下", () => c.submitPayload({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6 }), "NO_POOL_ITEM_ID");
 const claimApplied = c.statusView({ status: "applied", legacy_snapshot: { claim_next: { claimed: true, can_start: true, machine_code: "A04", pool_item_id: "sid|nid|sim" } } }, "claim_next", 0);
 eq("claim applied 只有 server can_start 才開工", [claimApplied.phase, claimApplied.claimNext.canStart], ["applied", true]);
