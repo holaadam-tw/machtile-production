@@ -45,7 +45,8 @@ eq("作業員：可做清單有本機的照 owner 排序", c.itemsForMachine(poo
 eq("沒給 options＝生管：全部同課照列", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A05" }).items.length, 2);
 
 console.log("== claim（旗標＋空閒＋eligible）==");
-eq("RPC 參數只帶一張單與一台機", c.claimArgs(" pool-1 ", " A01 "), { p_source_key: "pool-1", p_machine_code: "A01" });
+eq("既有接單 RPC 不增加參數", c.claimArgs(" pool-1 ", " A01 "), { p_source_key: "pool-1", p_machine_code: "A01" });
+eq("改掛 RPC 明確送 true", c.claimArgs("pool-1", "A04", true), { p_source_key: "pool-1", p_machine_code: "A04", p_replace_stopped: true });
 eq("只有 admin/planner 可釋放，不含 operator/manager", ["operator", "manager", "planner", "admin"].map(c.canRelease), [false, false, true, true]);
 eq("釋放 RPC 只帶 source key", c.releaseArgs(" pool-1 "), { p_source_key: "pool-1" });
 eq("只有 planner/admin 可退回", ["operator", "manager", "planner", "admin"].map(c.canReturn), [false, false, true, true]);
@@ -55,6 +56,11 @@ eq("忙機不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { 
 eq("已有工單不能接", c.claimState(item({ eligible_machine_codes: ["A01"] }), { machineCode: "A01", status: "idle", hasOrder: true }, ["A01"]), { enabled: false, reason: "機台不是空閒狀態" });
 eq("不在 eligible list 不能接", c.claimState(item({ eligible_machine_codes: ["A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01"]), { enabled: false, reason: "此機台不在可做清單" });
 eq("pilot 空閒 eligible 可接", c.claimState(item({ eligible_machine_codes: ["A01", "A03"] }), { machineCode: "A01", status: "idle", hasOrder: false }, ["A01", "A03"]), { enabled: true, reason: "" });
+const stopped = { machineCode: "A04", status: "paused", hasOrder: true, order: { id: "OLD", stationStep: 6 } };
+eq("主管可看且可改掛 eligible 停工機", c.replaceStoppedState(item({ eligible_machine_codes: ["A04"] }), stopped, "manager", ["A04"]), { enabled: true, visible: true, reason: "" });
+eq("管理員可看且可改掛 eligible 停工機", c.replaceStoppedState(item({ eligible_machine_codes: ["A04"] }), stopped, "admin", ["A04"]), { enabled: true, visible: true, reason: "" });
+eq("作業員完全看不到改掛", c.replaceStoppedState(item({ eligible_machine_codes: ["A04"] }), stopped, "operator", ["A04"]).visible, false);
+eq("主管在生產中看不到改掛", c.replaceStoppedState(item({ eligible_machine_codes: ["A04"] }), { ...stopped, status: "running" }, "manager", ["A04"]).visible, false);
 eq("搶輸顯示原因", c.claimErrorText(new Error("409 POOL_ITEM_NOT_WAITING")), "這張單已被別台接走。");
 eq("server 判定非空閒", c.claimErrorText(new Error("MACHINE_NOT_IDLE")), "機台已不是空閒狀態，請重新整理。");
 const claimErrors = {

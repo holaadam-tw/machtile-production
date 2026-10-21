@@ -11475,7 +11475,9 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
     const machineCode = machine?.code || machine?.name || "";
-    const claim = core.claimState(item, { machineCode, status: machine?.status, hasOrder: Boolean(machine?.order) }, config.dispatchPoolMachines);
+    const machineState = { machineCode, status: machine?.status, hasOrder: Boolean(machine?.order), order: machine?.order || null };
+    const claim = core.claimState(item, machineState, config.dispatchPoolMachines);
+    const replace = core.replaceStoppedState(item, machineState, machtileDepartmentAccess?.role || machtileAuthState.role, config.dispatchPoolMachines);
     const busy = Boolean(machtileDispatchPoolState.claimBusy);
     const disabled = !claim.enabled || busy;
     const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
@@ -11485,6 +11487,7 @@ function machtileDispatchPoolSectionMarkup(machine) {
         <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
         <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
         <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
+        ${replace.visible ? `<button type="button" class="pool-replace-stopped-action" data-pool-replace-stopped="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${!replace.enabled || busy ? "disabled" : ""} title="${escapeHtml(replace.reason)}">改掛此單（不關站）</button>` : ""}
         ${canRelease ? `<button type="button" class="pool-release-action" data-pool-release="${escapeHtml(item.source_key)}" ${busy ? "disabled" : ""}>${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("release_claiming") : machtileTranslate("release_claim")}</button>` : ""}
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
@@ -11547,6 +11550,32 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
     const machine = machtileScheduleMachine(machineCode);
     if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
   }
+}
+
+async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
+  if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy || !machtileStationCmdCore) return;
+  const machine = machtileScheduleMachine(machineCode);
+  const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
+  const current = machine?.order;
+  const role = String(machtileDepartmentAccess?.role || machtileAuthState.role || "").toLowerCase();
+  const gate = machtileDispatchPoolCore.replaceStoppedState(item, { machineCode, status: machine?.status, hasOrder: Boolean(current), order: current }, role, config.dispatchPoolMachines);
+  if (!gate.enabled || !item || !current) return;
+  const oldStep = Number(current.stationStep || current.processOrder || current.process_order || 0);
+  const nextStep = Number(item.process_order || 0);
+  const warning = `目前掛：${current.id || "未提供"}${oldStep > 0 ? ` 第 ${oldStep} 道` : ""}\n將改掛：${item.work_order_no || "未提供"}${nextStep > 0 ? ` 第 ${nextStep} 道` : ""}\n\n原工單不會關站、不會入庫、數量不變。`;
+  if (!window.confirm(warning)) return;
+  let uuid;
+  try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast("這台平板無法建立安全指令。", "error"); return; }
+  machtileDispatchPoolState.claimBusy = sourceKey;
+  try {
+    await machtileStationCmdRunSubmission({ commandUuid: uuid, commandType: "claim_next", machineCode,
+      fields: { orderNo: item.work_order_no, step: nextStep, partNo: item.part_no || null, manufactureIiId: null, poolItemId: sourceKey, replaceStopped: true },
+      recordFields: { orderNo: item.work_order_no, step: nextStep, partNo: item.part_no || null, poolItemId: sourceKey, replaceStopped: true },
+      startedAt: Date.now(), validateRow: row => machtileStationCmdRowIsThis(row, uuid),
+      onError: ({ error }) => showToast(machtileDispatchPoolCore.claimErrorText(error), "error"),
+      onAccepted: () => { machtileCloseCardSelection(); showToast("改掛指令已送出，工廠確認後會自動開工。", "success"); }
+    });
+  } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
 
 async function machtileReleaseDispatchPoolClaim(sourceKey) {
@@ -14695,7 +14724,8 @@ async function machtileStationCmdRunSubmission(options) {
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
-    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
+    const rpc = payload.p_replace_stopped === true ? core.REPLACE_STOPPED_RPC : core.SUBMIT_RPC;
+    const result = await supabaseFetch(`rpc/${rpc}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
     const info = core.submitErrorText(error);
@@ -24322,6 +24352,11 @@ function bindEvents() {
     const poolClaim = event.target.closest("[data-pool-claim]");
     if (poolClaim) {
       void machtileClaimDispatchPool(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
+      return;
+    }
+    const poolReplace = event.target.closest("[data-pool-replace-stopped]");
+    if (poolReplace) {
+      void machtileReplaceStoppedDispatchPool(poolReplace.dataset.poolReplaceStopped, poolReplace.dataset.poolMachine);
       return;
     }
     const poolRelease = event.target.closest("[data-pool-release]");

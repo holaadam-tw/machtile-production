@@ -68,8 +68,24 @@
     return { department, items: hideNotEligible ? list.filter((item) => item.eligibleHere) : list };
   }
 
-  function claimArgs(sourceKey, machineCode) {
-    return { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
+  function claimArgs(sourceKey, machineCode, replaceStopped = false) {
+    const args = { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
+    if (replaceStopped === true) args.p_replace_stopped = true;
+    return args;
+  }
+
+  function replaceStoppedState(item, machine, role, enabledMachines) {
+    const base = claimState(item, machine, enabledMachines);
+    const privileged = ["admin", "manager"].includes(text(role).toLowerCase());
+    const stopped = text(machine && machine.status).toLowerCase() === "paused";
+    const current = machine && machine.order;
+    if (!privileged || !stopped || !current) return { enabled: false, visible: false, reason: base.reason };
+    const code = text(machine && (machine.machineCode || machine.code || machine.name));
+    const enabled = (Array.isArray(enabledMachines) ? enabledMachines : []).map(text).includes(code);
+    if (!enabled) return { enabled: false, visible: true, reason: "此機台尚未開放接單" };
+    const eligible = Array.isArray(item && item.eligible_machine_codes) && item.eligible_machine_codes.map(text).includes(code);
+    if (!eligible) return { enabled: false, visible: true, reason: "此機台不在可做清單" };
+    return { enabled: true, visible: true, reason: "" };
   }
 
   function canRelease(role) {
@@ -197,6 +213,7 @@
     sortItems,
     itemsForMachine,
     claimArgs,
+    replaceStoppedState,
     canRelease,
     releaseArgs,
     canReturn,
