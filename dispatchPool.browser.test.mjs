@@ -31,7 +31,7 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], poolResponseRows = poolRows, poolResponsePlan = [], poolDelayMs = 0, dispatchPoolMachines = [], claimWinner = '', claimConflict = false, claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
+let checks = 0, poolMode = 'rows', poolQueries = [], poolResponseRows = poolRows, poolResponsePlan = [], poolDelayMs = 0, dispatchPoolMachines = [], multiStationMachines = [], claimWinner = '', claimConflict = false, claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -53,7 +53,7 @@ async function openApp(role, width) {
     const req = route.request(), u = new URL(req.url());
     const json = (status, data) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     if (req.url().startsWith(base)) {
-      if (u.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.MACHTILE_CONFIG={useSupabase:true,authMode:'strict',tenantId:'${tenant}',useTenantHeaderAuth:true,supabaseUrl:'${fake}',supabaseAnonKey:'fixture-public',oauthEnabled:false,disableServiceWorker:true,enableOutboxSubmit:false,enableProgramUpload:false,enableScheduleContracts:false,enableAccountDelete:false,enableJevTriage:false,enableFaceStatus:false,useHmcWorklistSupabase:false,hmcFixedStagingEnabled:false,dispatchPoolMachines:${JSON.stringify(dispatchPoolMachines)}};` });
+      if (u.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.MACHTILE_CONFIG={useSupabase:true,authMode:'strict',tenantId:'${tenant}',useTenantHeaderAuth:true,supabaseUrl:'${fake}',supabaseAnonKey:'fixture-public',oauthEnabled:false,disableServiceWorker:true,enableOutboxSubmit:false,enableProgramUpload:false,enableScheduleContracts:false,enableAccountDelete:false,enableJevTriage:false,enableFaceStatus:false,useHmcWorklistSupabase:false,hmcFixedStagingEnabled:false,dispatchPoolMachines:${JSON.stringify(dispatchPoolMachines)},multiStationMachines:${JSON.stringify(multiStationMachines)}};` });
       if (req.method() !== 'GET') { blocked.push(req.url()); return route.abort(); }
       return route.continue();
     }
@@ -120,6 +120,7 @@ const poolKeys = page => page.locator('#machtileCardSelection [data-card-selecti
 
 try {
   ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
+  ok(/multiStationMachines:\s*\["B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'station mode uses explicit B01-B06 multi-station capability list');
   const configVersion = rolloutVersions.get('config.js');
   ok(Boolean(configVersion) && rolloutIndex.includes(`config.js?v=${configVersion}`), 'rollout config cache key matches index.html');
   ok(['app.js', 'i18n.js', 'styles.css'].every(asset => new RegExp(`${asset.replace(".", "\\.")}\\?v=[^\"\\s]+`).test(rolloutIndex)), 'return-state app, translations, and styles have cache keys');
@@ -259,17 +260,20 @@ try {
     ok(await page.locator('[data-card-select-open]').count() === 0, 'operator: no 選擇工單 (cannot schedule)');
     ok(await page.locator('[data-card-pool-open="B03"]').count() === 0, 'operator: no foreign-department card/entry');
     const entryA01 = page.locator('[data-card-pool-open="A01"]');
-    ok(await entryA01.count() === 1 && (await entryA01.innerText()).includes('待做池（同課）1 張'), 'operator: A01 count excludes the step A01 is not eligible for');
-    await entryA01.click();
+    ok(await entryA01.count() === 0, 'operator: feature-off machine has no pool entry');
+    dispatchPoolMachines = ['A01', 'A02'];
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof machtileDispatchPoolState !== 'undefined' && machtileDispatchPoolState.status !== 'idle');
+    await page.locator('[data-card-pool-open="A01"]').click();
     ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0001|TEST-SIM-1']) && await page.locator('#machtileCardSelection .is-not-eligible').count() === 0, 'operator: steps this machine cannot take are hidden (planner still sees them dimmed)');
     await page.locator('[data-close-card-selection]').click();
     const entry = page.locator('[data-card-pool-open="A02"]');
-    ok(await entry.count() === 1 && (await entry.innerText()).includes('待做池（同課）2 張'), 'operator: same-department pool entry with count');
+    ok(await entry.count() === 1 && (await entry.innerText()).includes('目前 2 張可接'), 'operator: enabled same-department pool entry shows claimable count');
     await entry.click();
     ok((await page.locator('#cardSelectionTitle').innerText()).includes('A02 待做池'), 'operator: pool-only dialog');
     ok(await page.locator('#machtileCardSelection [data-card-selection-assigned], #machtileCardSelection [data-card-select-process]').count() === 0, 'operator: no selection buttons in pool-only dialog');
     ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0002|TEST-SIM-2', '01|TESTNEED0001|TEST-SIM-1']), 'operator: own department items in owner order');
-    ok(await page.locator('#machtileCardSelection [data-pool-claim]:not([disabled])').count() === 0, 'operator: claim disabled');
+    ok(await page.locator('#machtileCardSelection [data-pool-claim]:not([disabled])').count() === 2, 'operator: enabled idle machine can claim its eligible rows');
     ok(await page.locator('[data-pool-return], [data-pool-release]').count() === 0, 'operator: no return-to-pool or release-claim control anywhere');
     await page.screenshot({ path: path.join(out, 'operator-a02-390.png') });
     await ctx.close();
@@ -299,15 +303,18 @@ try {
     await ctx.close();
   }
 
-  // Empty pool: section says so; operator entry disappears.
-  poolMode = 'empty';
+  // Empty pool: enabled + valid department keeps a visible 0-count entry.
+  poolMode = 'empty'; dispatchPoolMachines = ['B05'];
   {
     const { ctx, page } = await openApp('operator', 1440);
-    ok(await page.locator('[data-card-pool-open]').count() === 0, 'empty pool: no operator entry');
+    const entry = page.locator('[data-card-pool-open="B05"]');
+    ok(await entry.count() === 1 && (await entry.innerText()).includes('目前 0 張可接'), 'B05 operator: enabled valid-department machine keeps visible zero-count entry');
+    await entry.click();
+    ok((await page.locator('[data-card-selection-pool]').innerText()).includes('目前沒有同課待接的工序'), 'B05 operator: zero-count entry opens an empty pool without a claim action');
     await ctx.close();
   }
   // Production rollout allowlist: all lathes A01-A05 can claim; every other machine remains non-actionable.
-  poolMode = 'rows'; dispatchPoolMachines = ['A01', 'A02', 'A03', 'A04', 'A05']; claimWinner = ''; exposeAssignedOrder = false;
+  poolMode = 'rows'; dispatchPoolMachines = ['A01', 'A02', 'A03', 'A04', 'A05', 'B04']; multiStationMachines = ['B04']; claimWinner = ''; exposeAssignedOrder = false;
   access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
   {
     const { ctx, page } = await openApp('operator', 1440);
@@ -317,9 +324,17 @@ try {
       ok(await claim.isEnabled(), `rollout: ${machine} shows an enabled claim action`);
       await page.locator('[data-close-card-selection]').click();
     }
-    ok(await page.locator('[data-card-pool-open="B01"], [data-card-pool-open="B02"], [data-card-pool-open="B03"], [data-card-pool-open="B04"], [data-card-pool-open="B05"], [data-card-pool-open="B06"], [data-card-pool-open="C01"], [data-pool-return]').count() === 0, 'rollout: B01-B06 and other machines expose no claim/return action');
+    machineRows.find(x => x.machine_code === 'B04').status = 'running';
+    poolResponseRows = [...poolRows, { ...poolRows[2], source_key: '01|TESTNEED0004|TEST-SIM-4', eligible_machine_codes: ['B04'] }];
+    access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['MILL'] };
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof machtileDispatchPoolState !== 'undefined' && machtileDispatchPoolState.status === 'ready');
+    await page.locator('[data-card-pool-open="B04"]').click();
+    ok(await page.locator('[data-pool-key="01|TESTNEED0004|TEST-SIM-4"] [data-pool-claim]').isEnabled(), 'B04 multi: running machine can claim an eligible item');
+    await page.locator('[data-close-card-selection]').click();
     await ctx.close();
   }
+  machineRows.find(x => x.machine_code === 'B04').status = 'idle'; poolResponseRows = poolRows; multiStationMachines = [];
   exposeAssignedOrder = true;
   // Return action is gated by the live pool projection, not merely work-order origin.
   poolMode = 'rows'; poolQueries = []; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; assignedPoolStatus = 'claimed';

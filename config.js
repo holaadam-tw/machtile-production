@@ -66,6 +66,9 @@ window.MACHTILE_CONFIG = {
   stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // 派工池接單：全部車床 A01–A05＋全部加工中心 B01–B06（2026-10-14 owner「池開加工中心」）。
   dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
+  // machines / v_machine_management_cards 尚未同步舊 MES Station_Type；machine_type 不是多工能力。
+  // 因此明列已由 Factory MachTileDispatchAssign 證實可多工的 B01–B06，其餘一律 single（fail closed）。
+  multiStationMachines: ["B01", "B02", "B03", "B04", "B05", "B06"],
   // I-Reporter process-record entry on machine cards. Empty is the safe default.
   inspectionLinkMachines: [],
   // 2026-10-15 owner：機台卡「完工」鍵（完工＝收工；PR #103）。

@@ -252,7 +252,7 @@
     "_draft": true
   },
   "dispatch_pool_count": {
-    "value": "Danh sách chờ (cùng bộ phận) {{count}} phiếu",
+    "value": "Danh sách chờ: hiện có {{count}} phiếu có thể nhận",
     "_draft": true
   },
   "dispatch_pool_title": {
