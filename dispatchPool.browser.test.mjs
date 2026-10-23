@@ -264,6 +264,7 @@ try {
     dispatchPoolMachines = ['A01', 'A02'];
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof machtileDispatchPoolState !== 'undefined' && machtileDispatchPoolState.status !== 'idle');
+    ok((await page.locator('[data-card-pool-open="A01"]').innerText()).includes('目前 1 張可接'), 'operator: entry counts only rows eligible for this machine, not every same-department row');
     await page.locator('[data-card-pool-open="A01"]').click();
     ok(JSON.stringify(await poolKeys(page)) === JSON.stringify(['01|TESTNEED0001|TEST-SIM-1']) && await page.locator('#machtileCardSelection .is-not-eligible').count() === 0, 'operator: steps this machine cannot take are hidden (planner still sees them dimmed)');
     await page.locator('[data-close-card-selection]').click();

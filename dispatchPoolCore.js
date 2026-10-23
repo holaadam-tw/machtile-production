@@ -104,6 +104,14 @@
     return { p_source_key: text(sourceKey), p_reason: text(reason) };
   }
 
+  function eligibleCount(items, machineCode) {
+    const code = text(machineCode);
+    if (!code) return 0;
+    return (Array.isArray(items) ? items : []).filter((item) =>
+      Array.isArray(item && item.eligible_machine_codes)
+      && item.eligible_machine_codes.map(text).includes(code)).length;
+  }
+
   // machines / v_machine_management_cards 目前沒有同步舊 MES Station_Type。
   // 只接受呼叫端明確提供的 stationMode；缺值一律 single（fail closed）。
   function stationMode(machine) {
@@ -221,6 +229,7 @@
     urgencyOf,
     sortItems,
     itemsForMachine,
+    eligibleCount,
     claimArgs,
     replaceStoppedState,
     canRelease,

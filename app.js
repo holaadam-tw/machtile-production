@@ -11648,7 +11648,8 @@ function machtileCardPoolEntryMarkup(machine) {
   const code = machine?.code || machine?.name || "";
   const enabled = (Array.isArray(config.dispatchPoolMachines) ? config.dispatchPoolMachines : []).map(String).includes(String(code));
   const department = machtileDispatchPoolCore?.departmentCodeOf(normalizedMachineDepartment(machine));
-  const count = machtileDispatchPoolForMachine(machine).items.length;
+  const count = machtileDispatchPoolCore.eligibleCount(
+    machtileDispatchPoolForMachine(machine).items, code);
   if (!code || !enabled || !department) return "";
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }

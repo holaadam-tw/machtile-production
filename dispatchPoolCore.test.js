@@ -40,6 +40,8 @@ eq("本機可做標記", lathe.items.map((x) => x.eligibleHere), [false, true]);
 eq("銑床卡只列銑床課", c.itemsForMachine(pool, { departmentName: "銑床課", machineCode: "B03" }).items.map((x) => x.work_order_no), ["M1"]);
 eq("課別不明的機台不列任何池子工序", c.itemsForMachine(pool, { departmentName: "其他", machineCode: "C01" }), { department: "", items: [] });
 eq("不改原資料（不加 eligibleHere）", "eligibleHere" in pool[0], false);
+eq("入口數量只算此機 eligible，不算同課全部", c.eligibleCount(lathe.items, "A02"), 1);
+eq("空白機台沒有 eligible", c.eligibleCount(lathe.items, ""), 0);
 eq("作業員：本機不在可做清單的不列", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A02" }, { hideNotEligible: true }).items.map((x) => x.work_order_no), ["L1"]);
 eq("作業員：可做清單有本機的照 owner 排序", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A05" }, { hideNotEligible: true }).items.map((x) => x.work_order_no), ["L2"]);
 eq("沒給 options＝生管：全部同課照列", c.itemsForMachine(pool, { departmentName: "車床課", machineCode: "A05" }).items.length, 2);
