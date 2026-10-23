@@ -50,7 +50,7 @@ await context.route("**/*", async route => {
   if (url.origin === fake) {
     requestUrls.push(url.href);
     const json = body => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
-    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: "A04", report_enabled: guardEnabled, report_enabled_machines: { A04: guardEnabled }, fail_reason_codes: ["尺寸不良", "外觀", "刀具崩", "試刀", "材料不良", "其他"] });
+    if (url.pathname.endsWith("/rpc/machtile_get_station_report_guard_config")) return guardFails ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "guard 讀取失敗" }) }) : json({ factory_synced: true, machine_code: currentMachine, report_enabled: guardEnabled, report_enabled_machines: { A01: guardEnabled, A04: guardEnabled }, fail_reason_codes: ["尺寸不良", "外觀", "刀具崩", "試刀", "材料不良", "其他"] });
     if (url.pathname.endsWith("/v_work_order_cards")) return json([{ id: workOrderId, tenant_id: tenantId, work_order_no: "XX01202604140011", part_no: "GQ7Q", part_name: "試點件", quantity: 1000, due_date: "2026-10-20", priority: "normal", work_order_status: "in_progress", current_process_id: processId, current_process_name: "車床", current_process_status: "running", machine_name: currentMachine, qty_completed: 920, qty_defect: 0, progress_percent: 92, last_report_at: "2026-10-13T03:00:00Z", current_process_off_station: false }]);
     if (url.pathname.endsWith("/v_machine_management_cards")) return json([{ id: id(201), machine_code: currentMachine, machine_name: currentMachine, machine_type: "車床", status: "running", display_order: 1 }]);
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
@@ -82,7 +82,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A01","A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A01","A04"],stationCommandMachines:["A01","A04"],disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -209,6 +209,18 @@ await page.screenshot({ path: path.join(shots, "20261013-single-station-smart-re
 
 await page.close();
 currentMachine = "A01";
+const a01 = await context.newPage();
+await a01.goto(base, { waitUntil: "domcontentloaded" });
+await a01.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await a01.locator("[data-open-report]:visible").first().click();
+await a01.locator('[data-report-type="noon"]').click();
+await a01.locator("#completedQty").fill("958");
+await a01.locator("#defectQty").fill("0");
+await a01.waitForFunction(() => document.querySelector('[data-station-report-preview="A01"]'));
+assert.equal(await a01.locator("#singleStationReportPanel").isVisible(), true, "A01 shows the smart-report entry");
+await a01.close();
+
+currentMachine = "A02";
 const outsider = await context.newPage();
 await outsider.goto(base, { waitUntil: "domcontentloaded" });
 await outsider.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
