@@ -31,7 +31,7 @@ test("falls back to zh-Hant and warns only once", () => {
 
 test("interpolates named parameters", () => {
   const i18n = freshI18n();
-  assert.equal(i18n.t("dispatch_pool_count", { count: 3 }), "待做池（同課）3 張");
+  assert.equal(i18n.t("dispatch_pool_count", { count: 3 }), "待做池：目前 3 張可接");
 });
 
 test("switches language, persists per device and rejects unsupported values", () => {

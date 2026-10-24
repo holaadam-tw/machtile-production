@@ -40,6 +40,8 @@ const config = {
   finishClaimStartComboMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
+  // 多工站明確名單；machines view 尚無 Station_Type/station_mode，空陣列即全部按 single 處理。
+  multiStationMachines: [],
   inspectionLinkMachines: [],
   inspectionLinkBaseUrl: "",
   // Schedule foundation RPCs/tables are additive and must be rolled out per
@@ -11475,7 +11477,14 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
     const machineCode = machine?.code || machine?.name || "";
-    const machineState = { machineCode, status: machine?.status, hasOrder: Boolean(machine?.order), order: machine?.order || null };
+    const multiStations = Array.isArray(config.multiStationMachines) ? config.multiStationMachines.map(String) : [];
+    const machineState = {
+      machineCode,
+      stationMode: multiStations.includes(String(machineCode)) ? "multi" : "single",
+      status: machine?.status,
+      hasOrder: Boolean(machine?.order),
+      order: machine?.order || null,
+    };
     const claim = core.claimState(item, machineState, config.dispatchPoolMachines);
     const replace = core.replaceStoppedState(item, machineState, machtileDepartmentAccess?.role || machtileAuthState.role, config.dispatchPoolMachines);
     const busy = Boolean(machtileDispatchPoolState.claimBusy);
@@ -11633,12 +11642,15 @@ async function machtileReturnDispatchPool(sourceKey) {
   } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
 
-// 作業員（不能排程）也能從機台卡打開「只看待做池」：只在這台同課有待接工序時才出現入口。
+// 作業員（不能排程）也能從機台卡打開「只看待做池」：功能有開且課別有效就顯示，0 張也保留入口。
 function machtileCardPoolEntryMarkup(machine) {
   if (machine?.isUnassignedBucket || machtileCanEditSchedule()) return "";
   const code = machine?.code || machine?.name || "";
-  const count = machtileDispatchPoolForMachine(machine).items.length;
-  if (!code || count === 0) return "";
+  const enabled = (Array.isArray(config.dispatchPoolMachines) ? config.dispatchPoolMachines : []).map(String).includes(String(code));
+  const department = machtileDispatchPoolCore?.departmentCodeOf(normalizedMachineDepartment(machine));
+  const count = machtileDispatchPoolCore.eligibleCount(
+    machtileDispatchPoolForMachine(machine).items, code);
+  if (!code || !enabled || !department) return "";
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }
 

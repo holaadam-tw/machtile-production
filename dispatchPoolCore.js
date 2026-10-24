@@ -104,12 +104,29 @@
     return { p_source_key: text(sourceKey), p_reason: text(reason) };
   }
 
+  function eligibleCount(items, machineCode) {
+    const code = text(machineCode);
+    if (!code) return 0;
+    return (Array.isArray(items) ? items : []).filter((item) =>
+      Array.isArray(item && item.eligible_machine_codes)
+      && item.eligible_machine_codes.map(text).includes(code)).length;
+  }
+
+  // machines / v_machine_management_cards 目前沒有同步舊 MES Station_Type。
+  // 只接受呼叫端明確提供的 stationMode；缺值一律 single（fail closed）。
+  function stationMode(machine) {
+    return text(machine && machine.stationMode).toLowerCase() === "multi" ? "multi" : "single";
+  }
+
   function claimState(item, machine, enabledMachines) {
     const code = text(machine && (machine.machineCode || machine.code || machine.name));
     const enabled = (Array.isArray(enabledMachines) ? enabledMachines : []).map(text).includes(code);
     if (!enabled) return { enabled: false, reason: "此機台尚未開放接單" };
-    if (text(machine && machine.status).toLowerCase() !== "idle" || Boolean(machine && machine.hasOrder)) {
-      return { enabled: false, reason: "機台不是空閒狀態" };
+    const status = text(machine && machine.status).toLowerCase();
+    if (["maintenance", "offline"].includes(status)) return { enabled: false, reason: "機台目前不可接單" };
+    if (stationMode(machine) === "single"
+      && (status !== "idle" || Boolean(machine && machine.hasOrder))) {
+      return { enabled: false, reason: "單工站必須空閒且沒有工單" };
     }
     const eligible = Array.isArray(item && item.eligible_machine_codes)
       && item.eligible_machine_codes.map(text).includes(code);
@@ -212,12 +229,14 @@
     urgencyOf,
     sortItems,
     itemsForMachine,
+    eligibleCount,
     claimArgs,
     replaceStoppedState,
     canRelease,
     releaseArgs,
     canReturn,
     returnArgs,
+    stationMode,
     claimState,
     errorCode,
     claimErrorText,
