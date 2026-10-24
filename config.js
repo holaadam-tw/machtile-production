@@ -73,17 +73,17 @@ window.MACHTILE_CONFIG = {
   inspectionLinkMachines: [],
   // 2026-10-15 owner：機台卡「完工」鍵（完工＝收工；PR #103）。
   enableFinishButton: true,
-  // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
+  // 完工報工 applied 後自動派關站。owner 排程：10/26 A01→A05→A03→A02；10/27 B03+B04；10/28 B06+B05；10/29 B02+B01。
   enableFinishClose: true,
-  finishCloseMachines: ["A04"],
+  finishCloseMachines: ["A04", "A01"],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
-  standardFinishFlowMachines: ["A04"],
-  // 完工後把「接下一道」與既有開工指令串成一次操作；僅 A04 試點。
+  standardFinishFlowMachines: ["A04", "A01"],
+  // 完工後把「接下一道」與既有開工指令串成一次操作；2026-10-25 起依 owner 排程逐台開放（四個名單同步）。
   enableFinishClaimStartCombo: true,
-  finishClaimStartComboMachines: ["A04"],
+  finishClaimStartComboMachines: ["A04", "A01"],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
-  stationReportMachines: ["A04"],
+  stationReportMachines: ["A04", "A01"],
 };
