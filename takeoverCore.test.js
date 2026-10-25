@@ -44,13 +44,34 @@ test("cloud payloads use dedicated RPC parameter names", () => {
     { p_command_uuid: "cmd", p_machine_code: "A05", p_stop_note_id: "note" });
 });
 
-test("candidate mapping only consumes contract fields and derives remaining quantity", () => {
-  const row = { stop_note_id: "note", order_no: "WO-1", index_sn: 2, source_machine: "A04", stopped_by: "user",
-    stopped_at: "2026-10-25T00:00:00Z", reason_code: "RUSH_ORDER", note: "rush", good_qty: 3, fail_qty: 1,
-    id: "forbidden", stopped_by_name: "forbidden", reason_label: "forbidden", remaining_qty: 999 };
+test("candidate mapping uses the station_stop_notes id and display-name columns", () => {
+  const row = { id: "note", tenant_id: "tenant", order_no: "WO-1", index_sn: 2, part_no: "P-1", source_machine: "A04",
+    manufacture_ii_id: null, reason_code: "RUSH_ORDER", allow_takeover: true, note: "rush", good_qty: 3, fail_qty: 1,
+    stopped_by: "user-uuid", stopped_by_name: "Operator Chen", stopped_at: "2026-10-25T00:00:00Z", status: "stopped",
+    taken_by_machine: null, taken_by: null, taken_by_name: null, taken_at: null, command_uuid: "command",
+    policy_changed_by: null, policy_changed_by_name: null, policy_changed_at: null };
   assert.deepEqual(core.candidateView(row, 10, "換做急單"), {
-    stopNoteId: "note", orderNo: "WO-1", indexSn: 2, sourceMachine: "A04", stoppedBy: "user",
+    stopNoteId: "note", orderNo: "WO-1", indexSn: 2, sourceMachine: "A04", stoppedBy: "Operator Chen",
     stoppedAt: "2026-10-25T00:00:00Z", reasonCode: "RUSH_ORDER", reasonLabel: "換做急單", note: "rush",
     goodQty: 3, failQty: 1, doneQty: 4, remainingQty: 6,
   });
+});
+
+test("a non-empty SQL-contract candidate fixture produces a takeover row", () => {
+  const sqlRow = { id: "note", tenant_id: "tenant", order_no: "WO-1", index_sn: 2, part_no: "P-1", source_machine: "A04",
+    manufacture_ii_id: null, reason_code: "RUSH_ORDER", allow_takeover: true, note: null, good_qty: 3, fail_qty: 1,
+    stopped_by: "user-uuid", stopped_by_name: "Operator Chen", stopped_at: "2026-10-25T00:00:00Z", status: "stopped",
+    taken_by_machine: null, taken_by: null, taken_by_name: null, taken_at: null, command_uuid: "command",
+    policy_changed_by: null, policy_changed_by_name: null, policy_changed_at: null };
+  const view = core.candidateView(sqlRow, 10, "Rush");
+  const rows = core.candidateMap([view]);
+  assert.equal(rows.size, 1);
+  assert.equal(rows.get("note").stoppedBy, "Operator Chen");
+});
+
+test("availability probe hides takeover only when the RPC is missing", () => {
+  assert.equal(core.availabilityAfterProbeError(new Error("NOT_ELIGIBLE")), "ready");
+  assert.equal(core.availabilityAfterProbeError({ code: "42883", message: "function does not exist" }), "missing");
+  assert.equal(core.availabilityAfterProbeError({ code: "PGRST202", message: "schema cache miss" }), "missing");
+  assert.equal(core.availabilityAfterProbeError(new Error("temporary network failure")), "ready");
 });

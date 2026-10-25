@@ -13783,12 +13783,15 @@ async function machtileLoadTakeoverAvailability() {
     const [policies, , notices] = await Promise.all([
       supabaseFetch("stop_reason_policy?select=code,label_zh,label_vi,default_allow,note_required,sort&order=sort.asc").catch(() => []),
       supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: machines[0] }) }),
-      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by,taken_at,status&source_machine=in.(${machines.map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
+      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status&source_machine=in.(${machines.map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
     ]);
     machtileTakeover.policies = machtileTakeoverCore.normalizePolicies(policies);
     machtileTakeover.notices = new Map((Array.isArray(notices) ? notices : []).map((row) => [`${String(row.source_machine).toUpperCase()}|${row.order_no}|${row.index_sn}`, row]));
     machtileTakeover.availability = "ready";
-  } catch (error) { console.warn("takeover RPC unavailable; takeover UI hidden", error); machtileTakeover.availability = "missing"; }
+  } catch (error) {
+    machtileTakeover.availability = machtileTakeoverCore.availabilityAfterProbeError(error);
+    console.warn(machtileTakeover.availability === "missing" ? "takeover RPC unavailable; takeover UI hidden" : "takeover availability probe was rejected; RPC exists", error);
+  }
 }
 function machtileTakeoverActive(code) { return machtileTakeover.availability === "ready" && machtileTakeoverEnabled(code); }
 function machtileTakeoverLanguage() { return String(document.documentElement.lang || "zh-Hant").toLowerCase().startsWith("vi") ? "vi" : "zh"; }
@@ -13848,7 +13851,7 @@ async function machtileTakeoverOpenStart(code, returnFocus) {
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("start_work"))}</h2></header><div class="takeover-tabs" role="tablist"><button data-takeover-tab="new" class="is-selected">${escapeHtml(machtileTranslate("takeover_new_order"))}</button><button data-takeover-tab="takeover">${escapeHtml(machtileTranslate("takeover_old_order"))}</button></div><div data-takeover-pane="new"><p>${escapeHtml(machtileTranslate("takeover_new_order_help"))}</p><button type="button" data-takeover-use-existing>${escapeHtml(machtileTranslate("takeover_continue_new"))}</button></div><div data-takeover-pane="takeover" hidden><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
   try {
     const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
-    holder._candidates = new Map((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel).filter((row) => row.stopNoteId).map((row) => [row.stopNoteId, row]));
+    holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
     holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
   } catch (error) { machtileTakeoverClose(); machtileTakeover.availability = "missing"; machtileStationCmdOpen("start", code, returnFocus); }
 }
@@ -14176,7 +14179,7 @@ function machtileStationCmdParts(machine) {
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
-  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
+  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
   const buttons = gate.ok ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";

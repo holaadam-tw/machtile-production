@@ -61,13 +61,20 @@
   function candidateView(row, plannedQty, reasonLabel) {
     const done = Number(row?.good_qty || 0) + Number(row?.fail_qty || 0);
     const planned = Math.max(0, Number(plannedQty || 0));
-    return { stopNoteId: text(row?.stop_note_id), orderNo: text(row?.order_no), indexSn: row?.index_sn,
-      sourceMachine: text(row?.source_machine), stoppedBy: text(row?.stopped_by), stoppedAt: row?.stopped_at,
+    return { stopNoteId: text(row?.id), orderNo: text(row?.order_no), indexSn: row?.index_sn,
+      sourceMachine: text(row?.source_machine), stoppedBy: text(row?.stopped_by_name), stoppedAt: row?.stopped_at,
       reasonCode: text(row?.reason_code), reasonLabel: text(reasonLabel) || text(row?.reason_code), note: text(row?.note),
       goodQty: Number(row?.good_qty || 0), failQty: Number(row?.fail_qty || 0), doneQty: done,
       remainingQty: Math.max(0, planned - done) };
   }
+  function candidateMap(rows) {
+    return new Map((Array.isArray(rows) ? rows : []).filter((row) => row?.stopNoteId).map((row) => [row.stopNoteId, row]));
+  }
+  function availabilityAfterProbeError(error) {
+    const value = `${text(error?.code)} ${text(error?.message || error)}`.toUpperCase();
+    return /(^|\s)42883(\s|$)/.test(value) || value.includes("PGRST202") ? "missing" : "ready";
+  }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload,
-    stopReportPayload, takeoverPayload, candidateView, startTabs };
+    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, startTabs };
 });
