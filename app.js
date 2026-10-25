@@ -13881,8 +13881,10 @@ async function machtileTakeoverSubmitCandidate(holder, candidate) {
     rpcName: "machtile_submit_takeover",
     payloadOverride: machtileTakeoverCore.takeoverPayload({ commandUuid, machineCode, stopNoteId: candidate.stopNoteId }),
   });
-  if (result.ok || machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+  if (result.ok) {
     machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent"));
+  } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+    machtileTakeoverClose(); showToast(machtileTranslate("takeover_sending"));
   } else showToast(result.error?.message || machtileTranslate("takeover_send_failed"));
 }
 const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
@@ -15000,7 +15002,7 @@ function machtileStationCmdFinish(code, view) {
     machtileStationCmdRenderSheet();
   }
   machtileStationCmdRerender();
-  if (view.phase === "applied") showToast(`${code} ${view.title}（舊 MES）`);
+  if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
 function machtileStationCmdPoll(code) {

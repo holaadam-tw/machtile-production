@@ -62,6 +62,21 @@ test("takeover survives reload and app submits through the shared result poller"
   assert.match(app, /record\.commandType === "takeover"[\s\S]*resultText\(view\)/);
 });
 
+test("takeover distinguishes retrying, accepted, and applied messages", () => {
+  const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
+  const translations = fs.readFileSync(require.resolve("./i18n.js"), "utf8");
+  const zhHant = JSON.parse(fs.readFileSync(require.resolve("./locales/zh-Hant.json"), "utf8"));
+  const vi = JSON.parse(fs.readFileSync(require.resolve("./locales/vi.json"), "utf8"));
+  assert.match(app, /if \(result\.ok\)[\s\S]*takeover_sent[\s\S]*pending\[machineCode\][\s\S]*takeover_sending/);
+  assert.match(translations, /takeover_sending: "傳送中…"/);
+  assert.match(translations, /takeover_sent: "已送出，等待工廠確認"/);
+  assert.equal(zhHant.takeover_sending, "傳送中…");
+  assert.equal(zhHant.takeover_sent, "已送出，等待工廠確認");
+  assert.equal(vi.takeover_sending.value, "Đang gửi…");
+  assert.equal(vi.takeover_sent.value, "Đã gửi, đang chờ nhà máy xác nhận");
+  assert.match(app, /view\.phase === "applied" && record\.commandType !== "takeover"/);
+});
+
 test("APP renders SQL display names and delegates probe error classification", () => {
   const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
   assert.match(app, /who: taken\.taken_by_name/);
