@@ -82,6 +82,9 @@ window.MACHTILE_CONFIG = {
   // 完工後把「接下一道」與既有開工指令串成一次操作；僅 A04 試點。
   enableFinishClaimStartCombo: true,
   finishClaimStartComboMachines: ["A04"],
+  // 換機台第一版先保持關閉；雲端 RPC 與 Factory 同步開通後再指定機台。
+  enableTakeover: false,
+  takeoverMachines: [],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,

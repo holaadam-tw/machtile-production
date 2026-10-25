@@ -40,6 +40,9 @@ window.MACHTILE_CONFIG = {
   enableStandardFinishFlow: false,
   standardFinishFlowMachines: [],
   enableFinishClaimStartCombo: false,
+  // 換機台第一版。RPC 尚未部署或探測失敗時，APP 會完整隱藏增強畫面。
+  enableTakeover: false,
+  takeoverMachines: [],
   finishClaimStartComboMachines: [],
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.

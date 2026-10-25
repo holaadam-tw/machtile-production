@@ -148,5 +148,15 @@
   "report_fail_reason_placeholder": "選擇不良原因",
   "report_fail_reason_required": "有不良數時，需選擇不良原因",
   "report_fail_reason_other_note_required": "選擇其他不良原因時，備註必須填寫一句說明",
-  "report_fail_reason_note_label": "其他原因說明"
+  "report_fail_reason_note_label": "其他原因說明",
+  "takeover_stop_title": "確認停工",
+  "takeover_stop_qty_question": "這段做了幾件？良品／不良（必填，0 也要填）",
+  "takeover_good_qty": "良品", "takeover_fail_qty": "不良", "takeover_reason": "停工原因",
+  "takeover_allow_question": "允許其他機台接手？", "takeover_must_tap": "請親自按是或否", "takeover_note": "說明",
+  "takeover_confirm_stop": "確認停工", "takeover_stop_sent": "停工已送出", "takeover_new_order": "開工新訂單",
+  "takeover_old_order": "接手舊的工單", "takeover_new_order_help": "從現有待做池選擇新訂單。", "takeover_continue_new": "繼續開工新訂單",
+  "takeover_step": "第 {{step}} 道", "takeover_done_remaining": "已做 {{done}}／剩下 {{remaining}}", "takeover_take": "接手",
+  "takeover_none": "目前沒有可接手的工單", "takeover_sent": "接手已送出", "takeover_send_failed": "送出失敗，請稍後再試",
+  "yes": "是", "no": "否", "cancel": "取消", "loading": "讀取中…",
+  "takeover_taken_notice": "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）"
 }

@@ -8,6 +8,13 @@
 
   const dictionaries = {
     "zh-Hant": {
+      takeover_stop_title: "確認停工", takeover_stop_qty_question: "這段做了幾件？良品／不良（必填，0 也要填）",
+      takeover_good_qty: "良品", takeover_fail_qty: "不良", takeover_reason: "停工原因", takeover_allow_question: "允許其他機台接手？",
+      takeover_must_tap: "請親自按是或否", takeover_note: "說明", takeover_confirm_stop: "確認停工", takeover_stop_sent: "停工已送出",
+      takeover_new_order: "開工新訂單", takeover_old_order: "接手舊的工單", takeover_new_order_help: "從現有待做池選擇新訂單。", takeover_continue_new: "繼續開工新訂單",
+      takeover_step: "第 {{step}} 道", takeover_done_remaining: "已做 {{done}}／剩下 {{remaining}}", takeover_take: "接手", takeover_none: "目前沒有可接手的工單",
+      takeover_sent: "接手已送出", takeover_send_failed: "送出失敗，請稍後再試", yes: "是", no: "否", cancel: "取消", loading: "讀取中…",
+      takeover_taken_notice: "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）",
       language_label: "語言",
       language_zh_hant: "繁中",
       language_vi: "Tiếng Việt",
@@ -154,6 +161,13 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      takeover_stop_title: "Xác nhận dừng máy", takeover_stop_qty_question: "Công đoạn này đã làm bao nhiêu? Hàng tốt／hàng lỗi (bắt buộc, kể cả 0)",
+      takeover_good_qty: "Hàng tốt", takeover_fail_qty: "Hàng lỗi", takeover_reason: "Lý do dừng", takeover_allow_question: "Cho phép máy khác tiếp nhận?",
+      takeover_must_tap: "Vui lòng tự chọn Có hoặc Không", takeover_note: "Ghi chú", takeover_confirm_stop: "Xác nhận dừng", takeover_stop_sent: "Đã gửi lệnh dừng",
+      takeover_new_order: "Mở đơn hàng mới", takeover_old_order: "Tiếp nhận lệnh cũ", takeover_new_order_help: "Chọn đơn hàng mới trong danh sách chờ.", takeover_continue_new: "Tiếp tục mở đơn mới",
+      takeover_step: "Công đoạn {{step}}", takeover_done_remaining: "Đã làm {{done}}／còn {{remaining}}", takeover_take: "Tiếp nhận", takeover_none: "Hiện không có lệnh có thể tiếp nhận",
+      takeover_sent: "Đã gửi yêu cầu tiếp nhận", takeover_send_failed: "Gửi thất bại, vui lòng thử lại", yes: "Có", no: "Không", cancel: "Hủy", loading: "Đang tải…",
+      takeover_taken_notice: "{{order}} đã được {{machine}} tiếp nhận ({{who}}, {{time}})",
       language_label: "Ngôn ngữ",
       language_zh_hant: "繁中",
       language_vi: "Tiếng Việt",
