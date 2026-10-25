@@ -10729,6 +10729,7 @@ function machtileAssignedCardProcess(row) {
   order.stationStep = row.process_order;
   order.processType = row.process_type;
   order.manufactureIiId = String(row.manufacture_ii_id || "").trim() || null;
+  order.simulationId = String(row.simulation_id || "").trim() || null;
   order.perProcessCard = true;
   order.dispatchPoolSourceKey = wo.legacy_mes_source === "dispatch_pool" ? String(wo.external_ref || "").trim() : "";
   return order;
@@ -10746,7 +10747,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -13776,21 +13777,23 @@ function machtileTakeoverEnabled(code) {
 }
 async function machtileLoadTakeoverAvailability() {
   if (!machtileTakeoverCore || config.enableTakeover !== true || state.source !== "supabase") { machtileTakeover.availability = "off"; return; }
-  const machines = Array.isArray(config.takeoverMachines) ? config.takeoverMachines.filter((code) => code !== "*") : [];
-  if (!machines.length) { machtileTakeover.availability = "off"; return; }
+  const configuredMachines = Array.isArray(config.takeoverMachines) ? config.takeoverMachines : [];
+  const visibleMachines = (state.machines || []).map((machine) => machine.code || machine.name);
+  const probeMachine = machtileTakeoverCore.probeMachine(configuredMachines, visibleMachines);
+  if (!probeMachine) { machtileTakeover.availability = "off"; return; }
   machtileTakeover.availability = "probing";
   try {
     const [policies, , notices] = await Promise.all([
-      supabaseFetch("stop_reason_policy?select=code,label_zh,label_vi,default_allow,note_required,sort&order=sort.asc").catch(() => []),
-      supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: machines[0] }) }),
-      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status&source_machine=in.(${machines.map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
+      supabaseFetch("stop_reason_policy?select=code,label_zh,label_vi,default_allow,note_required,sort&is_enabled=eq.true&order=sort.asc").catch(() => []),
+      supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: probeMachine }) }),
+      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status&source_machine=in.(${(configuredMachines.includes("*") ? visibleMachines : configuredMachines).map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
     ]);
     machtileTakeover.policies = machtileTakeoverCore.normalizePolicies(policies);
     machtileTakeover.notices = new Map((Array.isArray(notices) ? notices : []).map((row) => [`${String(row.source_machine).toUpperCase()}|${row.order_no}|${row.index_sn}`, row]));
     machtileTakeover.availability = "ready";
   } catch (error) {
     machtileTakeover.availability = machtileTakeoverCore.availabilityAfterProbeError(error);
-    console.warn(machtileTakeover.availability === "missing" ? "takeover RPC unavailable; takeover UI hidden" : "takeover availability probe was rejected; RPC exists", error);
+    console.warn("takeover capability unavailable; legacy start/stop remains active", error);
   }
 }
 function machtileTakeoverActive(code) { return machtileTakeover.availability === "ready" && machtileTakeoverEnabled(code); }
@@ -13805,9 +13808,12 @@ function machtileTakeoverOverlay(code, type, returnFocus) {
 function machtileTakeoverStopRender(holder, viewState) {
   const validation = machtileTakeoverCore.validateStop(viewState.form, viewState.policies);
   const selected = viewState.policies.find((p) => p.code === viewState.form.reason_code);
+  const failReasons = machtileReportFailReasons();
+  const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...failReasons.map((reason) => `<option value="${escapeHtml(reason)}"${viewState.form.fail_reason_code === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
     <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question">${escapeHtml(machtileTranslate("takeover_stop_qty_question"))}</p>
     <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required></label><label>${escapeHtml(machtileTranslate("takeover_fail_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required></label></div>
+    <label data-takeover-fail-reason-field${Number(viewState.form.fail_qty) > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
     <fieldset><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
     <fieldset><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${!viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
     <label>${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
@@ -13828,14 +13834,15 @@ async function machtileTakeoverSubmitStop(holder) {
   viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
   const commandUuid = crypto.randomUUID(), startedAt = Date.now();
   const fields = { orderNo: viewState.order.id, step: viewState.order.stationStep,
-    partNo: viewState.order.partNo || viewState.order.part || null, manufactureIiId: viewState.order.manufactureIiId || null };
+    partNo: viewState.order.partNo || viewState.order.part || null, manufactureIiId: viewState.order.manufactureIiId || null,
+    expectedSimulationId: viewState.order.simulationId || null };
   const result = await machtileStationCmdRunSubmission({
     commandUuid, commandType: "stop_report", machineCode: code, fields, recordFields: fields, startedAt,
     rpcName: "machtile_submit_stop_report",
     payloadOverride: machtileTakeoverCore.stopReportPayload({ commandUuid, machineCode: code, ...fields, indexSn: fields.step, form: viewState.form }),
   });
-  if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_sent")); return; }
-  if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_sent")); return; }
+  if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
+  if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
   viewState.sending = false; viewState.error = result.error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState);
 }
 function machtileTakeoverCandidateModel(row) {
@@ -14951,6 +14958,11 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (record.commandType === "stop_report" && view?.phase === "rejected") {
+    const message = machtileTakeoverCore?.rejectText(view.code);
+    if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
+    if (message) showToast(message);
+  }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
   if (record.commandType === "start" && record.standardFinishComboStart) {
@@ -23949,10 +23961,18 @@ document.addEventListener("keyup", (event) => {
 });
 document.addEventListener("input", (event) => { machtileHandleBatchInput(event); });
 document.addEventListener("change", (event) => { machtileHandleBatchInput(event); });
+document.addEventListener("change", (event) => {
+  const holder = event.target.closest?.("#machtileTakeoverSheet"), viewState = holder?._state; if (!viewState) return;
+  if (event.target.matches("[data-takeover-fail-reason]")) viewState.form.fail_reason_code = event.target.value;
+  const submit = holder.querySelector("[data-takeover-stop-confirm]"); if (submit) submit.disabled = !machtileTakeoverCore.validateStop(viewState.form, viewState.policies).ok || viewState.sending;
+});
 document.addEventListener("input", (event) => {
   const holder = event.target.closest?.("#machtileTakeoverSheet"), viewState = holder?._state; if (!viewState) return;
   if (event.target.matches("[data-takeover-good]")) viewState.form.good_qty = event.target.value;
-  if (event.target.matches("[data-takeover-fail]")) viewState.form.fail_qty = event.target.value;
+  if (event.target.matches("[data-takeover-fail]")) {
+    viewState.form.fail_qty = event.target.value;
+    holder.querySelector("[data-takeover-fail-reason-field]")?.toggleAttribute("hidden", !(Number(event.target.value) > 0));
+  }
   if (event.target.matches("[data-takeover-note]")) viewState.form.note = event.target.value;
   const submit = holder.querySelector("[data-takeover-stop-confirm]"); if (submit) submit.disabled = !machtileTakeoverCore.validateStop(viewState.form, viewState.policies).ok || viewState.sending;
 });

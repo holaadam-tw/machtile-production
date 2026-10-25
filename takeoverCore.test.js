@@ -35,10 +35,11 @@ test("start tabs and all takeover surfaces are absent when flag or machine is of
 });
 
 test("cloud payloads use dedicated RPC parameter names", () => {
-  const form = { good_qty: "3", fail_qty: "1", reason_code: "RUSH_ORDER", allow_takeover: true, note: "" };
-  assert.deepEqual(core.stopReportPayload({ commandUuid: "cmd", machineCode: "a04", orderNo: "WO-1", indexSn: 2, partNo: "P-1", form }), {
+  const form = { good_qty: "3", fail_qty: "1", fail_reason_code: "尺寸不良", reason_code: "RUSH_ORDER", allow_takeover: true, note: "" };
+  assert.deepEqual(core.stopReportPayload({ commandUuid: "cmd", machineCode: "a04", orderNo: "WO-1", indexSn: 2, partNo: "P-1", expectedSimulationId: "SIM-1", form }), {
     p_command_uuid: "cmd", p_machine_code: "A04", p_order_no: "WO-1", p_index_sn: 2, p_part_no: "P-1",
-    p_manufacture_ii_id: null, p_good_qty: 3, p_fail_qty: 1, p_reason_code: "RUSH_ORDER", p_allow_takeover: true, p_note: null,
+    p_manufacture_ii_id: null, p_expected_simulation_id: "SIM-1", p_good_qty: 3, p_fail_qty: 1,
+    p_fail_reason_code: "尺寸不良", p_reason_code: "RUSH_ORDER", p_allow_takeover: true, p_note: null,
   });
   assert.deepEqual(core.takeoverPayload({ commandUuid: "cmd", machineCode: "a05", stopNoteId: "note" }),
     { p_command_uuid: "cmd", p_machine_code: "A05", p_stop_note_id: "note" });
@@ -69,9 +70,25 @@ test("a non-empty SQL-contract candidate fixture produces a takeover row", () =>
   assert.equal(rows.get("note").stoppedBy, "Operator Chen");
 });
 
-test("availability probe hides takeover only when the RPC is missing", () => {
-  assert.equal(core.availabilityAfterProbeError(new Error("NOT_ELIGIBLE")), "ready");
+test("any unavailable takeover capability fails open to the legacy stop flow", () => {
+  assert.equal(core.availabilityAfterProbeError(new Error("NOT_ELIGIBLE")), "missing");
   assert.equal(core.availabilityAfterProbeError({ code: "42883", message: "function does not exist" }), "missing");
   assert.equal(core.availabilityAfterProbeError({ code: "PGRST202", message: "schema cache miss" }), "missing");
-  assert.equal(core.availabilityAfterProbeError(new Error("temporary network failure")), "ready");
+  assert.equal(core.availabilityAfterProbeError(new Error("temporary network failure")), "missing");
+  assert.equal(core.availabilityAfterProbeError(new Error("TAKEOVER_DISABLED")), "off");
+});
+
+test("defects require their own fail reason and wildcard config picks a visible probe machine", () => {
+  const form = { ...core.initialStopForm(core.DEFAULT_POLICIES[1]), good_qty: "3", fail_qty: "1", allow_takeover_touched: true };
+  assert.equal(core.validateStop(form).errors.fail_reason_code, "required");
+  form.fail_reason_code = "尺寸不良";
+  assert.equal(core.validateStop(form).ok, true);
+  assert.equal(core.probeMachine(["*"], ["a04", "A05"]), "A04");
+  assert.equal(core.probeMachine(["A05"], ["A04"]), "A05");
+});
+
+test("known takeover rejects have operator-facing text", () => {
+  assert.match(core.rejectText("TAKEOVER_DISABLED"), /一般停工/);
+  assert.match(core.rejectText("STATION_CLASS_MISMATCH"), /類型不同/);
+  assert.match(core.rejectText("NOT_ELIGIBLE"), /B 機合併站/);
 });

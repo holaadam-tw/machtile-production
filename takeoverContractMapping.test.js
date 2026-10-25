@@ -21,6 +21,16 @@ test("APP mapping matches PR #135 candidate and write RPC contracts", () => {
     ["p_command_uuid", "p_machine_code", "p_stop_note_id"]);
 });
 
+test("stop_report uses v2 dedicated columns and current SQL identities", () => {
+  const payload = core.stopReportPayload({ commandUuid: "cmd", machineCode: "A04", orderNo: "WO-1", indexSn: 3,
+    partNo: "P-1", manufactureIiId: "MII-1", expectedSimulationId: "SIM-1",
+    form: { good_qty: "7", fail_qty: "1", fail_reason_code: "尺寸不良", reason_code: "TOOLING", allow_takeover: true, note: "換刀" } });
+  assert.equal(payload.p_expected_simulation_id, "SIM-1");
+  assert.equal(payload.p_fail_reason_code, "尺寸不良");
+  assert.equal(payload.p_reason_code, "TOOLING");
+  assert.equal(Object.hasOwn(payload, "p_stop_reason_code"), false);
+});
+
 test("stop_report survives reload in the shared station pending lock", () => {
   const now = Date.now();
   const restored = stationCore.restorePending({ A04: { commandUuid: "20000000-0000-4000-9000-000000000001",
@@ -34,5 +44,7 @@ test("APP renders SQL display names and delegates probe error classification", (
   assert.match(app, /who: taken\.taken_by_name/);
   assert.match(app, /select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status/);
   assert.match(app, /availabilityAfterProbeError\(error\)/);
+  assert.match(app, /is_enabled=eq\.true/);
+  assert.match(app, /takeover_stop_waiting/);
   assert.doesNotMatch(app, /who: taken\.taken_by(?:\s|\|)/);
 });

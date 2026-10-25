@@ -31,7 +31,7 @@
   }
   function initialStopForm(policy) {
     return { good_qty: "", fail_qty: "", reason_code: policy?.code || "", allow_takeover: policy?.default_allow === true,
-      allow_takeover_touched: false, note: "" };
+      allow_takeover_touched: false, fail_reason_code: "", note: "" };
   }
   function validateStop(form, policies) {
     const policy = normalizePolicies(policies).find((row) => row.code === text(form?.reason_code).toUpperCase());
@@ -39,6 +39,7 @@
     const errors = {};
     if (!integer(form?.good_qty)) errors.good_qty = "required_nonnegative_integer";
     if (!integer(form?.fail_qty)) errors.fail_qty = "required_nonnegative_integer";
+    if (integer(form?.fail_qty) && Number(form.fail_qty) > 0 && !text(form?.fail_reason_code)) errors.fail_reason_code = "required";
     if (!policy) errors.reason_code = "required";
     if (form?.allow_takeover_touched !== true) errors.allow_takeover = "must_confirm";
     if (policy?.note_required && !text(form?.note)) errors.note = "required";
@@ -46,13 +47,15 @@
   }
   function stopPayload(form) {
     return { good_qty: Number(form.good_qty), fail_qty: Number(form.fail_qty), reason_code: text(form.reason_code).toUpperCase(),
+      fail_reason_code: Number(form.fail_qty) > 0 ? text(form.fail_reason_code) || null : null,
       allow_takeover: form.allow_takeover === true, note: text(form.note) };
   }
-  function stopReportPayload({ commandUuid, machineCode, orderNo, indexSn, partNo, manufactureIiId, form } = {}) {
+  function stopReportPayload({ commandUuid, machineCode, orderNo, indexSn, partNo, manufactureIiId, expectedSimulationId, form } = {}) {
     const stop = stopPayload(form || {});
     return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_order_no: text(orderNo),
       p_index_sn: Number(indexSn), p_part_no: text(partNo) || null, p_manufacture_ii_id: text(manufactureIiId) || null,
-      p_good_qty: stop.good_qty, p_fail_qty: stop.fail_qty, p_reason_code: stop.reason_code,
+      p_expected_simulation_id: text(expectedSimulationId) || null, p_good_qty: stop.good_qty, p_fail_qty: stop.fail_qty,
+      p_fail_reason_code: stop.fail_reason_code, p_reason_code: stop.reason_code,
       p_allow_takeover: stop.allow_takeover, p_note: stop.note || null };
   }
   function takeoverPayload({ commandUuid, machineCode, stopNoteId } = {}) {
@@ -72,9 +75,21 @@
   }
   function availabilityAfterProbeError(error) {
     const value = `${text(error?.code)} ${text(error?.message || error)}`.toUpperCase();
-    return /(^|\s)42883(\s|$)/.test(value) || value.includes("PGRST202") ? "missing" : "ready";
+    return value.includes("TAKEOVER_DISABLED") ? "off" : "missing";
+  }
+  function probeMachine(machines, visibleMachineCodes) {
+    const configured = [...machineSet(machines)];
+    if (!configured.includes("*")) return configured[0] || "";
+    return (Array.isArray(visibleMachineCodes) ? visibleMachineCodes : []).map((value) => text(value).toUpperCase()).find(Boolean) || "";
+  }
+  function rejectText(code) {
+    return ({
+      TAKEOVER_DISABLED: "工廠未啟用，請用一般停工",
+      STATION_CLASS_MISMATCH: "這台與來源機台類型不同，不能接手",
+      NOT_ELIGIBLE: "這筆目前不符合接手條件；第一版不開放 B 機合併站或多盤接手",
+    })[text(code).toUpperCase()] || "";
   }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload,
-    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, startTabs };
+    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, startTabs };
 });

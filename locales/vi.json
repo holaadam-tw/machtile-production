@@ -492,7 +492,7 @@
   "takeover_good_qty": { "value": "Hàng tốt", "_draft": true }, "takeover_fail_qty": { "value": "Hàng lỗi", "_draft": true },
   "takeover_reason": { "value": "Lý do dừng", "_draft": true }, "takeover_allow_question": { "value": "Cho phép máy khác tiếp nhận?", "_draft": true },
   "takeover_must_tap": { "value": "Vui lòng tự chọn Có hoặc Không", "_draft": true }, "takeover_note": { "value": "Ghi chú", "_draft": true },
-  "takeover_confirm_stop": { "value": "Xác nhận dừng", "_draft": true }, "takeover_stop_sent": { "value": "Đã gửi lệnh dừng", "_draft": true },
+  "takeover_confirm_stop": { "value": "Xác nhận dừng", "_draft": true }, "takeover_stop_sent": { "value": "Đã gửi lệnh dừng", "_draft": true }, "takeover_stop_waiting": { "value": "Đã gửi, đang chờ nhà máy xác nhận", "_draft": true },
   "takeover_new_order": { "value": "Mở đơn hàng mới", "_draft": true }, "takeover_old_order": { "value": "Tiếp nhận lệnh cũ", "_draft": true },
   "takeover_new_order_help": { "value": "Chọn đơn hàng mới trong danh sách chờ.", "_draft": true }, "takeover_continue_new": { "value": "Tiếp tục mở đơn mới", "_draft": true },
   "takeover_step": { "value": "Công đoạn {{step}}", "_draft": true }, "takeover_done_remaining": { "value": "Đã làm {{done}}／còn {{remaining}}", "_draft": true },
