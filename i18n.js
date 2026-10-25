@@ -89,6 +89,7 @@
       short_completion_question: "實做數少於計畫（差 {{quantity}} 件）：短交完工？",
       short_completion_material: "材料短少",
       short_completion_scrap: "報廢",
+      short_completion_none: "不短交（選填）",
       short_completion_other: "其他",
       short_completion_note: "請說明原因（最多 500 字）",
       short_completion_reason_required: "請選擇短交原因。",
@@ -246,6 +247,7 @@
       short_completion_question: "Số thực tế ít hơn kế hoạch (thiếu {{quantity}} sản phẩm): hoàn tất giao thiếu?", // _draft
       short_completion_material: "Thiếu vật liệu", // _draft
       short_completion_scrap: "Phế phẩm", // _draft
+      short_completion_none: "Không thiếu hàng (tùy chọn)", // _draft
       short_completion_other: "Khác", // _draft
       short_completion_note: "Vui lòng ghi lý do (tối đa 500 ký tự)", // _draft
       short_completion_reason_required: "Vui lòng chọn lý do giao thiếu.", // _draft

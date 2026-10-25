@@ -13827,7 +13827,7 @@ function machtileRenderShortCompletion(order = selectedOrder) {
       if (note) note.hidden = section.querySelector('input[name="shortCompletionReason"]:checked')?.value !== "OTHER";
     });
     section.innerHTML = `<p class="report-qty-help"><strong data-short-completion-gap></strong></p>
-      <div class="checklist-card"><label><input type="radio" name="shortCompletionReason" value="" checked> 不短交（選填）</label>
+      <div class="checklist-card"><label><input type="radio" name="shortCompletionReason" value="" checked> ${escapeHtml(machtileTranslate("short_completion_none"))}</label>
       <label><input type="radio" name="shortCompletionReason" value="MATERIAL_SHORT"> ${escapeHtml(machtileTranslate("short_completion_material"))}</label>
       <label><input type="radio" name="shortCompletionReason" value="SCRAP"> ${escapeHtml(machtileTranslate("short_completion_scrap"))}</label>
       <label><input type="radio" name="shortCompletionReason" value="OTHER"> ${escapeHtml(machtileTranslate("short_completion_other"))}</label></div>
