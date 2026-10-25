@@ -39,7 +39,7 @@ test("cloud payloads use dedicated RPC parameter names", () => {
   assert.deepEqual(core.stopReportPayload({ commandUuid: "cmd", machineCode: "a04", orderNo: "WO-1", indexSn: 2, partNo: "P-1", expectedSimulationId: "SIM-1", form }), {
     p_command_uuid: "cmd", p_machine_code: "A04", p_order_no: "WO-1", p_index_sn: 2, p_part_no: "P-1",
     p_manufacture_ii_id: null, p_expected_simulation_id: "SIM-1", p_good_qty: 3, p_fail_qty: 1,
-    p_fail_reason_code: "尺寸不良", p_reason_code: "RUSH_ORDER", p_allow_takeover: true, p_note: null,
+    p_fail_reason_code: "尺寸不良", p_stop_reason_code: "RUSH_ORDER", p_allow_takeover: true, p_stop_note: null,
   });
   assert.deepEqual(core.takeoverPayload({ commandUuid: "cmd", machineCode: "a05", stopNoteId: "note" }),
     { p_command_uuid: "cmd", p_machine_code: "A05", p_stop_note_id: "note" });

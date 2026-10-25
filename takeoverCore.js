@@ -55,8 +55,8 @@
     return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_order_no: text(orderNo),
       p_index_sn: Number(indexSn), p_part_no: text(partNo) || null, p_manufacture_ii_id: text(manufactureIiId) || null,
       p_expected_simulation_id: text(expectedSimulationId) || null, p_good_qty: stop.good_qty, p_fail_qty: stop.fail_qty,
-      p_fail_reason_code: stop.fail_reason_code, p_reason_code: stop.reason_code,
-      p_allow_takeover: stop.allow_takeover, p_note: stop.note || null };
+      p_fail_reason_code: stop.fail_reason_code, p_stop_reason_code: stop.reason_code,
+      p_allow_takeover: stop.allow_takeover, p_stop_note: stop.note || null };
   }
   function takeoverPayload({ commandUuid, machineCode, stopNoteId } = {}) {
     return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_stop_note_id: text(stopNoteId) };

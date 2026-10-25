@@ -13800,6 +13800,13 @@ function machtileTakeoverActive(code) { return machtileTakeover.availability ===
 function machtileTakeoverLanguage() { return String(document.documentElement.lang || "zh-Hant").toLowerCase().startsWith("vi") ? "vi" : "zh"; }
 function machtileTakeoverLabel(policy) { return machtileTakeoverLanguage() === "vi" ? policy.label_vi : policy.label_zh; }
 function machtileTakeoverClose() { document.getElementById("machtileTakeoverSheet")?.remove(); }
+function machtileTakeoverUseLegacyStop(code, returnFocus) {
+  machtileTakeoverClose();
+  const previousAvailability = machtileTakeover.availability;
+  machtileTakeover.availability = "bypass";
+  return machtileStationCmdOpen("stop", code, returnFocus)
+    .finally(() => { machtileTakeover.availability = previousAvailability; });
+}
 function machtileTakeoverOverlay(code, type, returnFocus) {
   machtileTakeoverClose();
   const holder = document.createElement("div"); holder.id = "machtileTakeoverSheet"; holder.className = "station-cmd-overlay";
@@ -13818,13 +13825,14 @@ function machtileTakeoverStopRender(holder, viewState) {
     <fieldset><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${!viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
     <label>${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
     <p class="station-cmd-notice is-bad" data-takeover-error ${viewState.error ? "" : "hidden"}>${escapeHtml(viewState.error || "")}</p>
-    <footer class="station-cmd-actions"><button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button><button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+    <footer class="station-cmd-actions"><button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
 }
 async function machtileTakeoverOpenStop(code, returnFocus) {
   const machine = machtileStationCmdMachineByCode(code), order = machine?.order; if (!order) return;
   const policies = machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
   const holder = machtileTakeoverOverlay(code, "stop", returnFocus);
-  holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), sending: false, error: "", machine, order };
+  holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order };
   machtileTakeoverStopRender(holder, holder._state);
 }
 async function machtileTakeoverSubmitStop(holder) {
@@ -13843,7 +13851,8 @@ async function machtileTakeoverSubmitStop(holder) {
   });
   if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
   if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
-  viewState.sending = false; viewState.error = result.error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState);
+  viewState.sending = false; viewState.offerLegacyStop = true;
+  viewState.error = result.error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState);
 }
 function machtileTakeoverCandidateModel(row) {
   const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
@@ -14962,6 +14971,7 @@ function machtileStationCmdFinish(code, view) {
     const message = machtileTakeoverCore?.rejectText(view.code);
     if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
     if (message) showToast(message);
+    void machtileTakeoverUseLegacyStop(code, null);
   }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
@@ -15054,6 +15064,7 @@ function machtileStationCmdHandleClick(event) {
   if (takeoverSheet) {
     const viewState = takeoverSheet._state;
     if (event.target.closest("[data-takeover-close]")) { machtileTakeoverClose(); return true; }
+    if (event.target.closest("[data-takeover-legacy-stop]")) { void machtileTakeoverUseLegacyStop(takeoverSheet.dataset.machine, takeoverSheet._returnFocus); return true; }
     if (event.target.closest("[data-takeover-use-existing]")) { const code = takeoverSheet.dataset.machine, focus = takeoverSheet._returnFocus; machtileTakeoverClose(); machtileTakeover.availability = "bypass"; machtileStationCmdOpen("start", code, focus).finally(() => { machtileTakeover.availability = "ready"; }); return true; }
     const tab = event.target.closest("[data-takeover-tab]");
     if (tab) { takeoverSheet.querySelectorAll("[data-takeover-tab]").forEach((el) => el.classList.toggle("is-selected", el === tab)); takeoverSheet.querySelectorAll("[data-takeover-pane]").forEach((el) => { el.hidden = el.dataset.takeoverPane !== tab.dataset.takeoverTab; }); return true; }
