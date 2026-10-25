@@ -52,6 +52,16 @@ test("stop_report survives reload in the shared station pending lock", () => {
   assert.equal(stationCore.statusView({ status: "pending" }, restored.A04.commandType, 0).terminal, false);
 });
 
+test("takeover survives reload and app submits through the shared result poller", () => {
+  const now = Date.now();
+  const restored = stationCore.restorePending({ A05: { commandUuid: "20000000-0000-4000-9000-000000000002",
+    commandType: "takeover", machineCode: "A05", stopNoteId: "note-1", startedAt: now } }, now);
+  assert.equal(restored.A05.commandType, "takeover");
+  const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
+  assert.match(app, /commandType: "takeover"/);
+  assert.match(app, /record\.commandType === "takeover"[\s\S]*resultText\(view\)/);
+});
+
 test("APP renders SQL display names and delegates probe error classification", () => {
   const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
   assert.match(app, /who: taken\.taken_by_name/);

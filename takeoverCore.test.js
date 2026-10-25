@@ -91,4 +91,7 @@ test("known takeover rejects have operator-facing text", () => {
   assert.match(core.rejectText("TAKEOVER_DISABLED"), /一般停工/);
   assert.match(core.rejectText("STATION_CLASS_MISMATCH"), /類型不同/);
   assert.match(core.rejectText("NOT_ELIGIBLE"), /B 機合併站/);
+  for (const code of ["TARGET_BUSY", "ALREADY_TAKEN", "TAKEOVER_NOT_ALLOWED", "NOT_ELIGIBLE"])
+    assert.match(core.rejectText(code), / \/ /, `${code} has Chinese and Vietnamese feedback`);
+  assert.equal(core.resultText({ phase: "applied" }), "已接手 / Đã tiếp quản");
 });

@@ -84,12 +84,21 @@
   }
   function rejectText(code) {
     return ({
+      TARGET_BUSY: "目標機台忙碌，請稍後再試 / Máy đích đang bận, vui lòng thử lại sau",
+      ALREADY_TAKEN: "此工單已被其他機台接手 / Lệnh này đã được máy khác tiếp quản",
+      ALREADY_CLAIMED: "此工單已被其他機台接手 / Lệnh này đã được máy khác tiếp quản",
+      TAKEOVER_NOT_ALLOWED: "生管已收回接手權限 / Điều độ đã thu hồi quyền tiếp quản",
       TAKEOVER_DISABLED: "工廠未啟用，請用一般停工",
       STATION_CLASS_MISMATCH: "這台與來源機台類型不同，不能接手",
-      NOT_ELIGIBLE: "這筆目前不符合接手條件；第一版不開放 B 機合併站或多盤接手",
+      NOT_ELIGIBLE: "這筆目前不符合接手條件；第一版不開放 B 機合併站或多盤接手 / Hiện không đủ điều kiện tiếp quản",
     })[text(code).toUpperCase()] || "";
+  }
+  function resultText(view) {
+    if (view?.phase === "applied") return "已接手 / Đã tiếp quản";
+    if (view?.phase === "rejected") return rejectText(view.code) || `接手失敗（${text(view.code) || "UNKNOWN"}） / Tiếp quản thất bại`;
+    return "";
   }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload,
-    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, startTabs };
+    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, startTabs };
 });

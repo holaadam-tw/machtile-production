@@ -13874,8 +13874,16 @@ async function machtileTakeoverOpenStart(code, returnFocus) {
 async function machtileTakeoverSubmitCandidate(holder, candidate) {
   if (!candidate || !window.confirm(machtileTranslate("takeover_confirm_message", { source: candidate.sourceMachine, order: candidate.orderNo,
     step: candidate.indexSn, done: candidate.doneQty, target: holder.dataset.machine, remaining: candidate.remainingQty }))) return;
-  try { await supabaseFetch("rpc/machtile_submit_takeover", { method: "POST", body: JSON.stringify(machtileTakeoverCore.takeoverPayload({ commandUuid: crypto.randomUUID(), machineCode: holder.dataset.machine, stopNoteId: candidate.stopNoteId })) }); machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent")); }
-  catch (error) { showToast(error?.message || machtileTranslate("takeover_send_failed")); }
+  const commandUuid = crypto.randomUUID(), machineCode = holder.dataset.machine;
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid, commandType: "takeover", machineCode,
+    fields: { stopNoteId: candidate.stopNoteId }, recordFields: { stopNoteId: candidate.stopNoteId }, startedAt: Date.now(),
+    rpcName: "machtile_submit_takeover",
+    payloadOverride: machtileTakeoverCore.takeoverPayload({ commandUuid, machineCode, stopNoteId: candidate.stopNoteId }),
+  });
+  if (result.ok || machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+    machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent"));
+  } else showToast(result.error?.message || machtileTranslate("takeover_send_failed"));
 }
 const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
 const machtileStationCmd = {
@@ -14972,6 +14980,9 @@ function machtileStationCmdFinish(code, view) {
     if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
     if (message) showToast(message);
     void machtileTakeoverUseLegacyStop(code, null);
+  }
+  if (record.commandType === "takeover" && view?.terminal) {
+    showToast(machtileTakeoverCore?.resultText(view) || view.title);
   }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);

@@ -29,7 +29,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileStationCommandCore() {
   "use strict";
 
-  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next", "stop_report"]);
+  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next", "stop_report", "takeover"]);
   const GENERIC_SUBMIT_COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
   const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站", claim_next: "接下一道" });
   const TERMINAL = Object.freeze(["applied", "rejected", "expired"]);
