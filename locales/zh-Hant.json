@@ -158,5 +158,6 @@
   "takeover_step": "第 {{step}} 道", "takeover_done_remaining": "已做 {{done}}／剩下 {{remaining}}", "takeover_take": "接手",
   "takeover_none": "目前沒有可接手的工單", "takeover_sent": "接手已送出", "takeover_send_failed": "送出失敗，請稍後再試",
   "yes": "是", "no": "否", "cancel": "取消", "loading": "讀取中…",
-  "takeover_taken_notice": "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）"
+  "takeover_taken_notice": "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）",
+  "takeover_confirm_message": "從 {{source}} 接手 {{order}} 第 {{step}} 道；{{source}} 已做 {{done}}，{{target}} 接手剩下 {{remaining}}。確定接手？"
 }

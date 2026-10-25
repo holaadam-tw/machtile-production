@@ -13782,8 +13782,8 @@ async function machtileLoadTakeoverAvailability() {
   try {
     const [policies, , notices] = await Promise.all([
       supabaseFetch("stop_reason_policy?select=code,label_zh,label_vi,default_allow,note_required,sort&order=sort.asc").catch(() => []),
-      supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ machine_code: machines[0] }) }),
-      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status&source_machine=in.(${machines.map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
+      supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: machines[0] }) }),
+      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by,taken_at,status&source_machine=in.(${machines.map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
     ]);
     machtileTakeover.policies = machtileTakeoverCore.normalizePolicies(policies);
     machtileTakeover.notices = new Map((Array.isArray(notices) ? notices : []).map((row) => [`${String(row.source_machine).toUpperCase()}|${row.order_no}|${row.index_sn}`, row]));
@@ -13820,28 +13820,42 @@ async function machtileTakeoverOpenStop(code, returnFocus) {
 }
 async function machtileTakeoverSubmitStop(holder) {
   const viewState = holder._state, check = machtileTakeoverCore.validateStop(viewState.form, viewState.policies); if (!check.ok || viewState.sending) return;
+  const code = holder.dataset.machine;
+  if (machtileStationCmd.pending[code] && !machtileStationCmdUnlocked(machtileStationCmd.pending[code])) return;
   viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
-  try {
-    await supabaseFetch("rpc/machtile_submit_station_command", { method: "POST", body: JSON.stringify({ p_command_uuid: crypto.randomUUID(), p_command_type: "stop_report", p_machine_code: holder.dataset.machine, p_expected_order_no: viewState.order.id, p_expected_index_sn: viewState.order.stationStep, p_expected_part_no: viewState.order.partNo || viewState.order.part || null, p_manufacture_ii_id: viewState.order.manufactureIiId || null, p_payload: machtileTakeoverCore.stopPayload(viewState.form) }) });
-    machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_sent"));
-  } catch (error) { viewState.sending = false; viewState.error = error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState); }
+  const commandUuid = crypto.randomUUID(), startedAt = Date.now();
+  const fields = { orderNo: viewState.order.id, step: viewState.order.stationStep,
+    partNo: viewState.order.partNo || viewState.order.part || null, manufactureIiId: viewState.order.manufactureIiId || null };
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid, commandType: "stop_report", machineCode: code, fields, recordFields: fields, startedAt,
+    rpcName: "machtile_submit_stop_report",
+    payloadOverride: machtileTakeoverCore.stopReportPayload({ commandUuid, machineCode: code, ...fields, indexSn: fields.step, form: viewState.form }),
+  });
+  if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_sent")); return; }
+  if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_sent")); return; }
+  viewState.sending = false; viewState.error = result.error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState);
+}
+function machtileTakeoverCandidateModel(row) {
+  const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
+  const policy = machtileTakeover.policies.find((item) => item.code === row.reason_code);
+  return machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code);
 }
 function machtileTakeoverCandidateCard(row) {
-  const done = Number(row.good_qty || 0) + Number(row.fail_qty || 0);
-  return `<article class="takeover-candidate"><h3>${escapeHtml(row.order_no || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.index_sn ?? "—" }))}</h3><p>${escapeHtml(row.source_machine || "—")} · ${escapeHtml(row.stopped_by_name || row.stopped_by || "—")} · ${escapeHtml(formatDateTime(row.stopped_at))}</p><p>${escapeHtml(row.reason_label || row.reason_code || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done, remaining: row.remaining_qty ?? 0 }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.id)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
+  return `<article class="takeover-candidate"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
 }
 async function machtileTakeoverOpenStart(code, returnFocus) {
   const holder = machtileTakeoverOverlay(code, "start", returnFocus);
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("start_work"))}</h2></header><div class="takeover-tabs" role="tablist"><button data-takeover-tab="new" class="is-selected">${escapeHtml(machtileTranslate("takeover_new_order"))}</button><button data-takeover-tab="takeover">${escapeHtml(machtileTranslate("takeover_old_order"))}</button></div><div data-takeover-pane="new"><p>${escapeHtml(machtileTranslate("takeover_new_order_help"))}</p><button type="button" data-takeover-use-existing>${escapeHtml(machtileTranslate("takeover_continue_new"))}</button></div><div data-takeover-pane="takeover" hidden><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
   try {
-    const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ machine_code: code }) });
-    holder._candidates = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.id), row]));
+    const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
+    holder._candidates = new Map((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel).filter((row) => row.stopNoteId).map((row) => [row.stopNoteId, row]));
     holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
   } catch (error) { machtileTakeoverClose(); machtileTakeover.availability = "missing"; machtileStationCmdOpen("start", code, returnFocus); }
 }
 async function machtileTakeoverSubmitCandidate(holder, candidate) {
-  if (!candidate || !window.confirm(machtileTakeoverCore.takeoverConfirmation(candidate, holder.dataset.machine))) return;
-  try { await supabaseFetch("rpc/machtile_submit_station_command", { method: "POST", body: JSON.stringify({ p_command_uuid: crypto.randomUUID(), p_command_type: "takeover", p_machine_code: holder.dataset.machine, p_payload: { stop_note_id: candidate.id } }) }); machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent")); }
+  if (!candidate || !window.confirm(machtileTranslate("takeover_confirm_message", { source: candidate.sourceMachine, order: candidate.orderNo,
+    step: candidate.indexSn, done: candidate.doneQty, target: holder.dataset.machine, remaining: candidate.remainingQty }))) return;
+  try { await supabaseFetch("rpc/machtile_submit_takeover", { method: "POST", body: JSON.stringify(machtileTakeoverCore.takeoverPayload({ commandUuid: crypto.randomUUID(), machineCode: holder.dataset.machine, stopNoteId: candidate.stopNoteId })) }); machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent")); }
   catch (error) { showToast(error?.message || machtileTranslate("takeover_send_failed")); }
 }
 const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
@@ -14151,18 +14165,18 @@ function machtileStationCmdParts(machine) {
   let line = "";
   let retry = "";
   if (pending && pending.unconfirmed) {
-    line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>`;
-    retry = `<button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
+    line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType] || machtileTranslate("takeover_stop_title"))}：上次送出時網路斷了，正在確認有沒有送到</p>`;
+    retry = pending.commandType === "stop_report" ? "" : `<button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
   } else if (pending) {
     const view = pending.view || machtileStationCmdCore.statusView({ status: "pending" }, pending.commandType, null);
-    line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
+    line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType] || machtileTranslate("takeover_stop_title"))}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
   } else if (last) {
     line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
-  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || taken.taken_by || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
+  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
   const buttons = gate.ok ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";
@@ -14812,14 +14826,14 @@ async function machtileStationCmdRunSubmission(options) {
   const {
     commandUuid, commandType, machineCode, fields, recordFields, startedAt,
     previousRecord = null, attemptNumber = 1, validateRow = null,
-    onError = null, onAccepted = null, afterRecord = null,
+    onError = null, onAccepted = null, afterRecord = null, rpcName = null, payloadOverride = null,
   } = options;
-  const payload = core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
+  const payload = payloadOverride || core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
-    const rpc = payload.p_replace_stopped === true ? core.REPLACE_STOPPED_RPC : core.SUBMIT_RPC;
+    const rpc = rpcName || (payload.p_replace_stopped === true ? core.REPLACE_STOPPED_RPC : core.SUBMIT_RPC);
     const result = await supabaseFetch(`rpc/${rpc}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {

@@ -6,11 +6,11 @@
   "use strict";
 
   const DEFAULT_POLICIES = Object.freeze([
-    { code: "MACHINE_FAULT", label_zh: "機台故障", label_vi: "Máy bị sự cố", default_allow: true, note_required: false, sort: 10 },
-    { code: "RUSH_ORDER", label_zh: "插急單", label_vi: "Chen đơn gấp", default_allow: true, note_required: false, sort: 20 },
-    { code: "TOOLING", label_zh: "刀具／治具問題", label_vi: "Vấn đề dao／đồ gá", default_allow: true, note_required: false, sort: 30 },
-    { code: "MATERIAL_WAIT", label_zh: "待料", label_vi: "Chờ vật liệu", default_allow: false, note_required: false, sort: 40 },
-    { code: "QUALITY_HOLD", label_zh: "品質確認中", label_vi: "Đang xác nhận chất lượng", default_allow: false, note_required: false, sort: 50 },
+    { code: "MACHINE_FAULT", label_zh: "機台故障／維修", label_vi: "Máy hỏng / bảo trì", default_allow: true, note_required: true, sort: 10 },
+    { code: "RUSH_ORDER", label_zh: "換做急單", label_vi: "Chuyển sang đơn gấp", default_allow: true, note_required: false, sort: 20 },
+    { code: "TOOLING", label_zh: "刀具／治具問題", label_vi: "Vấn đề dao / đồ gá", default_allow: true, note_required: false, sort: 30 },
+    { code: "MATERIAL_WAIT", label_zh: "缺料／等料", label_vi: "Thiếu / chờ vật liệu", default_allow: false, note_required: false, sort: 40 },
+    { code: "QUALITY_HOLD", label_zh: "品質問題／等檢驗", label_vi: "Vấn đề chất lượng / chờ kiểm tra", default_allow: false, note_required: false, sort: 50 },
     { code: "OTHER", label_zh: "其他", label_vi: "Khác", default_allow: true, note_required: true, sort: 60 },
   ]);
 
@@ -48,12 +48,26 @@
     return { good_qty: Number(form.good_qty), fail_qty: Number(form.fail_qty), reason_code: text(form.reason_code).toUpperCase(),
       allow_takeover: form.allow_takeover === true, note: text(form.note) };
   }
-  function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
-  function takeoverConfirmation(candidate, machineCode) {
-    const source = text(candidate?.source_machine), target = text(machineCode), order = text(candidate?.order_no);
-    const step = candidate?.index_sn ?? "—", done = Number(candidate?.good_qty || 0) + Number(candidate?.fail_qty || 0);
-    const remaining = Math.max(0, Number(candidate?.remaining_qty || 0));
-    return `從 ${source} 接手 ${order} 第 ${step} 道：${source} 已做 ${done}，${target} 接手剩 ${remaining}`;
+  function stopReportPayload({ commandUuid, machineCode, orderNo, indexSn, partNo, manufactureIiId, form } = {}) {
+    const stop = stopPayload(form || {});
+    return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_order_no: text(orderNo),
+      p_index_sn: Number(indexSn), p_part_no: text(partNo) || null, p_manufacture_ii_id: text(manufactureIiId) || null,
+      p_good_qty: stop.good_qty, p_fail_qty: stop.fail_qty, p_reason_code: stop.reason_code,
+      p_allow_takeover: stop.allow_takeover, p_note: stop.note || null };
   }
-  return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload, startTabs, takeoverConfirmation };
+  function takeoverPayload({ commandUuid, machineCode, stopNoteId } = {}) {
+    return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_stop_note_id: text(stopNoteId) };
+  }
+  function candidateView(row, plannedQty, reasonLabel) {
+    const done = Number(row?.good_qty || 0) + Number(row?.fail_qty || 0);
+    const planned = Math.max(0, Number(plannedQty || 0));
+    return { stopNoteId: text(row?.stop_note_id), orderNo: text(row?.order_no), indexSn: row?.index_sn,
+      sourceMachine: text(row?.source_machine), stoppedBy: text(row?.stopped_by), stoppedAt: row?.stopped_at,
+      reasonCode: text(row?.reason_code), reasonLabel: text(reasonLabel) || text(row?.reason_code), note: text(row?.note),
+      goodQty: Number(row?.good_qty || 0), failQty: Number(row?.fail_qty || 0), doneQty: done,
+      remainingQty: Math.max(0, planned - done) };
+  }
+  function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
+  return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload,
+    stopReportPayload, takeoverPayload, candidateView, startTabs };
 });

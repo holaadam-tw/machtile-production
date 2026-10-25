@@ -29,7 +29,8 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileStationCommandCore() {
   "use strict";
 
-  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
+  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next", "stop_report"]);
+  const GENERIC_SUBMIT_COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
   const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站", claim_next: "接下一道" });
   const TERMINAL = Object.freeze(["applied", "rejected", "expired"]);
   // 合約 r2 §2 的伺服器常數（App 只用來寫提示與決定何時停止輪詢，不用來判結果）
@@ -275,7 +276,7 @@
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
   function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, poolItemId, replaceStopped } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
-    if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
+    if (!GENERIC_SUBMIT_COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
     if (!code) throw new Error("NO_MACHINE");
     if (!text(orderNo)) throw new Error("NO_ORDER");
