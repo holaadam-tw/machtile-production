@@ -145,6 +145,8 @@ eq("合約欄位齊全", c.submitPayload({ commandUuid: UUID, commandType: "star
 eq("料號沒有 → null", c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: 1, partNo: null }).p_expected_part_no, null);
 eq("多工站帶 Id", c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "B03", orderNo: "X", step: 1, manufactureIiId: "77" }).p_manufacture_ii_id, "77");
 eq("close 帶預期 SimulationId", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1" }).p_expected_simulation_id, "SIM-1");
+eq("close 短交使用雲端具名參數與 Factory JSON 欄位", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "MATERIAL_SHORT", note: "缺料" } }).p_short_completion, { reason_code: "MATERIAL_SHORT", note: "缺料" });
+throws("短交 OTHER 缺說明", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "OTHER", note: "" } }), "SHORT_COMPLETION_REASON_INVALID");
 throws("close 缺 SimulationId", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1 }), "NO_SIMULATION_ID");
 throws("壞 uuid", () => c.submitPayload({ commandUuid: "x", commandType: "start", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_UUID");
 throws("不支援的指令（換單）", () => c.submitPayload({ commandUuid: UUID, commandType: "switch", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_TYPE");

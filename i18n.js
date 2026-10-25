@@ -86,6 +86,17 @@
       finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
       finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
       finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
+      short_completion_question: "實做數少於計畫（差 {{quantity}} 件）：短交完工？",
+      short_completion_material: "材料短少",
+      short_completion_scrap: "報廢",
+      short_completion_other: "其他",
+      short_completion_note: "請說明原因（最多 500 字）",
+      short_completion_reason_required: "請選擇短交原因。",
+      short_completion_other_note_required: "選擇其他時必須填寫說明（最多 500 字）。",
+      short_completion_disabled: "短交完工尚未開放，未關站。",
+      short_completion_not_needed: "實做數未少於計畫，不需短交完工。",
+      short_completion_reason_invalid: "短交原因或說明不符合規則，未關站。",
+      short_completion_warning: "下一道已有人接，數量未調整，請通知生管。",
       standard_finish_same_title: "下一道可在這台接著做",
       standard_finish_same_body: "下一道 {{name}}（{{class}}）已可接單。",
       standard_finish_other_title: "下一道交給其他課別",
@@ -232,6 +243,17 @@
       finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
       finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
       finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
+      short_completion_question: "Số thực tế ít hơn kế hoạch (thiếu {{quantity}} sản phẩm): hoàn tất giao thiếu?", // _draft
+      short_completion_material: "Thiếu vật liệu", // _draft
+      short_completion_scrap: "Phế phẩm", // _draft
+      short_completion_other: "Khác", // _draft
+      short_completion_note: "Vui lòng ghi lý do (tối đa 500 ký tự)", // _draft
+      short_completion_reason_required: "Vui lòng chọn lý do giao thiếu.", // _draft
+      short_completion_other_note_required: "Khi chọn Khác, phải nhập mô tả (tối đa 500 ký tự).", // _draft
+      short_completion_disabled: "Chức năng hoàn tất giao thiếu chưa được bật; công đoạn chưa đóng.", // _draft
+      short_completion_not_needed: "Số thực tế không ít hơn kế hoạch; không cần giao thiếu.", // _draft
+      short_completion_reason_invalid: "Lý do hoặc mô tả giao thiếu không hợp lệ; công đoạn chưa đóng.", // _draft
+      short_completion_warning: "Công đoạn tiếp theo đã được nhận; số lượng chưa điều chỉnh. Vui lòng báo kế hoạch sản xuất.", // _draft
       standard_finish_same_title: "Có thể tiếp tục công đoạn kế tiếp trên máy này",
       standard_finish_same_body: "Công đoạn kế tiếp {{name}} ({{class}}) đã sẵn sàng để nhận.",
       standard_finish_other_title: "Công đoạn kế tiếp thuộc bộ phận khác",

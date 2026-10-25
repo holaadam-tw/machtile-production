@@ -76,6 +76,9 @@ window.MACHTILE_CONFIG = {
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
   finishCloseMachines: ["A04"],
+  // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
+  enableShortCompletion: false,
+  shortCompletionMachines: [],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
   standardFinishFlowMachines: ["A04"],
