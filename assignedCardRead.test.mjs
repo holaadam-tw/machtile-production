@@ -7,7 +7,8 @@ const end=source.indexOf('async function machtileLoadCardLegacyProgress(',start)
 const calls=[],warnings=[];
 let response=[],failure=null,timerMs=0;
 const state={source:'supabase',workOrders:[]};
-const context=vm.createContext({state,Map,AbortController,
+// #130 pick/start: status filter reads config + machtilePickStartEnabled; defaults = all flags off (same as main).
+const context=vm.createContext({state,Map,AbortController,config:{},machtilePickStartEnabled:()=>false,
   console:{warn:(...x)=>warnings.push(x)},
   setTimeout:(f,ms)=>{timerMs=ms;return 1},clearTimeout:()=>{},
   normalizeOrder:r=>({id:r.work_order_no,processId:r.current_process_id,machine:r.machine_name,workStatus:r.work_order_status,processStatus:r.current_process_status,done:r.qty_completed}),

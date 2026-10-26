@@ -39,6 +39,9 @@ let currentMachine = "A04";
 let guardFails = false;
 let guardEnabled = true;
 let finishButtonEnabled = true;
+let pickStartEnabled = false;
+let assignedPausedA04 = false;
+const assignedQueries = [];
 let finalSubmitFails = false;
 let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
@@ -78,11 +81,17 @@ await context.route("**/*", async route => {
       if (closeCommand && requested.includes(closeCommand.command_uuid)) return json([closeCommand]);
       return json(reconciledCommand ? [reconciledCommand] : []);
     }
+    if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("machines!work_order_processes_machine_id_fkey")) {
+      assignedQueries.push(url.href);
+      if (assignedPausedA04) return json([{ id: processId, tenant_id: tenantId, process_order: 2, process_name: "車床", process_type: "cnc", status: "paused", off_station_at: null, qty_completed: 920, queue_order: null, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0",
+        work_orders: { id: workOrderId, work_order_no: "XX01202604140011", part_no: "GQ7Q", part_name: "試點件", quantity: 1000, due_date: "2026-10-20", status: "in_progress", legacy_mes_source: null, external_ref: null },
+        machines: { id: id(201), machine_code: "A04" } }]);
+    }
     if (url.pathname.endsWith("/production_reports") && req.method() === "POST") { calls.reports.push(req.postDataJSON()); return json([calls.reports.at(-1)]); }
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -338,6 +347,60 @@ await finishFlagOff.evaluate(() => {
 assert.equal(await finishFlagOff.locator('.machine-finish-button').count(), 0, "disabled finish flag removes machine-card finish button");
 await finishFlagOff.close();
 finishButtonEnabled = true;
+
+// d35 整合：#130 選工單／開工開關開＋雲端工序 paused（停工卡）→ 按「完工」走原本完工畫面，
+// 實做<計畫時出 #131 短交對話框，送出的 close 指令帶 p_short_completion（沿用既有送出流程，不另寫）。
+currentMachine = "A04"; pickStartEnabled = true; assignedPausedA04 = true; finishButtonEnabled = true;
+const pausedFinish = await context.newPage();
+await pausedFinish.goto(base, { waitUntil: "domcontentloaded" });
+await pausedFinish.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await pausedFinish.waitForFunction(() => machtileCardOrderForMachine("A04")?.processStatus === "paused");
+assert.ok(assignedQueries.at(-1).includes("status=in.(pending,running,abnormal,waiting_inspection,paused)"), "pick/start flag on → assigned-card query includes paused");
+await pausedFinish.waitForFunction(() => machtileDeferredLoadsSettled === true, null, { timeout: 15000 });
+// dev-nologin fixture has no session role; act as an operator (like stationCommand fixture) and reload through the normal loader.
+await pausedFinish.evaluate(async () => { machtileAuthState.role = "operator"; await loadFromSupabase({ preserveDepartmentOnFailure: true }); deriveMachines(); renderAll(); });
+assert.equal(await pausedFinish.evaluate(() => machtileStationCmd.availability), "ready", "operator session enables station commands");
+assert.equal(await pausedFinish.evaluate(() => machtilePickStartPhase(state.machines.find(m => machtileStationCmdMachineCode(m) === "A04"), machtileCardOrderForMachine("A04"))), "stopped", "cloud paused → pick/start phase stopped");
+const pausedCard = pausedFinish.locator("#workOrderGrid .machine-tile-card").filter({ has: pausedFinish.locator('.machine-finish-button[data-report-machine="A04"]') });
+await pausedCard.first().waitFor();
+assert.equal(await pausedCard.locator(".machine-report-button").count(), 0, "paused card hides routine report");
+assert.equal(await pausedCard.locator('[data-station-cmd="start"]').count(), 1, "paused card shows 開工 (resume)");
+const pausedFinishButton = pausedCard.locator('.machine-finish-button[data-open-report-type="finish"]');
+assert.equal(await pausedFinishButton.count(), 1, "paused card keeps exactly one finish button");
+assert.equal(await pausedFinishButton.isDisabled(), false, "paused card finish button is enabled");
+const pausedCloseBefore = calls.closeCommands.length;
+await pausedFinishButton.click();
+await pausedFinish.waitForFunction(() => document.querySelector("#finishSheet")?.classList.contains("is-open"));
+assert.equal(await pausedFinish.evaluate(() => ({ type: activeReportType, host: document.querySelector("#reportForm")?.parentElement?.id, report: document.querySelector("#reportSheet")?.classList.contains("is-open") })).then(v => JSON.stringify(v)),
+  JSON.stringify({ type: "finish", host: "finishFormHost", report: false }), "paused finish opens the original finish screen (canonical form, not routine report)");
+assert.equal(await pausedFinish.locator("#finishReportedQty").innerText(), "已報 920 件", "paused finish reuses reported quantity");
+assert.equal(calls.closeCommands.length, pausedCloseBefore, "opening finish sends no command");
+await pausedFinish.locator("#completedQty").fill("950");
+await pausedFinish.locator("#defectQty").fill("0");
+assert.equal(await pausedFinish.locator("#shortCompletionSection").isVisible(), true, "paused finish below plan shows the #131 short-completion dialog");
+assert.match(await pausedFinish.locator("#shortCompletionSection").innerText(), /50/, "paused short-completion prompt shows the plan gap");
+await pausedFinish.locator('input[name="shortCompletionReason"][value="MATERIAL_SHORT"]').check();
+await pausedFinish.evaluate(operatorId => {
+  const list = document.createElement("div");
+  list.id = "machtileOperatorList";
+  list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`;
+  document.body.append(list);
+}, id(901));
+await pausedFinish.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await pausedFinish.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+await pausedFinish.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
+await pausedFinish.waitForFunction(() => machtileBatchRow("A04").stationReport.close?.phase === "applied", null, { timeout: 10000 });
+assert.equal(calls.closeCommands.length, pausedCloseBefore + 1, "paused finish submits exactly one close command");
+const pausedClose = calls.closeCommands.at(-1);
+assert.equal(pausedClose.p_command_type, "close");
+assert.equal(pausedClose.p_machine_code, "A04");
+assert.equal(pausedClose.p_expected_order_no, "XX01202604140011");
+assert.equal(pausedClose.p_expected_index_sn, 2);
+assert.equal(pausedClose.p_expected_simulation_id, "Y011BG35APT0");
+assert.deepEqual(pausedClose.p_short_completion, { reason_code: "MATERIAL_SHORT", note: "" }, "paused-card finish sends p_short_completion through the existing close submit");
+await pausedFinish.close();
+pickStartEnabled = false; assignedPausedA04 = false;
+console.log("PASS paused-card finish → short completion → p_short_completion");
 
 currentMachine = "A04"; guardEnabled = false;
 const disabledGuard = await context.newPage();
