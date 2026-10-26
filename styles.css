@@ -13214,3 +13214,20 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 }
 .batch-command-panel{margin:12px 0;padding:14px;border:1px solid var(--line,#d8dee8);border-radius:12px;background:var(--panel,#fff)}
 .batch-command-panel h3{margin:0 0 10px}.batch-command-types{display:flex;gap:8px;margin-bottom:10px}.batch-command-types button{min-height:44px;padding:0 18px;border:1px solid #94a3b8;border-radius:9px;background:#fff}.batch-command-types button.is-active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}.batch-command-machines{display:grid;gap:8px;margin:10px 0}.batch-command-machine{display:grid;grid-template-columns:auto 52px 1fr;align-items:center;gap:8px;min-height:44px}.batch-command-machine em{grid-column:2/4;font-style:normal}.batch-command-machine em.is-ok{color:#15803d}.batch-command-machine em.is-error{color:#b91c1c}
+.takeover-panel { max-width: 680px; }
+.takeover-question { font-size: 1.1rem; font-weight: 800; }
+.takeover-qty { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.takeover-qty label, .takeover-panel > label { display: grid; gap: 6px; font-weight: 700; }
+.takeover-qty input, .takeover-panel textarea { width: 100%; box-sizing: border-box; border: 1px solid #b9c4d2; border-radius: 10px; padding: 12px; font: inherit; }
+.takeover-panel fieldset { border: 0; margin: 16px 0; padding: 0; }
+.takeover-panel legend { margin-bottom: 8px; font-weight: 800; }
+.takeover-choice-grid, .takeover-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.takeover-choice-grid button, .takeover-tabs button, .takeover-candidate button { border: 1px solid #9eabb9; border-radius: 999px; background: #fff; padding: 10px 14px; font: inherit; font-weight: 700; }
+.takeover-choice-grid button.is-selected, .takeover-tabs button.is-selected { color: #fff; border-color: #1769aa; background: #1769aa; }
+.takeover-candidate { margin-top: 12px; border: 1px solid #d7dee7; border-radius: 12px; padding: 12px; }
+.takeover-candidate h3, .takeover-candidate p { margin: 0 0 7px; }
+.takeover-taken-notice { margin: 8px 0; border-radius: 10px; background: #fff0c2; color: #704b00; padding: 9px 11px; font-weight: 800; }
+@media (max-width: 560px) { .takeover-qty { grid-template-columns: 1fr; } }
+.pick-order-tabs { margin: 4px 0 10px; }
+.pick-order-note { margin: 0 0 10px; color: #4b5b6c; font-size: .95rem; }
+.pick-order-empty { margin: 12px 0; border-radius: 10px; background: #eef2f6; color: #2f3d4c; padding: 10px 12px; font-weight: 800; }

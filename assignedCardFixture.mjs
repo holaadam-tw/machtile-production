@@ -6,6 +6,8 @@ export function assignedCardFixture(cards, machines, metadata = {}) {
     process_order: metadata[c.current_process_id]?.process_order ?? 1,
     process_name: c.current_process_name, process_type: 'cnc',
     status: c.current_process_status, off_station_at: null, qty_completed: c.qty_completed,
+    manufacture_ii_id: metadata[c.current_process_id]?.manufacture_ii_id ?? null,
+    simulation_id: metadata[c.current_process_id]?.simulation_id ?? null,
     work_orders: { id: c.id, work_order_no: c.work_order_no, part_name: c.part_name,
       part_no: c.part_no, quantity: c.quantity, due_date: c.due_date, status: c.work_order_status },
     machines: machines.find(m => (m.machine_code || m.machine_name) === c.machine_name),

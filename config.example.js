@@ -40,6 +40,12 @@ window.MACHTILE_CONFIG = {
   enableStandardFinishFlow: false,
   standardFinishFlowMachines: [],
   enableFinishClaimStartCombo: false,
+  // 換機台第一版。RPC 尚未部署或探測失敗時，APP 會完整隱藏增強畫面。
+  enableTakeover: false,
+  takeoverMachines: [],
+  // 選工單／開工分開：機台代號陣列；預設全關＝卡片照舊。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,
   shortCompletionMachines: [],

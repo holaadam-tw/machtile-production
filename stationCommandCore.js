@@ -29,7 +29,8 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createMachTileStationCommandCore() {
   "use strict";
 
-  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
+  const COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next", "stop_report", "takeover"]);
+  const GENERIC_SUBMIT_COMMAND_TYPES = Object.freeze(["start", "stop", "close", "claim_next"]);
   const TYPE_LABEL = Object.freeze({ start: "開工", stop: "停工", close: "關站", claim_next: "接下一道" });
   const TERMINAL = Object.freeze(["applied", "rejected", "expired"]);
   // 合約 r2 §2 的伺服器常數（App 只用來寫提示與決定何時停止輪詢，不用來判結果）
@@ -205,7 +206,9 @@
 
   // 開卡時重讀的 work_order_processes 列（含 work_orders、machines）→ 這一道是不是還掛在這台、道次沒變。
   // 不符就不給送（卡片資料過時），料號只取 work_orders.part_no（不拿圖號頂替）。
-  function freshCheck({ order, machineCode, row } = {}) {
+  // allowPaused：只有「選工單／開工分開」開關開的機台才傳 true——雲端停工 applied 後 status＝paused（PR #135），
+  // 單仍掛這台，接回要能按開工。沒傳＝跟以前一樣不收 paused。
+  function freshCheck({ order, machineCode, row, allowPaused = false } = {}) {
     const stale = (reason) => ({ ok: false, reason, text: "畫面上的工單資料已經過時（這一道不在這台、道次變了或已結束），請重新整理畫面再按。" });
     if (!row) return stale("process_not_found");
     const wo = row.work_orders || {};
@@ -214,7 +217,7 @@
     if (normCode(machine.machine_code) !== normCode(machineCode)) return stale("machine_changed");
     if (Number(row.process_order) !== Number(order && order.stationStep)) return stale("step_changed");
     if (text(wo.work_order_no) !== text(order && order.id)) return stale("order_changed");
-    if (!OPEN_PROCESS_STATUS.includes(text(row.status))) return stale("process_closed");
+    if (!OPEN_PROCESS_STATUS.includes(text(row.status)) && !(allowPaused === true && text(row.status) === "paused")) return stale("process_closed");
     if (CLOSED_WO_STATUS.includes(text(wo.status))) return stale("order_closed");
     return {
       ok: true, reason: "", text: "",
@@ -275,7 +278,7 @@
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
   function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
-    if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
+    if (!GENERIC_SUBMIT_COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
     if (!code) throw new Error("NO_MACHINE");
     if (!text(orderNo)) throw new Error("NO_ORDER");
