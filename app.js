@@ -11689,7 +11689,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
 
 async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy || !machtileStationCmdCore) return;
-  const pendingCmd = machtileStationCmd.pending[machineCode];
+  const pendingCmd = machtileStationCmd.pending[String(machineCode).trim().toUpperCase()];
   if (pendingCmd && !machtileStationCmdUnlocked(pendingCmd)) { showToast("這台有一筆指令還在等確認，請先處理那筆。", "error"); return; }
   const machine = machtileScheduleMachine(machineCode);
   const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
