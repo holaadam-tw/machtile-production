@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 const source=await readFile(new URL('./app.js',import.meta.url),'utf8');
 const start=source.indexOf('function machtileAssignedCardProcess(');
-const end=source.indexOf('async function machtileLoadCardLegacyProgress()',start);
+const end=source.indexOf('async function machtileLoadCardLegacyProgress(',start);
 const calls=[],warnings=[];
 let response=[],failure=null,timerMs=0;
 const state={source:'supabase',workOrders:[]};

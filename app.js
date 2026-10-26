@@ -10482,11 +10482,10 @@ function machtileRefreshCardSections() {
 function machtileStartDeferredLoads(generation) {
   const jobs = [
     ["card-details", "機台卡詳細資料", async () => {
-      await Promise.all([
-        machtileLoadAssignedDispatchPoolStatuses(),
-        machtileLoadInspectionStatuses(),
-      ]);
-      await machtileLoadCardLegacyProgress();
+      await Promise.all([machtileLoadCardLegacyProgress(generation), machtileLoadInspectionStatuses()]);
+      if (generation !== machtileDeferredLoadGeneration) return;
+      await machtileLoadAssignedDispatchPoolStatuses(generation);
+      if (generation !== machtileDeferredLoadGeneration) return;
       await Promise.all([machtileLoadCardMachineTimes(), machtileLoadCardActivity()]);
     }, machtileRefreshCardSections],
     ["schedule", "排程資料", async () => {
@@ -10496,7 +10495,7 @@ function machtileStartDeferredLoads(generation) {
     ["attention", "提醒中心", machtileLoadAttentionCenter, () => { renderAlerts(); renderNotificationCenter(); }],
     ["hmc", "HMC 盤況", machtileLoadHmcRuntime, () => { machtileRefreshCardSections(); ensureHmcDashboardEntry(); }],
     ["flow-visibility", "製程顯示設定", machtileLoadFlowVisibility, () => renderWorkOrders()],
-    ["station-command", "機台操作狀態", machtileLoadStationCommandAvailability, () => renderWorkOrders()],
+    ["station-command", "機台操作狀態", () => machtileLoadStationCommandAvailability(generation), () => renderWorkOrders()],
     ["dispatch-pool", "派工待做池", machtileLoadDispatchPool, () => renderWorkOrders()],
     ["process-flows", "完整製程路線", machtileLoadProcessFlows, null],
   ];
@@ -10541,7 +10540,7 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSeco
   // The first usable card wall needs only authorized orders, machine masters,
   // and assigned processes. Every secondary read is isolated below so it can
   // fail/retry without removing the cards already on screen.
-  renderAll();
+  if (deferSecondary) renderAll();
   machtileStartDeferredLoads(generation);
   if (!deferSecondary) await machtileBackgroundLoadPromise;
 }
@@ -10878,16 +10877,19 @@ function machtileMachineCardOrders() {
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
 }
 
-async function machtileLoadAssignedDispatchPoolStatuses() {
+async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
-  orders.forEach(order => { order.dispatchPoolStatus = ""; });
-  if (!keys.length) return;
+  if (!keys.length) {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach(order => { order.dispatchPoolStatus = ""; });
+    return;
+  }
   try {
     const quotedKeys = keys.map(key => `"${String(key).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",");
     const rows = await supabaseFetch(`dispatch_pool_items?select=source_key,status&source_key=in.${encodeURIComponent(`(${quotedKeys})`)}`);
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
     const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
+    if (generation !== machtileDeferredLoadGeneration) return;
     orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
   } catch (error) {
     // Fail closed: an unverified claim must never expose a return action.
@@ -10895,14 +10897,17 @@ async function machtileLoadAssignedDispatchPoolStatuses() {
   }
 }
 
-async function machtileLoadCardLegacyProgress() {
+async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
-  orders.forEach((order) => {
-    order.appDone = Number(order.done || 0);
-    delete order.progressSource;
-  });
+  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.done || 0)]));
   const core = machtileBatchCore();
-  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") return;
+  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach((order) => {
+      order.appDone = appDoneByOrder.get(order);
+      delete order.progressSource;
+    });
+    return;
+  }
   const ids = [...new Set(orders.map((order) => String(order.processId || "")).filter(isUuid))];
   const byProcess = new Map();
   const chunks = [];
@@ -10919,16 +10924,25 @@ async function machtileLoadCardLegacyProgress() {
     }
   }));
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
-  machtileCardPickState.progressByProcess = byProcess;
   const nowMs = Date.now();
+  const progressByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
-      const progress = core.cardProgress(order.appDone, row, nowMs);
-      order.done = progress.done;
-      order.progressSource = progress;
+      progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
+    }
+  });
+  if (generation !== machtileDeferredLoadGeneration) return;
+  machtileCardPickState.progressByProcess = byProcess;
+  orders.forEach((order) => {
+    order.appDone = appDoneByOrder.get(order);
+    delete order.progressSource;
+    const progress = progressByOrder.get(order);
+    if (progress) {
+      order.done = progress.done;
+      order.progressSource = progress;
     }
   });
 }
@@ -11721,7 +11735,8 @@ function machtileCanReturnDispatchPool() {
 
 function machtileDispatchPoolReturnMarkup(order, machineCode) {
   if (!order?.dispatchPoolSourceKey) return "";
-  const isPendingClaim = order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
+  const cardDetailsReady = machtileDeferredLoadState.get("card-details")?.status === "ready";
+  const isPendingClaim = cardDetailsReady && order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
   if (machtileCanReturnDispatchPool() && isPendingClaim) {
     return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
   }
@@ -14117,7 +14132,7 @@ function machtileStationCmdRestorePending() {
 }
 
 // loadFromSupabase 時呼叫（成功過就不再試）
-async function machtileLoadStationCommandAvailability() {
+async function machtileLoadStationCommandAvailability(generation = machtileDeferredLoadGeneration) {
   const flag = machtileStationCmdFlag();
   // 旗標關、或不是作業員／管理員帳號（橋接、manager、planner 都不行）→ 完全不讀
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(flag) || state.source !== "supabase" || !machtileStationCmdRoleOk()) {
@@ -14128,14 +14143,16 @@ async function machtileLoadStationCommandAvailability() {
   machtileStationCmd.availability = "probing";
   try {
     await supabaseFetch("station_commands?select=command_uuid&limit=1");
+    if (generation !== machtileDeferredLoadGeneration) return;
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
     if (typeof machtileBatchResetCommandSelection === "function") {
-      machtileBatchResetCommandSelection();
-      machtileRenderBatchReport();
+      if (!machtileBatchState.group || machtileBatchState.commandSelected.size === 0) machtileBatchResetCommandSelection();
+      if (machtileBatchState.group) machtileRenderBatchReport();
     }
   } catch (error) {
+    if (generation !== machtileDeferredLoadGeneration) return;
     console.warn("station commands unavailable; start/stop buttons hidden", error);
     machtileStationCmd.availability = "missing";
   }

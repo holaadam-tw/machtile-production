@@ -31,7 +31,7 @@ const poolRows = [
   { source_key: '01|TESTNEED0002|TEST-SIM-2', work_order_no: 'TEST-POOL-L1', process_order: 1, operation_name: '車削', part_no: 'TEST-P2', part_name: '測試套', quantity: null, due_date: '2026-10-30', planned_start: null, urgency: 1, department_code: 'LATHE', eligible_machine_codes: ['A02'], source_status: 'returned', synced_at: '2026-10-07T02:30:00Z' },
   { source_key: '01|TESTNEED0003|TEST-SIM-3', work_order_no: 'TEST-POOL-M1', process_order: 3, operation_name: 'MCV臥式加工', part_no: 'TEST-P3', part_name: '測試座', quantity: 300, due_date: '2026-10-25', planned_start: '2026-10-09T01:00:00Z', urgency: 3, department_code: 'MILL', eligible_machine_codes: ['B03'], source_status: 'pending', synced_at: '2026-10-07T02:30:00Z' },
 ];
-let checks = 0, poolMode = 'rows', poolQueries = [], poolResponseRows = poolRows, poolResponsePlan = [], poolDelayMs = 0, dispatchPoolMachines = [], multiStationMachines = [], claimWinner = '', claimConflict = false, claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed';
+let checks = 0, poolMode = 'rows', poolQueries = [], poolResponseRows = poolRows, poolResponsePlan = [], poolDelayMs = 0, dispatchPoolMachines = [], multiStationMachines = [], claimWinner = '', claimConflict = false, claimRequests = [], releaseRequests = [], returnRequests = [], exposeAssignedOrder = true, assignedPoolStatus = 'claimed', legacyProgressRows = [], legacyProgressDelayMs = 0;
 let access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
 const blocked = [], errors = [], mutations = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -48,7 +48,13 @@ const out = process.env.MACHTILE_SCREENSHOT_DIR || path.join(root, 'output/playw
 async function openApp(role, width) {
   const ctx = await browser.newContext({ viewport: { width, height: 1000 }, serviceWorkers: 'block' });
   const token = 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub: auth, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role }, role: 'authenticated' })).toString('base64url') + '.test';
-  await ctx.addInitScript(token => sessionStorage.setItem('machtileAuthSession', JSON.stringify({ version: 1, accessToken: token, refreshToken: '', email: 'user@test.invalid', authMethod: 'password', mode: 'session', createdAt: Date.now(), rememberUntil: 0 })), token);
+  await ctx.addInitScript(token => {
+    sessionStorage.setItem('machtileAuthSession', JSON.stringify({ version: 1, accessToken: token, refreshToken: '', email: 'user@test.invalid', authMethod: 'password', mode: 'session', createdAt: Date.now(), rememberUntil: 0 }));
+    window.__sawPoolReturn = false;
+    addEventListener('DOMContentLoaded', () => new MutationObserver(() => {
+      if (document.querySelector('.machine-tile-card [data-pool-return]')) window.__sawPoolReturn = true;
+    }).observe(document.documentElement, { childList: true, subtree: true }));
+  }, token);
   await ctx.route('**/*', async route => {
     const req = route.request(), u = new URL(req.url());
     const json = (status, data) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
@@ -107,7 +113,10 @@ async function openApp(role, width) {
       return json(200, [proc]);
     }
     if (p === '/rest/v1/v_work_order_cards') return json(200, exposeAssignedOrder ? [{ id: order.id, tenant_id: tenant, work_order_no: order.work_order_no, part_name: order.part_name, quantity: order.quantity, due_date: order.due_date, work_order_status: order.status, current_process_id: proc.id, current_process_name: proc.process_name, current_process_status: proc.status, machine_name: 'A01', qty_completed: 0, qty_defect: 0, current_process_off_station: false }] : []);
-    if (p === '/rest/v1/rpc/batch_report_progress') return json(200, []);
+    if (p === '/rest/v1/rpc/batch_report_progress') {
+      if (legacyProgressDelayMs) await new Promise(resolve => setTimeout(resolve, legacyProgressDelayMs));
+      return json(200, legacyProgressRows);
+    }
     return json(200, []);
   });
   const page = await ctx.newPage(); page.on('pageerror', e => errors.push(String(e)));
@@ -340,6 +349,15 @@ try {
   // Return action is gated by the live pool projection, not merely work-order origin.
   poolMode = 'rows'; poolQueries = []; dispatchPoolMachines = ['A02']; claimWinner = 'A01'; assignedPoolStatus = 'claimed';
   access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+  legacyProgressRows = [{ process_id: proc.id, legacy_output: 7, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  legacyProgressDelayMs = 180;
+  {
+    const legacyDone = await openApp('planner', 1440);
+    ok(await legacyDone.page.locator('.machine-tile-card [data-pool-return]').count() === 0, 'legacy MES output + App done=0: return-to-pool control is absent after load');
+    ok(await legacyDone.page.evaluate(() => window.__sawPoolReturn) === false, 'legacy MES output + App done=0: return-to-pool control never appears during background-load races');
+    await legacyDone.ctx.close();
+  }
+  legacyProgressRows = []; legacyProgressDelayMs = 0;
   {
     const claimed = await openApp('planner', 1440);
     ok(poolQueries.some(q => /select=source_key(?:%2C|,)status/i.test(q) && q.includes('source_key=in.')), 'assigned pool status uses the existing filtered pool-item read');

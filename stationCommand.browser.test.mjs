@@ -831,7 +831,7 @@ console.log("\n== 390px：送出時網路斷 → 重新整理後還記得，立�
   ok(stored.A04 && stored.A04.unconfirmed === true && stored.A04.commandUuid === firstUuid, "unconfirmed 有存進 localStorage", JSON.stringify(stored));
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
-  await page.waitForFunction(() => machtileStationCmd.pending.A04?.poolItemId === "pool-next-1", null, { timeout: 20000 });
+  await page.waitForFunction(() => machtileStationCmd.pending.A04?.unconfirmed === true, null, { timeout: 20000 });
   await page.locator("#workOrderGrid [data-station-cmd-retry]").waitFor({ timeout: 15000 });
   ok((await cardOf(page, "A04").locator("[data-station-cmd-status]").innerText()).includes("網路斷了"), "重新整理後卡片顯示「上次送出時網路斷了」");
   ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isDisabled(), "重新整理後先鎖開工／停工（只能用同一筆重送）");
@@ -1795,6 +1795,7 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   ok(await page.evaluate(() => JSON.parse(localStorage.getItem("machtile.stationCmdPending.v1"))?.A04?.poolItemId) === "pool-next-1", "refresh 前 pending claim 已保存 poolItemId");
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
+  await page.waitForFunction(() => machtileStationCmd.pending.A04?.poolItemId === "pool-next-1", null, { timeout: 20000 });
   ok(await page.evaluate(() => machtileStationCmd.pending.A04?.poolItemId) === "pool-next-1", "refresh 後還原 pending claim 的 poolItemId");
   await page.evaluate(() => machtileStationCmdOpenRetry("A04"));
   await page.locator("#machtileStationCmdSheet [data-station-cmd-confirm]").click();

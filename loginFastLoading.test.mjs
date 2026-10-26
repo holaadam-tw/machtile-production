@@ -120,5 +120,36 @@ await vm.runInContext("machtileLoadProcessFlows()", flowContext);
 assert.equal(workOrderCalls, 4, "200 orders use four 50-order process-flow chunks");
 assert.equal(maxActive, 4, "process-flow chunk concurrency reaches and stays capped at four");
 
+// A late station-command probe must preserve a choice made while the batch
+// panel is already open, repaint that panel, and discard stale generations.
+const stationLoader = sliceBetween(currentSource, "async function machtileLoadStationCommandAvailability", "function machtileStationCmdUnlocked");
+let finishProbe;
+const probe = new Promise(resolve => { finishProbe = resolve; });
+let resetCount = 0, batchRenderCount = 0;
+const stationContext = vm.createContext({
+  console: { warn() {} }, Promise,
+  machtileDeferredLoadGeneration: 5,
+  machtileStationCmd: { availability: "unknown" },
+  machtileStationCmdCore: { flagIsOn: () => true },
+  machtileStationCmdFlag: () => ["A01"],
+  state: { source: "supabase" },
+  machtileStationCmdRoleOk: () => true,
+  supabaseFetch: () => probe,
+  machtileStationCmdRestorePending() {}, machtileDailyStartResumeAll() {},
+  machtileBatchState: { group: "lathe", commandSelected: new Set(["A01"]) },
+  machtileBatchResetCommandSelection() { resetCount++; },
+  machtileRenderBatchReport() { batchRenderCount++; },
+});
+vm.runInContext(stationLoader, stationContext);
+const stationLoad = vm.runInContext("machtileLoadStationCommandAvailability(5)", stationContext);
+finishProbe([]);
+await stationLoad;
+assert.equal(resetCount, 0, "background station availability preserves an existing batch selection");
+assert.equal(batchRenderCount, 1, "background station availability repaints an open batch panel once");
+stationContext.machtileDeferredLoadGeneration = 6;
+stationContext.machtileStationCmd.availability = "probing";
+await vm.runInContext("machtileLoadStationCommandAvailability(5)", stationContext);
+assert.equal(stationContext.machtileStationCmd.availability, "probing", "stale station availability result cannot commit module state");
+
 console.log(JSON.stringify({ beforeFirstCardMs: Math.round(beforeFirstCardMs), afterFirstCardMs: Math.round(afterFirstCardMs), ratio: Number((afterFirstCardMs / beforeFirstCardMs).toFixed(3)), orders: 200, delayPerRequestMs: DELAY_MS, processFlowChunks: workOrderCalls, maxProcessFlowConcurrency: maxActive }));
 console.log("PASS login-first-card A+B loading contract");
