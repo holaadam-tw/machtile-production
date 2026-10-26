@@ -201,13 +201,14 @@
     return list.find((r) => r && text(r.work_order_no) === wo && normCode(r.machine_code) === code && Number(r.process_order) === n) || null;
   }
 
-  // paused：雲端停工 applied 後工序 status＝paused（PR #135），單仍掛這台，接回要能按開工。
-  const OPEN_PROCESS_STATUS = Object.freeze(["pending", "running", "paused", "abnormal", "waiting_inspection"]);
+  const OPEN_PROCESS_STATUS = Object.freeze(["pending", "running", "abnormal", "waiting_inspection"]);
   const CLOSED_WO_STATUS = Object.freeze(["completed", "shipped", "cancelled"]);
 
   // 開卡時重讀的 work_order_processes 列（含 work_orders、machines）→ 這一道是不是還掛在這台、道次沒變。
   // 不符就不給送（卡片資料過時），料號只取 work_orders.part_no（不拿圖號頂替）。
-  function freshCheck({ order, machineCode, row } = {}) {
+  // allowPaused：只有「選工單／開工分開」開關開的機台才傳 true——雲端停工 applied 後 status＝paused（PR #135），
+  // 單仍掛這台，接回要能按開工。沒傳＝跟以前一樣不收 paused。
+  function freshCheck({ order, machineCode, row, allowPaused = false } = {}) {
     const stale = (reason) => ({ ok: false, reason, text: "畫面上的工單資料已經過時（這一道不在這台、道次變了或已結束），請重新整理畫面再按。" });
     if (!row) return stale("process_not_found");
     const wo = row.work_orders || {};
@@ -216,7 +217,7 @@
     if (normCode(machine.machine_code) !== normCode(machineCode)) return stale("machine_changed");
     if (Number(row.process_order) !== Number(order && order.stationStep)) return stale("step_changed");
     if (text(wo.work_order_no) !== text(order && order.id)) return stale("order_changed");
-    if (!OPEN_PROCESS_STATUS.includes(text(row.status))) return stale("process_closed");
+    if (!OPEN_PROCESS_STATUS.includes(text(row.status)) && !(allowPaused === true && text(row.status) === "paused")) return stale("process_closed");
     if (CLOSED_WO_STATUS.includes(text(wo.status))) return stale("order_closed");
     return {
       ok: true, reason: "", text: "",

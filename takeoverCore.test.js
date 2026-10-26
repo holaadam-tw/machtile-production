@@ -122,7 +122,7 @@ test("known takeover rejects have operator-facing text", () => {
   assert.equal(core.resultText({ phase: "applied" }), "已接手 / Đã tiếp quản");
 });
 
-test("pick/start phase: no order = pick, pending = start only, running = report/stop/finish, own stop (paused) = start only", () => {
+test("pick/start phase: no order = pick, pending = start only, running = report/stop/finish, own stop (paused) = start + finish", () => {
   assert.equal(core.pickStartPhase({ hasOrder: false, processStatus: "running" }), "pick");
   assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "pending" }), "pending");
   // 接手 applied 改回 pending：actual_start_at 保留第一次開工，但這台還沒按開工
@@ -142,6 +142,20 @@ test("pick/start phase: no order = pick, pending = start only, running = report/
   assert.deepEqual(core.pickStartActions("pick"), ["pick"]);
   assert.deepEqual(core.pickStartActions("pending"), ["start"]);
   assert.deepEqual(core.pickStartActions("running"), ["report", "stop", "finish"]);
-  assert.deepEqual(core.pickStartActions("stopped"), ["start"]);
+  assert.deepEqual(core.pickStartActions("stopped"), ["start", "finish"]);
   assert.deepEqual(core.pickStartActions("unknown"), []);
+});
+
+test("local start/stop is dropped when a newer cloud read contradicts it", () => {
+  // 本機記開工，雲端之後讀到 paused／pending → 矛盾，以雲端為準
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "paused", localRun: "start", localAt: 100, cloudReadAt: 200 }), true);
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "pending", localRun: "start", localAt: 100, cloudReadAt: 200 }), true);
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "running", localRun: "stop", localAt: 100, cloudReadAt: 200 }), true);
+  // 雲端讀取比本機紀錄早開始（還沒反映）→ 保留本機
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "pending", localRun: "start", localAt: 300, cloudReadAt: 200 }), false);
+  // 一致／status 讀不到／沒有雲端讀取 → 保留
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "running", localRun: "start", localAt: 100, cloudReadAt: 200 }), false);
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "", localRun: "start", localAt: 100, cloudReadAt: 200 }), false);
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "paused", localRun: "start", localAt: 100 }), false);
+  assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "paused", localRun: "", localAt: 100, cloudReadAt: 200 }), false);
 });

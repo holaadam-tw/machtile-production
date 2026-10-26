@@ -111,7 +111,7 @@
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   // 選工單／開工分開（owner 2026-10-26）：卡片在哪個階段，只給那個階段該按的按鈕。
   //   pick＝沒掛單（只有「選工單」）／pending＝掛了單還沒開工（只有「開工」）／
-  //   running＝已開工（報工、停工、完工）／stopped＝自己停工中（雲端 stop／stop_report applied → status paused；只有「開工」接回）。
+  //   running＝已開工（報工、停工、完工）／stopped＝自己停工中（雲端 stop／stop_report applied → status paused；「開工」接回＋「完工」，owner 2026-10-26 21:3x）。
   // 判斷順序：本機剛 applied 的開工／停工（同單同道次）→ process status → machines.status → actual_start_at。
   // 雲端開工 applied 會把 status 改 running、寫 actual_start_at；接手 applied 改回 pending（actual_start_at 保留第一次開工），
   // 所以 status 有值就以 status 為準，只有 status 讀不到才退回看 actual_start_at／machines.status。
@@ -128,10 +128,19 @@
     if (["running", "abnormal", "waiting_inspection"].includes(status)) return "running";
     return text(actualStartAt) || raw === "running" ? "running" : "pending";
   }
+  // 本機剛 applied 的開工／停工跟雲端讀到的 status 矛盾，而且雲端那次讀取是在本機紀錄之後才開始 → 以雲端為準（清掉本機）。
+  // status 讀不到（空）不算矛盾。
+  function pickStartLocalStale({ localRun, localAt, cloudReadAt, ...input } = {}) {
+    if (!text(localRun) || !text(input.processStatus)) return false;
+    if (!(Number(cloudReadAt) > 0) || !(Number(cloudReadAt) >= Number(localAt || 0))) return false;
+    const cloud = pickStartPhase(input);
+    const local = pickStartPhase({ ...input, localRun });
+    return cloud !== local;
+  }
   function pickStartActions(phase) {
-    return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start"] })[text(phase)] || [];
+    return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start", "finish"] })[text(phase)] || [];
   }
   return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, validateStop, stopPayload,
     stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, startTabs,
-    pickStartPhase, pickStartActions };
+    pickStartPhase, pickStartActions, pickStartLocalStale };
 });

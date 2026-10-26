@@ -10711,7 +10711,7 @@ function machtileAssignedCardProcess(row) {
   const wo = row.work_orders;
   const machine = row.machines;
   if (!wo || !machine) throw new Error("工序的工單或機台資料不完整");
-  if (row.off_station_at != null || !["pending", "running", "paused", "abnormal", "waiting_inspection"].includes(row.status)
+  if (row.off_station_at != null || !machtileCardOpenProcessStatuses(machine.machine_code).includes(row.status)
     || ["completed", "shipped", "cancelled"].includes(wo.status)) return null;
   const order = normalizeOrder({ ...wo, tenant_id: row.tenant_id,
     work_order_status: wo.status, current_process_id: row.id,
@@ -10738,9 +10738,23 @@ function machtileAssignedCardProcess(row) {
   return order;
 }
 
+// 選工單／開工分開（開關開的機台）：雲端停工 applied 後工序 status＝paused（PR #135），單仍掛在這台，卡片要留著（只剩開工接回）。
+// 開關全關＝查詢字串與篩選跟以前完全相同（不收 paused）。
+function machtilePickStartAnyEnabled() {
+  return config.enablePickStartFlow === true && Array.isArray(config.pickStartFlowMachines) && config.pickStartFlowMachines.length > 0;
+}
+function machtileCardOpenProcessStatuses(machineCode) {
+  const base = ["pending", "running", "abnormal", "waiting_inspection"];
+  return machtilePickStartEnabled(machineCode) ? [...base, "paused"] : base;
+}
+function machtileCardProcessStatusFilter() {
+  return machtilePickStartAnyEnabled() ? "pending,running,abnormal,waiting_inspection,paused" : "pending,running,abnormal,waiting_inspection";
+}
+
 async function machtileLoadAssignedCardProcesses() {
   state.assignedCardOrders = null;
   state.cardProcessError = "";
+  const readStartedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
@@ -10750,7 +10764,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,paused,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(${machtileCardProcessStatusFilter()})&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -10761,6 +10775,7 @@ async function machtileLoadAssignedCardProcesses() {
       }
       if (rows.length < pageSize) {
         state.assignedCardOrders = [...byId.values()];
+        state.cardProcessReadAt = readStartedAt;   // 本機開工／停工紀錄比這次讀取舊 → 以雲端為準
         return;
       }
     }
@@ -11020,7 +11035,7 @@ function machtileIsSchedulableOrder(order) {
 function machtileIsCardCandidateOrder(order) {
   if (order?.perProcessCard) return order.offStation !== true
     && !["completed", "shipped", "cancelled"].includes(order.workStatus)
-    && ["pending", "running", "paused", "abnormal", "waiting_inspection"].includes(order.processStatus);
+    && machtileCardOpenProcessStatuses(order.machine).includes(order.processStatus);
   const assigned = isReportableMachineName(order?.machine);
   if (machtileCardActiveCore && typeof machtileCardActiveCore.isCardCandidate === "function") {
     return machtileCardActiveCore.isCardCandidate(order, { assigned });
@@ -11455,7 +11470,7 @@ function machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly) {
     .finally(() => {
       refresh.promise = null;
       const holder = document.getElementById("machtileCardSelection");
-      if (holder?.dataset.machineCode === code) machtileOpenCardSelection(code, { poolOnly, refreshPool: false });
+      if (holder?.dataset.machineCode === code) machtileOpenCardSelection(code, { poolOnly, refreshPool: false, pickOrder: holder.dataset.pickOrder === "true" });
     });
   return refresh.promise;
 }
@@ -11546,6 +11561,10 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
   const holder = document.getElementById("machtileCardSelection");
   const message = holder?.querySelector("[data-pool-claim-message]");
+  if (holder?.dataset.pickOrder === "true") {
+    const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
+    if (!machtilePickOrderConfirm(item?.work_order_no, item?.process_order, machineCode)) return;
+  }
   machtileDispatchPoolState.claimBusy = sourceKey;
   machtileDispatchPoolState.claimMessage = "";
   holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
@@ -11565,7 +11584,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   } finally {
     machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
-    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
+    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
 }
 
@@ -11590,7 +11609,7 @@ async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
       recordFields: { orderNo: item.work_order_no, step: nextStep, partNo: item.part_no || null, poolItemId: sourceKey, replaceStopped: true },
       startedAt: Date.now(), validateRow: row => machtileStationCmdRowIsThis(row, uuid),
       onError: ({ error }) => showToast(machtileDispatchPoolCore.claimErrorText(error), "error"),
-      onAccepted: () => { machtileCloseCardSelection(); showToast(machtileTranslate("replace_stopped_sent_press_start"), "success"); }
+      onAccepted: () => { machtileCloseCardSelection(); showToast(machtilePickStartEnabled(machineCode) ? machtileTranslate("replace_stopped_sent_press_start") : "改掛指令已送出，工廠確認後會自動開工。", "success"); }
     });
   } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
@@ -11613,7 +11632,7 @@ async function machtileReleaseDispatchPoolClaim(sourceKey) {
     await machtileLoadDispatchPool();
   } finally {
     machtileDispatchPoolState.claimBusy = "";
-    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
+    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
 }
 
@@ -11660,6 +11679,12 @@ function machtileCardPoolEntryMarkup(machine) {
     machtileDispatchPoolForMachine(machine).items, code);
   if (!code || !enabled || !department) return "";
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
+}
+
+// 接單／收回後重開同一個面板：「選工單」面板要維持選工單（分頁、舊工單），一般面板照舊。
+function machtileCardSelectionReopenOptions(holder, machineCode) {
+  const pickOrder = holder?.dataset.pickOrder === "true";
+  return { poolOnly: pickOrder ? !machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode) : !machtileCanEditSchedule(), refreshPool: false, pickOrder };
 }
 
 function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true, pickOrder = false } = {}) {
@@ -11713,6 +11738,12 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
 async function machtileCommitCardSelection(machineCode, processId) {
   const holder = document.getElementById("machtileCardSelection");
   if (!holder || holder.dataset.pending === "true") return;
+  if (holder.dataset.pickOrder === "true") {
+    const pickMachine = machtileScheduleMachine(machineCode);
+    const { assigned: pickAssigned, unassigned: pickUnassigned } = pickMachine ? machtileCardSelectionCandidates(pickMachine) : { assigned: [], unassigned: [] };
+    const target = [...pickAssigned, ...pickUnassigned].find(order => order.processId === processId);
+    if (!machtilePickOrderConfirm(target?.id, target?.stationStep, pickMachine?.name || machineCode)) return;
+  }
   const errorBox = holder.querySelector("[data-card-selection-error]");
   holder.dataset.pending = "true";
   holder.querySelectorAll("button").forEach(button => { button.disabled = true; });
@@ -13889,7 +13920,7 @@ async function machtileTakeoverLoadCandidates(holder, code) {
 // 選工單／開工分開（owner 2026-10-26）：選工單＝只把單掛到機台；開工＝開始做（新單、接手的舊單都要按）。
 // 旗標開的機台，卡片只出現當下該按的按鈕；旗標關＝卡片跟以前一樣。
 function machtilePickStartEnabled(code) {
-  return Boolean(machtileTakeoverCore?.enabledForMachine(config.enablePickStartFlow === true, config.pickStartFlowMachines, code));
+  return Boolean((typeof window === "undefined" ? null : window.MachTileTakeoverCore)?.enabledForMachine(config.enablePickStartFlow === true, config.pickStartFlowMachines, code));
 }
 // 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
 const machtilePickStartLocal = {};
@@ -13897,14 +13928,19 @@ function machtilePickStartPhase(machine, order) {
   const code = machtileStationCmdMachineCode(machine);
   const local = machtilePickStartLocal[code];
   const sameOrder = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
-  return machtileTakeoverCore.pickStartPhase({ hasOrder: Boolean(order), processStatus: order?.processStatus,
-    actualStartAt: machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null, rawStatus: machine?.rawStatus, localRun: sameOrder ? local.type : "" });
+  const input = { hasOrder: Boolean(order), processStatus: order?.processStatus,
+    actualStartAt: machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null, rawStatus: machine?.rawStatus };
+  if (sameOrder && machtileTakeoverCore.pickStartLocalStale({ ...input, localRun: local.type, localAt: local.at, cloudReadAt: state.cardProcessReadAt })) {
+    delete machtilePickStartLocal[code];
+    return machtileTakeoverCore.pickStartPhase(input);
+  }
+  return machtileTakeoverCore.pickStartPhase({ ...input, localRun: sameOrder ? local.type : "" });
 }
 function machtilePickStartNoteApplied(code, record) {
   if (!code || !record) return;
   if (["takeover", "claim_next"].includes(record.commandType)) { delete machtilePickStartLocal[code]; return; }
   const type = record.commandType === "start" ? "start" : ["stop", "stop_report"].includes(record.commandType) ? "stop" : "";
-  if (type && record.orderNo) machtilePickStartLocal[code] = { type, orderNo: record.orderNo, step: record.step };
+  if (type && record.orderNo) machtilePickStartLocal[code] = { type, orderNo: record.orderNo, step: record.step, at: Date.now() };
 }
 // 「選工單」面板：新工單（排給這台的單＋派工池，走原本「設為目前工單」／dispatch_pool_claim）／
 // 舊工單（允許接手的停工單，走原本接手候選→確認→machtile_submit_takeover）。確認＝只掛單，不開工。
@@ -13912,6 +13948,10 @@ function machtilePickOrderOpen(code) {
   const pending = machtileStationCmd.pending[code];
   if (pending && !machtileStationCmdUnlocked(pending)) return;
   machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() || !machtileCanAssignToMachine(code), pickOrder: true });
+}
+// 選工單→新工單：按「接」或「設為目前工單」前先確認（owner 2026-10-26）；取消＝什麼都不送。
+function machtilePickOrderConfirm(orderNo, step, machineCode) {
+  return window.confirm(machtileTranslate("pick_order_confirm", { order: orderNo || "—", step: step ?? "—", machine: machineCode || "—" }));
 }
 function machtilePickOrderUpdateEmpty(holder) {
   if (!holder || holder.dataset.pickOrder !== "true") return;
@@ -14476,7 +14516,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     (async () => {
       try {
         const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
-        fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+        fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null, ...(machtilePickStartEnabled(code) ? { allowPaused: true } : {}) });
       } catch (error) {
         console.warn("station command: work_order_processes re-read failed", error);
         fresh = { ok: false, reason: "read_failed", text: "讀不到最新的工單資料，請重新整理畫面再按。" };
@@ -23449,7 +23489,7 @@ async function machtileBatchSendStationCommand(code, type, retryPending = null) 
     if (!choice.eligible) throw new Error(choice.reason);
   }
   const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
-  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null, ...(machtilePickStartEnabled(code) ? { allowPaused: true } : {}) });
   if (!fresh.ok) throw new Error(fresh.text);
   const uuid = retryPending ? retryPending.commandUuid : core.newUuid(window.crypto);
   const startedAt = retryPending ? retryPending.startedAt : Date.now();

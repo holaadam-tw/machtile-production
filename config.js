@@ -85,8 +85,11 @@ window.MACHTILE_CONFIG = {
   // 換機台第一版先保持關閉；雲端 RPC 與 Factory 同步開通後再指定機台。
   enableTakeover: false,
   takeoverMachines: [],
-  // 選工單／開工分開（owner 2026-10-26）：沒掛單只出「選工單」、掛了單未開工只出「開工」、已開工出「報工／停工／完工」。
-  // 要等雲端開工 applied 寫 running／actual_start_at 的那包上線後，跟 enableTakeover 一起指定機台再開。
+  // 選工單／開工分開（owner 2026-10-26）：沒掛單只出「選工單」、掛了單未開工只出「開工」、已開工出「報工／停工／完工」、
+  // 停工中（雲端 status=paused）只出「開工」接回＋「完工」。
+  // ⚠️ enableTakeover 與 enablePickStartFlow 必須一起開（機台名單也要一致）：空機台接手只剩「選工單→舊工單」這個入口；
+  // ⚠️ 而且要等雲端「開工 applied 把工序 status 改 running、寫 actual_start_at」那包上線後才能開，
+  //    否則重新整理後已開工的單會被當成未開工（卡片只剩「開工」、不能報工）。
   enablePickStartFlow: false,
   pickStartFlowMachines: [],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",

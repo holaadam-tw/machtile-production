@@ -71,6 +71,7 @@
   "pick_order_note": "選了只是把單掛到這台，還沒開始；要開始做請再按「開工」。",
   "pick_order_none": "目前沒有可做的工單",
   "replace_stopped_sent_press_start": "已改掛，請按開工",
+  "pick_order_confirm": "把 {{order}} 第 {{step}} 道掛到 {{machine}}？（掛上後要再按開工才算開始）",
   "standard_finish_start": "開工",
   "standard_finish_other_order": "選其他工單",
   "batch_command_title": "批次開工／停工",
