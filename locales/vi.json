@@ -497,6 +497,7 @@
   },
   "takeover_stop_title": { "value": "Xác nhận dừng máy", "_draft": true },
   "takeover_stop_qty_question": { "value": "Đã báo {{done}} cái. Trước khi dừng còn bao nhiêu cái chưa báo? (không có thì điền 0)", "_draft": true },
+  "takeover_stop_qty_question_recent": { "value": "Đã báo {{done}} cái (gồm {{recent}} cái vừa báo). Trước khi dừng còn bao nhiêu cái chưa báo? (không có thì điền 0)", "_draft": true },
   "takeover_stop_dup_question": { "value": "Số lượng này giống với lần vừa báo, có chắc là làm thêm riêng không?", "_draft": true }, "takeover_stop_dup_confirm": { "value": "Xác nhận gửi", "_draft": true }, "takeover_stop_dup_edit": { "value": "Sửa số lượng", "_draft": true }, "takeover_stop_dup_ack_unsupported": { "value": "Máy chủ chưa nhận được \"Xác nhận gửi\", vui lòng bấm \"Sửa số lượng\" để nhập lại (không có thì điền 0) hoặc báo bộ phận kế hoạch", "_draft": true },
   "takeover_good_qty": { "value": "Hàng tốt", "_draft": true }, "takeover_fail_qty": { "value": "Hàng lỗi", "_draft": true },
   "takeover_reason": { "value": "Lý do dừng", "_draft": true }, "takeover_allow_question": { "value": "Cho phép máy khác tiếp nhận?", "_draft": true },

@@ -8323,6 +8323,9 @@ async function machtileLoadFinishReportedQty(order = selectedOrder) {
     return;
   }
   let progress = machtileFinishCardProgress(order);
+  // 這個 progress 是哪一次快照（停工對話框補「剛報、還沒同步」的報工用）：沿用卡片那份＝卡片的快照；否則＝那一列的快照
+  let progressSnapshotAt = progress && progress === order.progressSource ? order.progressSnapshotAt || null
+    : progress ? machtileCardPickState.progressByProcess?.get?.(String(processId))?.legacy_snapshot_at || null : null;
   if (!progress && state.source === "supabase" && isUuid(processId)) {
     try {
       const result = await machtileBatchFetchProgress([processId]);
@@ -8332,6 +8335,7 @@ async function machtileLoadFinishReportedQty(order = selectedOrder) {
         machtileCardPickState.progressByProcess?.set?.(processId, row);
         progress = machtileBatchCore()?.cardProgress(Number(order.appDone ?? order.done ?? 0), row, Date.now()) || null;
         if (!progress?.legacyKnown) progress = null;
+        progressSnapshotAt = row.legacy_snapshot_at || null;
       }
     } catch (error) {
       console.warn("finish reported progress unavailable", error);
@@ -8341,6 +8345,7 @@ async function machtileLoadFinishReportedQty(order = selectedOrder) {
   if (progress && Number.isFinite(Number(progress.done))) {
     finishReportedState = { status: "ready", quantity: Number(progress.done), processId };
     order.progressSource = progress;
+    order.progressSnapshotAt = progressSnapshotAt;
     order.done = Number(progress.done);
     if ($("#completedQty")) $("#completedQty").value = Number(progress.done);
   } else {
@@ -10955,10 +10960,13 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
   const nowMs = Date.now();
   const progressByOrder = new Map();
+  const snapshotByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
       progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
+      // 停工對話框補「剛報、還沒同步」的報工要知道這個 done 是哪一次快照（machtileStopRecentSince）
+      snapshotByOrder.set(order, row?.legacy_snapshot_at || null);
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
     }
@@ -10968,10 +10976,12 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
   orders.forEach((order) => {
     order.appDone = appDoneByOrder.get(order);
     delete order.progressSource;
+    delete order.progressSnapshotAt;
     const progress = progressByOrder.get(order);
     if (progress) {
       order.done = progress.done;
       order.progressSource = progress;
+      order.progressSnapshotAt = snapshotByOrder.get(order) || null;
     }
   });
 }
@@ -14001,6 +14011,79 @@ function machtileTakeoverStopDoneQty(order) {
   const done = Number(order?.done);
   return Number.isFinite(done) && done >= 0 ? done : 0;
 }
+// 停工對話框「已報」要含「剛報、雲端進度還沒反映」的站別指令報工（r4c 2026-10-27）。
+// order.done＝batch_report_progress（舊 MES 已報＝legacy_station_progress，派工橋每輪同步，正式最慢約一個 pollSeconds）；
+// 站別指令報工不產生 production_reports，所以在派工橋下一輪之前不會出現在 order.done。
+// 補法（不加後端欄位、不加 RPC）：讀 station_commands（RLS：同租戶＋本人可讀機台）這台×這張單×這道
+// command_type=report、status=applied、applied_at 晚於 order.done 那一列的 legacy_snapshot_at（派工橋讀舊 MES 的時間）。
+//   order.done 有舊 MES 結算列（progressSource.legacyKnown）→ 只加 applied_at > legacy_snapshot_at 的；
+//   沒有結算列（App 累計，不含站別指令報工）→ 這道全部 applied 報工都還沒算進去，全加。
+//   有結算列卻沒有快照時間 → 不補（寧可少顯示，不重複算）。
+// 讀不到 station_commands（網路／權限）→ 改用本平板記住的剛 applied 報工（localStorage，30 分鐘過期，同一套時間條件）。
+// 只加良品（order.done 本來就是良品數 legacy_output；不良不混進「已報」）。
+const MACHTILE_STOP_RECENT_REPORT_KEY = "machtile.stopRecentReports.v1";
+const MACHTILE_STOP_RECENT_REPORT_TTL_MS = 30 * 60 * 1000;
+function machtileStopRecentIndexSn(order) {
+  const legacy = order?.processId ? machtileBatchState.stationReportIdentityByProcess.get(String(order.processId)) : null;
+  const legacyIndex = Number(legacy?.legacy_index_sn);
+  if (Number.isInteger(legacyIndex) && legacyIndex > 0) return legacyIndex;
+  const step = Number(order?.stationStep);
+  return Number.isInteger(step) && step > 0 ? step : null;
+}
+function machtileStopRecentSince(order) {
+  if (!order?.progressSource?.legacyKnown) return null;
+  const at = order.progressSnapshotAt ? Date.parse(order.progressSnapshotAt) : NaN;
+  return Number.isFinite(at) ? at : NaN;
+}
+function machtileStopRecentLocalRead() {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(MACHTILE_STOP_RECENT_REPORT_KEY) || "[]"); } catch { list = []; }
+  const nowMs = Date.now();
+  return (Array.isArray(list) ? list : []).filter((item) => item && Number.isFinite(Number(item.savedAt)) && nowMs - Number(item.savedAt) < MACHTILE_STOP_RECENT_REPORT_TTL_MS);
+}
+function machtileStopRecentLocalRemember(args, result) {
+  if (!args || !result || String(result.status || "").toLowerCase() !== "applied" || String(result.command_type || "report") !== "report") return;
+  const good = Number(result.good_qty ?? args.p_good_qty), fail = Number(result.fail_qty ?? args.p_fail_qty);
+  if (!Number.isFinite(good) || good + (Number.isFinite(fail) ? fail : 0) <= 0) return;
+  const appliedAt = Date.parse(result.applied_at || "") || Date.now();
+  const entry = { commandUuid: String(args.p_command_uuid || result.command_uuid || ""), machineCode: String(args.p_machine_code || "").toUpperCase(),
+    orderNo: String(args.p_expected_order_no || ""), indexSn: Number(args.p_expected_index_sn), good, fail: Number.isFinite(fail) ? fail : 0, appliedAt, savedAt: Date.now() };
+  if (!entry.commandUuid || !entry.machineCode || !entry.orderNo) return;
+  const list = machtileStopRecentLocalRead().filter((item) => item.commandUuid !== entry.commandUuid);
+  list.push(entry);
+  try { localStorage.setItem(MACHTILE_STOP_RECENT_REPORT_KEY, JSON.stringify(list.slice(-50))); } catch { /* 存不了：只是少一個補充來源 */ }
+}
+async function machtileStopRecentReported(code, order) {
+  const empty = { good: 0, fail: 0, count: 0, source: "none" };
+  if (!order?.id || state.source !== "supabase") return empty;
+  const indexSn = machtileStopRecentIndexSn(order);
+  const since = machtileStopRecentSince(order);
+  if (!indexSn || Number.isNaN(since)) return empty;
+  const machineCode = String(code || "").toUpperCase();
+  const sum = (rows, source) => rows.reduce((acc, row) => ({ good: acc.good + row.good, fail: acc.fail + row.fail, count: acc.count + 1, source }), { ...empty, source });
+  try {
+    const sinceFilter = since === null ? "" : `&applied_at=gt.${encodeURIComponent(new Date(since).toISOString())}`;
+    const rows = await supabaseFetch(`station_commands?select=command_uuid,good_qty,fail_qty,applied_at&machine_code=eq.${encodeURIComponent(machineCode)}&command_type=eq.report&status=eq.applied&expected_order_no=eq.${encodeURIComponent(order.id)}&expected_index_sn=eq.${indexSn}${sinceFilter}&order=applied_at.desc&limit=100`);
+    if (!Array.isArray(rows)) throw new Error("station_commands recent reports response invalid");
+    // 伺服器已經篩過；這裡再篩一次（時間、數量），防止不合條件的列被加進來
+    const picked = rows.map((row) => ({ good: Number(row.good_qty), fail: Number(row.fail_qty), at: Date.parse(row.applied_at || "") }))
+      .filter((row) => Number.isFinite(row.good) && row.good >= 0 && Number.isFinite(row.at) && (since === null || row.at > since))
+      .map((row) => ({ good: row.good, fail: Number.isFinite(row.fail) ? row.fail : 0 }));
+    return sum(picked, "cloud");
+  } catch (error) {
+    console.warn("station_commands recent reports unavailable; using this tablet's applied reports", error);
+    const picked = machtileStopRecentLocalRead().filter((item) => item.machineCode === machineCode && item.orderNo === String(order.id) &&
+      Number(item.indexSn) === indexSn && (since === null || Number(item.appliedAt) > since));
+    return sum(picked, "local");
+  }
+}
+function machtileTakeoverStopQuestion(viewState) {
+  const done = machtileTakeoverStopDoneQty(viewState.order);
+  const recent = Math.max(0, Number(viewState.recentGood) || 0);
+  return recent > 0
+    ? machtileTranslate("takeover_stop_qty_question_recent", { done: done + recent, recent })
+    : machtileTranslate("takeover_stop_qty_question", { done });
+}
 function machtileTakeoverStopRender(holder, viewState) {
   const validation = machtileTakeoverCore.validateStop(viewState.form, viewState.policies);
   const dupConfirm = viewState.dupConfirm === true;
@@ -14008,7 +14091,7 @@ function machtileTakeoverStopRender(holder, viewState) {
   const failReasons = machtileReportFailReasons();
   const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...failReasons.map((reason) => `<option value="${escapeHtml(reason)}"${viewState.form.fail_reason_code === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
-    <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTranslate("takeover_stop_qty_question", { done: machtileTakeoverStopDoneQty(viewState.order) }))}</p>
+    <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTakeoverStopQuestion(viewState))}</p>
     ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
     <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label>${escapeHtml(machtileTranslate("takeover_fail_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
     <label data-takeover-fail-reason-field${Number(viewState.form.fail_qty) > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
@@ -14025,8 +14108,19 @@ async function machtileTakeoverOpenStop(code, returnFocus) {
   const policies = machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
   const holder = machtileTakeoverOverlay(code, "stop", returnFocus);
   holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
-    error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order };
+    error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order, recentGood: 0 };
   machtileTakeoverStopRender(holder, holder._state);
+  await machtileTakeoverStopLoadRecent(holder, code, order);
+}
+// 開對話框後補讀「剛報、進度還沒反映」的報工（見 machtileStopRecentReported）；讀完只更新題目那一行，不動作業員正在填的欄位。
+async function machtileTakeoverStopLoadRecent(holder, code, order) {
+  const recent = await machtileStopRecentReported(code, order).catch(() => ({ good: 0, source: "none" }));
+  if (!holder.isConnected || holder._state?.order !== order) return;
+  holder._state.recentGood = recent.good;
+  holder._state.recentSource = recent.source;
+  holder.dataset.takeoverRecentLoaded = recent.source || "none";
+  const question = holder.querySelector("[data-takeover-qty-question]");
+  if (question) question.textContent = machtileTakeoverStopQuestion(holder._state);
 }
 async function machtileTakeoverSubmitStop(holder, { acks = [] } = {}) {
   const viewState = holder._state, check = machtileTakeoverCore.validateStop(viewState.form, viewState.policies); if (!check.ok || viewState.sending) return;
@@ -14067,6 +14161,33 @@ function machtileTakeoverReopenStopDuplicate(code, draft) {
   holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
     error: draft ? "" : machtileTranslate("takeover_stop_dup_question"), offerLegacyStop: false, machine, order, dupConfirm: Boolean(draft) };
   machtileTakeoverStopRender(holder, holder._state);
+}
+// 工廠拒絕 stop_report（DUPLICATE_SUSPECTED／TAKEOVER_DISABLED 以外）：重開同一份停工表單、數量保留可改，
+// 顯示白話原因＋代碼，出「改用一般停工」按鈕（不自動送一般停工）。頁面重整過、記憶體沒有表單 → 開空白表單＋同一句原因。
+function machtileTakeoverStopRejectedText(view, message) {
+  const code = String(view?.code || "").toUpperCase();
+  // 報工拒絕碼的白話（stationReportCore 的 GUARD_LABELS，例：QTY_EXCEEDS_AVAILABLE＝本次數量超過可報數）；不帶工廠技術說明
+  let guard = "";
+  try {
+    const card = code ? machtileStationReportCore()?.resultCard?.({ status: "rejected", reject_code: code, command_type: "report" }) : null;
+    guard = card?.message && card.message !== "請聯絡管理員。" ? card.message : "";
+  } catch { guard = ""; }
+  const reason = message || guard || "";
+  const generic = machtileTranslate("takeover_stop_report_rejected_generic");
+  return `${reason ? `${reason}。` : ""}${generic}${code ? `（${code}）` : ""}`;
+}
+function machtileTakeoverReopenStopRejected(code, draft, view, message) {
+  const machine = machtileStationCmdMachineByCode(code), order = draft?.order || machine?.order;
+  if (!order) return;
+  const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
+  const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: machtileTakeoverStopRejectedText(view, message), offerLegacyStop: true, machine, order, rejectedCode: String(view?.code || ""), recentGood: 0 };
+  holder.dataset.takeoverRejected = String(view?.code || "");
+  machtileTakeoverStopRender(holder, holder._state);
+  // 原因在表單最下面：捲到看得到（手機一屏放不下）
+  try { holder.querySelector("[data-takeover-error]")?.scrollIntoView({ block: "nearest" }); } catch { /* 舊瀏覽器 */ }
+  void machtileTakeoverStopLoadRecent(holder, code, order);
 }
 function machtileTakeoverCandidateModel(row) {
   const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
@@ -15360,9 +15481,16 @@ function machtileStationCmdFinish(code, view) {
   } else if (record.commandType === "stop_report" && view?.phase === "rejected") {
     // NOT_ELIGIBLE text is worded for takeover (target machine not allowed); a rejected stop report gets the generic text.
     const message = view.code === "NOT_ELIGIBLE" ? "" : machtileTakeoverCore?.rejectText(view.code);
-    if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
     showToast(message || machtileTranslate("takeover_stop_report_rejected_generic"));
-    void machtileTakeoverUseLegacyStop(code, null);
+    if (view.code === "TAKEOVER_DISABLED") {
+      // 工廠沒開換機台＝這個功能不存在：維持自動退回一般停工
+      machtileTakeover.availability = "off";
+      void machtileTakeoverUseLegacyStop(code, null);
+    } else {
+      // r4c（2026-10-27）：其他拒絕碼不自動退回一般停工。重開同一份停工表單（數量保留）、顯示白話原因，
+      // 「改用一般停工」讓作業員自己按。
+      machtileTakeoverReopenStopRejected(code, stopDraft, view, message);
+    }
   }
   if (record.commandType === "takeover" && view?.terminal) {
     showToast(machtileTakeoverCore?.resultText(view) || view.title);
@@ -23368,6 +23496,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
       ? "智慧報工後端尚未同步；未建立正式報工。"
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
+  try { machtileStopRecentLocalRemember(args, flow.result); } catch { /* 只是停工對話框的補充來源 */ }
   let followUpFailed = false;
   try {
     await machtileRecordSingleStationProductionReport(code, args, options.order);
