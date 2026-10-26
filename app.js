@@ -13842,7 +13842,7 @@ async function machtileTakeoverSubmitStop(holder) {
   viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
   const commandUuid = crypto.randomUUID(), startedAt = Date.now();
   const fields = { orderNo: viewState.order.id, step: viewState.order.stationStep,
-    partNo: viewState.order.partNo || viewState.order.part || null, manufactureIiId: viewState.order.manufactureIiId || null,
+    partNo: viewState.order.partNo || null, manufactureIiId: viewState.order.manufactureIiId || null,
     expectedSimulationId: viewState.order.simulationId || null };
   const result = await machtileStationCmdRunSubmission({
     commandUuid, commandType: "stop_report", machineCode: code, fields, recordFields: fields, startedAt,
