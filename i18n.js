@@ -8,7 +8,7 @@
 
   const dictionaries = {
     "zh-Hant": {
-      takeover_stop_title: "確認停工", takeover_stop_qty_question: "這段做了幾件？良品／不良（必填，0 也要填）",
+      takeover_stop_title: "確認停工", takeover_stop_qty_question: "已報 {{done}} 件。停工前還沒報的有幾件？（沒有就填 0）", takeover_stop_dup_question: "這個數量跟剛才報的很像，確定是另外做的嗎？", takeover_stop_dup_confirm: "確定送出", takeover_stop_dup_edit: "改數量", takeover_stop_dup_ack_unsupported: "伺服器還不能接受「確定送出」，請按「改數量」重新填（沒有就填 0）或找生管",
       takeover_good_qty: "良品", takeover_fail_qty: "不良", takeover_reason: "停工原因", takeover_allow_question: "允許其他機台接手？",
       takeover_must_tap: "請親自按是或否", takeover_note: "說明", takeover_confirm_stop: "確認停工", takeover_stop_sent: "停工已送出", takeover_stop_waiting: "已送出，等待工廠確認",
       takeover_new_order: "開工新訂單", takeover_old_order: "接手舊的工單", takeover_new_order_help: "從現有待做池選擇新訂單。", takeover_continue_new: "繼續開工新訂單",
@@ -170,7 +170,7 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
-      takeover_stop_title: "Xác nhận dừng máy", takeover_stop_qty_question: "Công đoạn này đã làm bao nhiêu? Hàng tốt／hàng lỗi (bắt buộc, kể cả 0)",
+      takeover_stop_title: "Xác nhận dừng máy", takeover_stop_qty_question: "Đã báo {{done}} cái. Trước khi dừng còn bao nhiêu cái chưa báo? (không có thì điền 0)", takeover_stop_dup_question: "Số lượng này giống với lần vừa báo, có chắc là làm thêm riêng không?", takeover_stop_dup_confirm: "Xác nhận gửi", takeover_stop_dup_edit: "Sửa số lượng", takeover_stop_dup_ack_unsupported: "Máy chủ chưa nhận được \"Xác nhận gửi\", vui lòng bấm \"Sửa số lượng\" để nhập lại (không có thì điền 0) hoặc báo bộ phận kế hoạch", /* _draft */
       takeover_good_qty: "Hàng tốt", takeover_fail_qty: "Hàng lỗi", takeover_reason: "Lý do dừng", takeover_allow_question: "Cho phép máy khác tiếp nhận?",
       takeover_must_tap: "Vui lòng tự chọn Có hoặc Không", takeover_note: "Ghi chú", takeover_confirm_stop: "Xác nhận dừng", takeover_stop_sent: "Đã gửi lệnh dừng", takeover_stop_waiting: "Đã gửi, đang chờ nhà máy xác nhận",
       takeover_new_order: "Mở đơn hàng mới", takeover_old_order: "Tiếp nhận lệnh cũ", takeover_new_order_help: "Chọn đơn hàng mới trong danh sách chờ.", takeover_continue_new: "Tiếp tục mở đơn mới",
