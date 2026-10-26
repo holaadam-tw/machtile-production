@@ -154,6 +154,7 @@ async function waitLoaded(page) {
   await page.goto(base, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"), null, { timeout: 20000 });
   await page.locator("#workOrderGrid .machine-tile-card").first().waitFor();
+  await page.waitForFunction(() => document.getElementById("machtileDeferredLoadStatus")?.hidden === true, null, { timeout: 20000 });
 }
 
 const cardFor = (page, code) => page.locator("#workOrderGrid .machine-tile-card").filter({ has: page.locator("h2", { hasText: code }) }).first();
