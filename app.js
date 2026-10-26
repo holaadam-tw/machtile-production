@@ -14202,7 +14202,7 @@ function machtileStationCmdParts(machine) {
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const pending = machtileStationCmd.pending[code];
-  const idleTakeover = machtileTakeoverCore.idleActionVisible({ enabled: config.enableTakeover === true,
+  const idleTakeover = gate.reason === "no_order" && machtileTakeoverCore.idleActionVisible({ enabled: config.enableTakeover === true,
     machines: config.takeoverMachines, machineCode: code, availability: machtileTakeover.availability, hasOrder: Boolean(order) });
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
   if (!gate.ok && !idleTakeover && !(pending && machtileStationCmdActiveFor(code))) return none;

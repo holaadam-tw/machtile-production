@@ -693,6 +693,16 @@ console.log("\n== 390px：空機台沒有候選時顯示明確訊息 ==");
   await context.close();
 }
 
+console.log("\n== 390px：空機接手也要過站別指令閘門（不在 stationCommandMachines 不出現）==");
+{
+  const be = makeBackend({ takeoverCandidates: [] });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A02", "A04"],' });
+  ok(await cardOf(page, "A02").locator("[data-takeover-open-idle]").count() === 0, "A02 不在站別指令名單 → 不出現空機接手按鈕");
+  ok(realErrors(errors).length === 0, "閘門案例沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
 console.log("\n== 390px：送出時 RPC 不存在 → 功能藏起來 ==");
 {
   const be = makeBackend({ rpcMissing: true });
