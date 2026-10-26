@@ -65,7 +65,8 @@ function makeContext({ baseline = false, failJob = "" } = {}) {
     machtileLoadProcessFlows: loader("process-flows"),
     deriveMachines() {}, renderStats() {}, renderFilters() {}, renderWorkOrders() {}, renderAlerts() {},
     renderInspectionQueue() {}, renderSchedule() {}, renderNotificationCenter() {}, renderHistory() {}, renderReports() {}, renderSettings() {}, ensureHmcDashboardEntry() {},
-    renderAll: () => renderTimes.push(performance.now() - startedAt),
+    machtileStationCmdRestorePendingEarly: () => calls.push("pending-restore-early"),
+    renderAll: () => { calls.push("render-all"); renderTimes.push(performance.now() - startedAt); },
   });
   vm.runInContext(baseline ? baselineLoader : currentLoader, context);
   return { context, calls, renderTimes, state };
@@ -90,6 +91,11 @@ assert.ok(afterFirstCardMs <= beforeFirstCardMs * 0.4,
 for (const name of ["cnc", "schedule-queue", "assigned-pool", "inspection", "legacy-progress", "machine-times", "schedule-contracts", "capacity", "attention", "hmc", "card-activity", "flow-visibility", "station-command", "dispatch-pool", "process-flows"]) {
   assert.ok(after.calls.includes(name), `deferred loader still runs: ${name}`);
 }
+
+assert.ok(after.calls.indexOf("pending-restore-early") >= 0 && after.calls.indexOf("pending-restore-early") < after.calls.indexOf("render-all"),
+  "unconfirmed station-command pending is restored synchronously before the first card paint");
+assert.match(currentSource, /function machtileStationCmdRestorePendingEarly\(\)[\s\S]{0,400}machtileStationCmdRestorePending\(\)/, "early restore reuses the real restore path");
+assert.match(currentSource, /async function machtileReplaceStoppedDispatchPool[\s\S]{0,500}machtileStationCmdUnlocked\(pendingCmd\)/, "replace-stopped claim_next refuses to run over a locked pending command");
 
 const failed = makeContext({ failJob: "attention" });
 await vm.runInContext("loadFromSupabase({ deferSecondary: true })", failed.context);

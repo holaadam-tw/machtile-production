@@ -10540,7 +10540,13 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSeco
   // The first usable card wall needs only authorized orders, machine masters,
   // and assigned processes. Every secondary read is isolated below so it can
   // fail/retry without removing the cards already on screen.
-  if (deferSecondary) renderAll();
+  if (deferSecondary) {
+    // Unconfirmed station commands must be in memory before the first card paint,
+    // otherwise a button pressed before the availability probe finishes could
+    // resend a new command_uuid over a pending one.
+    machtileStationCmdRestorePendingEarly();
+    renderAll();
+  }
   machtileStartDeferredLoads(generation);
   if (!deferSecondary) await machtileBackgroundLoadPromise;
 }
@@ -11683,6 +11689,8 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
 
 async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy || !machtileStationCmdCore) return;
+  const pendingCmd = machtileStationCmd.pending[machineCode];
+  if (pendingCmd && !machtileStationCmdUnlocked(pendingCmd)) { showToast("這台有一筆指令還在等確認，請先處理那筆。", "error"); return; }
   const machine = machtileScheduleMachine(machineCode);
   const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
   const current = machine?.order;
@@ -14129,6 +14137,13 @@ function machtileStationCmdRestorePending() {
     machtileStationCmdPoll(code);
   });
   machtileStationCmdSavePending();
+}
+
+// 第一次畫卡片之前先同步還原 localStorage 裡等確認的指令（不等 station_commands 探測）。
+// 否則探測完成前按鈕若可按，會在已有 unconfirmed pending 時另產生新 command_uuid。
+function machtileStationCmdRestorePendingEarly() {
+  if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
+  machtileStationCmdRestorePending();
 }
 
 // loadFromSupabase 時呼叫（成功過就不再試）
