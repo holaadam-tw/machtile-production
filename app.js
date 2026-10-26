@@ -13857,7 +13857,7 @@ async function machtileTakeoverSubmitStop(holder) {
 function machtileTakeoverCandidateModel(row) {
   const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
   const policy = machtileTakeover.policies.find((item) => item.code === row.reason_code);
-  return machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code);
+  return machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code, order?.done);
 }
 function machtileTakeoverCandidateCard(row) {
   return `<article class="takeover-candidate"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
@@ -14978,9 +14978,10 @@ function machtileStationCmdFinish(code, view) {
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "stop_report" && view?.phase === "rejected") {
-    const message = machtileTakeoverCore?.rejectText(view.code);
+    // NOT_ELIGIBLE text is worded for takeover (target machine not allowed); a rejected stop report gets the generic text.
+    const message = view.code === "NOT_ELIGIBLE" ? "" : machtileTakeoverCore?.rejectText(view.code);
     if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
-    if (message) showToast(message);
+    showToast(message || machtileTranslate("takeover_stop_report_rejected_generic"));
     void machtileTakeoverUseLegacyStop(code, null);
   }
   if (record.commandType === "takeover" && view?.terminal) {

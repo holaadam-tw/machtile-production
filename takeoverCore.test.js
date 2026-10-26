@@ -54,8 +54,24 @@ test("candidate mapping uses the station_stop_notes id and display-name columns"
   assert.deepEqual(core.candidateView(row, 10, "換做急單"), {
     stopNoteId: "note", orderNo: "WO-1", indexSn: 2, sourceMachine: "A04", stoppedBy: "Operator Chen",
     stoppedAt: "2026-10-25T00:00:00Z", reasonCode: "RUSH_ORDER", reasonLabel: "換做急單", note: "rush",
-    goodQty: 3, failQty: 1, doneQty: 4, remainingQty: 6,
+    goodQty: 3, failQty: 1, doneQty: 4, processDoneQty: 4, remainingQty: 6,
   });
+});
+
+test("second and later takeovers use the whole step's cumulative completion for remaining qty", () => {
+  // Plan 10: A04 made 4, A05 took over and made 3 more, then stopped again (note holds only its own 3).
+  const secondNote = { id: "note-2", order_no: "WO-1", index_sn: 2, source_machine: "A05", reason_code: "TOOLING",
+    good_qty: 3, fail_qty: 0, stopped_by_name: "Operator Lin", stopped_at: "2026-10-25T02:00:00Z" };
+  const view = core.candidateView(secondNote, 10, "刀具／治具問題", 7);
+  assert.equal(view.doneQty, 3, "doneQty still shows what the source machine made in this segment");
+  assert.equal(view.processDoneQty, 7);
+  assert.equal(view.remainingQty, 3, "remaining = planned 10 - cumulative 7, not 10 - 3 = 7");
+  // Cumulative read lagging behind the note (stop report not applied yet) never overstates remaining.
+  assert.equal(core.candidateView(secondNote, 10, "", 0).remainingQty, 7);
+  assert.equal(core.candidateView(secondNote, 10, "", 2).remainingQty, 7);
+  assert.equal(core.candidateView(secondNote, 10, "", undefined).remainingQty, 7);
+  // Over-completion clamps at zero.
+  assert.equal(core.candidateView(secondNote, 10, "", 12).remainingQty, 0);
 });
 
 test("a non-empty SQL-contract candidate fixture produces a takeover row", () => {
@@ -90,7 +106,8 @@ test("defects require their own fail reason and wildcard config picks a visible 
 test("known takeover rejects have operator-facing text", () => {
   assert.match(core.rejectText("TAKEOVER_DISABLED"), /一般停工/);
   assert.match(core.rejectText("STATION_CLASS_MISMATCH"), /類型不同/);
-  assert.match(core.rejectText("NOT_ELIGIBLE"), /B 機合併站/);
+  assert.equal(core.rejectText("NOT_ELIGIBLE").split(" / ")[0], "這台機台不能接這筆停工單（不在可接機台名單）");
+  assert.doesNotMatch(core.rejectText("NOT_ELIGIBLE"), /B 機合併站/);
   for (const code of ["TARGET_BUSY", "ALREADY_TAKEN", "TAKEOVER_NOT_ALLOWED", "NOT_ELIGIBLE"])
     assert.match(core.rejectText(code), / \/ /, `${code} has Chinese and Vietnamese feedback`);
   assert.equal(core.resultText({ phase: "applied" }), "已接手 / Đã tiếp quản");

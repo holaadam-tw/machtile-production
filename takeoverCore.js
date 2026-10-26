@@ -61,14 +61,20 @@
   function takeoverPayload({ commandUuid, machineCode, stopNoteId } = {}) {
     return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_stop_note_id: text(stopNoteId) };
   }
-  function candidateView(row, plannedQty, reasonLabel) {
+  // remainingQty must use the whole step's cumulative completion (work_order_processes.qty_completed
+  // that the APP already reads), not only this stop note's segment: on a second or later takeover the
+  // note only holds the last machine's segment and would overstate what is left. When the cumulative
+  // read is missing or lags behind the note (stop report not applied yet), fall back to the larger value.
+  function candidateView(row, plannedQty, reasonLabel, processDoneQty) {
     const done = Number(row?.good_qty || 0) + Number(row?.fail_qty || 0);
     const planned = Math.max(0, Number(plannedQty || 0));
+    const cumulative = Number(processDoneQty);
+    const processDone = Number.isFinite(cumulative) && cumulative > 0 ? cumulative : 0;
     return { stopNoteId: text(row?.id), orderNo: text(row?.order_no), indexSn: row?.index_sn,
       sourceMachine: text(row?.source_machine), stoppedBy: text(row?.stopped_by_name), stoppedAt: row?.stopped_at,
       reasonCode: text(row?.reason_code), reasonLabel: text(reasonLabel) || text(row?.reason_code), note: text(row?.note),
       goodQty: Number(row?.good_qty || 0), failQty: Number(row?.fail_qty || 0), doneQty: done,
-      remainingQty: Math.max(0, planned - done) };
+      processDoneQty: Math.max(processDone, done), remainingQty: Math.max(0, planned - Math.max(processDone, done)) };
   }
   function candidateMap(rows) {
     return new Map((Array.isArray(rows) ? rows : []).filter((row) => row?.stopNoteId).map((row) => [row.stopNoteId, row]));
@@ -90,7 +96,8 @@
       TAKEOVER_NOT_ALLOWED: "生管已收回接手權限 / Điều độ đã thu hồi quyền tiếp quản",
       TAKEOVER_DISABLED: "工廠未啟用，請用一般停工",
       STATION_CLASS_MISMATCH: "這台與來源機台類型不同，不能接手",
-      NOT_ELIGIBLE: "這筆目前不符合接手條件；第一版不開放 B 機合併站或多盤接手 / Hiện không đủ điều kiện tiếp quản",
+      // vi: _draft
+      NOT_ELIGIBLE: "這台機台不能接這筆停工單（不在可接機台名單） / Máy này không thể tiếp nhận lệnh dừng này (không có trong danh sách máy được tiếp nhận)",
     })[text(code).toUpperCase()] || "";
   }
   function resultText(view) {

@@ -89,3 +89,23 @@ test("APP renders SQL display names and delegates probe error classification", (
   assert.match(app, /view\?\.phase === "rejected"[\s\S]*machtileTakeoverUseLegacyStop\(code, null\)/);
   assert.doesNotMatch(app, /who: taken\.taken_by(?:\s|\|)/);
 });
+
+test("rejected stop_report always shows feedback before reopening the legacy stop dialog", () => {
+  const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
+  const start = app.indexOf('if (record.commandType === "stop_report" && view?.phase === "rejected")');
+  assert.ok(start > 0, "stop_report reject branch exists");
+  const branch = app.slice(start, app.indexOf("\n  }\n", start));
+  const toastAt = branch.indexOf('showToast(message || machtileTranslate("takeover_stop_report_rejected_generic"))');
+  assert.ok(toastAt > 0, "unknown reject codes fall back to the generic toast");
+  assert.ok(branch.indexOf("machtileTakeoverUseLegacyStop(code, null)") > toastAt, "legacy stop dialog reopens after the toast");
+  const zh = JSON.parse(fs.readFileSync(require.resolve("./locales/zh-Hant.json"), "utf8"));
+  const vi = JSON.parse(fs.readFileSync(require.resolve("./locales/vi.json"), "utf8"));
+  assert.equal(zh.takeover_stop_report_rejected_generic, "停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管");
+  assert.equal(vi.takeover_stop_report_rejected_generic._draft, true);
+  assert.ok(vi.takeover_stop_report_rejected_generic.value.length > 0);
+});
+
+test("candidate remaining qty is fed the step's cumulative completion the APP already reads", () => {
+  const app = fs.readFileSync(require.resolve("./app.js"), "utf8");
+  assert.match(app, /machtileTakeoverCore\.candidateView\(row, order\?\.total \|\| 0, [^\n]*, order\?\.done\);/);
+});
