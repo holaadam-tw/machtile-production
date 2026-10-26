@@ -11,7 +11,7 @@ let pass = 0;
 const ok = (value, label) => { if (!value) throw new Error(label); pass += 1; console.log(`PASS ${label}`); };
 const appSource = await readFile(path.join(root, "app.js"), "utf8");
 const sharedCalls = appSource.match(/machtileStationCmdRunSubmission\s*\(\s*\{/g) || [];
-ok(sharedCalls.length === 4 && (appSource.match(/rpc\/\$\{core\.SUBMIT_RPC\}/g) || []).length === 1,
+ok(sharedCalls.length === 5 && (appSource.match(/const rpc = payload\.p_replace_stopped === true \? core\.REPLACE_STOPPED_RPC : core\.SUBMIT_RPC/g) || []).length === 1,
   "single-machine and batch paths share one submit lifecycle helper");
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, "http://localhost").pathname === "/" ? "/index.html" : new URL(req.url, "http://localhost").pathname;

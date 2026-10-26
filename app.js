@@ -10396,16 +10396,7 @@ function normalizeMachineMaster(row) {
   };
 }
 
-async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
-  // Machine-card inspection links use app_users.id, never the Auth/JWT subject.
-  // Resolve before cards render; lookup failure leaves the operator hint empty.
-  await machtileResolveAppUserId();
-  await machtileLoadDepartmentAccess({ readOnly: true, force: true });
-  machtileHistoryRealRows = null;
-  const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
-  if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
-  state.workOrders = rows.map(normalizeOrder);
-  await machtileLoadCncProgramsForCards();
+async function machtileLoadMachineMasters() {
   try {
     const machineRows = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
     state.machineMasters = Array.isArray(machineRows) ? machineRows.map(normalizeMachineMaster) : [];
@@ -10421,29 +10412,143 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
     console.warn("v_machine_management_cards is not ready yet; using local machine defaults.", error);
     state.machineMasters = [];
   }
-  await machtileLoadScheduleQueue();
-  state.source = "supabase";
-  await machtileLoadAssignedCardProcesses();
-  await machtileLoadAssignedDispatchPoolStatuses();
-  await machtileLoadInspectionStatuses();
-  // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
-  await machtileLoadCardLegacyProgress();
-  await machtileLoadCardMachineTimes();
-  await Promise.all([
-    machtileLoadScheduleContracts(),
-    machtileLoadCapacityCalendar(),
-    machtileLoadAttentionCenter(),
-    machtileLoadHmcRuntime(),
-    // 卡片「目前工單」＝這台最近有活動的那張（只讀；讀不到退回原本規則）
-    machtileLoadCardActivity(),
-    // 製程路線顯示層級（只讀；讀不到＝每個角色都「完整」）
-    machtileLoadFlowVisibility(),
-    // 開工／停工回寫舊 MES：旗標關＝不讀；表不存在＝藏起來
-    machtileLoadStationCommandAvailability(),
-    // 派工待做池（只讀；表還沒建＝不顯示這一段）
-    machtileLoadDispatchPool(),
+}
+
+const machtileDeferredLoadState = new Map();
+let machtileDeferredLoadGeneration = 0;
+let machtileBackgroundLoadPromise = Promise.resolve();
+let machtileDeferredLoadsSettled = true;
+
+function machtileUpdateDataSourceLabel() {
+  const label = document.getElementById("dataSourceLabel");
+  if (!label) return;
+  label.textContent = state.source === "supabase"
+    ? `${machtileDeferredLoadsSettled ? "Supabase 已連線" : "正在補齊資料"}${state.cardProcessError ? " · " + state.cardProcessError : ""}${machtileDepartmentAccessError ? " · " + machtileDepartmentAccessError : ""}`
+    : "Mock data";
+}
+
+function machtileRenderDeferredLoadStatus() {
+  const label = document.getElementById("dataSourceLabel");
+  if (!label?.parentElement) return;
+  let holder = document.getElementById("machtileDeferredLoadStatus");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "machtileDeferredLoadStatus";
+    holder.className = "deferred-load-status";
+    holder.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-retry-deferred-load]");
+      const job = button && machtileDeferredLoadState.get(button.dataset.retryDeferredLoad);
+      if (!job || job.status === "loading") return;
+      void machtileRunDeferredLoad(job.key, job.label, job.load, job.refresh, machtileDeferredLoadGeneration);
+    });
+    label.parentElement.append(holder);
+  }
+  const failed = [...machtileDeferredLoadState.values()].filter(job => job.status === "error");
+  const loading = [...machtileDeferredLoadState.values()].filter(job => job.status === "loading");
+  holder.hidden = failed.length === 0 && loading.length === 0;
+  holder.innerHTML = failed.length
+    ? failed.map(job => `<span role="alert">${escapeHtml(job.label)}載入失敗 <button type="button" data-retry-deferred-load="${escapeHtml(job.key)}">重試</button></span>`).join("")
+    : loading.length ? `<span aria-live="polite">正在補齊 ${loading.map(job => escapeHtml(job.label)).join("、")}…</span>` : "";
+}
+
+async function machtileRunDeferredLoad(key, label, load, refresh, generation) {
+  const job = { key, label, load, refresh, status: "loading", error: "" };
+  machtileDeferredLoadState.set(key, job);
+  machtileRenderDeferredLoadStatus();
+  try {
+    await load();
+    if (generation !== machtileDeferredLoadGeneration) return;
+    job.status = "ready";
+    refresh?.();
+  } catch (error) {
+    if (generation !== machtileDeferredLoadGeneration) return;
+    job.status = "error";
+    job.error = String(error?.message || error || "");
+    console.warn(`${label} deferred load unavailable`, error);
+  } finally {
+    if (generation === machtileDeferredLoadGeneration) machtileRenderDeferredLoadStatus();
+  }
+}
+
+function machtileRefreshCardSections() {
+  deriveMachines();
+  renderStats();
+  renderFilters();
+  renderWorkOrders();
+  renderAlerts();
+  renderInspectionQueue();
+}
+
+function machtileStartDeferredLoads(generation) {
+  const jobs = [
+    ["card-details", "機台卡詳細資料", async () => {
+      await Promise.all([machtileLoadCardLegacyProgress(generation), machtileLoadInspectionStatuses()]);
+      if (generation !== machtileDeferredLoadGeneration) return;
+      await machtileLoadAssignedDispatchPoolStatuses(generation);
+      if (generation !== machtileDeferredLoadGeneration) return;
+      await Promise.all([machtileLoadCardMachineTimes(), machtileLoadCardActivity()]);
+    }, machtileRefreshCardSections],
+    ["schedule", "排程資料", async () => {
+      await machtileLoadScheduleQueue();
+      await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar()]);
+    }, () => renderSchedule()],
+    ["attention", "提醒中心", machtileLoadAttentionCenter, () => { renderAlerts(); renderNotificationCenter(); }],
+    ["hmc", "HMC 盤況", machtileLoadHmcRuntime, () => { machtileRefreshCardSections(); ensureHmcDashboardEntry(); }],
+    ["flow-visibility", "製程顯示設定", machtileLoadFlowVisibility, () => renderWorkOrders()],
+    ["station-command", "機台操作狀態", () => machtileLoadStationCommandAvailability(generation), () => renderWorkOrders()],
+    ["dispatch-pool", "派工待做池", machtileLoadDispatchPool, () => renderWorkOrders()],
+    ["process-flows", "完整製程路線", machtileLoadProcessFlows, null],
+  ];
+  machtileDeferredLoadState.clear();
+  machtileDeferredLoadsSettled = false;
+  machtileBackgroundLoadPromise = Promise.allSettled(jobs.map(([key, label, load, refresh]) =>
+    machtileRunDeferredLoad(key, label, load, refresh, generation))).then(async (results) => {
+      if (generation === machtileDeferredLoadGeneration) {
+        // One final section-level paint makes the completed snapshot atomic
+        // even when several independent jobs finished in the same task turn.
+        machtileRefreshCardSections();
+        renderNotificationCenter();
+        renderHistory();
+        renderReports();
+        renderSettings();
+        renderSchedule();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        machtileDeferredLoadsSettled = true;
+        machtileUpdateDataSourceLabel();
+      }
+      return results;
+    });
+  return machtileBackgroundLoadPromise;
+}
+
+async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSecondary = false } = {}) {
+  const generation = ++machtileDeferredLoadGeneration;
+  machtileDeferredLoadsSettled = false;
+  // Preserve the existing identity -> department authorization order exactly.
+  await machtileResolveAppUserId();
+  await machtileLoadDepartmentAccess({ readOnly: true, force: true });
+  machtileHistoryRealRows = null;
+  const [rows] = await Promise.all([
+    supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc"),
+    machtileLoadMachineMasters(),
   ]);
-  await machtileLoadProcessFlows();
+  if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
+  state.workOrders = rows.map(normalizeOrder);
+  state.source = "supabase";
+  await machtileLoadCncProgramsForCards();
+  await machtileLoadAssignedCardProcesses();
+  // The first usable card wall needs only authorized orders, machine masters,
+  // and assigned processes. Every secondary read is isolated below so it can
+  // fail/retry without removing the cards already on screen.
+  if (deferSecondary) {
+    // Unconfirmed station commands must be in memory before the first card paint,
+    // otherwise a button pressed before the availability probe finishes could
+    // resend a new command_uuid over a pending one.
+    machtileStationCmdRestorePendingEarly();
+    renderAll();
+  }
+  machtileStartDeferredLoads(generation);
+  if (!deferSecondary) await machtileBackgroundLoadPromise;
 }
 
 // Full routing is independent of the cards view (which only contains active station rows).
@@ -10501,8 +10606,12 @@ async function machtileLoadProcessFlows() {
   const next = new Map();
   machtileProcessFlows = next;
   const nos = [...new Set(state.workOrders.map(o => o.id).filter(Boolean))];
-  for (let i = 0; i < nos.length; i += 50) {
-    const chunk = nos.slice(i, i + 50);
+  const chunks = [];
+  for (let i = 0; i < nos.length; i += 50) chunks.push(nos.slice(i, i + 50));
+  let cursor = 0;
+  async function worker() {
+    while (cursor < chunks.length) {
+      const chunk = chunks[cursor++];
     try {
       const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
@@ -10543,7 +10652,9 @@ async function machtileLoadProcessFlows() {
     } catch (error) {
       console.warn("process flow unavailable; no guessed route/progress", error);
     }
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, () => worker()));
   machtileRefreshOpenProcessFlow();
 }
 
@@ -10772,16 +10883,19 @@ function machtileMachineCardOrders() {
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
 }
 
-async function machtileLoadAssignedDispatchPoolStatuses() {
+async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
-  orders.forEach(order => { order.dispatchPoolStatus = ""; });
-  if (!keys.length) return;
+  if (!keys.length) {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach(order => { order.dispatchPoolStatus = ""; });
+    return;
+  }
   try {
     const quotedKeys = keys.map(key => `"${String(key).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",");
     const rows = await supabaseFetch(`dispatch_pool_items?select=source_key,status&source_key=in.${encodeURIComponent(`(${quotedKeys})`)}`);
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
     const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
+    if (generation !== machtileDeferredLoadGeneration) return;
     orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
   } catch (error) {
     // Fail closed: an unverified claim must never expose a return action.
@@ -10789,14 +10903,17 @@ async function machtileLoadAssignedDispatchPoolStatuses() {
   }
 }
 
-async function machtileLoadCardLegacyProgress() {
+async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
-  orders.forEach((order) => {
-    order.appDone = Number(order.done || 0);
-    delete order.progressSource;
-  });
+  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.done || 0)]));
   const core = machtileBatchCore();
-  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") return;
+  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach((order) => {
+      order.appDone = appDoneByOrder.get(order);
+      delete order.progressSource;
+    });
+    return;
+  }
   const ids = [...new Set(orders.map((order) => String(order.processId || "")).filter(isUuid))];
   const byProcess = new Map();
   const chunks = [];
@@ -10813,16 +10930,25 @@ async function machtileLoadCardLegacyProgress() {
     }
   }));
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
-  machtileCardPickState.progressByProcess = byProcess;
   const nowMs = Date.now();
+  const progressByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
-      const progress = core.cardProgress(order.appDone, row, nowMs);
-      order.done = progress.done;
-      order.progressSource = progress;
+      progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
+    }
+  });
+  if (generation !== machtileDeferredLoadGeneration) return;
+  machtileCardPickState.progressByProcess = byProcess;
+  orders.forEach((order) => {
+    order.appDone = appDoneByOrder.get(order);
+    delete order.progressSource;
+    const progress = progressByOrder.get(order);
+    if (progress) {
+      order.done = progress.done;
+      order.progressSource = progress;
     }
   });
 }
@@ -11563,6 +11689,8 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
 
 async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy || !machtileStationCmdCore) return;
+  const pendingCmd = machtileStationCmd.pending[String(machineCode).trim().toUpperCase()];
+  if (pendingCmd && !machtileStationCmdUnlocked(pendingCmd)) { showToast("這台有一筆指令還在等確認，請先處理那筆。", "error"); return; }
   const machine = machtileScheduleMachine(machineCode);
   const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
   const current = machine?.order;
@@ -11615,7 +11743,8 @@ function machtileCanReturnDispatchPool() {
 
 function machtileDispatchPoolReturnMarkup(order, machineCode) {
   if (!order?.dispatchPoolSourceKey) return "";
-  const isPendingClaim = order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
+  const cardDetailsReady = machtileDeferredLoadState.get("card-details")?.status === "ready";
+  const isPendingClaim = cardDetailsReady && order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
   if (machtileCanReturnDispatchPool() && isPendingClaim) {
     return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
   }
@@ -14010,8 +14139,15 @@ function machtileStationCmdRestorePending() {
   machtileStationCmdSavePending();
 }
 
+// 第一次畫卡片之前先同步還原 localStorage 裡等確認的指令（不等 station_commands 探測）。
+// 否則探測完成前按鈕若可按，會在已有 unconfirmed pending 時另產生新 command_uuid。
+function machtileStationCmdRestorePendingEarly() {
+  if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
+  machtileStationCmdRestorePending();
+}
+
 // loadFromSupabase 時呼叫（成功過就不再試）
-async function machtileLoadStationCommandAvailability() {
+async function machtileLoadStationCommandAvailability(generation = machtileDeferredLoadGeneration) {
   const flag = machtileStationCmdFlag();
   // 旗標關、或不是作業員／管理員帳號（橋接、manager、planner 都不行）→ 完全不讀
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(flag) || state.source !== "supabase" || !machtileStationCmdRoleOk()) {
@@ -14022,14 +14158,16 @@ async function machtileLoadStationCommandAvailability() {
   machtileStationCmd.availability = "probing";
   try {
     await supabaseFetch("station_commands?select=command_uuid&limit=1");
+    if (generation !== machtileDeferredLoadGeneration) return;
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
     if (typeof machtileBatchResetCommandSelection === "function") {
-      machtileBatchResetCommandSelection();
-      machtileRenderBatchReport();
+      if (!machtileBatchState.group || machtileBatchState.commandSelected.size === 0) machtileBatchResetCommandSelection();
+      if (machtileBatchState.group) machtileRenderBatchReport();
     }
   } catch (error) {
+    if (generation !== machtileDeferredLoadGeneration) return;
     console.warn("station commands unavailable; start/stop buttons hidden", error);
     machtileStationCmd.availability = "missing";
   }
@@ -21112,8 +21250,7 @@ function renderAll() {
   applyDashboardFilterParams();
   selectedOrder = state.workOrders.find((order) => order.id === selectedOrder?.id) || state.workOrders[0] || null;
   if (selectedOrder) setSelectedOrder(selectedOrder);
-  $("#dataSourceLabel").textContent = state.source === "supabase"
-    ? `Supabase 已連線${state.cardProcessError ? " · " + state.cardProcessError : ""}${machtileDepartmentAccessError ? " · " + machtileDepartmentAccessError : ""}` : "Mock data";
+  machtileUpdateDataSourceLabel();
   ensureHmcDashboardEntry();
   renderStats();
   renderFilters();
@@ -24933,7 +25070,7 @@ async function machtileResumeInit() {
 
   if (config.useSupabase && config.supabaseUrl && config.supabaseAnonKey) {
     try {
-      await loadFromSupabase();
+      await loadFromSupabase({ deferSecondary: true });
     } catch (error) {
       if (machtileStrictMode()) {
         machtileClearDepartmentData();
