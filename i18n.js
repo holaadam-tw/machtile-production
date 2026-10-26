@@ -124,6 +124,7 @@
       standard_finish_disabled: "接下一道功能尚未開放，請選其他工單。",
       standard_finish_claim_failed: "接下一道失敗，請選其他工單。",
       standard_finish_sync_pending: "同步中，請稍後",
+      takeover_sync_pending: "已接手，資料同步中，請稍候幾秒再看",
       standard_finish_start: "開工",
       standard_finish_other_order: "選其他工單",
       abnormal_report: "異常回報",
@@ -278,6 +279,7 @@
       standard_finish_disabled: "Chức năng nhận công đoạn kế tiếp chưa được mở; vui lòng chọn lệnh khác.", // _draft
       standard_finish_claim_failed: "Không thể nhận công đoạn kế tiếp; vui lòng chọn lệnh khác.", // _draft
       standard_finish_sync_pending: "Đang đồng bộ, vui lòng đợi", // _draft
+      takeover_sync_pending: "Đã tiếp nhận, dữ liệu đang đồng bộ, vui lòng đợi vài giây rồi xem lại", // _draft
       standard_finish_start: "Bắt đầu",
       standard_finish_other_order: "Chọn lệnh khác",
       abnormal_report: "Báo cáo bất thường",

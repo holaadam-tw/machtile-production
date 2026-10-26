@@ -157,6 +157,7 @@
   "standard_finish_disabled": { "value": "Chức năng nhận công đoạn kế tiếp chưa được mở; vui lòng chọn lệnh khác.", "_draft": true },
   "standard_finish_claim_failed": { "value": "Không thể nhận công đoạn kế tiếp; vui lòng chọn lệnh khác.", "_draft": true },
   "standard_finish_sync_pending": { "value": "Đang đồng bộ, vui lòng đợi", "_draft": true },
+  "takeover_sync_pending": { "value": "Đã tiếp nhận, dữ liệu đang đồng bộ, vui lòng đợi vài giây rồi xem lại", "_draft": true },
   "standard_finish_start": { "value": "Bắt đầu", "_draft": true },
   "standard_finish_other_order": { "value": "Chọn lệnh khác", "_draft": true },
   "batch_command_title": {

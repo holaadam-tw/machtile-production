@@ -64,6 +64,7 @@
   "standard_finish_disabled": "接下一道功能尚未開放，請選其他工單。",
   "standard_finish_claim_failed": "接下一道失敗，請選其他工單。",
   "standard_finish_sync_pending": "同步中，請稍後",
+  "takeover_sync_pending": "已接手，資料同步中，請稍候幾秒再看",
   "standard_finish_start": "開工",
   "standard_finish_other_order": "選其他工單",
   "batch_command_title": "批次開工／停工",

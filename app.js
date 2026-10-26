@@ -13895,7 +13895,7 @@ async function machtileTakeoverSubmitCandidate(holder, candidate) {
   const commandUuid = crypto.randomUUID();
   const result = await machtileStationCmdRunSubmission({
     commandUuid, commandType: "takeover", machineCode,
-    fields: { stopNoteId: candidate.stopNoteId }, recordFields: { stopNoteId: candidate.stopNoteId }, startedAt: Date.now(),
+    fields: { stopNoteId: candidate.stopNoteId }, recordFields: { stopNoteId: candidate.stopNoteId, orderNo: candidate.orderNo, step: candidate.indexSn }, startedAt: Date.now(),
     rpcName: "machtile_submit_takeover",
     payloadOverride: machtileTakeoverCore.takeoverPayload({ commandUuid, machineCode, stopNoteId: candidate.stopNoteId }),
   });
@@ -13904,6 +13904,30 @@ async function machtileTakeoverSubmitCandidate(holder, candidate) {
   } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
     machtileTakeoverClose(); showToast(machtileTranslate("takeover_sending"));
   } else showToast(result.error?.message || machtileTranslate("takeover_send_failed"));
+}
+// 接手 applied 後：重載資料讓目標機台卡片出現那張單（報工／完工入口）。比照接下一道的 standard_finish_sync_pending：
+// 重載後卡片還看不到「單號＋道次」→ 提示同步中，10 秒後再重載，延後重載最多 3 次就停。
+const machtileTakeoverSync = { retryMs: 10000, maxRetries: 3, timers: {}, retries: {}, reloads: {} };
+function machtileTakeoverSyncVisible(code, orderNo, step) {
+  const current = machtileCardOrderForMachine(code);
+  return Boolean(current) && String(current.id || "") === String(orderNo || "") && Number(current.stationStep) === Number(step);
+}
+async function machtileTakeoverRefreshAfterApplied(code, orderNo, step, isRetry = false) {
+  clearTimeout(machtileTakeoverSync.timers[code]);
+  delete machtileTakeoverSync.timers[code];
+  if (!isRetry) machtileTakeoverSync.retries[code] = 0;
+  machtileTakeoverSync.reloads[code] = (machtileTakeoverSync.reloads[code] || 0) + 1;
+  try {
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines(); renderAll();
+  } catch (error) {
+    console.warn("takeover applied; reload failed", error);
+  }
+  if (!orderNo || !step || machtileTakeoverSyncVisible(code, orderNo, step)) return;
+  showToast(machtileTranslate("takeover_sync_pending"));
+  if ((machtileTakeoverSync.retries[code] || 0) >= machtileTakeoverSync.maxRetries) return;
+  machtileTakeoverSync.retries[code] = (machtileTakeoverSync.retries[code] || 0) + 1;
+  machtileTakeoverSync.timers[code] = setTimeout(() => { void machtileTakeoverRefreshAfterApplied(code, orderNo, step, true); }, machtileTakeoverSync.retryMs);
 }
 const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
 const machtileStationCmd = {
@@ -15007,6 +15031,7 @@ function machtileStationCmdFinish(code, view) {
   }
   if (record.commandType === "takeover" && view?.terminal) {
     showToast(machtileTakeoverCore?.resultText(view) || view.title);
+    if (view.phase === "applied") void machtileTakeoverRefreshAfterApplied(code, record.orderNo, record.step);
   }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
