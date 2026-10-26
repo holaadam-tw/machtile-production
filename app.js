@@ -13926,6 +13926,57 @@ function machtileFinishCloseEnabled(machineCode) {
     machines: config.finishCloseMachines, machineCode, reportType: "finish", serverStatus: "applied" }).send);
 }
 
+function machtileShortCompletionEnabled(machineCode) {
+  return config.enableShortCompletion === true
+    && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.shortCompletionMachines), machineCode);
+}
+
+function machtileShortCompletionValue(order = selectedOrder) {
+  const section = document.getElementById("shortCompletionSection");
+  if (!section || section.hidden || !machtileShortCompletionEnabled(order?.machine)) return null;
+  const reason = section.querySelector('input[name="shortCompletionReason"]:checked')?.value || "";
+  const note = String(section.querySelector("#shortCompletionNote")?.value || "").trim();
+  if (!reason) return null;
+  if (!["MATERIAL_SHORT", "SCRAP", "OTHER"].includes(reason)) throw new Error(machtileTranslate("short_completion_reason_required"));
+  if (note.length > 500 || (reason === "OTHER" && !note)) throw new Error(machtileTranslate("short_completion_other_note_required"));
+  return { reason_code: reason, note };
+}
+
+function machtileRenderShortCompletion(order = selectedOrder) {
+  const form = document.getElementById("reportForm");
+  if (!form) return;
+  let section = document.getElementById("shortCompletionSection");
+  if (!section) {
+    section = document.createElement("section");
+    section.id = "shortCompletionSection";
+    section.className = "report-section";
+    form.querySelector(".submit-report")?.before(section);
+    section.addEventListener("change", () => {
+      const note = section.querySelector("#shortCompletionNote");
+      if (note) note.hidden = section.querySelector('input[name="shortCompletionReason"]:checked')?.value !== "OTHER";
+    });
+    section.innerHTML = `<p class="report-qty-help"><strong data-short-completion-gap></strong></p>
+      <div class="checklist-card"><label><input type="radio" name="shortCompletionReason" value="" checked> ${escapeHtml(machtileTranslate("short_completion_none"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="MATERIAL_SHORT"> ${escapeHtml(machtileTranslate("short_completion_material"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="SCRAP"> ${escapeHtml(machtileTranslate("short_completion_scrap"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="OTHER"> ${escapeHtml(machtileTranslate("short_completion_other"))}</label></div>
+      <textarea id="shortCompletionNote" maxlength="500" hidden placeholder="${escapeHtml(machtileTranslate("short_completion_note"))}"></textarea>`;
+  }
+  const planned = Number(order?.total || order?.quantity || 0);
+  const finish = window.MachTileReportCounterCore?.finishTotal(
+    document.getElementById("completedQty")?.value,
+    machtileFinishReportedQty(order),
+  );
+  const total = finish?.total;
+  const visible = activeReportType === "finish" && machtileShortCompletionEnabled(order?.machine)
+    && Number.isFinite(total) && planned > 0 && total < planned;
+  section.hidden = !visible;
+  section.classList.toggle("is-hidden", !visible);
+  if (!visible) return;
+  const gap = section.querySelector("[data-short-completion-gap]");
+  if (gap) gap.textContent = machtileTranslate("short_completion_question", { quantity: planned - total });
+}
+
 function machtileStandardFinishEnabled(machineCode) {
   return config.enableStandardFinishFlow === true
     && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.standardFinishFlowMachines), machineCode);
@@ -13955,12 +14006,14 @@ function machtileFinishCloseSetResult(code, view) {
   const title = applied
     ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
     : machtileTranslate("finish_close_rejected_title");
-  const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running" })[view?.code];
+  const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running",
+    SHORT_COMPLETION_DISABLED: "short_completion_disabled", SHORT_COMPLETION_NOT_NEEDED: "short_completion_not_needed",
+    SHORT_COMPLETION_REASON_INVALID: "short_completion_reason_invalid" })[view?.code];
   flow.close = {
     phase: view?.phase || "rejected",
     title,
     message: applied
-      ? machtileTranslate("finish_close_applied_detail")
+      ? (view?.warning && flow.singleReport?.shortCompletion ? machtileTranslate("short_completion_warning") : (view?.warning || machtileTranslate("finish_close_applied_detail")))
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
     claim: null,
@@ -14097,6 +14150,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       partNo: args.p_expected_part_no,
       manufactureIiId: args.p_manufacture_ii_id,
       expectedSimulationId: args.p_expected_simulation_id,
+      shortCompletion: flow.singleReport?.shortCompletion || null,
     },
     recordFields: {
       orderNo: args.p_expected_order_no,
@@ -14104,6 +14158,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       partNo: args.p_expected_part_no,
       manufactureIiId: args.p_manufacture_ii_id,
       expectedSimulationId: args.p_expected_simulation_id,
+      shortCompletion: flow.singleReport?.shortCompletion || null,
       finishCloseReportCommandUuid: reportCommandUuid,
     },
     startedAt: Date.now(),
@@ -14922,6 +14977,7 @@ async function machtileStationCmdRunSubmission(options) {
     unconfirmed: false, serverOffset: offset, ...(acceptedResult?.recordExtra || {}),
   });
   const view = core.statusView(row || { status: "pending" }, commandType, core.ageForHint(record, row?.requested_at, now));
+  if (commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
   record.view = view;
   record.lastStatus = String(row?.status || "pending");
   machtileStationCmd.pending[machineCode] = record;
@@ -15026,6 +15082,7 @@ function machtileStationCmdPoll(code) {
         const wasUnconfirmed = current.unconfirmed;
         current.unconfirmed = false;
         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
+        if (current.commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
         current.view = view;
@@ -22440,6 +22497,7 @@ function machtileRenderSingleStationReport() {
   const holder = document.getElementById("singleStationReportPanel");
   const submit = document.querySelector("#reportForm .submit-report");
   if (!holder || !submit) return;
+  machtileRenderShortCompletion(selectedOrder);
   const code = machtileSingleStationReportState.machineCode;
   const order = machtileSingleStationReportOrder(code);
   const eligibleType = ["noon", "finish"].includes(activeReportType);
@@ -22776,10 +22834,14 @@ async function machtileStationReportSubmitPreview(code) {
       return;
     }
     const reportType = activeReportType === "finish" ? "finish" : "noon";
+    let shortCompletion = null;
+    try { if (reportType === "finish") shortCompletion = machtileShortCompletionValue(order); }
+    catch (error) { block(error.message); return; }
     flow.singleReport = {
       reportType,
       reportPayload: buildReportPayload(reportType),
       operators: machtileSelectedOperators(machtileBatchState.actorId),
+      shortCompletion,
     };
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
     // 仍建立 completed_qty=0 的正式 finish 紀錄，再沿用既有 close command 收尾。
@@ -24673,6 +24735,7 @@ function bindEvents() {
       updateReportEstimate();
       updateNoonAdvice();
       updateReportCounterPreview();
+      if (id === "completedQty") machtileRenderShortCompletion(selectedOrder);
       if (id === "defectQty") machtileUpdateReportFailReason();
     });
   });

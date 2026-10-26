@@ -82,7 +82,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -262,6 +262,20 @@ assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the cano
 assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
 assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
+assert.match(await finishValidation.locator("#shortCompletionSection").innerText(), /80/, "short-completion prompt shows the actual plan gap");
+await finishValidation.locator("#completedQty").fill("1000");
+assert.equal(await finishValidation.locator("#shortCompletionSection").isHidden(), true, "total completed quantity at plan hides short completion");
+assert.equal(await finishValidation.evaluate(() => {
+  const shortCompletion = machtileShortCompletionValue(selectedOrder);
+  const payload = machtileStationCmdCore.submitPayload({ commandUuid: crypto.randomUUID(), commandType: "close", machineCode: "A04", orderNo: "XX01202604140011", step: 2, expectedSimulationId: "Y011BG35APT0", shortCompletion });
+  return Object.hasOwn(payload, "p_short_completion");
+}), false, "full completion payload omits p_short_completion");
+await finishValidation.locator("#completedQty").fill("950");
+assert.equal(await finishValidation.locator("#shortCompletionSection").isVisible(), true, "total below plan shows short completion");
+assert.match(await finishValidation.locator("#shortCompletionSection").innerText(), /50/, "short-completion prompt uses the current total's plan gap");
+await finishValidation.locator('input[name="shortCompletionReason"][value="MATERIAL_SHORT"]').check();
+await finishValidation.evaluate(() => machtileRenderShortCompletion(selectedOrder));
+assert.equal(await finishValidation.locator('input[name="shortCompletionReason"][value="MATERIAL_SHORT"]').isChecked(), true, "rerender preserves the selected short-completion reason");
 assert.equal(await finishValidation.locator('input[name="finishOvertime"][value="none"]').isChecked(), true, "hidden overtime field defaults to none");
 await finishValidation.evaluate(operatorId => {
   const list = document.createElement("div");
@@ -300,8 +314,15 @@ assert.equal(calls.closeCommands[0].p_command_type, "close");
 assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
+assert.deepEqual(calls.closeCommands[0].p_short_completion, { reason_code: "MATERIAL_SHORT", note: "" }, "APP fixture uses the cloud RPC parameter and Factory JSON field names");
 assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "true", "finish confirmation closes immediately while factory work continues");
 assert.match(await finishValidation.locator("#stationReportBackgroundStatus").innerText(), /工廠已完成寫入/, "successful background finish shows a temporary completion status");
+assert.equal(await finishValidation.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.singleReport.shortCompletion = null;
+  machtileFinishCloseSetResult("A04", { phase: "applied", warning: "Factory 原始警告" });
+  return flow.close.message;
+}), "Factory 原始警告", "non-short completion preserves Factory's original warning");
 await finishValidation.close();
 
 finishButtonEnabled = false;

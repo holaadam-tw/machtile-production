@@ -1608,7 +1608,7 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     ["ZERO_REPORTED", { status: "rejected", reject_code: "ZERO_REPORTED" }, "這一道還沒有報工數量，不能完工關站；請先報工"],
     ["LOCK_TIMEOUT", { status: "rejected", reject_code: "LOCK_TIMEOUT" }, "這次沒有關成（系統忙），可以再按一次"],
     ["STILL_RUNNING", { status: "rejected", reject_code: "STILL_RUNNING" }, "這筆仍在生產中，沒有關站；請先停工再試。"],
-    ["applied ShortQty > 0", { status: "applied", legacy_snapshot: { ShortQty: 7 } }, "少 7 件，已關站"],
+    ["applied ShortQty > 0", { status: "applied", legacy_snapshot: { ShortQty: 7 } }, "少 7 件，已關站並依實做數入庫"],
     ["applied ShortQty = 0", { status: "applied", legacy_snapshot: { ShortQty: 0 } }, "已關站"],
   ];
   for (const [label, outcome, expected] of cases) {

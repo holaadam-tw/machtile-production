@@ -273,7 +273,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, poolItemId, replaceStopped } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -293,6 +293,12 @@
     if (commandType === "close") {
       if (!text(expectedSimulationId)) throw new Error("NO_SIMULATION_ID");
       payload.p_expected_simulation_id = text(expectedSimulationId);
+      if (shortCompletion != null) {
+        const reason = text(shortCompletion.reason_code);
+        const note = text(shortCompletion.note);
+        if (!["MATERIAL_SHORT", "SCRAP", "OTHER"].includes(reason) || note.length > 500 || (reason === "OTHER" && !note)) throw new Error("SHORT_COMPLETION_REASON_INVALID");
+        payload.p_short_completion = { reason_code: reason, note };
+      }
     }
     if (commandType === "claim_next") {
       if (!text(poolItemId)) throw new Error("NO_POOL_ITEM_ID");
@@ -480,7 +486,7 @@
     const status = text(row && row.status).toLowerCase();
     if (status === "applied") {
       const shortQty = type === "close" ? closeShortQty(row) : 0;
-      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站` : "已關站") : type === "claim_next" ? "已接下一道" : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty, nextStep: standardFinishNextStep(row) } : {}), ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
+      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站並依實做數入庫` : "已關站") : type === "claim_next" ? "已接下一道" : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty, nextStep: standardFinishNextStep(row) } : {}), ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
@@ -536,6 +542,7 @@
       operationName: text(rec.operationName),
       manufactureIiId: text(rec.manufactureIiId) || null,
       expectedSimulationId: text(rec.expectedSimulationId) || null,
+      shortCompletion: rec.shortCompletion && typeof rec.shortCompletion === "object" ? rec.shortCompletion : null,
       finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
       poolItemId: text(rec.poolItemId) || null,
       standardFinishClaim: rec.standardFinishClaim === true,
