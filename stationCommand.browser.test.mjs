@@ -152,7 +152,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     poolItems, poolClaims: [], withDepartments, procStatus: { ...procStatus }, extraCards,
     // 停工對話框（報工＋停工一次）：machtile_submit_stop_report 的 body；procExtra＝工單號 → 工序列額外欄位（simulation_id、qty_completed）
     stopReportSubmits: [], stopReportAckMissing: false, procExtra: {},
-    // 停工對話框補讀的 station_commands report applied 列（r4c）、那支查詢的 query string、讀取失敗開關
+    // 停工對話框不再補「剛報」（owner 10/27「已報先只提醒不自動加」）：仍記下任何「report applied」查詢，用來斷言沒讀
     recentReports: [], recentQueries: [], recentReadFail: false,
   };
   be.handle = async (route) => {
@@ -765,8 +765,6 @@ const takeoverSheet = (page) => page.locator("#machtileTakeoverSheet");
 async function openStopDialog(page) {
   await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click();
   await takeoverSheet(page).locator("[data-takeover-good]").waitFor();
-  // 對話框開了之後才補讀「剛報、進度還沒反映」的報工；讀完（不論有沒有）才讀題目
-  await page.waitForSelector("#machtileTakeoverSheet[data-takeover-recent-loaded]", { timeout: 10000 });
 }
 async function fillStopDialog(page, good, fail) {
   const ts = takeoverSheet(page);
@@ -787,7 +785,7 @@ console.log("\n== 390px：停工對話框——已報 4 件 → 停工前沒報�
   await openStopDialog(page);
   const ts = takeoverSheet(page);
   const question = (await ts.locator("[data-takeover-qty-question]").innerText()).trim();
-  ok(question === "已報 4 件。停工前還沒報的有幾件？（沒有就填 0）", "題目＝「已報 4 件。停工前還沒報的有幾件？（沒有就填 0）」", question);
+  ok(question === "已報 4 件。剛報的件數可能還沒算進來，請照實際還沒報的件數填（沒有就填 0）", "題目＝「已報 4 件。剛報的件數可能還沒算進來，請照實際還沒報的件數填（沒有就填 0）」", question);
   ok(await ts.locator("[data-takeover-good]").inputValue() === "" && await ts.locator("[data-takeover-fail]").inputValue() === "", "良品／不良都不預設（空白）");
   await ts.locator('[data-takeover-reason="RUSH_ORDER"]').click();
   await ts.locator('[data-takeover-allow="yes"]').click();
@@ -926,55 +924,70 @@ console.log("\n== 390px：停工回報被拒 TAKEOVER_DISABLED → 仍自動退�
   await context.close();
 }
 
-console.log("\n== 390px：報工 4 applied 後立刻停工（派工橋還沒同步）→ 已報 4 件（含剛報的 4 件） ==");
+console.log("\n== 390px：報工 4 applied 後立刻停工（派工橋還沒同步）→ 只提醒、不從 station_commands／本機紀錄補量 ==");
 {
   const be = makeBackend();
   be.mode = "applied";
-  // 卡片進度：舊 MES 結算列 0 件、快照 10 分鐘前；站別指令：1 分鐘前 applied 報工 4（快照後）
-  // ＋20 分鐘前 7（快照前＝已含在舊 MES）＋別道次 9＋別台 6（都不能算）
+  // 卡片進度：舊 MES 結算列 0 件、快照 10 分鐘前；station_commands 有 1 分鐘前 applied 的報工 4（以前會被加進「已報」）
   be.progressRows = [{ process_id: id(304), legacy_input: 0, legacy_output: 0, legacy_fail: 0, legacy_snapshot_at: ago(10), legacy_synced_at: ago(10),
     pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: null, actual_start_at: ago(60) }];
   be.recentReports = [
     { command_uuid: id(9801), machine_code: "A04", expected_order_no: STOP_WO, expected_index_sn: 5, good_qty: 4, fail_qty: 0, applied_at: ago(1) },
-    { command_uuid: id(9802), machine_code: "A04", expected_order_no: STOP_WO, expected_index_sn: 5, good_qty: 7, fail_qty: 0, applied_at: ago(20) },
-    { command_uuid: id(9803), machine_code: "A04", expected_order_no: STOP_WO, expected_index_sn: 4, good_qty: 9, fail_qty: 0, applied_at: ago(1) },
-    { command_uuid: id(9804), machine_code: "A05", expected_order_no: STOP_WO, expected_index_sn: 5, good_qty: 6, fail_qty: 0, applied_at: ago(1) },
   ];
   const { context, page, errors } = await stopDialogPage(be, { qtyCompleted: 0 });
-  const done = await page.evaluate(() => machtileStationCmdMachineByCode("A04")?.order?.done);
-  ok(done === 0, "卡片 A04 這一道雲端進度＝0（派工橋還沒同步）", String(done));
-  await openStopDialog(page);
-  const ts = takeoverSheet(page);
-  const question = (await ts.locator("[data-takeover-qty-question]").innerText()).trim();
-  ok(question === "已報 4 件（含剛報的 4 件）。停工前還沒報的有幾件？（沒有就填 0）", "題目＝「已報 4 件（含剛報的 4 件）。停工前還沒報的有幾件？（沒有就填 0）」", question);
-  const rq = be.recentQueries[0] || "";
-  ok(be.recentQueries.length === 1 && rq.includes("machine_code=eq.A04") && rq.includes(`expected_order_no=eq.${STOP_WO}`) && rq.includes("expected_index_sn=eq.5") &&
-    rq.includes("command_type=eq.report") && rq.includes("status=eq.applied") && rq.includes(`applied_at=gt.${new Date(Date.parse(ago(10))).toISOString()}`),
-    "只查這台×這張單×這道 applied 報工、applied_at 晚於進度快照時間", rq);
-  ok(await ts.locator("[data-takeover-good]").inputValue() === "" && await ts.locator("[data-takeover-fail]").inputValue() === "", "數量欄仍不預設");
-  await page.screenshot({ path: path.join(outDir, "phone-stop-dialog-recent-report4.png") });
-  ok(realErrors(errors).length === 0, "剛報 4 立刻停工沒有 JS 錯誤", realErrors(errors).join(" | "));
-  await context.close();
-}
-
-console.log("\n== 390px：讀不到 station_commands → 用本平板記住的剛 applied 報工（過期的不算） ==");
-{
-  const be = makeBackend();
-  be.mode = "applied";
-  be.recentReadFail = true;
-  const { context, page, errors } = await stopDialogPage(be, { qtyCompleted: 0 });
+  // 本平板的舊版補量紀錄（1de09c4a 會讀）：現在不能被加進來
   await page.evaluate((wo) => {
     const nowMs = Date.now();
     localStorage.setItem("machtile.stopRecentReports.v1", JSON.stringify([
       { commandUuid: "local-1", machineCode: "A04", orderNo: wo, indexSn: 5, good: 2, fail: 0, appliedAt: nowMs - 60000, savedAt: nowMs - 60000 },
-      { commandUuid: "local-old", machineCode: "A04", orderNo: wo, indexSn: 5, good: 5, fail: 0, appliedAt: nowMs - 40 * 60000, savedAt: nowMs - 40 * 60000 },
     ]));
   }, STOP_WO);
+  const done = await page.evaluate(() => machtileStationCmdMachineByCode("A04")?.order?.done);
+  ok(done === 0, "卡片 A04 這一道雲端進度＝0（派工橋還沒同步）", String(done));
   await openStopDialog(page);
-  const question = (await takeoverSheet(page).locator("[data-takeover-qty-question]").innerText()).trim();
-  ok(question === "已報 2 件（含剛報的 2 件）。停工前還沒報的有幾件？（沒有就填 0）", "雲端讀不到 → 本機補充 2 件（超過 30 分鐘的不算）", question);
-  ok(await page.evaluate(() => document.getElementById("machtileTakeoverSheet")?.dataset.takeoverRecentLoaded) === "local", "來源標成 local");
-  ok(realErrors(errors).length === 0, "本機補充情境沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await page.waitForTimeout(800);   // 給任何（不該有的）補讀時間
+  const ts = takeoverSheet(page);
+  const question = (await ts.locator("[data-takeover-qty-question]").innerText()).trim();
+  ok(question === "已報 0 件。剛報的件數可能還沒算進來，請照實際還沒報的件數填（沒有就填 0）", "題目＝「已報 0 件。剛報的件數可能還沒算進來，請照實際還沒報的件數填（沒有就填 0）」（不加剛報的 4、也不加本機的 2）", question);
+  ok(!question.includes("含剛報的"), "題目沒有「含剛報的」字樣", question);
+  ok(be.recentQueries.length === 0, "沒有讀 station_commands 的 applied 報工來補量", JSON.stringify(be.recentQueries));
+  ok(await page.evaluate(() => document.getElementById("machtileTakeoverSheet")?.dataset.takeoverRecentLoaded) === undefined, "沒有補讀流程（沒有 data-takeover-recent-loaded）");
+  ok(await ts.locator("[data-takeover-good]").inputValue() === "" && await ts.locator("[data-takeover-fail]").inputValue() === "", "數量欄仍不預設");
+  await page.screenshot({ path: path.join(outDir, "phone-stop-dialog-unsynced-hint.png") });
+  ok(realErrors(errors).length === 0, "剛報 4 立刻停工沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// r4c 審查 LOW：stop_report 被拒、頁面重整過（記憶體沒有表單）且卡片上也找不到那張單 → 開一般停工確認卡（不自動送）
+console.log("\n== 390px：停工回報被拒、沒有暫存表單也沒有工單 → 開一般停工確認卡（不自動送 stop） ==");
+{
+  const be = makeBackend();
+  be.mode = "hold";
+  const { context, page, errors } = await stopDialogPage(be);
+  await openStopDialog(page);
+  await fillStopDialog(page, 3, 0);
+  await takeoverSheet(page).locator("[data-takeover-stop-confirm]").click();
+  await page.waitForFunction(() => machtileTakeoverStopDrafts.size === 1, null, { timeout: 10000 });
+  ok(be.stopReportSubmits.length === 1, "停工回報已送出（工廠還沒回）", String(be.stopReportSubmits.length));
+  // 模擬頁面重整：暫存表單清空；拒絕回來時重開表單那一步查不到工單（卡片還沒載好／單已不在這台）
+  await page.evaluate(() => {
+    machtileTakeoverStopDrafts.clear();
+    const original = window.machtileStationCmdMachineByCode;
+    window.machtileStationCmdMachineByCode = (code) => {
+      const machine = original(code);
+      const caller = (new Error().stack || "").split("\n")[2] || "";
+      return caller.includes("machtileTakeoverReopenStopRejected") && machine ? { ...machine, order: null } : machine;
+    };
+  });
+  be.mode = "code:QTY_EXCEEDS_AVAILABLE";
+  await page.locator("#machtileStationCmdSheet").waitFor({ timeout: 20000 });
+  await page.waitForTimeout(500);
+  ok(await page.locator("#machtileStationCmdSheet").count() === 1 && await page.locator("#machtileTakeoverSheet").count() === 0, "開了一般停工確認卡（停工對話框沒有重開）");
+  ok(legacyStopSubmits(be).length === 0, "一般停工沒有自動送出", String(legacyStopSubmits(be).length));
+  ok(be.stopReportSubmits.length === 1, "停工回報沒有重送", String(be.stopReportSubmits.length));
+  const toasts = await page.evaluate(() => window.__toasts);
+  ok(toasts.includes("停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管"), "仍顯示通用提示", JSON.stringify(toasts));
+  ok(realErrors(errors).length === 0, "無表單無工單被拒沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
