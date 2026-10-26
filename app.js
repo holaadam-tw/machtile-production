@@ -13862,19 +13862,37 @@ function machtileTakeoverCandidateModel(row) {
 function machtileTakeoverCandidateCard(row) {
   return `<article class="takeover-candidate"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
 }
+async function machtileTakeoverLoadCandidates(holder, code) {
+  const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
+  holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
+  holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
+}
 async function machtileTakeoverOpenStart(code, returnFocus) {
   const holder = machtileTakeoverOverlay(code, "start", returnFocus);
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("start_work"))}</h2></header><div class="takeover-tabs" role="tablist"><button data-takeover-tab="new" class="is-selected">${escapeHtml(machtileTranslate("takeover_new_order"))}</button><button data-takeover-tab="takeover">${escapeHtml(machtileTranslate("takeover_old_order"))}</button></div><div data-takeover-pane="new"><p>${escapeHtml(machtileTranslate("takeover_new_order_help"))}</p><button type="button" data-takeover-use-existing>${escapeHtml(machtileTranslate("takeover_continue_new"))}</button></div><div data-takeover-pane="takeover" hidden><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
   try {
-    const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
-    holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
-    holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
+    await machtileTakeoverLoadCandidates(holder, code);
   } catch (error) { machtileTakeoverClose(); machtileTakeover.availability = "missing"; machtileStationCmdOpen("start", code, returnFocus); }
 }
+async function machtileTakeoverOpenIdle(code, returnFocus) {
+  const pending = machtileStationCmd.pending[code];
+  if (!machtileTakeoverActive(code) || (pending && !machtileStationCmdUnlocked(pending))) return;
+  const holder = machtileTakeoverOverlay(code, "takeover", returnFocus);
+  holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("takeover_idle_action"))}</h2></header><div data-takeover-pane="takeover"><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+  try {
+    await machtileTakeoverLoadCandidates(holder, code);
+  } catch (error) {
+    machtileTakeoverClose();
+    machtileTakeover.availability = "missing";
+    machtileStationCmdRerender();
+  }
+}
 async function machtileTakeoverSubmitCandidate(holder, candidate) {
+  const machineCode = holder.dataset.machine, pending = machtileStationCmd.pending[machineCode];
+  if (pending && !machtileStationCmdUnlocked(pending)) return;
   if (!candidate || !window.confirm(machtileTranslate("takeover_confirm_message", { source: candidate.sourceMachine, order: candidate.orderNo,
     step: candidate.indexSn, done: candidate.doneQty, target: holder.dataset.machine, remaining: candidate.remainingQty }))) return;
-  const commandUuid = crypto.randomUUID(), machineCode = holder.dataset.machine;
+  const commandUuid = crypto.randomUUID();
   const result = await machtileStationCmdRunSubmission({
     commandUuid, commandType: "takeover", machineCode,
     fields: { stopNoteId: candidate.stopNoteId }, recordFields: { stopNoteId: candidate.stopNoteId }, startedAt: Date.now(),
@@ -14184,8 +14202,10 @@ function machtileStationCmdParts(machine) {
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const pending = machtileStationCmd.pending[code];
+  const idleTakeover = machtileTakeoverCore.idleActionVisible({ enabled: config.enableTakeover === true,
+    machines: config.takeoverMachines, machineCode: code, availability: machtileTakeover.availability, hasOrder: Boolean(order) });
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
-  if (!gate.ok && !(pending && machtileStationCmdActiveFor(code))) return none;
+  if (!gate.ok && !idleTakeover && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
@@ -14206,7 +14226,8 @@ function machtileStationCmdParts(machine) {
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
   const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
-  const buttons = gate.ok ? `
+  const buttons = idleTakeover ? `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-takeover-open-idle data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("takeover_idle_action"))}</button>` : gate.ok ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";
   return { status: takenLine + status, buttons, active: true };
@@ -15090,6 +15111,8 @@ function machtileStationCmdHandleClick(event) {
     }
     return true;
   }
+  const idleTakeover = event.target.closest("[data-takeover-open-idle]");
+  if (idleTakeover) { void machtileTakeoverOpenIdle(idleTakeover.dataset.stationCmdMachine, idleTakeover); return true; }
   const open = event.target.closest("[data-station-cmd]");
   if (open) { machtileStationCmdOpen(open.dataset.stationCmd, open.dataset.stationCmdMachine, open); return true; }
   const retry = event.target.closest("[data-station-cmd-retry]");

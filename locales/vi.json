@@ -496,7 +496,7 @@
   "takeover_new_order": { "value": "Mở đơn hàng mới", "_draft": true }, "takeover_old_order": { "value": "Tiếp nhận lệnh cũ", "_draft": true },
   "takeover_new_order_help": { "value": "Chọn đơn hàng mới trong danh sách chờ.", "_draft": true }, "takeover_continue_new": { "value": "Tiếp tục mở đơn mới", "_draft": true },
   "takeover_step": { "value": "Công đoạn {{step}}", "_draft": true }, "takeover_done_remaining": { "value": "Đã làm {{done}}／còn {{remaining}}", "_draft": true },
-  "takeover_take": { "value": "Tiếp nhận", "_draft": true }, "takeover_none": { "value": "Hiện không có lệnh có thể tiếp nhận", "_draft": true },
+  "takeover_take": { "value": "Tiếp nhận", "_draft": true }, "takeover_idle_action": { "value": "Tiếp nhận lệnh đã dừng", "_draft": true }, "takeover_none": { "value": "Hiện không có lệnh đã dừng có thể tiếp nhận", "_draft": true },
   "takeover_sending": { "value": "Đang gửi…", "_draft": true }, "takeover_sent": { "value": "Đã gửi, đang chờ nhà máy xác nhận", "_draft": true }, "takeover_send_failed": { "value": "Gửi thất bại, vui lòng thử lại", "_draft": true },
   "takeover_stop_report_rejected_generic": { "value": "Báo dừng máy không thành công, số lượng vừa nhập chưa được gửi. Vui lòng dùng dừng máy thông thường và báo cho bộ phận kế hoạch", "_draft": true },
   "yes": { "value": "Có", "_draft": true }, "no": { "value": "Không", "_draft": true }, "cancel": { "value": "Hủy", "_draft": true }, "loading": { "value": "Đang tải…", "_draft": true },

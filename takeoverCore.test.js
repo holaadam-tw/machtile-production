@@ -94,6 +94,15 @@ test("any unavailable takeover capability fails open to the legacy stop flow", (
   assert.equal(core.availabilityAfterProbeError(new Error("TAKEOVER_DISABLED")), "off");
 });
 
+test("idle takeover action needs every gate and never applies to a machine with an order", () => {
+  const ready = { enabled: true, machines: ["A02"], machineCode: "a02", availability: "ready", hasOrder: false };
+  assert.equal(core.idleActionVisible(ready), true);
+  assert.equal(core.idleActionVisible({ ...ready, enabled: false }), false);
+  assert.equal(core.idleActionVisible({ ...ready, machines: ["A03"] }), false);
+  assert.equal(core.idleActionVisible({ ...ready, availability: "missing" }), false);
+  assert.equal(core.idleActionVisible({ ...ready, hasOrder: true }), false);
+});
+
 test("defects require their own fail reason and wildcard config picks a visible probe machine", () => {
   const form = { ...core.initialStopForm(core.DEFAULT_POLICIES[1]), good_qty: "3", fail_qty: "1", allow_takeover_touched: true };
   assert.equal(core.validateStop(form).errors.fail_reason_code, "required");

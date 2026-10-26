@@ -126,7 +126,7 @@ const testConfig = (extra) => `window.MACHTILE_CONFIG = {
 };`;
 
 // ---------- fake backend（每個情境一份） ----------
-function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false, directMode = "ok" } = {}) {
+function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false, directMode = "ok", takeoverCandidates = [] } = {}) {
   const be = {
     tableMissing, rpcMissing, role, submitError, appUserName, dailyStartDone, dailyStartFail,
     reportUpserts: [],        // field_report_upsert 的 body（今日開工等報工）
@@ -143,7 +143,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     hangSubmit: false,        // 送出的 RPC 不回（測逾時）
     serverSkewMs: 0,          // 伺服器時間＝真實時間－這個值（模擬平板時鐘快）
     procOverride: {},         // 開卡重讀工序時改寫某台的列（例：已離站、沒有料號）
-    progressRows: [],
+    progressRows: [], takeoverCandidates, takeoverSubmits: [],
     otherWrites: [],
   };
   be.handle = async (route) => {
@@ -195,6 +195,15 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (be.ackLostNextSubmit) { be.ackLostNextSubmit = false; return route.abort("failed"); }   // 伺服器建好了，回覆在路上掉了
       if (be.submitRowMode === "noUuid") { const { command_uuid, ...rest } = row; return json(200, rest); }
       if (be.submitRowMode === "wrongUuid") return json(200, { ...row, command_uuid: "99999999-9999-4999-8999-999999999999" });
+      return json(200, row);
+    }
+    if (p === "/rest/v1/rpc/takeover_candidates") return json(200, be.takeoverCandidates);
+    if (p === "/rest/v1/rpc/machtile_submit_takeover") {
+      const body = JSON.parse(req.postData() || "{}");
+      be.takeoverSubmits.push(body);
+      const row = { id: id(9500 + be.takeoverSubmits.length), command_uuid: body.p_command_uuid, command_type: "takeover",
+        machine_code: body.p_machine_code, requested_at: new Date().toISOString(), status: "pending", reject_code: null, reject_message: null };
+      be.commands.set(body.p_command_uuid, row);
       return json(200, row);
     }
     // 開卡時重讀單一工序（id=eq.）
@@ -271,6 +280,8 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       const wanted = m ? m[1].split(",").map((s) => s.replace(/"/g, "")) : [];
       return json(200, legacyRows.filter((r) => wanted.includes(r.work_order_no)));
     }
+    if (p === "/rest/v1/station_stop_notes") return json(200, []);
+    if (p === "/rest/v1/stop_reason_policy") return json(200, []);
     if (p === "/rest/v1/work_order_processes") {
       const m = q.match(/id=in\.\(([^)]*)\)/);
       if (m && q.includes("actual_start_at")) return json(200, m[1].split(",").map((pid) => ({ id: pid, process_order: procs.find((x) => id(300 + x.n) === pid)?.step || 1, process_type: "cnc", actual_start_at: null })));
@@ -357,7 +368,7 @@ for (const vp of ["desktop", "tablet", "phone"]) {
   {
     const be = makeBackend();
     const { context, page, errors } = await newPage(browser, vp, { backend: be });
-    ok(await page.locator(".station-cmd-row, [data-station-cmd]").count() === 0, `${W}：旗標關 → 沒有開工／停工按鈕`);
+    ok(await page.locator(".station-cmd-row, [data-station-cmd], [data-takeover-open-idle]").count() === 0, `${W}：旗標關 → 沒有開工／停工／空機接手按鈕`);
     ok(be.stationReads === 0, `${W}：旗標關 → 完全沒讀 station_commands／沒呼叫 RPC（${be.stationReads}）`);
     if (baselineGrid !== null) { const g = await gridHtml(page); ok(g === baselineGrid, `${W}：旗標關 → Monitor 卡片 HTML 跟 ${baselineRef} 一字不差`, firstDiff(g, baselineGrid)); }
     else { skip++; console.log(`  SKIP ${W}：讀不到 ${baselineRef}，略過一字不差比對`); }
@@ -635,6 +646,51 @@ for (const vp of ["desktop", "tablet", "phone"]) {
     ok(realErrors(errors).length === 0, `${W}：11 台名單沒有 JS 錯誤`, realErrors(errors).join(" | "));
     await context.close();
   }
+}
+
+console.log("\n== 390px：空機台可直接接手停工單，既有有單入口不變 ==");
+{
+  const candidate = { id: id(880), source_machine: "A04", order_no: "XX01202502050012", index_sn: 5,
+    stopped_by_name: "王小明", stopped_at: new Date().toISOString(), reason_code: "RUSH_ORDER", note: null,
+    good_qty: 20, fail_qty: 0 };
+  const be = makeBackend({ takeoverCandidates: [candidate] });
+  const cfg = 'stationCommandMachines: ["A02", "A04"], enableTakeover: true, takeoverMachines: ["A02", "A04"],';
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  const idle = cardOf(page, "A02");
+  const idleButton = idle.locator("[data-takeover-open-idle]");
+  ok(await idleButton.count() === 1 && (await idleButton.innerText()).trim() === "接手停工單", "空機台 A02 顯示「接手停工單」");
+  ok(await idle.locator("[data-station-cmd]").count() === 0, "空機台不新增一般開工／停工入口");
+  await idleButton.click();
+  await page.locator(`#machtileTakeoverSheet [data-takeover-candidate="${candidate.id}"]`).waitFor();
+  await page.locator(`#machtileTakeoverSheet [data-takeover-candidate="${candidate.id}"]`).click();
+  await page.waitForFunction(() => document.querySelector("#machtileTakeoverSheet") === null);
+  ok(be.takeoverSubmits.length === 1, "空機台候選確認後只送出一筆 machtile_submit_takeover");
+  const sent = be.takeoverSubmits[0] || {};
+  ok(JSON.stringify(Object.keys(sent).sort()) === JSON.stringify(["p_command_uuid", "p_machine_code", "p_stop_note_id"])
+      && sent.p_machine_code === "A02" && sent.p_stop_note_id === candidate.id && !("p_part_no" in sent),
+    "接手 payload 正確；p_part_no 不混入品名或其他欄位", JSON.stringify(sent));
+  ok(await idle.locator("[data-takeover-open-idle]").isDisabled(), "有未確認 pending 指令時空機接手按鈕停用");
+  const activeStart = cardOf(page, "A04").locator('[data-station-cmd="start"]');
+  ok(await activeStart.count() === 1, "有工單機台仍保留既有開工入口");
+  await activeStart.click();
+  ok(await page.locator('#machtileTakeoverSheet [data-takeover-tab="new"]').count() === 1
+      && await page.locator('#machtileTakeoverSheet [data-takeover-tab="takeover"]').count() === 1,
+    "有工單機台仍走既有開工分頁入口");
+  await page.locator("#machtileTakeoverSheet [data-takeover-close]").click();
+  ok(realErrors(errors).length === 0, "空機接手沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：空機台沒有候選時顯示明確訊息 ==");
+{
+  const be = makeBackend({ takeoverCandidates: [] });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'stationCommandMachines: ["A02"], enableTakeover: true, takeoverMachines: ["A02"],' });
+  await cardOf(page, "A02").locator("[data-takeover-open-idle]").click();
+  const text = (await page.locator('#machtileTakeoverSheet [data-takeover-pane="takeover"]').innerText()).trim();
+  ok(text === "目前沒有可接手的停工單", "沒有候選顯示「目前沒有可接手的停工單」", text);
+  ok(be.takeoverSubmits.length === 0 && realErrors(errors).length === 0, "沒有候選不送出且沒有 JS 錯誤");
+  await context.close();
 }
 
 console.log("\n== 390px：送出時 RPC 不存在 → 功能藏起來 ==");

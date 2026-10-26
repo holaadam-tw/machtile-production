@@ -12,7 +12,7 @@
       takeover_good_qty: "良品", takeover_fail_qty: "不良", takeover_reason: "停工原因", takeover_allow_question: "允許其他機台接手？",
       takeover_must_tap: "請親自按是或否", takeover_note: "說明", takeover_confirm_stop: "確認停工", takeover_stop_sent: "停工已送出", takeover_stop_waiting: "已送出，等待工廠確認",
       takeover_new_order: "開工新訂單", takeover_old_order: "接手舊的工單", takeover_new_order_help: "從現有待做池選擇新訂單。", takeover_continue_new: "繼續開工新訂單",
-      takeover_step: "第 {{step}} 道", takeover_done_remaining: "已做 {{done}}／剩下 {{remaining}}", takeover_take: "接手", takeover_none: "目前沒有可接手的工單",
+      takeover_step: "第 {{step}} 道", takeover_done_remaining: "已做 {{done}}／剩下 {{remaining}}", takeover_take: "接手", takeover_idle_action: "接手停工單", takeover_none: "目前沒有可接手的停工單",
       takeover_sending: "傳送中…", takeover_sent: "已送出，等待工廠確認", takeover_send_failed: "送出失敗，請稍後再試", takeover_stop_report_rejected_generic: "停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管", yes: "是", no: "否", cancel: "取消", loading: "讀取中…",
       takeover_confirm_message: "從 {{source}} 接手 {{order}} 第 {{step}} 道；{{source}} 已做 {{done}}，{{target}} 接手剩下 {{remaining}}。確定接手？",
       takeover_taken_notice: "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）",
@@ -166,7 +166,7 @@
       takeover_good_qty: "Hàng tốt", takeover_fail_qty: "Hàng lỗi", takeover_reason: "Lý do dừng", takeover_allow_question: "Cho phép máy khác tiếp nhận?",
       takeover_must_tap: "Vui lòng tự chọn Có hoặc Không", takeover_note: "Ghi chú", takeover_confirm_stop: "Xác nhận dừng", takeover_stop_sent: "Đã gửi lệnh dừng", takeover_stop_waiting: "Đã gửi, đang chờ nhà máy xác nhận",
       takeover_new_order: "Mở đơn hàng mới", takeover_old_order: "Tiếp nhận lệnh cũ", takeover_new_order_help: "Chọn đơn hàng mới trong danh sách chờ.", takeover_continue_new: "Tiếp tục mở đơn mới",
-      takeover_step: "Công đoạn {{step}}", takeover_done_remaining: "Đã làm {{done}}／còn {{remaining}}", takeover_take: "Tiếp nhận", takeover_none: "Hiện không có lệnh có thể tiếp nhận",
+      takeover_step: "Công đoạn {{step}}", takeover_done_remaining: "Đã làm {{done}}／còn {{remaining}}", takeover_take: "Tiếp nhận", takeover_idle_action: "Tiếp nhận lệnh đã dừng", takeover_none: "Hiện không có lệnh đã dừng có thể tiếp nhận", /* _draft */
       takeover_sending: "Đang gửi…", takeover_sent: "Đã gửi, đang chờ nhà máy xác nhận", takeover_send_failed: "Gửi thất bại, vui lòng thử lại", takeover_stop_report_rejected_generic: "Báo dừng máy không thành công, số lượng vừa nhập chưa được gửi. Vui lòng dùng dừng máy thông thường và báo cho bộ phận kế hoạch", /* _draft */ yes: "Có", no: "Không", cancel: "Hủy", loading: "Đang tải…",
       takeover_confirm_message: "Tiếp nhận {{order}}, công đoạn {{step}} từ {{source}}; {{source}} đã làm {{done}}, {{target}} tiếp tục {{remaining}} còn lại. Xác nhận tiếp nhận?",
       takeover_taken_notice: "{{order}} đã được {{machine}} tiếp nhận ({{who}}, {{time}})",

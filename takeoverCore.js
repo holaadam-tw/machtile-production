@@ -21,6 +21,9 @@
     const set = machineSet(machines);
     return set.has("*") || set.has(text(machineCode).toUpperCase());
   }
+  function idleActionVisible({ enabled, machines, machineCode, availability, hasOrder } = {}) {
+    return hasOrder !== true && availability === "ready" && enabledForMachine(enabled, machines, machineCode);
+  }
   function normalizePolicies(rows) {
     const valid = (Array.isArray(rows) ? rows : []).filter((row) => row && text(row.code));
     return (valid.length ? valid : DEFAULT_POLICIES).map((row, index) => ({
@@ -106,6 +109,6 @@
     return "";
   }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
-  return { DEFAULT_POLICIES, enabledForMachine, normalizePolicies, initialStopForm, validateStop, stopPayload,
+  return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, validateStop, stopPayload,
     stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, startTabs };
 });
