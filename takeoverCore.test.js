@@ -121,3 +121,27 @@ test("known takeover rejects have operator-facing text", () => {
     assert.match(core.rejectText(code), / \/ /, `${code} has Chinese and Vietnamese feedback`);
   assert.equal(core.resultText({ phase: "applied" }), "已接手 / Đã tiếp quản");
 });
+
+test("pick/start phase: no order = pick, pending = start only, running = report/stop/finish, own stop (paused) = start only", () => {
+  assert.equal(core.pickStartPhase({ hasOrder: false, processStatus: "running" }), "pick");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "pending" }), "pending");
+  // 接手 applied 改回 pending：actual_start_at 保留第一次開工，但這台還沒按開工
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "pending", actualStartAt: "2026-10-20T01:00:00Z" }), "pending");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "running" }), "running");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "abnormal" }), "running");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "paused" }), "stopped");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "", rawStatus: "paused" }), "stopped");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "pending", rawStatus: "paused" }), "pending");
+  // status 讀不到 → 退回 actual_start_at／machines.status
+  assert.equal(core.pickStartPhase({ hasOrder: true, actualStartAt: "2026-10-20T01:00:00Z" }), "running");
+  assert.equal(core.pickStartPhase({ hasOrder: true, rawStatus: "running" }), "running");
+  assert.equal(core.pickStartPhase({ hasOrder: true }), "pending");
+  // 本機剛 applied 的開工／停工優先（雲端還沒重讀）
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "pending", localRun: "start" }), "running");
+  assert.equal(core.pickStartPhase({ hasOrder: true, processStatus: "running", localRun: "stop" }), "stopped");
+  assert.deepEqual(core.pickStartActions("pick"), ["pick"]);
+  assert.deepEqual(core.pickStartActions("pending"), ["start"]);
+  assert.deepEqual(core.pickStartActions("running"), ["report", "stop", "finish"]);
+  assert.deepEqual(core.pickStartActions("stopped"), ["start"]);
+  assert.deepEqual(core.pickStartActions("unknown"), []);
+});

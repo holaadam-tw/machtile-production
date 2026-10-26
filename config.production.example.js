@@ -7,6 +7,8 @@
 window.MACHTILE_CONFIG = {
   enableTakeover: false,
   takeoverMachines: [],
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.
   authMode: "strict",

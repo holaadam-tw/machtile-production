@@ -105,6 +105,7 @@ eq("換到別台 → 不給送", c.freshCheck({ order, machineCode: "A04", row: 
 eq("道次變了 → 不給送", c.freshCheck({ order, machineCode: "A04", row: { ...row, process_order: 6 } }).reason, "step_changed");
 eq("工單號不同 → 不給送", c.freshCheck({ order, machineCode: "A04", row: { ...row, work_orders: { ...row.work_orders, work_order_no: "X" } } }).reason, "order_changed");
 eq("工序已完成 → 不給送", c.freshCheck({ order, machineCode: "A04", row: { ...row, status: "completed" } }).reason, "process_closed");
+eq("停工中（paused，雲端停工 applied）→ 仍是這台的單、可接回開工", c.freshCheck({ order, machineCode: "A04", row: { ...row, status: "paused" } }).ok, true);
 eq("工單已結案 → 不給送", c.freshCheck({ order, machineCode: "A04", row: { ...row, work_orders: { ...row.work_orders, status: "completed" } } }).reason, "order_closed");
 eq("不符時的白話叫他重新整理", c.freshCheck({ order, machineCode: "A04", row: null }).text.includes("請重新整理畫面"), true);
 

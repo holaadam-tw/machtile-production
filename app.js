@@ -40,6 +40,9 @@ const config = {
   finishClaimStartComboMachines: [],
   enableTakeover: false,
   takeoverMachines: [],
+  // 選工單／開工分開（owner 2026-10-26）：機台代號陣列；["*"]＝全部。預設全關＝卡片跟以前一樣。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   // 多工站明確名單；machines view 尚無 Station_Type/station_mode，空陣列即全部按 single 處理。
@@ -10708,7 +10711,7 @@ function machtileAssignedCardProcess(row) {
   const wo = row.work_orders;
   const machine = row.machines;
   if (!wo || !machine) throw new Error("工序的工單或機台資料不完整");
-  if (row.off_station_at != null || !["pending", "running", "abnormal", "waiting_inspection"].includes(row.status)
+  if (row.off_station_at != null || !["pending", "running", "paused", "abnormal", "waiting_inspection"].includes(row.status)
     || ["completed", "shipped", "cancelled"].includes(wo.status)) return null;
   const order = normalizeOrder({ ...wo, tenant_id: row.tenant_id,
     work_order_status: wo.status, current_process_id: row.id,
@@ -10747,7 +10750,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,paused,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -11017,7 +11020,7 @@ function machtileIsSchedulableOrder(order) {
 function machtileIsCardCandidateOrder(order) {
   if (order?.perProcessCard) return order.offStation !== true
     && !["completed", "shipped", "cancelled"].includes(order.workStatus)
-    && ["pending", "running", "abnormal", "waiting_inspection"].includes(order.processStatus);
+    && ["pending", "running", "paused", "abnormal", "waiting_inspection"].includes(order.processStatus);
   const assigned = isReportableMachineName(order?.machine);
   if (machtileCardActiveCore && typeof machtileCardActiveCore.isCardCandidate === "function") {
     return machtileCardActiveCore.isCardCandidate(order, { assigned });
@@ -11535,6 +11538,7 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
       else currentList.after(nextStatus);
     }
   }
+  machtilePickOrderUpdateEmpty(holder);
   return true;
 }
 
@@ -11586,7 +11590,7 @@ async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
       recordFields: { orderNo: item.work_order_no, step: nextStep, partNo: item.part_no || null, poolItemId: sourceKey, replaceStopped: true },
       startedAt: Date.now(), validateRow: row => machtileStationCmdRowIsThis(row, uuid),
       onError: ({ error }) => showToast(machtileDispatchPoolCore.claimErrorText(error), "error"),
-      onAccepted: () => { machtileCloseCardSelection(); showToast("改掛指令已送出，工廠確認後會自動開工。", "success"); }
+      onAccepted: () => { machtileCloseCardSelection(); showToast(machtileTranslate("replace_stopped_sent_press_start"), "success"); }
     });
   } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
@@ -11658,7 +11662,7 @@ function machtileCardPoolEntryMarkup(machine) {
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }
 
-function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true } = {}) {
+function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true, pickOrder = false } = {}) {
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
@@ -11681,14 +11685,29 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   holder.id = "machtileCardSelection";
   holder.className = "card-selection-overlay";
   holder.dataset.machineCode = String(machineCode || "");
+  const withOld = pickOrder && machtileTakeoverActive(String(machineCode || ""));
+  const title = pickOrder ? "pick_order" : poolOnly ? "dispatch_pool_title" : "select_work_order";
+  const body = pickOrder
+    ? `<div class="takeover-tabs pick-order-tabs" role="tablist"><button type="button" role="tab" data-pick-tab="new" class="is-selected" aria-selected="true">${escapeHtml(machtileTranslate("pick_order_new"))}</button>${withOld ? `<button type="button" role="tab" data-pick-tab="old" aria-selected="false">${escapeHtml(machtileTranslate("pick_order_old"))}</button>` : ""}</div>
+    <p class="pick-order-note">${escapeHtml(machtileTranslate("pick_order_note"))}</p>
+    <div data-pick-pane="new">${selectionMarkup}
+    ${machtileDispatchPoolSectionMarkup(machine)}</div>
+    ${withOld ? `<div data-pick-pane="old" hidden><div data-takeover-pane="takeover"><p>${escapeHtml(machtileTranslate("loading"))}</p></div></div>` : ""}
+    <p class="pick-order-empty" data-pick-order-empty role="status" hidden>${escapeHtml(machtileTranslate("pick_order_none"))}</p>`
+    : `${selectionMarkup}
+    ${machtileDispatchPoolSectionMarkup(machine)}`;
+  if (pickOrder) { holder.dataset.pickOrder = "true"; holder.dataset.machine = String(machineCode || ""); }
   holder.innerHTML = `<section class="card-selection-panel" role="dialog" aria-modal="true" aria-labelledby="cardSelectionTitle">
-    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(poolOnly ? "dispatch_pool_title" : "select_work_order"))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
-    ${selectionMarkup}
-    ${machtileDispatchPoolSectionMarkup(machine)}
+    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(title))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
+    ${body}
     <p data-card-selection-error role="alert">${poolOnly ? "" : escapeHtml(state.cardProcessError || "")}</p>
   </section>`;
   document.body.appendChild(holder);
   holder.querySelector("button")?.focus();
+  if (pickOrder) {
+    machtilePickOrderUpdateEmpty(holder);
+    if (withOld) void machtilePickOrderLoadOld(holder, String(machineCode || ""));
+  }
 }
 
 async function machtileCommitCardSelection(machineCode, processId) {
@@ -13867,25 +13886,60 @@ async function machtileTakeoverLoadCandidates(holder, code) {
   holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
   holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
 }
-async function machtileTakeoverOpenStart(code, returnFocus) {
-  const holder = machtileTakeoverOverlay(code, "start", returnFocus);
-  holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("start_work"))}</h2></header><div class="takeover-tabs" role="tablist"><button data-takeover-tab="new" class="is-selected">${escapeHtml(machtileTranslate("takeover_new_order"))}</button><button data-takeover-tab="takeover">${escapeHtml(machtileTranslate("takeover_old_order"))}</button></div><div data-takeover-pane="new"><p>${escapeHtml(machtileTranslate("takeover_new_order_help"))}</p><button type="button" data-takeover-use-existing>${escapeHtml(machtileTranslate("takeover_continue_new"))}</button></div><div data-takeover-pane="takeover" hidden><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
-  try {
-    await machtileTakeoverLoadCandidates(holder, code);
-  } catch (error) { machtileTakeoverClose(); machtileTakeover.availability = "missing"; machtileStationCmdOpen("start", code, returnFocus); }
+// 選工單／開工分開（owner 2026-10-26）：選工單＝只把單掛到機台；開工＝開始做（新單、接手的舊單都要按）。
+// 旗標開的機台，卡片只出現當下該按的按鈕；旗標關＝卡片跟以前一樣。
+function machtilePickStartEnabled(code) {
+  return Boolean(machtileTakeoverCore?.enabledForMachine(config.enablePickStartFlow === true, config.pickStartFlowMachines, code));
 }
-async function machtileTakeoverOpenIdle(code, returnFocus) {
+// 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
+const machtilePickStartLocal = {};
+function machtilePickStartPhase(machine, order) {
+  const code = machtileStationCmdMachineCode(machine);
+  const local = machtilePickStartLocal[code];
+  const sameOrder = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
+  return machtileTakeoverCore.pickStartPhase({ hasOrder: Boolean(order), processStatus: order?.processStatus,
+    actualStartAt: machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null, rawStatus: machine?.rawStatus, localRun: sameOrder ? local.type : "" });
+}
+function machtilePickStartNoteApplied(code, record) {
+  if (!code || !record) return;
+  if (["takeover", "claim_next"].includes(record.commandType)) { delete machtilePickStartLocal[code]; return; }
+  const type = record.commandType === "start" ? "start" : ["stop", "stop_report"].includes(record.commandType) ? "stop" : "";
+  if (type && record.orderNo) machtilePickStartLocal[code] = { type, orderNo: record.orderNo, step: record.step };
+}
+// 「選工單」面板：新工單（排給這台的單＋派工池，走原本「設為目前工單」／dispatch_pool_claim）／
+// 舊工單（允許接手的停工單，走原本接手候選→確認→machtile_submit_takeover）。確認＝只掛單，不開工。
+function machtilePickOrderOpen(code) {
   const pending = machtileStationCmd.pending[code];
-  if (!machtileTakeoverActive(code) || (pending && !machtileStationCmdUnlocked(pending))) return;
-  const holder = machtileTakeoverOverlay(code, "takeover", returnFocus);
-  holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true"><header><h2>${escapeHtml(machtileTranslate("takeover_idle_action"))}</h2></header><div data-takeover-pane="takeover"><p>${escapeHtml(machtileTranslate("loading"))}</p></div><footer class="station-cmd-actions"><button class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+  if (pending && !machtileStationCmdUnlocked(pending)) return;
+  machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() || !machtileCanAssignToMachine(code), pickOrder: true });
+}
+function machtilePickOrderUpdateEmpty(holder) {
+  if (!holder || holder.dataset.pickOrder !== "true") return;
+  const empty = holder.querySelector("[data-pick-order-empty]");
+  if (!empty) return;
+  const hasOld = holder.querySelector('[data-pick-tab="old"]') !== null;
+  const oldLoaded = !hasOld || holder._candidates instanceof Map;
+  const oldCount = holder._candidates instanceof Map ? holder._candidates.size : 0;
+  const newCount = holder.querySelectorAll("[data-card-select-process], [data-pool-claim]:not([disabled]), [data-pool-replace-stopped]:not([disabled])").length;
+  empty.hidden = !(oldLoaded && oldCount === 0 && newCount === 0);
+}
+async function machtilePickOrderLoadOld(holder, code) {
   try {
     await machtileTakeoverLoadCandidates(holder, code);
   } catch (error) {
-    machtileTakeoverClose();
+    console.warn("takeover candidates unavailable; old-order tab hidden", error);
     machtileTakeover.availability = "missing";
-    machtileStationCmdRerender();
+    holder.querySelector('[data-pick-tab="old"]')?.remove();
+    holder.querySelector('[data-pick-pane="old"]')?.remove();
+    holder._candidates = new Map();
+    const tab = holder.querySelector('[data-pick-tab="new"]');
+    if (tab) machtilePickOrderSelectTab(holder, tab);
   }
+  machtilePickOrderUpdateEmpty(holder);
+}
+function machtilePickOrderSelectTab(holder, tab) {
+  holder.querySelectorAll("[data-pick-tab]").forEach((el) => { el.classList.toggle("is-selected", el === tab); el.setAttribute("aria-selected", el === tab ? "true" : "false"); });
+  holder.querySelectorAll("[data-pick-pane]").forEach((el) => { el.hidden = el.dataset.pickPane !== tab.dataset.pickTab; });
 }
 async function machtileTakeoverSubmitCandidate(holder, candidate) {
   const machineCode = holder.dataset.machine, pending = machtileStationCmd.pending[machineCode];
@@ -13899,10 +13953,11 @@ async function machtileTakeoverSubmitCandidate(holder, candidate) {
     rpcName: "machtile_submit_takeover",
     payloadOverride: machtileTakeoverCore.takeoverPayload({ commandUuid, machineCode, stopNoteId: candidate.stopNoteId }),
   });
+  const closeHolder = () => { if (holder.id === "machtileCardSelection") machtileCloseCardSelection(); else machtileTakeoverClose(); };
   if (result.ok) {
-    machtileTakeoverClose(); showToast(machtileTranslate("takeover_sent"));
+    closeHolder(); showToast(machtileTranslate("takeover_sent"));
   } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
-    machtileTakeoverClose(); showToast(machtileTranslate("takeover_sending"));
+    closeHolder(); showToast(machtileTranslate("takeover_sending"));
   } else showToast(result.error?.message || machtileTranslate("takeover_send_failed"));
 }
 // 接手 applied 後：重載資料讓目標機台卡片出現那張單（報工／完工入口）。比照接下一道的 standard_finish_sync_pending：
@@ -14226,10 +14281,12 @@ function machtileStationCmdParts(machine) {
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const pending = machtileStationCmd.pending[code];
-  const idleTakeover = gate.reason === "no_order" && machtileTakeoverCore.idleActionVisible({ enabled: config.enableTakeover === true,
-    machines: config.takeoverMachines, machineCode: code, availability: machtileTakeover.availability, hasOrder: Boolean(order) });
+  // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
+  const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
+  const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
+  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase) : [];
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
-  if (!gate.ok && !idleTakeover && !(pending && machtileStationCmdActiveFor(code))) return none;
+  if (!gate.ok && !pickActive && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
@@ -14250,11 +14307,16 @@ function machtileStationCmdParts(machine) {
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
   const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
-  const buttons = idleTakeover ? `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-takeover-open-idle data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("takeover_idle_action"))}</button>` : gate.ok ? `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
-          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";
-  return { status: takenLine + status, buttons, active: true };
+  const startButton = `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>`;
+  const stopButton = `
+          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>`;
+  const pickButton = `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-pick-order-open data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("pick_order"))}</button>`;
+  const buttons = pickPhase
+    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? startButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
+    : gate.ok ? `${startButton}${stopButton}` : "";
+  return { status: takenLine + status, buttons, active: true, pickPhase, pickActions };
 }
 
 // 單台報工畫面：這台開了卡片「開工／停工」時，確認卡已順便記今日開工，隱藏重複分頁。
@@ -14385,7 +14447,6 @@ function machtileStationCmdNewSheet(fields) {
 
 async function machtileStationCmdOpen(type, code, returnFocus) {
   if (machtileTakeoverActive(code) && type === "stop") { await machtileTakeoverOpenStop(code, returnFocus); return; }
-  if (machtileTakeoverActive(code) && type === "start") { await machtileTakeoverOpenStart(code, returnFocus); return; }
   const core = machtileStationCmdCore;
   if (!core || !core.COMMAND_TYPES.includes(type)) return;
   const machine = machtileStationCmdMachineByCode(code);
@@ -15022,6 +15083,7 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
   if (record.commandType === "stop_report" && view?.phase === "rejected") {
     // NOT_ELIGIBLE text is worded for takeover (target machine not allowed); a rejected stop report gets the generic text.
     const message = view.code === "NOT_ELIGIBLE" ? "" : machtileTakeoverCore?.rejectText(view.code);
@@ -15125,9 +15187,6 @@ function machtileStationCmdHandleClick(event) {
     const viewState = takeoverSheet._state;
     if (event.target.closest("[data-takeover-close]")) { machtileTakeoverClose(); return true; }
     if (event.target.closest("[data-takeover-legacy-stop]")) { void machtileTakeoverUseLegacyStop(takeoverSheet.dataset.machine, takeoverSheet._returnFocus); return true; }
-    if (event.target.closest("[data-takeover-use-existing]")) { const code = takeoverSheet.dataset.machine, focus = takeoverSheet._returnFocus; machtileTakeoverClose(); machtileTakeover.availability = "bypass"; machtileStationCmdOpen("start", code, focus).finally(() => { machtileTakeover.availability = "ready"; }); return true; }
-    const tab = event.target.closest("[data-takeover-tab]");
-    if (tab) { takeoverSheet.querySelectorAll("[data-takeover-tab]").forEach((el) => el.classList.toggle("is-selected", el === tab)); takeoverSheet.querySelectorAll("[data-takeover-pane]").forEach((el) => { el.hidden = el.dataset.takeoverPane !== tab.dataset.takeoverTab; }); return true; }
     const candidate = event.target.closest("[data-takeover-candidate]"); if (candidate) { void machtileTakeoverSubmitCandidate(takeoverSheet, takeoverSheet._candidates?.get(candidate.dataset.takeoverCandidate)); return true; }
     if (viewState) {
       const reason = event.target.closest("[data-takeover-reason]"); if (reason) { const policy = viewState.policies.find((p) => p.code === reason.dataset.takeoverReason); viewState.form.reason_code = policy.code; viewState.form.allow_takeover = policy.default_allow; viewState.form.allow_takeover_touched = false; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
@@ -15136,8 +15195,15 @@ function machtileStationCmdHandleClick(event) {
     }
     return true;
   }
-  const idleTakeover = event.target.closest("[data-takeover-open-idle]");
-  if (idleTakeover) { void machtileTakeoverOpenIdle(idleTakeover.dataset.stationCmdMachine, idleTakeover); return true; }
+  const pickHolder = event.target.closest('#machtileCardSelection[data-pick-order="true"]');
+  if (pickHolder) {
+    const pickTab = event.target.closest("[data-pick-tab]");
+    if (pickTab) { machtilePickOrderSelectTab(pickHolder, pickTab); return true; }
+    const candidate = event.target.closest("[data-takeover-candidate]");
+    if (candidate) { void machtileTakeoverSubmitCandidate(pickHolder, pickHolder._candidates?.get(candidate.dataset.takeoverCandidate)); return true; }
+  }
+  const pickOpen = event.target.closest("[data-pick-order-open]");
+  if (pickOpen) { machtilePickOrderOpen(pickOpen.dataset.stationCmdMachine); return true; }
   const open = event.target.closest("[data-station-cmd]");
   if (open) { machtileStationCmdOpen(open.dataset.stationCmd, open.dataset.stationCmdMachine, open); return true; }
   const retry = event.target.closest("[data-station-cmd-retry]");
@@ -15212,10 +15278,12 @@ function renderMachineCard(machine) {
     : programSameAsPrevious
       ? "同上版"
       : `已上傳${profile.programVersion && profile.programVersion !== "-" ? ` ${profile.programVersion}` : ""}`;
-  const reportAction = order && canReport
+  // 選工單／開工分開（旗標開的機台）：pickActions 決定這個階段要不要報工／完工／選單入口；旗標關＝null＝照舊
+  const pickActions = stationCmd.pickPhase ? stationCmd.pickActions || [] : null;
+  const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
-  const finishAction = machtileFinishButtonEnabled() && order && canReport
+  const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport
     ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
@@ -15255,9 +15323,9 @@ function renderMachineCard(machine) {
       ${"" /* 原本中段「舊 MES 開工／停工」區塊的位置：已移到卡片底部（保留這一行，沒開功能的機台卡片 HTML 才會跟以前逐字相同） */}
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
-      ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
+      ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
         ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
-      ${machtileCardPoolEntryMarkup(machine)}
+      ${!pickActions || pickActions.includes("select") ? machtileCardPoolEntryMarkup(machine) : ""}
 
       ${order ? `
         <details class="machine-program-details" data-no-detail>

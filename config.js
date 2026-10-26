@@ -79,12 +79,16 @@ window.MACHTILE_CONFIG = {
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
   standardFinishFlowMachines: ["A04"],
-  // 完工後把「接下一道」與既有開工指令串成一次操作；僅 A04 試點。
-  enableFinishClaimStartCombo: true,
-  finishClaimStartComboMachines: ["A04"],
+  // 完工後「接並開工」一顆鈕：owner 2026-10-26 拍板拿掉（選工單≠開工），改兩下：先接、再按開工。
+  enableFinishClaimStartCombo: false,
+  finishClaimStartComboMachines: [],
   // 換機台第一版先保持關閉；雲端 RPC 與 Factory 同步開通後再指定機台。
   enableTakeover: false,
   takeoverMachines: [],
+  // 選工單／開工分開（owner 2026-10-26）：沒掛單只出「選工單」、掛了單未開工只出「開工」、已開工出「報工／停工／完工」。
+  // 要等雲端開工 applied 寫 running／actual_start_at 的那包上線後，跟 enableTakeover 一起指定機台再開。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,

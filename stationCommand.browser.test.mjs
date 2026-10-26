@@ -126,7 +126,7 @@ const testConfig = (extra) => `window.MACHTILE_CONFIG = {
 };`;
 
 // ---------- fake backend（每個情境一份） ----------
-function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false, directMode = "ok", takeoverCandidates = [] } = {}) {
+function makeBackend({ tableMissing = false, rpcMissing = false, role = "operator", submitError = null, appUserName = null, dailyStartDone = true, dailyStartFail = false, directMode = "ok", takeoverCandidates = [], poolItems = [], withDepartments = false, procStatus = {} } = {}) {
   const be = {
     tableMissing, rpcMissing, role, submitError, appUserName, dailyStartDone, dailyStartFail,
     reportUpserts: [],        // field_report_upsert 的 body（今日開工等報工）
@@ -148,6 +148,8 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     procMachine: {},          // 工單號 → 目前機台（覆蓋 fixture）
     listReads: 0,             // 工序清單（work_orders!inner）讀取次數＝重載次數
     otherWrites: [],
+    // 選工單／開工分開（2026-10-26）用：派工池列、接單請求、機台課別、工序 status（工單號 → status；預設 pending）
+    poolItems, poolClaims: [], withDepartments, procStatus: { ...procStatus },
   };
   be.handle = async (route) => {
     const req = route.request();
@@ -202,6 +204,17 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       return json(200, row);
     }
     if (p === "/rest/v1/rpc/takeover_candidates") return json(200, be.takeoverCandidates);
+    if (p === "/rest/v1/dispatch_pool_items") {
+      if (!q.includes("status=eq.waiting")) return json(200, []);
+      return json(200, be.poolItems.filter((item) => !be.poolClaims.some((c) => c.p_source_key === item.source_key)));
+    }
+    if (p === "/rest/v1/rpc/dispatch_pool_claim") {
+      const body = JSON.parse(req.postData() || "{}");
+      be.poolClaims.push(body);
+      const item = be.poolItems.find((x) => x.source_key === body.p_source_key);
+      if (item) be.procMachine[item.work_order_no] = body.p_machine_code;   // 模擬雲端：工序掛到這台、status 維持 pending
+      return json(200, { action: "claimed", source_key: body.p_source_key, machine_code: body.p_machine_code });
+    }
     if (p === "/rest/v1/rpc/machtile_submit_takeover") {
       const body = JSON.parse(req.postData() || "{}");
       be.takeoverSubmits.push(body);
@@ -218,9 +231,9 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       const x = procs.find((k) => id(300 + k.n) === pid);
       if (!x) return json(200, []);
       const o = be.procOverride[x.machine] || {};
-      return json(200, [{ id: pid, process_order: o.step ?? x.step, process_name: x.proc, status: o.status || "pending", off_station_at: o.off_station_at ?? null,
+      return json(200, [{ id: pid, process_order: o.step ?? x.step, process_name: x.proc, status: o.status || be.procStatus[x.wo] || "pending", off_station_at: o.off_station_at ?? null,
         work_orders: { work_order_no: x.wo, part_no: "part_no" in o ? o.part_no : x.partNo, part_name: x.part, status: "in_progress" },
-        machines: { machine_code: o.machine || x.machine } }]);
+        machines: { machine_code: o.machine || be.procMachine[x.wo] || x.machine } }]);
     }
     if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
       be.listReads++;
@@ -228,7 +241,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
         const c = cards.find((k) => k.work_order_no === x.wo);
         const machineCode = be.procMachine[x.wo] || x.machine;
         return {
-          id: c.current_process_id, tenant_id: T, process_order: x.step, process_name: x.proc, process_type: "cnc", status: "pending",
+          id: c.current_process_id, tenant_id: T, process_order: x.step, process_name: x.proc, process_type: "cnc", status: be.procStatus[x.wo] || "pending",
           off_station_at: null, qty_completed: 0, queue_order: null, manufacture_ii_id: x.manufactureIiId ?? null,
           work_orders: { id: c.id, work_order_no: x.wo, part_no: x.partNo, part_name: x.part, quantity: x.qty, due_date: c.due_date, status: "in_progress" },
           machines: machines.find((m) => m.machine_code === machineCode),
@@ -272,7 +285,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       return json(200, { inserted: true, report_id: id(7000 + be.reportUpserts.length) });
     }
     if (p === "/rest/v1/v_work_order_cards") return json(200, cards.map((c) => (be.procMachine[c.work_order_no] ? { ...c, machine_name: be.procMachine[c.work_order_no] } : c)));
-    if (p === "/rest/v1/v_machine_management_cards") return json(200, machines);
+    if (p === "/rest/v1/v_machine_management_cards") return json(200, be.withDepartments ? machines.map((m) => ({ ...m, department_name: m.machine_code.startsWith("A") ? "車床課" : "銑床課" })) : machines);
     if (p === "/rest/v1/cnc_programs") return json(200, [{
       id: id(990), work_order_id: id(104), version: 3, sha256: "a".repeat(64),
       file_path: `${T}/cnc-programs/XX01202502050012/aaaaaaaaaaaaaaaa-O500%20finish.NC`,
@@ -655,35 +668,40 @@ for (const vp of ["desktop", "tablet", "phone"]) {
   }
 }
 
-console.log("\n== 390px：空機台可直接接手停工單，既有有單入口不變 ==");
+console.log("\n== 390px：空機台「選工單」→舊工單 可接手停工單；有單機台開工不再有分頁 ==");
 {
   const candidate = { id: id(880), source_machine: "A04", order_no: "XX01202502050012", index_sn: 5,
     stopped_by_name: "王小明", stopped_at: new Date().toISOString(), reason_code: "RUSH_ORDER", note: null,
     good_qty: 20, fail_qty: 0 };
   const be = makeBackend({ takeoverCandidates: [candidate] });
-  const cfg = 'stationCommandMachines: ["A02", "A04"], enableTakeover: true, takeoverMachines: ["A02", "A04"],';
+  const cfg = 'stationCommandMachines: ["A02", "A04"], enableTakeover: true, takeoverMachines: ["A02", "A04"], enablePickStartFlow: true, pickStartFlowMachines: ["A02", "A04"],';
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
   const idle = cardOf(page, "A02");
-  const idleButton = idle.locator("[data-takeover-open-idle]");
-  ok(await idleButton.count() === 1 && (await idleButton.innerText()).trim() === "接手停工單", "空機台 A02 顯示「接手停工單」");
+  const pickButton = idle.locator("[data-pick-order-open]");
+  ok(await pickButton.count() === 1 && (await pickButton.innerText()).trim() === "選工單", "空機台 A02 只顯示「選工單」");
+  ok(await idle.locator("[data-takeover-open-idle]").count() === 0, "空機台不再有「接手停工單」按鈕（併入選工單→舊工單）");
   ok(await idle.locator("[data-station-cmd]").count() === 0, "空機台不新增一般開工／停工入口");
-  await idleButton.click();
-  await page.locator(`#machtileTakeoverSheet [data-takeover-candidate="${candidate.id}"]`).waitFor();
-  await page.locator(`#machtileTakeoverSheet [data-takeover-candidate="${candidate.id}"]`).click();
-  await page.waitForFunction(() => document.querySelector("#machtileTakeoverSheet") === null);
+  ok(await idle.locator(".machine-report-button, .machine-finish-button").count() === 0, "空機台沒有報工／完工按鈕");
+  await pickButton.click();
+  await page.locator('#machtileCardSelection [data-pick-tab="old"]').click();
+  await page.locator(`#machtileCardSelection [data-takeover-candidate="${candidate.id}"]`).waitFor();
+  await page.screenshot({ path: path.join(outDir, "phone-pick-old-order.png") });
+  await page.locator(`#machtileCardSelection [data-takeover-candidate="${candidate.id}"]`).click();
+  await page.waitForFunction(() => document.querySelector("#machtileCardSelection") === null);
   ok(be.takeoverSubmits.length === 1, "空機台候選確認後只送出一筆 machtile_submit_takeover");
   const sent = be.takeoverSubmits[0] || {};
   ok(JSON.stringify(Object.keys(sent).sort()) === JSON.stringify(["p_command_uuid", "p_machine_code", "p_stop_note_id"])
       && sent.p_machine_code === "A02" && sent.p_stop_note_id === candidate.id && !("p_part_no" in sent),
     "接手 payload 正確；p_part_no 不混入品名或其他欄位", JSON.stringify(sent));
-  ok(await idle.locator("[data-takeover-open-idle]").isDisabled(), "有未確認 pending 指令時空機接手按鈕停用");
+  ok(await idle.locator("[data-pick-order-open]").isDisabled(), "有未確認 pending 指令時「選工單」按鈕停用");
   const activeStart = cardOf(page, "A04").locator('[data-station-cmd="start"]');
-  ok(await activeStart.count() === 1, "有工單機台仍保留既有開工入口");
+  ok(await activeStart.count() === 1, "有工單（未開工）機台保留開工入口");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="stop"], [data-pick-order-open]').count() === 0, "有工單未開工機台只有「開工」（沒有停工、選工單）");
   await activeStart.click();
-  ok(await page.locator('#machtileTakeoverSheet [data-takeover-tab="new"]').count() === 1
-      && await page.locator('#machtileTakeoverSheet [data-takeover-tab="takeover"]').count() === 1,
-    "有工單機台仍走既有開工分頁入口");
-  await page.locator("#machtileTakeoverSheet [data-takeover-close]").click();
+  await sheet(page).locator("[data-station-cmd-confirm]").waitFor();
+  ok(await page.locator("#machtileTakeoverSheet, [data-takeover-tab], [data-pick-tab]").count() === 0,
+    "開工畫面不再有新單／舊單分頁（直接是原本的開工確認卡）");
+  await sheet(page).locator("[data-station-cmd-close]").click();
   ok(realErrors(errors).length === 0, "空機接手沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
@@ -692,10 +710,11 @@ console.log("\n== 390px：空機台沒有候選時顯示明確訊息 ==");
 {
   const be = makeBackend({ takeoverCandidates: [] });
   const { context, page, errors } = await newPage(browser, "phone", { backend: be,
-    configExtra: 'stationCommandMachines: ["A02"], enableTakeover: true, takeoverMachines: ["A02"],' });
-  await cardOf(page, "A02").locator("[data-takeover-open-idle]").click();
-  await page.waitForFunction(() => { const pane = document.querySelector('#machtileTakeoverSheet [data-takeover-pane="takeover"]'); return pane && !pane.textContent.includes("讀取中"); }, null, { timeout: 10000 }).catch(() => {});   // 等候選讀完再讀字（原本點完立刻讀＝讀到「讀取中…」）
-  const text = (await page.locator('#machtileTakeoverSheet [data-takeover-pane="takeover"]').innerText()).trim();
+    configExtra: 'stationCommandMachines: ["A02"], enableTakeover: true, takeoverMachines: ["A02"], enablePickStartFlow: true, pickStartFlowMachines: ["A02"],' });
+  await cardOf(page, "A02").locator("[data-pick-order-open]").click();
+  await page.locator('#machtileCardSelection [data-pick-tab="old"]').click();
+  await page.waitForFunction(() => { const pane = document.querySelector('#machtileCardSelection [data-takeover-pane="takeover"]'); return pane && !pane.textContent.includes("讀取中"); }, null, { timeout: 10000 }).catch(() => {});   // 等候選讀完再讀字（原本點完立刻讀＝讀到「讀取中…」）
+  const text = (await page.locator('#machtileCardSelection [data-takeover-pane="takeover"]').innerText()).trim();
   ok(text === "目前沒有可接手的停工單", "沒有候選顯示「目前沒有可接手的停工單」", text);
   ok(be.takeoverSubmits.length === 0 && realErrors(errors).length === 0, "沒有候選不送出且沒有 JS 錯誤");
   await context.close();
@@ -707,7 +726,7 @@ async function takeoverAppliedScenario({ moveTo }) {
     stopped_by_name: "王小明", stopped_at: new Date().toISOString(), reason_code: "RUSH_ORDER", note: null, good_qty: 20, fail_qty: 0 };
   const be = makeBackend({ takeoverCandidates: [candidate] });
   be.takeoverMoveTo = moveTo;
-  const cfg = 'stationCommandMachines: ["A04", "A05"], enableTakeover: true, takeoverMachines: ["A04", "A05"], enableFinishButton: true,';
+  const cfg = 'stationCommandMachines: ["A04", "A05"], enableTakeover: true, takeoverMachines: ["A04", "A05"], enableFinishButton: true, enablePickStartFlow: true, pickStartFlowMachines: ["A04", "A05"],';
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
   await page.evaluate(() => {
     window.__toasts = [];
@@ -719,18 +738,35 @@ async function takeoverAppliedScenario({ moveTo }) {
   ok(await target.locator(`.machine-report-button[data-report="${candidate.order_no}"]`).count() === 0, `接手前 A05 沒有 ${candidate.order_no} 的報工入口`);
   be.mode = "applied";
   const readsBefore = be.listReads;
-  await target.locator("[data-takeover-open-idle]").click();
-  await page.locator(`#machtileTakeoverSheet [data-takeover-candidate="${candidate.id}"]`).click();
-  await page.waitForFunction(() => document.querySelector("#machtileTakeoverSheet") === null);
+  await target.locator("[data-pick-order-open]").click();
+  await page.locator('#machtileCardSelection [data-pick-tab="old"]').click();
+  await page.locator(`#machtileCardSelection [data-takeover-candidate="${candidate.id}"]`).click();
+  await page.waitForFunction(() => document.querySelector("#machtileCardSelection") === null);
   ok(be.takeoverSubmits.length === 1 && be.takeoverSubmits[0].p_machine_code === "A05", "A05 送出一筆 machtile_submit_takeover");
   return { context, page, errors, be, candidate, target, readsBefore };
 }
 
-console.log("\n== 390px：接手 applied → 重載，A05 卡片出現報工／完工入口 ==");
+console.log("\n== 390px：接手 applied → 重載，A05 卡片只剩「開工」；按開工後出現報工／停工／完工入口 ==");
 {
   const { context, page, errors, be, candidate, target, readsBefore } = await takeoverAppliedScenario({ moveTo: "A05" });
   await page.waitForFunction(() => (machtileTakeoverSync.reloads.A05 || 0) >= 1 && !machtileStationCmd.pending.A05, null, { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(1500);
+  // 選舊單接手後＝只掛單：卡片只剩「開工」
+  ok(await target.locator('[data-station-cmd="start"]').count() === 1 && !(await target.locator('[data-station-cmd="start"]').isDisabled()), "接手後 A05 有「開工」（可按）");
+  ok(await target.locator('[data-station-cmd="stop"], [data-pick-order-open], .machine-report-button, .machine-finish-button').count() === 0, "接手後 A05 只剩「開工」（沒有停工／報工／完工／選工單）");
+  await page.screenshot({ path: path.join(outDir, "phone-pick-after-takeover-start-only.png") });
+  // 新增步驟：按開工（原本的開工確認卡）→ applied 之後才是已開工
+  await target.locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  const startSent = be.submits.at(-1) || {};
+  ok(startSent.p_command_type === "start" && startSent.p_machine_code === "A05" && startSent.p_expected_order_no === candidate.order_no && startSent.p_expected_index_sn === candidate.index_sn,
+    "開工送的是原本 start 指令（A05、接手那張單＋道次）", JSON.stringify(startSent));
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await target.locator('[data-station-cmd="start"], [data-pick-order-open]').count() === 0 && await target.locator('[data-station-cmd="stop"]').count() === 1,
+    "開工後 A05 只剩報工／停工／完工（沒有開工、選工單）");
+  await page.screenshot({ path: path.join(outDir, "phone-pick-after-start-running.png") });
   const report = target.locator(`.machine-report-button[data-report="${candidate.order_no}"]`);
   const finish = target.locator(`.machine-finish-button[data-report="${candidate.order_no}"]`);
   ok(await report.count() === 1 && !(await report.isDisabled()), "A05 卡片出現該單的報工入口（可按）");
@@ -770,6 +806,128 @@ console.log("\n== 390px：空機接手也要過站別指令閘門（不在 stati
     configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A02", "A04"],' });
   ok(await cardOf(page, "A02").locator("[data-takeover-open-idle]").count() === 0, "A02 不在站別指令名單 → 不出現空機接手按鈕");
   ok(realErrors(errors).length === 0, "閘門案例沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：選工單／開工分開 — 空機台「選工單」兩頁、選新單後只剩開工 ==");
+{
+  const poolItem = { source_key: "01|TESTPICK0001|SIM-1", work_order_no: "XX01202609020008", process_order: 2, operation_name: "車床加工", part_no: "MPW-01", part_name: "MPW-01止油閥座",
+    quantity: 5000, due_date: "2026-10-30", planned_start: null, urgency: 2, department_code: "LATHE", eligible_machine_codes: ["A02"], source_status: "pending", synced_at: new Date().toISOString() };
+  const candidate = { id: id(882), source_machine: "A04", order_no: "XX01202502050012", index_sn: 5,
+    stopped_by_name: "王小明", stopped_at: new Date().toISOString(), reason_code: "RUSH_ORDER", note: null, good_qty: 20, fail_qty: 0 };
+  const be = makeBackend({ takeoverCandidates: [candidate], poolItems: [poolItem], withDepartments: true });
+  const cfg = 'stationCommandMachines: ["A01", "A02", "A04"], dispatchPoolMachines: ["A02"], enableTakeover: true, takeoverMachines: ["A02"], enablePickStartFlow: true, pickStartFlowMachines: ["A01", "A02", "A04"],';
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  const a02 = cardOf(page, "A02");
+  ok(await a02.locator("[data-pick-order-open]").count() === 1 && await a02.locator("[data-station-cmd], .machine-report-button, .machine-finish-button, [data-card-pool-open], [data-card-select-open]").count() === 0,
+    "空機台 A02 只有「選工單」（沒有開工／停工／報工／完工／待做池入口）");
+  await a02.locator("[data-pick-order-open]").click();
+  const panel = page.locator("#machtileCardSelection");
+  ok(await panel.locator('[data-pick-tab="new"]').count() === 1 && await panel.locator('[data-pick-tab="old"]').count() === 1, "選工單面板有「新工單」「舊工單」兩頁");
+  ok((await panel.locator('[data-pick-tab="new"]').innerText()).trim() === "新工單" && (await panel.locator('[data-pick-tab="old"]').innerText()).trim() === "舊工單", "分頁名稱＝新工單／舊工單");
+  await panel.locator(`[data-pool-claim="${poolItem.source_key}"]:not([disabled])`).waitFor({ timeout: 10000 });
+  ok(await panel.locator('[data-pick-pane="new"]').isVisible() && !(await panel.locator('[data-pick-pane="old"]').isVisible()), "預設在新工單頁，派工池可接的單在這頁");
+  await panel.locator('[data-pick-tab="old"]').click();
+  await panel.locator(`[data-takeover-candidate="${candidate.id}"]`).waitFor();
+  ok(!(await panel.locator('[data-pick-pane="new"]').isVisible()), "切到舊工單頁 → 新工單頁收起、列出可接手的停工單");
+  ok(!(await panel.locator("[data-pick-order-empty]").isVisible()), "兩頁都有單 → 不顯示「目前沒有可做的工單」");
+  await panel.locator('[data-pick-tab="new"]').click();
+  await page.screenshot({ path: path.join(outDir, "phone-pick-new-order.png") });
+  await panel.locator(`[data-pool-claim="${poolItem.source_key}"]`).click();
+  await page.waitForFunction(() => document.querySelector("#machtileCardSelection") === null, null, { timeout: 10000 });
+  ok(be.poolClaims.length === 1 && JSON.stringify(be.poolClaims[0]) === JSON.stringify({ p_source_key: poolItem.source_key, p_machine_code: "A02" }),
+    "新工單走原本 dispatch_pool_claim（payload 不變）", JSON.stringify(be.poolClaims));
+  ok(be.submits.length === 0 && be.takeoverSubmits.length === 0, "選新單只掛單：沒有送開工或接手指令");
+  await page.waitForFunction(() => machtileCardOrderForMachine("A02")?.id === "XX01202609020008", null, { timeout: 10000 }).catch(() => {});
+  ok(await a02.locator('[data-station-cmd="start"]').count() === 1, "選新單後 A02 出現「開工」");
+  ok(await a02.locator('[data-station-cmd="stop"], [data-pick-order-open], .machine-report-button, .machine-finish-button').count() === 0, "選新單後 A02 只剩「開工」");
+  await page.screenshot({ path: path.join(outDir, "phone-pick-after-new-start-only.png") });
+  // 開工送出等待中 → 開工鍵停用（pending 停用）
+  await a02.locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  if (await sheet(page).locator("[data-station-cmd-daily-qty]").count()) await sheet(page).locator("[data-station-cmd-daily-qty]").fill("1");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await a02.locator('[data-station-cmd="start"]').isDisabled(), "開工指令等待工廠結果時「開工」停用");
+  ok(be.submits.length === 1 && be.submits[0].p_command_type === "start" && be.submits[0].p_expected_order_no === "XX01202609020008" && be.submits[0].p_expected_part_no === "MPW-01",
+    "開工送原本 start 指令（p_part_no 只料號）", JSON.stringify(be.submits[0] || {}));
+  ok(realErrors(errors).length === 0, "選新單沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：選工單兩頁都空 → 「目前沒有可做的工單」；接手旗標關 → 沒有舊工單頁 ==");
+for (const takeoverOn of [true, false]) {
+  const be = makeBackend({ takeoverCandidates: [] });
+  const cfg = `stationCommandMachines: ["A02"], enableTakeover: ${takeoverOn}, takeoverMachines: ${takeoverOn ? '["A02"]' : "[]"}, enablePickStartFlow: true, pickStartFlowMachines: ["A02"],`;
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  await cardOf(page, "A02").locator("[data-pick-order-open]").click();
+  const panel = page.locator("#machtileCardSelection");
+  ok(await panel.locator('[data-pick-tab="old"]').count() === (takeoverOn ? 1 : 0), takeoverOn ? "接手旗標開 → 有舊工單頁" : "接手旗標關 → 沒有舊工單頁（只有新工單）");
+  await panel.locator("[data-pick-order-empty]:not([hidden])").waitFor({ timeout: 10000 }).catch(() => {});
+  ok(await panel.locator("[data-pick-order-empty]").isVisible() && (await panel.locator("[data-pick-order-empty]").innerText()).trim() === "目前沒有可做的工單",
+    `${takeoverOn ? "兩頁" : "新工單頁"}都空 → 顯示「目前沒有可做的工單」`);
+  if (!takeoverOn) await page.screenshot({ path: path.join(outDir, "phone-pick-empty.png") });
+  ok(realErrors(errors).length === 0, "選工單空狀態沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：已開工（雲端 status=running）→ 只剩報工／停工／完工；停工後（status=paused）卡片仍在、只剩開工 ==");
+{
+  const be = makeBackend({ procStatus: { XX01202502050012: "running", XX01202609020008: "paused" } });
+  const cfg = 'stationCommandMachines: ["A01", "A04"], enableFinishButton: true, enablePickStartFlow: true, pickStartFlowMachines: ["A01", "A04"],';
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  const a04 = cardOf(page, "A04");
+  ok(await a04.locator('[data-station-cmd="stop"]').count() === 1 && await a04.locator(".machine-report-button:not([disabled])").count() === 1 && await a04.locator(".machine-finish-button").count() === 1,
+    "running → 有報工、停工、完工");
+  ok(await a04.locator('[data-station-cmd="start"], [data-pick-order-open]').count() === 0, "running → 沒有開工、選工單");
+  const a01 = cardOf(page, "A01");
+  ok(await page.evaluate(() => machtileCardOrderForMachine("A01")?.id) === "XX01202609020008", "status=paused 的工序仍在 A01 卡片上（沒有從平板消失）");
+  ok(await a01.locator('[data-station-cmd="start"]').count() === 1 && !(await a01.locator('[data-station-cmd="start"]').isDisabled()), "自己停工中（paused）→ 有「開工」（接回）");
+  ok(await a01.locator('[data-station-cmd="stop"], [data-pick-order-open], .machine-report-button, .machine-finish-button, [data-card-select-open], [data-card-pool-open]').count() === 0, "自己停工中（paused）→ 只剩「開工」");
+  await page.screenshot({ path: path.join(outDir, "phone-pick-paused-start-only.png") });
+  be.mode = "applied";
+  await a01.locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  if (await sheet(page).locator("[data-station-cmd-daily-qty]").count()) await sheet(page).locator("[data-station-cmd-daily-qty]").fill("1");
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  const resume = { ...(be.submits.at(-1) || {}) };
+  const resumeUuidOk = stationCore.isUuid(resume.p_command_uuid);
+  delete resume.p_command_uuid;
+  const expectedResume = { p_command_type: "start", p_machine_code: "A01", p_expected_order_no: "XX01202609020008", p_expected_index_sn: 2, p_expected_part_no: "MPW-01", p_manufacture_ii_id: null };
+  ok(resumeUuidOk && JSON.stringify(resume) === JSON.stringify(expectedResume), "停工中按開工 → payload 跟一般開工相同（start、只料號、無多餘欄位）", JSON.stringify(be.submits.at(-1) || {}));
+  ok(await a01.locator('[data-station-cmd="stop"]').count() === 1 && await a01.locator('[data-station-cmd="start"]').count() === 0, "接回開工 applied → A01 換成已開工（停工鍵出現、開工鍵收起）");
+  // 停工 applied → 卡片換成停工中（只剩開工接回）
+  await a04.locator('[data-station-cmd="stop"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(be.submits.at(-1)?.p_command_type === "stop", "停工送原本 stop 指令");
+  ok(await a04.locator('[data-station-cmd="start"]').count() === 1 && await a04.locator('[data-station-cmd="stop"]').count() === 0, "停工 applied → A04 換成「開工」（接回）");
+  ok(await a04.locator(".machine-report-button, .machine-finish-button").count() === 0, "停工 applied → A04 只剩「開工」（報工／完工收起）");
+  ok(realErrors(errors).length === 0, "已開工／停工中沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 1440px：選工單旗標關（站別指令開著）→ 卡片跟 origin/main 一字不差、按鈕照舊 ==");
+{
+  const cfg = 'stationCommandMachines: ["A01", "A02", "A04"], enablePickStartFlow: false, pickStartFlowMachines: ["A01", "A02", "A04"],';
+  let baseline = null;
+  if (baselineAvailable) { const b = await newPage(browser, "desktop", { backend: makeBackend(), baseline: true, configExtra: cfg }); baseline = { grid: await gridHtml(b.page), actions: await b.page.locator("#workOrderGrid .machine-tile-actions").evaluateAll((xs) => xs.map((x) => x.innerHTML.replace(/\s+/g, " ").split("/__baseline/").join("/"))) }; await b.context.close(); }
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "desktop", { backend: be, configExtra: cfg });
+  ok(await page.locator("[data-pick-order-open], [data-pick-tab]").count() === 0, "旗標關 → 沒有選工單入口");
+  ok(await cardOf(page, "A04").locator("[data-station-cmd]").count() === 2, "旗標關 → 有單機台照舊「開工」「停工」");
+  if (baseline) {
+    const g = await gridHtml(page);
+    ok(g === baseline.grid, "旗標關 → 卡片 HTML 跟 origin/main 一字不差", firstDiff(g, baseline.grid));
+    const actions = await page.locator("#workOrderGrid .machine-tile-actions").evaluateAll((xs) => xs.map((x) => x.innerHTML.replace(/\s+/g, " ")));
+    ok(JSON.stringify(actions) === JSON.stringify(baseline.actions), "旗標關 → 卡片底部按鈕列跟 origin/main 一字不差", firstDiff(JSON.stringify(actions), JSON.stringify(baseline.actions)));
+  } else { skip += 2; console.log("  SKIP 讀不到 origin/main，略過一字不差比對"); }
+  ok(be.otherWrites.length === 0 && be.submits.length === 0 && realErrors(errors).length === 0, "旗標關 → 沒有寫入、沒有 JS 錯誤");
   await context.close();
 }
 

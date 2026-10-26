@@ -13228,3 +13228,6 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .takeover-candidate h3, .takeover-candidate p { margin: 0 0 7px; }
 .takeover-taken-notice { margin: 8px 0; border-radius: 10px; background: #fff0c2; color: #704b00; padding: 9px 11px; font-weight: 800; }
 @media (max-width: 560px) { .takeover-qty { grid-template-columns: 1fr; } }
+.pick-order-tabs { margin: 4px 0 10px; }
+.pick-order-note { margin: 0 0 10px; color: #4b5b6c; font-size: .95rem; }
+.pick-order-empty { margin: 12px 0; border-radius: 10px; background: #eef2f6; color: #2f3d4c; padding: 10px 12px; font-weight: 800; }

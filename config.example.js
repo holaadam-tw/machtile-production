@@ -43,6 +43,9 @@ window.MACHTILE_CONFIG = {
   // 換機台第一版。RPC 尚未部署或探測失敗時，APP 會完整隱藏增強畫面。
   enableTakeover: false,
   takeoverMachines: [],
+  // 選工單／開工分開：機台代號陣列；預設全關＝卡片照舊。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.

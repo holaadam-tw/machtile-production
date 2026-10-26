@@ -201,7 +201,8 @@
     return list.find((r) => r && text(r.work_order_no) === wo && normCode(r.machine_code) === code && Number(r.process_order) === n) || null;
   }
 
-  const OPEN_PROCESS_STATUS = Object.freeze(["pending", "running", "abnormal", "waiting_inspection"]);
+  // paused：雲端停工 applied 後工序 status＝paused（PR #135），單仍掛這台，接回要能按開工。
+  const OPEN_PROCESS_STATUS = Object.freeze(["pending", "running", "paused", "abnormal", "waiting_inspection"]);
   const CLOSED_WO_STATUS = Object.freeze(["completed", "shipped", "cancelled"]);
 
   // 開卡時重讀的 work_order_processes 列（含 work_orders、machines）→ 這一道是不是還掛在這台、道次沒變。
