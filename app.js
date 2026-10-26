@@ -13992,20 +13992,33 @@ function machtileTakeoverOverlay(code, type, returnFocus) {
   const holder = document.createElement("div"); holder.id = "machtileTakeoverSheet"; holder.className = "station-cmd-overlay";
   holder.dataset.machine = code; holder.dataset.type = type; holder._returnFocus = returnFocus; document.body.appendChild(holder); return holder;
 }
+// 停工對話框（owner 10/25：停工＝報工＋停工一次）：數量欄問的是「上次報工之後、停工前還沒報的件數」，
+// 上方顯示這一道已報的累計（卡片現有 order.done），必填不預設（0 也要親手填）。
+// 送出的表單依 command_uuid 暫存在記憶體：工廠回 DUPLICATE_SUSPECTED 時不退一般停工，而是重開同一份表單問
+// 「確定是另外做的嗎？」→ 確定送出＝照報工的再次確認慣例（新的 command_uuid＋p_acks）；改數量＝回到可編輯。
+const machtileTakeoverStopDrafts = new Map();
+function machtileTakeoverStopDoneQty(order) {
+  const done = Number(order?.done);
+  return Number.isFinite(done) && done >= 0 ? done : 0;
+}
 function machtileTakeoverStopRender(holder, viewState) {
   const validation = machtileTakeoverCore.validateStop(viewState.form, viewState.policies);
+  const dupConfirm = viewState.dupConfirm === true;
   const selected = viewState.policies.find((p) => p.code === viewState.form.reason_code);
   const failReasons = machtileReportFailReasons();
   const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...failReasons.map((reason) => `<option value="${escapeHtml(reason)}"${viewState.form.fail_reason_code === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
-    <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question">${escapeHtml(machtileTranslate("takeover_stop_qty_question"))}</p>
-    <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required></label><label>${escapeHtml(machtileTranslate("takeover_fail_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required></label></div>
+    <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTranslate("takeover_stop_qty_question", { done: machtileTakeoverStopDoneQty(viewState.order) }))}</p>
+    ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
+    <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label>${escapeHtml(machtileTranslate("takeover_fail_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
     <label data-takeover-fail-reason-field${Number(viewState.form.fail_qty) > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
     <fieldset><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
     <fieldset><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${!viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
     <label>${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
     <p class="station-cmd-notice is-bad" data-takeover-error ${viewState.error ? "" : "hidden"}>${escapeHtml(viewState.error || "")}</p>
-    <footer class="station-cmd-actions"><button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+    <footer class="station-cmd-actions">${dupConfirm
+      ? `<button type="button" class="station-cmd-confirm is-stop" data-takeover-dup-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_stop_dup_confirm"))}</button><button type="button" class="station-cmd-secondary" data-takeover-dup-edit ${viewState.sending ? "disabled" : ""}>${escapeHtml(machtileTranslate("takeover_stop_dup_edit"))}</button>`
+      : `<button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>`}${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
 }
 async function machtileTakeoverOpenStop(code, returnFocus) {
   const machine = machtileStationCmdMachineByCode(code), order = machine?.order; if (!order) return;
@@ -14015,24 +14028,45 @@ async function machtileTakeoverOpenStop(code, returnFocus) {
     error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order };
   machtileTakeoverStopRender(holder, holder._state);
 }
-async function machtileTakeoverSubmitStop(holder) {
+async function machtileTakeoverSubmitStop(holder, { acks = [] } = {}) {
   const viewState = holder._state, check = machtileTakeoverCore.validateStop(viewState.form, viewState.policies); if (!check.ok || viewState.sending) return;
   const code = holder.dataset.machine;
   if (machtileStationCmd.pending[code] && !machtileStationCmdUnlocked(machtileStationCmd.pending[code])) return;
   viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
+  // 再次確認照報工慣例（stationReportCore.retryWithAck）：新的 command_uuid＋p_acks；同一筆 uuid 重送只會拿回原本被拒的那列。
   const commandUuid = crypto.randomUUID(), startedAt = Date.now();
   const fields = { orderNo: viewState.order.id, step: viewState.order.stationStep,
     partNo: viewState.order.partNo || null, manufactureIiId: viewState.order.manufactureIiId || null,
     expectedSimulationId: viewState.order.simulationId || null };
+  const payload = machtileTakeoverCore.stopReportPayload({ commandUuid, machineCode: code, ...fields, indexSn: fields.step, form: viewState.form });
+  const ackList = [...new Set(acks)];
+  if (ackList.length) payload.p_acks = ackList;
+  machtileTakeoverStopDrafts.set(commandUuid, { form: { ...viewState.form }, order: viewState.order, policies: viewState.policies, returnFocus: holder._returnFocus || null });
+  let ackUnsupported = false;
   const result = await machtileStationCmdRunSubmission({
     commandUuid, commandType: "stop_report", machineCode: code, fields, recordFields: fields, startedAt,
     rpcName: "machtile_submit_stop_report",
-    payloadOverride: machtileTakeoverCore.stopReportPayload({ commandUuid, machineCode: code, ...fields, indexSn: fields.step, form: viewState.form }),
+    payloadOverride: payload,
+    // 帶 p_acks 的停工回報若伺服器函式還不認得這個參數（PGRST202）：只在對話框說明，不把整個站別指令功能標成「未啟用」。
+    onError: ackList.length ? ({ info }) => (info.missing ? ((ackUnsupported = true), { cancel: true }) : null) : null,
   });
   if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
   if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
+  machtileTakeoverStopDrafts.delete(commandUuid);
   viewState.sending = false; viewState.offerLegacyStop = true;
-  viewState.error = result.error?.message || machtileTranslate("takeover_send_failed"); machtileTakeoverStopRender(holder, viewState);
+  viewState.error = ackUnsupported ? machtileTranslate("takeover_stop_dup_ack_unsupported") : result.error?.message || machtileTranslate("takeover_send_failed");
+  machtileTakeoverStopRender(holder, viewState);
+}
+// 工廠拒絕 stop_report＝DUPLICATE_SUSPECTED：重開停工對話框（同一份表單、數量先鎖住）問作業員是不是另外做的。
+// 頁面重整過、記憶體沒有表單 → 開空白表單並顯示同一句提醒，讓作業員重填（仍不自動退一般停工）。
+function machtileTakeoverReopenStopDuplicate(code, draft) {
+  const machine = machtileStationCmdMachineByCode(code), order = draft?.order || machine?.order;
+  if (!order) { showToast(machtileTranslate("takeover_stop_dup_question")); return; }
+  const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
+  const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: draft ? "" : machtileTranslate("takeover_stop_dup_question"), offerLegacyStop: false, machine, order, dupConfirm: Boolean(draft) };
+  machtileTakeoverStopRender(holder, holder._state);
 }
 function machtileTakeoverCandidateModel(row) {
   const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
@@ -15319,7 +15353,11 @@ function machtileStationCmdFinish(code, view) {
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
-  if (record.commandType === "stop_report" && view?.phase === "rejected") {
+  const stopDraft = record.commandType === "stop_report" ? machtileTakeoverStopDrafts.get(record.commandUuid) : null;
+  if (record.commandType === "stop_report") machtileTakeoverStopDrafts.delete(record.commandUuid);
+  if (record.commandType === "stop_report" && view?.phase === "rejected" && view.code === "DUPLICATE_SUSPECTED") {
+    machtileTakeoverReopenStopDuplicate(code, stopDraft);
+  } else if (record.commandType === "stop_report" && view?.phase === "rejected") {
     // NOT_ELIGIBLE text is worded for takeover (target machine not allowed); a rejected stop report gets the generic text.
     const message = view.code === "NOT_ELIGIBLE" ? "" : machtileTakeoverCore?.rejectText(view.code);
     if (view.code === "TAKEOVER_DISABLED") machtileTakeover.availability = "off";
@@ -15428,6 +15466,13 @@ function machtileStationCmdHandleClick(event) {
       const reason = event.target.closest("[data-takeover-reason]"); if (reason) { const policy = viewState.policies.find((p) => p.code === reason.dataset.takeoverReason); viewState.form.reason_code = policy.code; viewState.form.allow_takeover = policy.default_allow; viewState.form.allow_takeover_touched = false; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
       const allow = event.target.closest("[data-takeover-allow]"); if (allow) { viewState.form.allow_takeover = allow.dataset.takeoverAllow === "yes"; viewState.form.allow_takeover_touched = true; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
       if (event.target.closest("[data-takeover-stop-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet); return true; }
+      if (event.target.closest("[data-takeover-dup-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet, { acks: ["DUPLICATE_SUSPECTED"] }); return true; }
+      if (event.target.closest("[data-takeover-dup-edit]")) {
+        if (viewState.sending) return true;
+        viewState.dupConfirm = false; viewState.error = ""; machtileTakeoverStopRender(takeoverSheet, viewState);
+        takeoverSheet.querySelector("[data-takeover-good]")?.focus();
+        return true;
+      }
     }
     return true;
   }
