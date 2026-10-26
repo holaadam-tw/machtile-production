@@ -486,7 +486,7 @@
     const status = text(row && row.status).toLowerCase();
     if (status === "applied") {
       const shortQty = type === "close" ? closeShortQty(row) : 0;
-      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站` : "已關站") : type === "claim_next" ? "已接下一道" : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty, nextStep: standardFinishNextStep(row) } : {}), ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
+      return { phase: "applied", terminal: true, tone: "ok", title: type === "stop" ? "已停工" : type === "start" ? "已開工" : type === "close" ? (shortQty > 0 ? `少 ${shortQty} 件，已關站並依實做數入庫` : "已關站") : type === "claim_next" ? "已接下一道" : "已套用", text: `舊 MES 已${action}。`, ...(type === "close" ? { shortQty, nextStep: standardFinishNextStep(row) } : {}), ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);

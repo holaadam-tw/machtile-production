@@ -79,7 +79,7 @@
       counter_qty_help: "報工請照機台計數器填累計數量",
       finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
       finish_close_applied: "已關站",
-      finish_close_applied_short: "少 {{quantity}} 件，已關站",
+      finish_close_applied_short: "少 {{quantity}} 件，已關站並依實做數入庫",
       finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
       finish_close_rejected_title: "關站未完成",
       finish_close_zero_reported: "這一道還沒有報工數量，不能完工關站；請先報工",
@@ -237,7 +237,7 @@
       counter_qty_help: "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", // _draft
       finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
       finish_close_applied: "Đã đóng công đoạn", // _draft
-      finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn", // _draft
+      finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm", // _draft
       finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
       finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft
       finish_close_zero_reported: "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.", // _draft

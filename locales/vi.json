@@ -100,7 +100,7 @@
     "_draft": true
   },
   "finish_close_applied_short": {
-    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn",
+    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm",
     "_draft": true
   },
   "finish_close_applied_detail": {

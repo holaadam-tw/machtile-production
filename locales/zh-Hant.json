@@ -27,7 +27,7 @@
   "finish_work_hint": "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
   "finish_work_close_hint": "完工報工成功後，會接著關閉舊 MES 工站並讓下一道進池",
   "finish_close_applied": "已關站",
-  "finish_close_applied_short": "少 {{quantity}} 件，已關站",
+  "finish_close_applied_short": "少 {{quantity}} 件，已關站並依實做數入庫",
   "finish_close_applied_detail": "完工報工已保留；舊 MES 已關站。",
   "finish_close_rejected_title": "關站未完成",
   "finish_close_zero_reported": "這一道還沒有報工數量，不能完工關站；請先報工",

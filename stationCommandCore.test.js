@@ -152,8 +152,8 @@ throws("壞 uuid", () => c.submitPayload({ commandUuid: "x", commandType: "start
 throws("不支援的指令（換單）", () => c.submitPayload({ commandUuid: UUID, commandType: "switch", machineCode: "A04", orderNo: "X", step: 1 }), "BAD_COMMAND_TYPE");
 throws("沒有第幾道", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: null }), "NO_STEP");
 throws("沒有工單", () => c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "", step: 1 }), "NO_ORDER");
-eq("close applied ShortQty > 0 顯示少 N 件，已關站", c.statusView({ status: "applied", legacy_snapshot: { ShortQty: 7 } }, "close", 0).title, "少 7 件，已關站");
-eq("close applied shortQty > 0 相容小寫 JSON", c.statusView({ status: "applied", legacy_snapshot: '{"shortQty":3}' }, "close", 0).title, "少 3 件，已關站");
+eq("close applied ShortQty > 0 顯示少 N 件，已關站並依實做數入庫", c.statusView({ status: "applied", legacy_snapshot: { ShortQty: 7 } }, "close", 0).title, "少 7 件，已關站並依實做數入庫");
+eq("close applied shortQty > 0 相容小寫 JSON", c.statusView({ status: "applied", legacy_snapshot: '{"shortQty":3}' }, "close", 0).title, "少 3 件，已關站並依實做數入庫");
 eq("close applied ShortQty = 0 顯示已關站", c.statusView({ status: "applied", legacy_snapshot: { ShortQty: 0 } }, "close", 0).title, "已關站");
 eq("close rejected 保留伺服器白話原因", c.statusView({ status: "rejected", reject_code: "LEGACY_REJECTED", reject_message: "這是最後一道，關站會結工單，請生管處理" }, "close", 0).detail, "這是最後一道，關站會結工單，請生管處理");
 eq("close ZERO_REPORTED 顯示 owner 定案白話", c.statusView({ status: "rejected", reject_code: "ZERO_REPORTED" }, "close", 0).text, "這一道還沒有報工數量，不能完工關站；請先報工");
