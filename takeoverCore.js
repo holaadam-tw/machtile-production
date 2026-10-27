@@ -68,16 +68,19 @@
   // that the APP already reads), not only this stop note's segment: on a second or later takeover the
   // note only holds the last machine's segment and would overstate what is left. When the cumulative
   // read is missing or lags behind the note (stop report not applied yet), fall back to the larger value.
+  // doneQty on the candidate card / confirm dialog uses the same cumulative value so that
+  // "done + remaining = planned": quantities reported before the stop count, not only the stop note's.
   function candidateView(row, plannedQty, reasonLabel, processDoneQty) {
-    const done = Number(row?.good_qty || 0) + Number(row?.fail_qty || 0);
+    const noteDone = Number(row?.good_qty || 0) + Number(row?.fail_qty || 0);
     const planned = Math.max(0, Number(plannedQty || 0));
     const cumulative = Number(processDoneQty);
     const processDone = Number.isFinite(cumulative) && cumulative > 0 ? cumulative : 0;
+    const done = Math.max(processDone, noteDone);
     return { stopNoteId: text(row?.id), orderNo: text(row?.order_no), indexSn: row?.index_sn,
       sourceMachine: text(row?.source_machine), stoppedBy: text(row?.stopped_by_name), stoppedAt: row?.stopped_at,
       reasonCode: text(row?.reason_code), reasonLabel: text(reasonLabel) || text(row?.reason_code), note: text(row?.note),
       goodQty: Number(row?.good_qty || 0), failQty: Number(row?.fail_qty || 0), doneQty: done,
-      processDoneQty: Math.max(processDone, done), remainingQty: Math.max(0, planned - Math.max(processDone, done)) };
+      processDoneQty: done, remainingQty: Math.max(0, planned - done) };
   }
   function candidateMap(rows) {
     return new Map((Array.isArray(rows) ? rows : []).filter((row) => row?.stopNoteId).map((row) => [row.stopNoteId, row]));

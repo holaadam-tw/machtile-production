@@ -63,7 +63,8 @@ test("second and later takeovers use the whole step's cumulative completion for 
   const secondNote = { id: "note-2", order_no: "WO-1", index_sn: 2, source_machine: "A05", reason_code: "TOOLING",
     good_qty: 3, fail_qty: 0, stopped_by_name: "Operator Lin", stopped_at: "2026-10-25T02:00:00Z" };
   const view = core.candidateView(secondNote, 10, "刀具／治具問題", 7);
-  assert.equal(view.doneQty, 3, "doneQty still shows what the source machine made in this segment");
+  assert.equal(view.doneQty, 7, "doneQty shows the step's cumulative completion so done + remaining = planned");
+  assert.equal(view.goodQty, 3, "goodQty still holds the stop note's own segment");
   assert.equal(view.processDoneQty, 7);
   assert.equal(view.remainingQty, 3, "remaining = planned 10 - cumulative 7, not 10 - 3 = 7");
   // Cumulative read lagging behind the note (stop report not applied yet) never overstates remaining.
@@ -72,6 +73,22 @@ test("second and later takeovers use the whole step's cumulative completion for 
   assert.equal(core.candidateView(secondNote, 10, "", undefined).remainingQty, 7);
   // Over-completion clamps at zero.
   assert.equal(core.candidateView(secondNote, 10, "", 12).remainingQty, 0);
+});
+
+test("candidate doneQty counts quantities reported before the stop, not only the stop note", () => {
+  // Plan 10: reported 4 before stopping, stop note filled 0 -> cumulative 4.
+  const zeroNote = { id: "note-z", order_no: "WO-1", index_sn: 2, source_machine: "A04", reason_code: "RUSH_ORDER",
+    good_qty: 0, fail_qty: 0, stopped_by_name: "Operator Chen", stopped_at: "2026-10-27T01:00:00Z" };
+  const zeroView = core.candidateView(zeroNote, 10, "", 4);
+  assert.equal(zeroView.doneQty, 4);
+  assert.equal(zeroView.remainingQty, 6);
+  assert.equal(zeroView.doneQty + zeroView.remainingQty, 10);
+  // Reported 4, then the stop report adds 4 more -> cumulative 8.
+  const fourNote = { ...zeroNote, id: "note-4", good_qty: 4 };
+  const fourView = core.candidateView(fourNote, 10, "", 8);
+  assert.equal(fourView.doneQty, 8);
+  assert.equal(fourView.remainingQty, 2);
+  assert.equal(fourView.goodQty, 4, "goodQty / failQty still hold the stop note's own segment");
 });
 
 test("a non-empty SQL-contract candidate fixture produces a takeover row", () => {
