@@ -48,6 +48,14 @@ test("reason default is highlighted but takeover choice still requires a tap", (
   assert.equal(core.validateStop(form).ok, true);
 });
 
+test("stop rejection tells operators old MES stopped but quantities were not sent", () => {
+  assert.match(core.stopReportRejectedText("ORDER_CHANGED_DURING_APPLY"), /舊 MES 已先停工/);
+  assert.match(core.stopReportRejectedText("ORDER_CHANGED_DURING_APPLY"), /件數沒有送出/);
+  assert.doesNotMatch(core.stopReportRejectedText("ORDER_CHANGED_DURING_APPLY"), /一般停工/);
+  assert.doesNotMatch(core.stopReportRejectedText("QTY_EXCEEDS_AVAILABLE"), /舊 MES 已/);
+  assert.match(core.stopReportRejectedText("QTY_EXCEEDS_AVAILABLE"), /件數沒有送出/);
+});
+
 test("MACHINE_FAULT and OTHER require notes and labels match the cloud contract", () => {
   assert.equal(core.DEFAULT_POLICIES.find((row) => row.code === "MACHINE_FAULT").note_required, true);
   assert.equal(core.DEFAULT_POLICIES.find((row) => row.code === "OTHER").note_required, true);

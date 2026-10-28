@@ -876,7 +876,7 @@ console.log("\n== 390px：確定送出時雲端函式還不認得 p_acks（PGRST
   await context.close();
 }
 
-console.log("\n== 390px：停工回報被拒其他代碼（QTY_EXCEEDS_AVAILABLE）→ 不自動退一般停工：重開同一份表單＋白話原因＋「改用一般停工」 ==");
+console.log("\n== 390px：停工回報被拒其他代碼（QTY_EXCEEDS_AVAILABLE）→ 重開同一份表單，不引導一般停工 ==");
 {
   const be = makeBackend();
   be.mode = "code:QTY_EXCEEDS_AVAILABLE";
@@ -887,7 +887,7 @@ console.log("\n== 390px：停工回報被拒其他代碼（QTY_EXCEEDS_AVAILABLE
   await page.waitForSelector('#machtileTakeoverSheet[data-takeover-rejected="QTY_EXCEEDS_AVAILABLE"]', { timeout: 15000 });
   await page.waitForTimeout(500);   // 確認沒有接著自動開一般停工
   const toasts = await page.evaluate(() => window.__toasts);
-  ok(toasts.includes("停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管"), "顯示通用提示", JSON.stringify(toasts));
+  ok(toasts.includes("這次停工沒有成功，件數沒有送出，請重新整理後再試，仍不行請找生管"), "顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
   const ts = takeoverSheet(page);
   ok(await page.locator("#machtileStationCmdSheet").count() === 0 && legacyStopSubmits(be).length === 0, "沒有自動退回一般停工（沒開一般停工確認卡、沒送 stop）");
   ok(await ts.count() === 1 && await ts.locator("[data-takeover-dup]").count() === 0, "重開停工對話框（不是重複確認）");
@@ -897,13 +897,10 @@ console.log("\n== 390px：停工回報被拒其他代碼（QTY_EXCEEDS_AVAILABLE
     "停工原因／允許接手也保留");
   const err = (await ts.locator("[data-takeover-error]").innerText()).trim();
   ok(await ts.locator("[data-takeover-error]").isVisible() && err.includes("本次數量超過可報數") && err.includes("QTY_EXCEEDS_AVAILABLE"), "表單上顯示白話拒絕原因（本次數量超過可報數）＋代碼", err);
-  ok(await ts.locator("[data-takeover-legacy-stop]").count() === 1 && await ts.locator("[data-takeover-stop-confirm]").count() === 1, "出現「改用一般停工」按鈕，「確認停工」也還在");
+  ok(await ts.locator("[data-takeover-legacy-stop]").count() === 0 && await ts.locator("[data-takeover-stop-confirm]").count() === 1, "不出現「改用一般停工」，仍可重新整理後重填");
   ok(be.stopReportSubmits.length === 1, "停工回報只送一次", String(be.stopReportSubmits.length));
   await page.screenshot({ path: path.join(outDir, "phone-stop-dialog-other-reject-kept.png") });
-  await ts.locator("[data-takeover-legacy-stop]").click();
-  await page.locator("#machtileStationCmdSheet").waitFor({ timeout: 10000 });
-  ok(await page.locator("#machtileStationCmdSheet").count() === 1 && await page.locator("#machtileTakeoverSheet").count() === 0, "作業員自己按「改用一般停工」→ 才開一般停工確認卡");
-  ok(legacyStopSubmits(be).length === 0, "開一般停工確認卡本身不送 stop", String(legacyStopSubmits(be).length));
+  ok(await page.locator("#machtileStationCmdSheet").count() === 0 && legacyStopSubmits(be).length === 0, "拒絕後沒有一般停工入口或送出");
   ok(realErrors(errors).length === 0, "其他拒絕碼沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
@@ -975,8 +972,8 @@ console.log("\n== 390px：本道 report 尚未 applied → 擋下停工 ==");
   await context.close();
 }
 
-// r4c 審查 LOW：stop_report 被拒、頁面重整過（記憶體沒有表單）且卡片上也找不到那張單 → 開一般停工確認卡（不自動送）
-console.log("\n== 390px：停工回報被拒、沒有暫存表單也沒有工單 → 開一般停工確認卡（不自動送 stop） ==");
+// stop_report 被拒、頁面重整過且卡片上找不到那張單：只提示，不引導重複停工。
+console.log("\n== 390px：停工回報被拒、沒有暫存表單也沒有工單 → 只提示、不開一般停工 ==");
 {
   const be = makeBackend();
   be.mode = "hold";
@@ -997,13 +994,13 @@ console.log("\n== 390px：停工回報被拒、沒有暫存表單也沒有工單
     };
   });
   be.mode = "code:QTY_EXCEEDS_AVAILABLE";
-  await page.locator("#machtileStationCmdSheet").waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => window.__toasts.some((text) => text.includes("件數沒有送出")), null, { timeout: 20000 });
   await page.waitForTimeout(500);
-  ok(await page.locator("#machtileStationCmdSheet").count() === 1 && await page.locator("#machtileTakeoverSheet").count() === 0, "開了一般停工確認卡（停工對話框沒有重開）");
-  ok(legacyStopSubmits(be).length === 0, "一般停工沒有自動送出", String(legacyStopSubmits(be).length));
+  ok(await page.locator("#machtileStationCmdSheet").count() === 0 && await page.locator("#machtileTakeoverSheet").count() === 0, "沒有工單可重開時只提示，不開一般停工確認卡");
+  ok(legacyStopSubmits(be).length === 0, "沒有送出一般停工", String(legacyStopSubmits(be).length));
   ok(be.stopReportSubmits.length === 1, "停工回報沒有重送", String(be.stopReportSubmits.length));
   const toasts = await page.evaluate(() => window.__toasts);
-  ok(toasts.includes("停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管"), "仍顯示通用提示", JSON.stringify(toasts));
+  ok(toasts.includes("這次停工沒有成功，件數沒有送出，請重新整理後再試，仍不行請找生管"), "仍顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
   ok(realErrors(errors).length === 0, "無表單無工單被拒沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

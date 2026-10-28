@@ -306,6 +306,11 @@ eq("負數 → 擋", c.dailyStartQtyCheck("-1"), { ok: false, text: "機台目�
 eq("小數 → 擋（step 預設 1）", c.dailyStartQtyCheck("12.5").ok, false);
 eq("非數字 → 擋", c.dailyStartQtyCheck("abc").ok, false);
 eq("數字型別也可", c.dailyStartQtyCheck(208), { ok: true, value: 208 });
+eq("機台數大於已報才提醒差額", c.startQtyGap(208, 200), { machine: 208, reported: 200, gap: 8 });
+eq("相等或較小不提醒", [c.startQtyGap(200, 200), c.startQtyGap(199, 200)], [null, null]);
+eq("17:30 設定：17:31 才問", [c.overtimePromptDue({ promptEnabled: true, noStartEnabled: false, shiftEndTime: "17:30", now: new Date(2026, 9, 28, 17, 30) }), c.overtimePromptDue({ promptEnabled: true, noStartEnabled: false, shiftEndTime: "17:30", now: new Date(2026, 9, 28, 17, 31) })], [false, true]);
+eq("18:00 設定與兩個關閉旗標", [c.overtimePromptDue({ promptEnabled: true, noStartEnabled: false, shiftEndTime: "18:00", now: new Date(2026, 9, 28, 18, 1) }), c.overtimePromptDue({ promptEnabled: false, noStartEnabled: false, shiftEndTime: "17:00", now: new Date(2026, 9, 28, 20, 0) }), c.overtimePromptDue({ promptEnabled: true, noStartEnabled: true, shiftEndTime: "17:00", now: new Date(2026, 9, 28, 20, 0) })], [true, false, false]);
+eq("加班答案形成可稽核前綴", [c.overtimeNote({ continued: true, startTime: "18:00" }, "17:00", "17:30"), c.overtimeNote({ continued: false }, "17:00", "17:30")], ["[加班確認：17:00 後繼續加工，加班起點 18:00]", "[加班確認：17:00 後沒有繼續加工]"]);
 const todayRows = [
   { process_id: PID, report_type: "noon" },
   { process_id: "00000000-0000-4000-8000-000000000301", report_type: "dailyStart" },

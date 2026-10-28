@@ -5,6 +5,10 @@
 // bundle); every read/write goes through the signed-in session Bearer.
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
+  overtimePromptEnabled: false,
+  overtimeNoStartEnabled: false,
+  shiftEndTime: "17:00",
+  overtimeStartTime: "17:30",
   enableTakeover: false,
   takeoverMachines: [],
   enablePickStartFlow: false,
