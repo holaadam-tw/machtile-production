@@ -100,7 +100,7 @@
     "_draft": true
   },
   "finish_close_applied_short": {
-    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn",
+    "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm",
     "_draft": true
   },
   "finish_close_applied_detail": {
@@ -157,6 +157,14 @@
   "standard_finish_disabled": { "value": "Chức năng nhận công đoạn kế tiếp chưa được mở; vui lòng chọn lệnh khác.", "_draft": true },
   "standard_finish_claim_failed": { "value": "Không thể nhận công đoạn kế tiếp; vui lòng chọn lệnh khác.", "_draft": true },
   "standard_finish_sync_pending": { "value": "Đang đồng bộ, vui lòng đợi", "_draft": true },
+  "takeover_sync_pending": { "value": "Đã tiếp nhận, dữ liệu đang đồng bộ, vui lòng đợi vài giây rồi xem lại", "_draft": true },
+  "pick_order": { "value": "Chọn lệnh", "_draft": true },
+  "pick_order_new": { "value": "Lệnh mới", "_draft": true },
+  "pick_order_old": { "value": "Lệnh cũ", "_draft": true },
+  "pick_order_note": { "value": "Chọn lệnh chỉ gắn lệnh vào máy này, chưa bắt đầu; muốn bắt đầu làm hãy bấm “Bắt đầu”.", "_draft": true },
+  "pick_order_none": { "value": "Hiện không có lệnh nào để làm", "_draft": true },
+  "replace_stopped_sent_press_start": { "value": "Đã đổi lệnh, vui lòng bấm Bắt đầu", "_draft": true },
+  "pick_order_confirm": { "value": "Gắn lệnh {{order}} công đoạn {{step}} vào máy {{machine}}? (Sau khi gắn phải bấm “Bắt đầu” mới tính là bắt đầu)", "_draft": true },
   "standard_finish_start": { "value": "Bắt đầu", "_draft": true },
   "standard_finish_other_order": { "value": "Chọn lệnh khác", "_draft": true },
   "batch_command_title": {
@@ -487,6 +495,22 @@
     "value": "Xem trước và gửi",
     "_draft": true
   },
+  "takeover_stop_title": { "value": "Xác nhận dừng máy", "_draft": true },
+  "takeover_stop_qty_question_unsynced": { "value": "Đã báo {{done}} cái. Số vừa báo có thể chưa được tính vào, vui lòng điền đúng số thực tế còn chưa báo (không có thì điền 0)", "_draft": true },
+  "takeover_stop_dup_question": { "value": "Số lượng này giống với lần vừa báo, có chắc là làm thêm riêng không?", "_draft": true }, "takeover_stop_dup_confirm": { "value": "Xác nhận gửi", "_draft": true }, "takeover_stop_dup_edit": { "value": "Sửa số lượng", "_draft": true }, "takeover_stop_dup_ack_unsupported": { "value": "Máy chủ chưa nhận được \"Xác nhận gửi\", vui lòng bấm \"Sửa số lượng\" để nhập lại (không có thì điền 0) hoặc báo bộ phận kế hoạch", "_draft": true },
+  "takeover_good_qty": { "value": "Hàng tốt", "_draft": true }, "takeover_fail_qty": { "value": "Hàng lỗi", "_draft": true },
+  "takeover_reason": { "value": "Lý do dừng", "_draft": true }, "takeover_allow_question": { "value": "Cho phép máy khác tiếp nhận?", "_draft": true },
+  "takeover_must_tap": { "value": "Vui lòng tự chọn Có hoặc Không", "_draft": true }, "takeover_note": { "value": "Ghi chú", "_draft": true },
+  "takeover_confirm_stop": { "value": "Xác nhận dừng", "_draft": true }, "takeover_stop_sent": { "value": "Đã gửi lệnh dừng", "_draft": true }, "takeover_stop_waiting": { "value": "Đã gửi, đang chờ nhà máy xác nhận", "_draft": true },
+  "takeover_new_order": { "value": "Mở đơn hàng mới", "_draft": true }, "takeover_old_order": { "value": "Tiếp nhận lệnh cũ", "_draft": true },
+  "takeover_new_order_help": { "value": "Chọn đơn hàng mới trong danh sách chờ.", "_draft": true }, "takeover_continue_new": { "value": "Tiếp tục mở đơn mới", "_draft": true },
+  "takeover_step": { "value": "Công đoạn {{step}}", "_draft": true }, "takeover_done_remaining": { "value": "Đã làm {{done}}／còn {{remaining}}", "_draft": true },
+  "takeover_take": { "value": "Tiếp nhận", "_draft": true }, "takeover_idle_action": { "value": "Tiếp nhận lệnh đã dừng", "_draft": true }, "takeover_none": { "value": "Hiện không có lệnh đã dừng có thể tiếp nhận", "_draft": true },
+  "takeover_sending": { "value": "Đang gửi…", "_draft": true }, "takeover_sent": { "value": "Đã gửi, đang chờ nhà máy xác nhận", "_draft": true }, "takeover_send_failed": { "value": "Gửi thất bại, vui lòng thử lại", "_draft": true },
+  "takeover_stop_report_rejected_generic": { "value": "Báo dừng máy không thành công, số lượng vừa nhập chưa được gửi. Vui lòng dùng dừng máy thông thường và báo cho bộ phận kế hoạch", "_draft": true },
+  "yes": { "value": "Có", "_draft": true }, "no": { "value": "Không", "_draft": true }, "cancel": { "value": "Hủy", "_draft": true }, "loading": { "value": "Đang tải…", "_draft": true },
+  "takeover_taken_notice": { "value": "{{order}} đã được {{machine}} tiếp nhận ({{who}}, {{time}})", "_draft": true },
+  "takeover_confirm_message": { "value": "Tiếp nhận {{order}}, công đoạn {{step}} từ {{source}}; {{source}} đã làm {{done}}, {{target}} tiếp tục {{remaining}} còn lại. Xác nhận tiếp nhận?", "_draft": true },
   "reload_guard_config": {
     "value": "Tải lại cấu hình",
     "_draft": true

@@ -218,6 +218,12 @@ async function newPage(browser, device, backend) {
 async function waitLoaded(page) {
   await page.goto(base, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"), null, { timeout: 20000 });
+  // Login acceleration paints usable cards first, then atomically replaces the
+  // card section after secondary timing/progress reads settle.
+  await page.waitForTimeout(200);
+  await page.waitForFunction(() => document.querySelector('#workOrderGrid .machine-tile-card h2')
+    && [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].some(card => card.querySelector('h2')?.textContent.includes('A01')
+      && card.querySelector('.cycle-mini-grid')?.innerText.includes('1分35秒 / 件')), null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 }).catch(async (e) => {
     console.log("    cards never rendered:", await page.evaluate(() => JSON.stringify({ grid: document.getElementById("workOrderGrid")?.outerHTML.slice(0, 300), orders: state.workOrders.length,  machines: state.machines.length, src: state.source, dash: document.getElementById("dashboardView")?.innerText.slice(0, 400) })));
     throw e;

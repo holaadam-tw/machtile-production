@@ -38,6 +38,11 @@ const config = {
   standardFinishFlowMachines: [],
   enableFinishClaimStartCombo: false,
   finishClaimStartComboMachines: [],
+  enableTakeover: false,
+  takeoverMachines: [],
+  // 選工單／開工分開（owner 2026-10-26）：機台代號陣列；["*"]＝全部。預設全關＝卡片跟以前一樣。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
   // 多工站明確名單；machines view 尚無 Station_Type/station_mode，空陣列即全部按 single 處理。
@@ -10396,16 +10401,7 @@ function normalizeMachineMaster(row) {
   };
 }
 
-async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
-  // Machine-card inspection links use app_users.id, never the Auth/JWT subject.
-  // Resolve before cards render; lookup failure leaves the operator hint empty.
-  await machtileResolveAppUserId();
-  await machtileLoadDepartmentAccess({ readOnly: true, force: true });
-  machtileHistoryRealRows = null;
-  const rows = await supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc");
-  if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
-  state.workOrders = rows.map(normalizeOrder);
-  await machtileLoadCncProgramsForCards();
+async function machtileLoadMachineMasters() {
   try {
     const machineRows = await supabaseFetch("v_machine_management_cards?select=*&order=display_order.asc,machine_code.asc");
     state.machineMasters = Array.isArray(machineRows) ? machineRows.map(normalizeMachineMaster) : [];
@@ -10421,29 +10417,145 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false } = {}) {
     console.warn("v_machine_management_cards is not ready yet; using local machine defaults.", error);
     state.machineMasters = [];
   }
-  await machtileLoadScheduleQueue();
-  state.source = "supabase";
-  await machtileLoadAssignedCardProcesses();
-  await machtileLoadAssignedDispatchPoolStatuses();
-  await machtileLoadInspectionStatuses();
-  // 先把完成數換成「舊 MES＋待回寫」，後面的待處理／交期判斷才會用到同一個數字。
-  await machtileLoadCardLegacyProgress();
-  await machtileLoadCardMachineTimes();
-  await Promise.all([
-    machtileLoadScheduleContracts(),
-    machtileLoadCapacityCalendar(),
-    machtileLoadAttentionCenter(),
-    machtileLoadHmcRuntime(),
-    // 卡片「目前工單」＝這台最近有活動的那張（只讀；讀不到退回原本規則）
-    machtileLoadCardActivity(),
-    // 製程路線顯示層級（只讀；讀不到＝每個角色都「完整」）
-    machtileLoadFlowVisibility(),
-    // 開工／停工回寫舊 MES：旗標關＝不讀；表不存在＝藏起來
-    machtileLoadStationCommandAvailability(),
-    // 派工待做池（只讀；表還沒建＝不顯示這一段）
-    machtileLoadDispatchPool(),
+}
+
+const machtileDeferredLoadState = new Map();
+let machtileDeferredLoadGeneration = 0;
+let machtileBackgroundLoadPromise = Promise.resolve();
+let machtileDeferredLoadsSettled = true;
+
+function machtileUpdateDataSourceLabel() {
+  const label = document.getElementById("dataSourceLabel");
+  if (!label) return;
+  label.textContent = state.source === "supabase"
+    ? `${machtileDeferredLoadsSettled ? "Supabase 已連線" : "正在補齊資料"}${state.cardProcessError ? " · " + state.cardProcessError : ""}${machtileDepartmentAccessError ? " · " + machtileDepartmentAccessError : ""}`
+    : "Mock data";
+}
+
+function machtileRenderDeferredLoadStatus() {
+  const label = document.getElementById("dataSourceLabel");
+  if (!label?.parentElement) return;
+  let holder = document.getElementById("machtileDeferredLoadStatus");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "machtileDeferredLoadStatus";
+    holder.className = "deferred-load-status";
+    holder.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-retry-deferred-load]");
+      const job = button && machtileDeferredLoadState.get(button.dataset.retryDeferredLoad);
+      if (!job || job.status === "loading") return;
+      void machtileRunDeferredLoad(job.key, job.label, job.load, job.refresh, machtileDeferredLoadGeneration);
+    });
+    label.parentElement.append(holder);
+  }
+  const failed = [...machtileDeferredLoadState.values()].filter(job => job.status === "error");
+  const loading = [...machtileDeferredLoadState.values()].filter(job => job.status === "loading");
+  holder.hidden = failed.length === 0 && loading.length === 0;
+  holder.innerHTML = failed.length
+    ? failed.map(job => `<span role="alert">${escapeHtml(job.label)}載入失敗 <button type="button" data-retry-deferred-load="${escapeHtml(job.key)}">重試</button></span>`).join("")
+    : loading.length ? `<span aria-live="polite">正在補齊 ${loading.map(job => escapeHtml(job.label)).join("、")}…</span>` : "";
+}
+
+async function machtileRunDeferredLoad(key, label, load, refresh, generation) {
+  const job = { key, label, load, refresh, status: "loading", error: "" };
+  machtileDeferredLoadState.set(key, job);
+  machtileRenderDeferredLoadStatus();
+  try {
+    await load();
+    if (generation !== machtileDeferredLoadGeneration) return;
+    job.status = "ready";
+    refresh?.();
+  } catch (error) {
+    if (generation !== machtileDeferredLoadGeneration) return;
+    job.status = "error";
+    job.error = String(error?.message || error || "");
+    console.warn(`${label} deferred load unavailable`, error);
+  } finally {
+    if (generation === machtileDeferredLoadGeneration) machtileRenderDeferredLoadStatus();
+  }
+}
+
+function machtileRefreshCardSections() {
+  deriveMachines();
+  renderStats();
+  renderFilters();
+  renderWorkOrders();
+  renderAlerts();
+  renderInspectionQueue();
+}
+
+function machtileStartDeferredLoads(generation) {
+  const jobs = [
+    ["card-details", "機台卡詳細資料", async () => {
+      await Promise.all([machtileLoadCardLegacyProgress(generation), machtileLoadInspectionStatuses()]);
+      if (generation !== machtileDeferredLoadGeneration) return;
+      await machtileLoadAssignedDispatchPoolStatuses(generation);
+      if (generation !== machtileDeferredLoadGeneration) return;
+      await Promise.all([machtileLoadCardMachineTimes(), machtileLoadCardActivity()]);
+    }, machtileRefreshCardSections],
+    ["schedule", "排程資料", async () => {
+      await machtileLoadScheduleQueue();
+      await Promise.all([machtileLoadScheduleContracts(), machtileLoadCapacityCalendar()]);
+    }, () => renderSchedule()],
+    ["attention", "提醒中心", machtileLoadAttentionCenter, () => { renderAlerts(); renderNotificationCenter(); }],
+    ["hmc", "HMC 盤況", machtileLoadHmcRuntime, () => { machtileRefreshCardSections(); ensureHmcDashboardEntry(); }],
+    ["flow-visibility", "製程顯示設定", machtileLoadFlowVisibility, () => renderWorkOrders()],
+    ["station-command", "機台操作狀態", () => machtileLoadStationCommandAvailability(generation), () => renderWorkOrders()],
+    // #130 換機台：探針要用目前可見機台（"*" 設定時），所以先 deriveMachines；旗標關＝不讀
+    ["takeover", "換機台狀態", async () => { deriveMachines(); await machtileLoadTakeoverAvailability(); }, () => renderWorkOrders()],
+    ["dispatch-pool", "派工待做池", machtileLoadDispatchPool, () => renderWorkOrders()],
+    ["process-flows", "完整製程路線", machtileLoadProcessFlows, null],
+  ];
+  machtileDeferredLoadState.clear();
+  machtileDeferredLoadsSettled = false;
+  machtileBackgroundLoadPromise = Promise.allSettled(jobs.map(([key, label, load, refresh]) =>
+    machtileRunDeferredLoad(key, label, load, refresh, generation))).then(async (results) => {
+      if (generation === machtileDeferredLoadGeneration) {
+        // One final section-level paint makes the completed snapshot atomic
+        // even when several independent jobs finished in the same task turn.
+        machtileRefreshCardSections();
+        renderNotificationCenter();
+        renderHistory();
+        renderReports();
+        renderSettings();
+        renderSchedule();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        machtileDeferredLoadsSettled = true;
+        machtileUpdateDataSourceLabel();
+      }
+      return results;
+    });
+  return machtileBackgroundLoadPromise;
+}
+
+async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSecondary = false } = {}) {
+  const generation = ++machtileDeferredLoadGeneration;
+  machtileDeferredLoadsSettled = false;
+  // Preserve the existing identity -> department authorization order exactly.
+  await machtileResolveAppUserId();
+  await machtileLoadDepartmentAccess({ readOnly: true, force: true });
+  machtileHistoryRealRows = null;
+  const [rows] = await Promise.all([
+    supabaseFetch("v_work_order_cards?select=*&order=due_date.asc,work_order_no.asc"),
+    machtileLoadMachineMasters(),
   ]);
-  await machtileLoadProcessFlows();
+  if (!Array.isArray(rows)) throw new Error("v_work_order_cards response invalid");
+  state.workOrders = rows.map(normalizeOrder);
+  state.source = "supabase";
+  await machtileLoadCncProgramsForCards();
+  await machtileLoadAssignedCardProcesses();
+  // The first usable card wall needs only authorized orders, machine masters,
+  // and assigned processes. Every secondary read is isolated below so it can
+  // fail/retry without removing the cards already on screen.
+  if (deferSecondary) {
+    // Unconfirmed station commands must be in memory before the first card paint,
+    // otherwise a button pressed before the availability probe finishes could
+    // resend a new command_uuid over a pending one.
+    machtileStationCmdRestorePendingEarly();
+    renderAll();
+  }
+  machtileStartDeferredLoads(generation);
+  if (!deferSecondary) await machtileBackgroundLoadPromise;
 }
 
 // Full routing is independent of the cards view (which only contains active station rows).
@@ -10501,8 +10613,12 @@ async function machtileLoadProcessFlows() {
   const next = new Map();
   machtileProcessFlows = next;
   const nos = [...new Set(state.workOrders.map(o => o.id).filter(Boolean))];
-  for (let i = 0; i < nos.length; i += 50) {
-    const chunk = nos.slice(i, i + 50);
+  const chunks = [];
+  for (let i = 0; i < nos.length; i += 50) chunks.push(nos.slice(i, i + 50));
+  let cursor = 0;
+  async function worker() {
+    while (cursor < chunks.length) {
+      const chunk = chunks[cursor++];
     try {
       const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
@@ -10543,7 +10659,9 @@ async function machtileLoadProcessFlows() {
     } catch (error) {
       console.warn("process flow unavailable; no guessed route/progress", error);
     }
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, () => worker()));
   machtileRefreshOpenProcessFlow();
 }
 
@@ -10705,7 +10823,7 @@ function machtileAssignedCardProcess(row) {
   const wo = row.work_orders;
   const machine = row.machines;
   if (!wo || !machine) throw new Error("工序的工單或機台資料不完整");
-  if (row.off_station_at != null || !["pending", "running", "abnormal", "waiting_inspection"].includes(row.status)
+  if (row.off_station_at != null || !machtileCardOpenProcessStatuses(machine.machine_code).includes(row.status)
     || ["completed", "shipped", "cancelled"].includes(wo.status)) return null;
   const order = normalizeOrder({ ...wo, tenant_id: row.tenant_id,
     work_order_status: wo.status, current_process_id: row.id,
@@ -10726,14 +10844,29 @@ function machtileAssignedCardProcess(row) {
   order.stationStep = row.process_order;
   order.processType = row.process_type;
   order.manufactureIiId = String(row.manufacture_ii_id || "").trim() || null;
+  order.simulationId = String(row.simulation_id || "").trim() || null;
   order.perProcessCard = true;
   order.dispatchPoolSourceKey = wo.legacy_mes_source === "dispatch_pool" ? String(wo.external_ref || "").trim() : "";
   return order;
 }
 
+// 選工單／開工分開（開關開的機台）：雲端停工 applied 後工序 status＝paused（PR #135），單仍掛在這台，卡片要留著（只剩開工接回）。
+// 開關全關＝查詢字串與篩選跟以前完全相同（不收 paused）。
+function machtilePickStartAnyEnabled() {
+  return config.enablePickStartFlow === true && Array.isArray(config.pickStartFlowMachines) && config.pickStartFlowMachines.length > 0;
+}
+function machtileCardOpenProcessStatuses(machineCode) {
+  const base = ["pending", "running", "abnormal", "waiting_inspection"];
+  return machtilePickStartEnabled(machineCode) ? [...base, "paused"] : base;
+}
+function machtileCardProcessStatusFilter() {
+  return machtilePickStartAnyEnabled() ? "pending,running,abnormal,waiting_inspection,paused" : "pending,running,abnormal,waiting_inspection";
+}
+
 async function machtileLoadAssignedCardProcesses() {
   state.assignedCardOrders = null;
   state.cardProcessError = "";
+  const readStartedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
@@ -10743,7 +10876,7 @@ async function machtileLoadAssignedCardProcesses() {
       // Both embedded parents and processes stay behind the caller's tenant RLS.
       // There is also an actual_machine_id FK: select the assigned machine FK
       // explicitly, otherwise PostgREST returns PGRST201 (ambiguous relationship).
-      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(pending,running,abnormal,waiting_inspection)&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
+      const rows = await supabaseFetch(`work_order_processes?select=id,tenant_id,process_order,process_name,process_type,status,off_station_at,qty_completed,queue_order,manufacture_ii_id,simulation_id,work_orders!inner(id,work_order_no,part_no,part_name,quantity,due_date,status,legacy_mes_source,external_ref),machines!work_order_processes_machine_id_fkey!inner(id,machine_code)&machine_id=not.is.null&off_station_at=is.null&status=in.(${machtileCardProcessStatusFilter()})&work_orders.status=not.in.(completed,shipped,cancelled)&order=id.asc&limit=${pageSize}&offset=${page * pageSize}`, { signal: controller.signal });
       if (!Array.isArray(rows)) throw new Error("工序資料格式不正確");
       for (const row of rows) {
         const order = machtileAssignedCardProcess(row);
@@ -10754,6 +10887,7 @@ async function machtileLoadAssignedCardProcesses() {
       }
       if (rows.length < pageSize) {
         state.assignedCardOrders = [...byId.values()];
+        state.cardProcessReadAt = readStartedAt;   // 本機開工／停工紀錄比這次讀取舊 → 以雲端為準
         return;
       }
     }
@@ -10772,16 +10906,19 @@ function machtileMachineCardOrders() {
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
 }
 
-async function machtileLoadAssignedDispatchPoolStatuses() {
+async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
-  orders.forEach(order => { order.dispatchPoolStatus = ""; });
-  if (!keys.length) return;
+  if (!keys.length) {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach(order => { order.dispatchPoolStatus = ""; });
+    return;
+  }
   try {
     const quotedKeys = keys.map(key => `"${String(key).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",");
     const rows = await supabaseFetch(`dispatch_pool_items?select=source_key,status&source_key=in.${encodeURIComponent(`(${quotedKeys})`)}`);
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
     const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
+    if (generation !== machtileDeferredLoadGeneration) return;
     orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
   } catch (error) {
     // Fail closed: an unverified claim must never expose a return action.
@@ -10789,14 +10926,17 @@ async function machtileLoadAssignedDispatchPoolStatuses() {
   }
 }
 
-async function machtileLoadCardLegacyProgress() {
+async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
-  orders.forEach((order) => {
-    order.appDone = Number(order.done || 0);
-    delete order.progressSource;
-  });
+  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.done || 0)]));
   const core = machtileBatchCore();
-  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") return;
+  if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") {
+    if (generation === machtileDeferredLoadGeneration) orders.forEach((order) => {
+      order.appDone = appDoneByOrder.get(order);
+      delete order.progressSource;
+    });
+    return;
+  }
   const ids = [...new Set(orders.map((order) => String(order.processId || "")).filter(isUuid))];
   const byProcess = new Map();
   const chunks = [];
@@ -10813,16 +10953,25 @@ async function machtileLoadCardLegacyProgress() {
     }
   }));
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
-  machtileCardPickState.progressByProcess = byProcess;
   const nowMs = Date.now();
+  const progressByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
-      const progress = core.cardProgress(order.appDone, row, nowMs);
-      order.done = progress.done;
-      order.progressSource = progress;
+      progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
+    }
+  });
+  if (generation !== machtileDeferredLoadGeneration) return;
+  machtileCardPickState.progressByProcess = byProcess;
+  orders.forEach((order) => {
+    order.appDone = appDoneByOrder.get(order);
+    delete order.progressSource;
+    const progress = progressByOrder.get(order);
+    if (progress) {
+      order.done = progress.done;
+      order.progressSource = progress;
     }
   });
 }
@@ -11013,7 +11162,7 @@ function machtileIsSchedulableOrder(order) {
 function machtileIsCardCandidateOrder(order) {
   if (order?.perProcessCard) return order.offStation !== true
     && !["completed", "shipped", "cancelled"].includes(order.workStatus)
-    && ["pending", "running", "abnormal", "waiting_inspection"].includes(order.processStatus);
+    && machtileCardOpenProcessStatuses(order.machine).includes(order.processStatus);
   const assigned = isReportableMachineName(order?.machine);
   if (machtileCardActiveCore && typeof machtileCardActiveCore.isCardCandidate === "function") {
     return machtileCardActiveCore.isCardCandidate(order, { assigned });
@@ -11448,7 +11597,7 @@ function machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly) {
     .finally(() => {
       refresh.promise = null;
       const holder = document.getElementById("machtileCardSelection");
-      if (holder?.dataset.machineCode === code) machtileOpenCardSelection(code, { poolOnly, refreshPool: false });
+      if (holder?.dataset.machineCode === code) machtileOpenCardSelection(code, { poolOnly, refreshPool: false, pickOrder: holder.dataset.pickOrder === "true" });
     });
   return refresh.promise;
 }
@@ -11531,6 +11680,7 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
       else currentList.after(nextStatus);
     }
   }
+  machtilePickOrderUpdateEmpty(holder);
   return true;
 }
 
@@ -11538,6 +11688,10 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
   const holder = document.getElementById("machtileCardSelection");
   const message = holder?.querySelector("[data-pool-claim-message]");
+  if (holder?.dataset.pickOrder === "true") {
+    const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
+    if (!machtilePickOrderConfirm(item?.work_order_no, item?.process_order, machineCode)) return;
+  }
   machtileDispatchPoolState.claimBusy = sourceKey;
   machtileDispatchPoolState.claimMessage = "";
   holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
@@ -11557,12 +11711,14 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   } finally {
     machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
-    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
+    if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
 }
 
 async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy || !machtileStationCmdCore) return;
+  const pendingCmd = machtileStationCmd.pending[String(machineCode).trim().toUpperCase()];
+  if (pendingCmd && !machtileStationCmdUnlocked(pendingCmd)) { showToast("這台有一筆指令還在等確認，請先處理那筆。", "error"); return; }
   const machine = machtileScheduleMachine(machineCode);
   const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
   const current = machine?.order;
@@ -11582,7 +11738,7 @@ async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {
       recordFields: { orderNo: item.work_order_no, step: nextStep, partNo: item.part_no || null, poolItemId: sourceKey, replaceStopped: true },
       startedAt: Date.now(), validateRow: row => machtileStationCmdRowIsThis(row, uuid),
       onError: ({ error }) => showToast(machtileDispatchPoolCore.claimErrorText(error), "error"),
-      onAccepted: () => { machtileCloseCardSelection(); showToast("改掛指令已送出，工廠確認後會自動開工。", "success"); }
+      onAccepted: () => { machtileCloseCardSelection(); showToast(machtilePickStartEnabled(machineCode) ? machtileTranslate("replace_stopped_sent_press_start") : "改掛指令已送出，工廠確認後會自動開工。", "success"); }
     });
   } finally { machtileDispatchPoolState.claimBusy = ""; }
 }
@@ -11605,7 +11761,7 @@ async function machtileReleaseDispatchPoolClaim(sourceKey) {
     await machtileLoadDispatchPool();
   } finally {
     machtileDispatchPoolState.claimBusy = "";
-    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, { poolOnly: !machtileCanEditSchedule(), refreshPool: false });
+    if (holder?.isConnected && machineCode) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
 }
 
@@ -11615,7 +11771,8 @@ function machtileCanReturnDispatchPool() {
 
 function machtileDispatchPoolReturnMarkup(order, machineCode) {
   if (!order?.dispatchPoolSourceKey) return "";
-  const isPendingClaim = order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
+  const cardDetailsReady = machtileDeferredLoadState.get("card-details")?.status === "ready";
+  const isPendingClaim = cardDetailsReady && order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
   if (machtileCanReturnDispatchPool() && isPendingClaim) {
     return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
   }
@@ -11654,7 +11811,13 @@ function machtileCardPoolEntryMarkup(machine) {
   return `<button type="button" class="card-select-entry card-pool-entry" data-no-detail data-card-pool-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("dispatch_pool_count", { count }))}</button>`;
 }
 
-function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true } = {}) {
+// 接單／收回後重開同一個面板：「選工單」面板要維持選工單（分頁、舊工單），一般面板照舊。
+function machtileCardSelectionReopenOptions(holder, machineCode) {
+  const pickOrder = holder?.dataset.pickOrder === "true";
+  return { poolOnly: pickOrder ? !machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode) : !machtileCanEditSchedule(), refreshPool: false, pickOrder };
+}
+
+function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true, pickOrder = false } = {}) {
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
@@ -11677,19 +11840,40 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   holder.id = "machtileCardSelection";
   holder.className = "card-selection-overlay";
   holder.dataset.machineCode = String(machineCode || "");
+  const withOld = pickOrder && machtileTakeoverActive(String(machineCode || ""));
+  const title = pickOrder ? "pick_order" : poolOnly ? "dispatch_pool_title" : "select_work_order";
+  const body = pickOrder
+    ? `<div class="takeover-tabs pick-order-tabs" role="tablist"><button type="button" role="tab" data-pick-tab="new" class="is-selected" aria-selected="true">${escapeHtml(machtileTranslate("pick_order_new"))}</button>${withOld ? `<button type="button" role="tab" data-pick-tab="old" aria-selected="false">${escapeHtml(machtileTranslate("pick_order_old"))}</button>` : ""}</div>
+    <p class="pick-order-note">${escapeHtml(machtileTranslate("pick_order_note"))}</p>
+    <div data-pick-pane="new">${selectionMarkup}
+    ${machtileDispatchPoolSectionMarkup(machine)}</div>
+    ${withOld ? `<div data-pick-pane="old" hidden><div data-takeover-pane="takeover"><p>${escapeHtml(machtileTranslate("loading"))}</p></div></div>` : ""}
+    <p class="pick-order-empty" data-pick-order-empty role="status" hidden>${escapeHtml(machtileTranslate("pick_order_none"))}</p>`
+    : `${selectionMarkup}
+    ${machtileDispatchPoolSectionMarkup(machine)}`;
+  if (pickOrder) { holder.dataset.pickOrder = "true"; holder.dataset.machine = String(machineCode || ""); }
   holder.innerHTML = `<section class="card-selection-panel" role="dialog" aria-modal="true" aria-labelledby="cardSelectionTitle">
-    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(poolOnly ? "dispatch_pool_title" : "select_work_order"))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
-    ${selectionMarkup}
-    ${machtileDispatchPoolSectionMarkup(machine)}
+    <header><h2 id="cardSelectionTitle">${escapeHtml(machine.name)} ${escapeHtml(machtileTranslate(title))}</h2><button type="button" data-close-card-selection aria-label="${escapeHtml(machtileTranslate("close"))}">✕</button></header>
+    ${body}
     <p data-card-selection-error role="alert">${poolOnly ? "" : escapeHtml(state.cardProcessError || "")}</p>
   </section>`;
   document.body.appendChild(holder);
   holder.querySelector("button")?.focus();
+  if (pickOrder) {
+    machtilePickOrderUpdateEmpty(holder);
+    if (withOld) void machtilePickOrderLoadOld(holder, String(machineCode || ""));
+  }
 }
 
 async function machtileCommitCardSelection(machineCode, processId) {
   const holder = document.getElementById("machtileCardSelection");
   if (!holder || holder.dataset.pending === "true") return;
+  if (holder.dataset.pickOrder === "true") {
+    const pickMachine = machtileScheduleMachine(machineCode);
+    const { assigned: pickAssigned, unassigned: pickUnassigned } = pickMachine ? machtileCardSelectionCandidates(pickMachine) : { assigned: [], unassigned: [] };
+    const target = [...pickAssigned, ...pickUnassigned].find(order => order.processId === processId);
+    if (!machtilePickOrderConfirm(target?.id, target?.stationStep, pickMachine?.name || machineCode)) return;
+  }
   const errorBox = holder.querySelector("[data-card-selection-error]");
   holder.dataset.pending = "true";
   holder.querySelectorAll("button").forEach(button => { button.disabled = true; });
@@ -13765,6 +13949,278 @@ function machtileOpenHmcMachineDetail(machineCode) {
 //   第 1 階段不換單：「不是這張單」只叫作業員找生管。
 // ============================================================================================
 const machtileStationCmdCore = window.MachTileStationCommandCore || null;
+const machtileTakeoverCore = window.MachTileTakeoverCore || null;
+const machtileTakeover = { availability: "off", policies: [], notices: new Map() };
+
+function machtileTakeoverEnabled(code) {
+  return Boolean(machtileTakeoverCore?.enabledForMachine(config.enableTakeover === true, config.takeoverMachines, code));
+}
+async function machtileLoadTakeoverAvailability() {
+  if (!machtileTakeoverCore || config.enableTakeover !== true || state.source !== "supabase") { machtileTakeover.availability = "off"; return; }
+  const configuredMachines = Array.isArray(config.takeoverMachines) ? config.takeoverMachines : [];
+  const visibleMachines = (state.machines || []).map((machine) => machine.code || machine.name);
+  const probeMachine = machtileTakeoverCore.probeMachine(configuredMachines, visibleMachines);
+  if (!probeMachine) { machtileTakeover.availability = "off"; return; }
+  machtileTakeover.availability = "probing";
+  try {
+    const [policies, , notices] = await Promise.all([
+      supabaseFetch("stop_reason_policy?select=code,label_zh,label_vi,default_allow,note_required,sort&is_enabled=eq.true&order=sort.asc").catch(() => []),
+      supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: probeMachine }) }),
+      supabaseFetch(`station_stop_notes?select=order_no,index_sn,source_machine,taken_by_machine,taken_by_name,taken_at,status&source_machine=in.(${(configuredMachines.includes("*") ? visibleMachines : configuredMachines).map(encodeURIComponent).join(",")})&status=eq.taken&order=taken_at.desc`),
+    ]);
+    machtileTakeover.policies = machtileTakeoverCore.normalizePolicies(policies);
+    machtileTakeover.notices = new Map((Array.isArray(notices) ? notices : []).map((row) => [`${String(row.source_machine).toUpperCase()}|${row.order_no}|${row.index_sn}`, row]));
+    machtileTakeover.availability = "ready";
+  } catch (error) {
+    machtileTakeover.availability = machtileTakeoverCore.availabilityAfterProbeError(error);
+    console.warn("takeover capability unavailable; legacy start/stop remains active", error);
+  }
+}
+function machtileTakeoverActive(code) { return machtileTakeover.availability === "ready" && machtileTakeoverEnabled(code); }
+function machtileTakeoverLanguage() { return String(document.documentElement.lang || "zh-Hant").toLowerCase().startsWith("vi") ? "vi" : "zh"; }
+function machtileTakeoverLabel(policy) { return machtileTakeoverLanguage() === "vi" ? policy.label_vi : policy.label_zh; }
+function machtileTakeoverClose() { document.getElementById("machtileTakeoverSheet")?.remove(); }
+function machtileTakeoverUseLegacyStop(code, returnFocus) {
+  machtileTakeoverClose();
+  const previousAvailability = machtileTakeover.availability;
+  machtileTakeover.availability = "bypass";
+  return machtileStationCmdOpen("stop", code, returnFocus)
+    .finally(() => { machtileTakeover.availability = previousAvailability; });
+}
+function machtileTakeoverOverlay(code, type, returnFocus) {
+  machtileTakeoverClose();
+  const holder = document.createElement("div"); holder.id = "machtileTakeoverSheet"; holder.className = "station-cmd-overlay";
+  holder.dataset.machine = code; holder.dataset.type = type; holder._returnFocus = returnFocus; document.body.appendChild(holder); return holder;
+}
+// 停工對話框（owner 10/25：停工＝報工＋停工一次）：數量欄問的是「上次報工之後、停工前還沒報的件數」，
+// 上方顯示這一道已報的累計（卡片現有 order.done），必填不預設（0 也要親手填）。
+// 送出的表單依 command_uuid 暫存在記憶體：工廠回 DUPLICATE_SUSPECTED 時不退一般停工，而是重開同一份表單問
+// 「確定是另外做的嗎？」→ 確定送出＝照報工的再次確認慣例（新的 command_uuid＋p_acks）；改數量＝回到可編輯。
+const machtileTakeoverStopDrafts = new Map();
+function machtileTakeoverStopDoneQty(order) {
+  const done = Number(order?.done);
+  return Number.isFinite(done) && done >= 0 ? done : 0;
+}
+// 停工對話框題目（owner 2026-10-27「已報先只提醒不自動加」）：已報＝卡片現有 order.done（batch_report_progress），
+// 不從 station_commands／本機紀錄補「剛報」的件數（補量可能跟 production_reports／pending_output 重複算）；
+// 題目直接提醒「剛報的可能還沒算進來」，請作業員照實際還沒報的件數填。
+function machtileTakeoverStopQuestion(viewState) {
+  return machtileTranslate("takeover_stop_qty_question_unsynced", { done: machtileTakeoverStopDoneQty(viewState.order) });
+}
+function machtileTakeoverStopRender(holder, viewState) {
+  const validation = machtileTakeoverCore.validateStop(viewState.form, viewState.policies);
+  const dupConfirm = viewState.dupConfirm === true;
+  const selected = viewState.policies.find((p) => p.code === viewState.form.reason_code);
+  const failReasons = machtileReportFailReasons();
+  const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...failReasons.map((reason) => `<option value="${escapeHtml(reason)}"${viewState.form.fail_reason_code === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
+  holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
+    <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTakeoverStopQuestion(viewState))}</p>
+    ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
+    <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label>${escapeHtml(machtileTranslate("takeover_fail_qty"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
+    <label data-takeover-fail-reason-field${Number(viewState.form.fail_qty) > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
+    <fieldset><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
+    <fieldset><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${!viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
+    <label>${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
+    <p class="station-cmd-notice is-bad" data-takeover-error ${viewState.error ? "" : "hidden"}>${escapeHtml(viewState.error || "")}</p>
+    <footer class="station-cmd-actions">${dupConfirm
+      ? `<button type="button" class="station-cmd-confirm is-stop" data-takeover-dup-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_stop_dup_confirm"))}</button><button type="button" class="station-cmd-secondary" data-takeover-dup-edit ${viewState.sending ? "disabled" : ""}>${escapeHtml(machtileTranslate("takeover_stop_dup_edit"))}</button>`
+      : `<button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>`}${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+}
+async function machtileTakeoverOpenStop(code, returnFocus) {
+  const machine = machtileStationCmdMachineByCode(code), order = machine?.order; if (!order) return;
+  const policies = machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
+  const holder = machtileTakeoverOverlay(code, "stop", returnFocus);
+  holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order };
+  machtileTakeoverStopRender(holder, holder._state);
+}
+async function machtileTakeoverSubmitStop(holder, { acks = [] } = {}) {
+  const viewState = holder._state, check = machtileTakeoverCore.validateStop(viewState.form, viewState.policies); if (!check.ok || viewState.sending) return;
+  const code = holder.dataset.machine;
+  if (machtileStationCmd.pending[code] && !machtileStationCmdUnlocked(machtileStationCmd.pending[code])) return;
+  viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
+  // 再次確認照報工慣例（stationReportCore.retryWithAck）：新的 command_uuid＋p_acks；同一筆 uuid 重送只會拿回原本被拒的那列。
+  const commandUuid = crypto.randomUUID(), startedAt = Date.now();
+  const fields = { orderNo: viewState.order.id, step: viewState.order.stationStep,
+    partNo: viewState.order.partNo || null, manufactureIiId: viewState.order.manufactureIiId || null,
+    expectedSimulationId: viewState.order.simulationId || null };
+  const payload = machtileTakeoverCore.stopReportPayload({ commandUuid, machineCode: code, ...fields, indexSn: fields.step, form: viewState.form });
+  const ackList = [...new Set(acks)];
+  if (ackList.length) payload.p_acks = ackList;
+  machtileTakeoverStopDrafts.set(commandUuid, { form: { ...viewState.form }, order: viewState.order, policies: viewState.policies, returnFocus: holder._returnFocus || null });
+  let ackUnsupported = false;
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid, commandType: "stop_report", machineCode: code, fields, recordFields: fields, startedAt,
+    rpcName: "machtile_submit_stop_report",
+    payloadOverride: payload,
+    // 帶 p_acks 的停工回報若伺服器函式還不認得這個參數（PGRST202）：只在對話框說明，不把整個站別指令功能標成「未啟用」。
+    onError: ackList.length ? ({ info }) => (info.missing ? ((ackUnsupported = true), { cancel: true }) : null) : null,
+  });
+  if (result.ok) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
+  if (machtileStationCmd.pending[code]?.commandUuid === commandUuid) { machtileTakeoverClose(); showToast(machtileTranslate("takeover_stop_waiting")); return; }
+  machtileTakeoverStopDrafts.delete(commandUuid);
+  viewState.sending = false; viewState.offerLegacyStop = true;
+  viewState.error = ackUnsupported ? machtileTranslate("takeover_stop_dup_ack_unsupported") : result.error?.message || machtileTranslate("takeover_send_failed");
+  machtileTakeoverStopRender(holder, viewState);
+}
+// 工廠拒絕 stop_report＝DUPLICATE_SUSPECTED：重開停工對話框（同一份表單、數量先鎖住）問作業員是不是另外做的。
+// 頁面重整過、記憶體沒有表單 → 開空白表單並顯示同一句提醒，讓作業員重填（仍不自動退一般停工）。
+function machtileTakeoverReopenStopDuplicate(code, draft) {
+  const machine = machtileStationCmdMachineByCode(code), order = draft?.order || machine?.order;
+  if (!order) { showToast(machtileTranslate("takeover_stop_dup_question")); return; }
+  const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
+  const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: draft ? "" : machtileTranslate("takeover_stop_dup_question"), offerLegacyStop: false, machine, order, dupConfirm: Boolean(draft) };
+  machtileTakeoverStopRender(holder, holder._state);
+}
+// 工廠拒絕 stop_report（DUPLICATE_SUSPECTED／TAKEOVER_DISABLED 以外）：重開同一份停工表單、數量保留可改，
+// 顯示白話原因＋代碼，出「改用一般停工」按鈕（不自動送一般停工）。頁面重整過、記憶體沒有表單 → 開空白表單＋同一句原因。
+function machtileTakeoverStopRejectedText(view, message) {
+  const code = String(view?.code || "").toUpperCase();
+  // 報工拒絕碼的白話（stationReportCore 的 GUARD_LABELS，例：QTY_EXCEEDS_AVAILABLE＝本次數量超過可報數）；不帶工廠技術說明
+  let guard = "";
+  try {
+    const card = code ? machtileStationReportCore()?.resultCard?.({ status: "rejected", reject_code: code, command_type: "report" }) : null;
+    guard = card?.message && card.message !== "請聯絡管理員。" ? card.message : "";
+  } catch { guard = ""; }
+  const reason = message || guard || "";
+  const generic = machtileTranslate("takeover_stop_report_rejected_generic");
+  return `${reason ? `${reason}。` : ""}${generic}${code ? `（${code}）` : ""}`;
+}
+function machtileTakeoverReopenStopRejected(code, draft, view, message) {
+  const machine = machtileStationCmdMachineByCode(code), order = draft?.order || machine?.order;
+  // 頁面重整過、表單跟工單都不在（r4c 審查 LOW）：退回一般停工確認卡（只開卡，不自動送；作業員自己按）
+  if (!order) { void machtileTakeoverUseLegacyStop(code, null); return; }
+  const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
+  const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), sending: false,
+    error: machtileTakeoverStopRejectedText(view, message), offerLegacyStop: true, machine, order, rejectedCode: String(view?.code || "") };
+  holder.dataset.takeoverRejected = String(view?.code || "");
+  machtileTakeoverStopRender(holder, holder._state);
+  // 原因在表單最下面：捲到看得到（手機一屏放不下）
+  try { holder.querySelector("[data-takeover-error]")?.scrollIntoView({ block: "nearest" }); } catch { /* 舊瀏覽器 */ }
+}
+function machtileTakeoverCandidateModel(row) {
+  const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
+  const policy = machtileTakeover.policies.find((item) => item.code === row.reason_code);
+  return machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code, order?.done);
+}
+function machtileTakeoverCandidateCard(row) {
+  return `<article class="takeover-candidate"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
+}
+async function machtileTakeoverLoadCandidates(holder, code) {
+  const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
+  holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
+  holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
+}
+// 選工單／開工分開（owner 2026-10-26）：選工單＝只把單掛到機台；開工＝開始做（新單、接手的舊單都要按）。
+// 旗標開的機台，卡片只出現當下該按的按鈕；旗標關＝卡片跟以前一樣。
+function machtilePickStartEnabled(code) {
+  return Boolean((typeof window === "undefined" ? null : window.MachTileTakeoverCore)?.enabledForMachine(config.enablePickStartFlow === true, config.pickStartFlowMachines, code));
+}
+// 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
+const machtilePickStartLocal = {};
+function machtilePickStartPhase(machine, order) {
+  const code = machtileStationCmdMachineCode(machine);
+  const local = machtilePickStartLocal[code];
+  const sameOrder = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
+  const input = { hasOrder: Boolean(order), processStatus: order?.processStatus,
+    actualStartAt: machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null, rawStatus: machine?.rawStatus };
+  if (sameOrder && machtileTakeoverCore.pickStartLocalStale({ ...input, localRun: local.type, localAt: local.at, cloudReadAt: state.cardProcessReadAt })) {
+    delete machtilePickStartLocal[code];
+    return machtileTakeoverCore.pickStartPhase(input);
+  }
+  return machtileTakeoverCore.pickStartPhase({ ...input, localRun: sameOrder ? local.type : "" });
+}
+function machtilePickStartNoteApplied(code, record) {
+  if (!code || !record) return;
+  if (["takeover", "claim_next"].includes(record.commandType)) { delete machtilePickStartLocal[code]; return; }
+  const type = record.commandType === "start" ? "start" : ["stop", "stop_report"].includes(record.commandType) ? "stop" : "";
+  if (type && record.orderNo) machtilePickStartLocal[code] = { type, orderNo: record.orderNo, step: record.step, at: Date.now() };
+}
+// 「選工單」面板：新工單（排給這台的單＋派工池，走原本「設為目前工單」／dispatch_pool_claim）／
+// 舊工單（允許接手的停工單，走原本接手候選→確認→machtile_submit_takeover）。確認＝只掛單，不開工。
+function machtilePickOrderOpen(code) {
+  const pending = machtileStationCmd.pending[code];
+  if (pending && !machtileStationCmdUnlocked(pending)) return;
+  machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() || !machtileCanAssignToMachine(code), pickOrder: true });
+}
+// 選工單→新工單：按「接」或「設為目前工單」前先確認（owner 2026-10-26）；取消＝什麼都不送。
+function machtilePickOrderConfirm(orderNo, step, machineCode) {
+  return window.confirm(machtileTranslate("pick_order_confirm", { order: orderNo || "—", step: step ?? "—", machine: machineCode || "—" }));
+}
+function machtilePickOrderUpdateEmpty(holder) {
+  if (!holder || holder.dataset.pickOrder !== "true") return;
+  const empty = holder.querySelector("[data-pick-order-empty]");
+  if (!empty) return;
+  const hasOld = holder.querySelector('[data-pick-tab="old"]') !== null;
+  const oldLoaded = !hasOld || holder._candidates instanceof Map;
+  const oldCount = holder._candidates instanceof Map ? holder._candidates.size : 0;
+  const newCount = holder.querySelectorAll("[data-card-select-process], [data-pool-claim]:not([disabled]), [data-pool-replace-stopped]:not([disabled])").length;
+  empty.hidden = !(oldLoaded && oldCount === 0 && newCount === 0);
+}
+async function machtilePickOrderLoadOld(holder, code) {
+  try {
+    await machtileTakeoverLoadCandidates(holder, code);
+  } catch (error) {
+    console.warn("takeover candidates unavailable; old-order tab hidden", error);
+    machtileTakeover.availability = "missing";
+    holder.querySelector('[data-pick-tab="old"]')?.remove();
+    holder.querySelector('[data-pick-pane="old"]')?.remove();
+    holder._candidates = new Map();
+    const tab = holder.querySelector('[data-pick-tab="new"]');
+    if (tab) machtilePickOrderSelectTab(holder, tab);
+  }
+  machtilePickOrderUpdateEmpty(holder);
+}
+function machtilePickOrderSelectTab(holder, tab) {
+  holder.querySelectorAll("[data-pick-tab]").forEach((el) => { el.classList.toggle("is-selected", el === tab); el.setAttribute("aria-selected", el === tab ? "true" : "false"); });
+  holder.querySelectorAll("[data-pick-pane]").forEach((el) => { el.hidden = el.dataset.pickPane !== tab.dataset.pickTab; });
+}
+async function machtileTakeoverSubmitCandidate(holder, candidate) {
+  const machineCode = holder.dataset.machine, pending = machtileStationCmd.pending[machineCode];
+  if (pending && !machtileStationCmdUnlocked(pending)) return;
+  if (!candidate || !window.confirm(machtileTranslate("takeover_confirm_message", { source: candidate.sourceMachine, order: candidate.orderNo,
+    step: candidate.indexSn, done: candidate.doneQty, target: holder.dataset.machine, remaining: candidate.remainingQty }))) return;
+  const commandUuid = crypto.randomUUID();
+  const result = await machtileStationCmdRunSubmission({
+    commandUuid, commandType: "takeover", machineCode,
+    fields: { stopNoteId: candidate.stopNoteId }, recordFields: { stopNoteId: candidate.stopNoteId, orderNo: candidate.orderNo, step: candidate.indexSn }, startedAt: Date.now(),
+    rpcName: "machtile_submit_takeover",
+    payloadOverride: machtileTakeoverCore.takeoverPayload({ commandUuid, machineCode, stopNoteId: candidate.stopNoteId }),
+  });
+  const closeHolder = () => { if (holder.id === "machtileCardSelection") machtileCloseCardSelection(); else machtileTakeoverClose(); };
+  if (result.ok) {
+    closeHolder(); showToast(machtileTranslate("takeover_sent"));
+  } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
+    closeHolder(); showToast(machtileTranslate("takeover_sending"));
+  } else showToast(result.error?.message || machtileTranslate("takeover_send_failed"));
+}
+// 接手 applied 後：重載資料讓目標機台卡片出現那張單（報工／完工入口）。比照接下一道的 standard_finish_sync_pending：
+// 重載後卡片還看不到「單號＋道次」→ 提示同步中，10 秒後再重載，延後重載最多 3 次就停。
+const machtileTakeoverSync = { retryMs: 10000, maxRetries: 3, timers: {}, retries: {}, reloads: {} };
+function machtileTakeoverSyncVisible(code, orderNo, step) {
+  const current = machtileCardOrderForMachine(code);
+  return Boolean(current) && String(current.id || "") === String(orderNo || "") && Number(current.stationStep) === Number(step);
+}
+async function machtileTakeoverRefreshAfterApplied(code, orderNo, step, isRetry = false) {
+  clearTimeout(machtileTakeoverSync.timers[code]);
+  delete machtileTakeoverSync.timers[code];
+  if (!isRetry) machtileTakeoverSync.retries[code] = 0;
+  machtileTakeoverSync.reloads[code] = (machtileTakeoverSync.reloads[code] || 0) + 1;
+  try {
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines(); renderAll();
+  } catch (error) {
+    console.warn("takeover applied; reload failed", error);
+  }
+  if (!orderNo || !step || machtileTakeoverSyncVisible(code, orderNo, step)) return;
+  showToast(machtileTranslate("takeover_sync_pending"));
+  if ((machtileTakeoverSync.retries[code] || 0) >= machtileTakeoverSync.maxRetries) return;
+  machtileTakeoverSync.retries[code] = (machtileTakeoverSync.retries[code] || 0) + 1;
+  machtileTakeoverSync.timers[code] = setTimeout(() => { void machtileTakeoverRefreshAfterApplied(code, orderNo, step, true); }, machtileTakeoverSync.retryMs);
+}
 const MACHTILE_STATION_CMD_PENDING_KEY = "machtile.stationCmdPending.v1";
 const machtileStationCmd = {
   availability: "off",        // off（旗標關）／probing／ready／missing
@@ -13797,6 +14253,57 @@ function machtileFinishCloseEnabled(machineCode) {
     machines: config.finishCloseMachines, machineCode, reportType: "finish", serverStatus: "applied" }).send);
 }
 
+function machtileShortCompletionEnabled(machineCode) {
+  return config.enableShortCompletion === true
+    && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.shortCompletionMachines), machineCode);
+}
+
+function machtileShortCompletionValue(order = selectedOrder) {
+  const section = document.getElementById("shortCompletionSection");
+  if (!section || section.hidden || !machtileShortCompletionEnabled(order?.machine)) return null;
+  const reason = section.querySelector('input[name="shortCompletionReason"]:checked')?.value || "";
+  const note = String(section.querySelector("#shortCompletionNote")?.value || "").trim();
+  if (!reason) return null;
+  if (!["MATERIAL_SHORT", "SCRAP", "OTHER"].includes(reason)) throw new Error(machtileTranslate("short_completion_reason_required"));
+  if (note.length > 500 || (reason === "OTHER" && !note)) throw new Error(machtileTranslate("short_completion_other_note_required"));
+  return { reason_code: reason, note };
+}
+
+function machtileRenderShortCompletion(order = selectedOrder) {
+  const form = document.getElementById("reportForm");
+  if (!form) return;
+  let section = document.getElementById("shortCompletionSection");
+  if (!section) {
+    section = document.createElement("section");
+    section.id = "shortCompletionSection";
+    section.className = "report-section";
+    form.querySelector(".submit-report")?.before(section);
+    section.addEventListener("change", () => {
+      const note = section.querySelector("#shortCompletionNote");
+      if (note) note.hidden = section.querySelector('input[name="shortCompletionReason"]:checked')?.value !== "OTHER";
+    });
+    section.innerHTML = `<p class="report-qty-help"><strong data-short-completion-gap></strong></p>
+      <div class="checklist-card"><label><input type="radio" name="shortCompletionReason" value="" checked> ${escapeHtml(machtileTranslate("short_completion_none"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="MATERIAL_SHORT"> ${escapeHtml(machtileTranslate("short_completion_material"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="SCRAP"> ${escapeHtml(machtileTranslate("short_completion_scrap"))}</label>
+      <label><input type="radio" name="shortCompletionReason" value="OTHER"> ${escapeHtml(machtileTranslate("short_completion_other"))}</label></div>
+      <textarea id="shortCompletionNote" maxlength="500" hidden placeholder="${escapeHtml(machtileTranslate("short_completion_note"))}"></textarea>`;
+  }
+  const planned = Number(order?.total || order?.quantity || 0);
+  const finish = window.MachTileReportCounterCore?.finishTotal(
+    document.getElementById("completedQty")?.value,
+    machtileFinishReportedQty(order),
+  );
+  const total = finish?.total;
+  const visible = activeReportType === "finish" && machtileShortCompletionEnabled(order?.machine)
+    && Number.isFinite(total) && planned > 0 && total < planned;
+  section.hidden = !visible;
+  section.classList.toggle("is-hidden", !visible);
+  if (!visible) return;
+  const gap = section.querySelector("[data-short-completion-gap]");
+  if (gap) gap.textContent = machtileTranslate("short_completion_question", { quantity: planned - total });
+}
+
 function machtileStandardFinishEnabled(machineCode) {
   return config.enableStandardFinishFlow === true
     && machtileStationCmdCore?.enabledForMachine(machtileStationCmdCore.parseFlag(config.standardFinishFlowMachines), machineCode);
@@ -13826,12 +14333,14 @@ function machtileFinishCloseSetResult(code, view) {
   const title = applied
     ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
     : machtileTranslate("finish_close_rejected_title");
-  const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running" })[view?.code];
+  const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running",
+    SHORT_COMPLETION_DISABLED: "short_completion_disabled", SHORT_COMPLETION_NOT_NEEDED: "short_completion_not_needed",
+    SHORT_COMPLETION_REASON_INVALID: "short_completion_reason_invalid" })[view?.code];
   flow.close = {
     phase: view?.phase || "rejected",
     title,
     message: applied
-      ? machtileTranslate("finish_close_applied_detail")
+      ? (view?.warning && flow.singleReport?.shortCompletion ? machtileTranslate("short_completion_warning") : (view?.warning || machtileTranslate("finish_close_applied_detail")))
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
     claim: null,
@@ -13968,6 +14477,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       partNo: args.p_expected_part_no,
       manufactureIiId: args.p_manufacture_ii_id,
       expectedSimulationId: args.p_expected_simulation_id,
+      shortCompletion: flow.singleReport?.shortCompletion || null,
     },
     recordFields: {
       orderNo: args.p_expected_order_no,
@@ -13975,6 +14485,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       partNo: args.p_expected_part_no,
       manufactureIiId: args.p_manufacture_ii_id,
       expectedSimulationId: args.p_expected_simulation_id,
+      shortCompletion: flow.singleReport?.shortCompletion || null,
       finishCloseReportCommandUuid: reportCommandUuid,
     },
     startedAt: Date.now(),
@@ -14010,8 +14521,15 @@ function machtileStationCmdRestorePending() {
   machtileStationCmdSavePending();
 }
 
+// 第一次畫卡片之前先同步還原 localStorage 裡等確認的指令（不等 station_commands 探測）。
+// 否則探測完成前按鈕若可按，會在已有 unconfirmed pending 時另產生新 command_uuid。
+function machtileStationCmdRestorePendingEarly() {
+  if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
+  machtileStationCmdRestorePending();
+}
+
 // loadFromSupabase 時呼叫（成功過就不再試）
-async function machtileLoadStationCommandAvailability() {
+async function machtileLoadStationCommandAvailability(generation = machtileDeferredLoadGeneration) {
   const flag = machtileStationCmdFlag();
   // 旗標關、或不是作業員／管理員帳號（橋接、manager、planner 都不行）→ 完全不讀
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(flag) || state.source !== "supabase" || !machtileStationCmdRoleOk()) {
@@ -14022,14 +14540,16 @@ async function machtileLoadStationCommandAvailability() {
   machtileStationCmd.availability = "probing";
   try {
     await supabaseFetch("station_commands?select=command_uuid&limit=1");
+    if (generation !== machtileDeferredLoadGeneration) return;
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
     if (typeof machtileBatchResetCommandSelection === "function") {
-      machtileBatchResetCommandSelection();
-      machtileRenderBatchReport();
+      if (!machtileBatchState.group || machtileBatchState.commandSelected.size === 0) machtileBatchResetCommandSelection();
+      if (machtileBatchState.group) machtileRenderBatchReport();
     }
   } catch (error) {
+    if (generation !== machtileDeferredLoadGeneration) return;
     console.warn("station commands unavailable; start/stop buttons hidden", error);
     machtileStationCmd.availability = "missing";
   }
@@ -14056,13 +14576,18 @@ function machtileStationCmdParts(machine) {
   if (!machtileStationCmdCore) return none;
   const code = machtileStationCmdMachineCode(machine);
   const order = machine?.order || null;
+  const taken = order && machtileTakeoverActive(code) ? machtileTakeover.notices.get(`${code}|${order.id}|${order.stationStep}`) : null;
   const gate = machtileStationCmdCore.eligibility({
     flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const pending = machtileStationCmd.pending[code];
+  // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
+  const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
+  const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
+  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase) : [];
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
-  if (!gate.ok && !(pending && machtileStationCmdActiveFor(code))) return none;
+  if (!gate.ok && !pickActive && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
@@ -14071,21 +14596,28 @@ function machtileStationCmdParts(machine) {
   let line = "";
   let retry = "";
   if (pending && pending.unconfirmed) {
-    line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：上次送出時網路斷了，正在確認有沒有送到</p>`;
-    retry = `<button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
+    line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType] || machtileTranslate("takeover_stop_title"))}：上次送出時網路斷了，正在確認有沒有送到</p>`;
+    retry = pending.commandType === "stop_report" ? "" : `<button type="button" class="station-cmd-retry" data-station-cmd-retry="${escapeHtml(code)}">用同一筆重送</button>`;
   } else if (pending) {
     const view = pending.view || machtileStationCmdCore.statusView({ status: "pending" }, pending.commandType, null);
-    line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType])}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
+    line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType] || machtileTranslate("takeover_stop_title"))}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
   } else if (last) {
     line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
-  const buttons = gate.ok ? `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>
-          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>` : "";
-  return { status, buttons, active: true };
+  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
+  const startButton = `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>`;
+  const stopButton = `
+          <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>`;
+  const pickButton = `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-pick-order-open data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("pick_order"))}</button>`;
+  const buttons = pickPhase
+    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? startButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
+    : gate.ok ? `${startButton}${stopButton}` : "";
+  return { status: takenLine + status, buttons, active: true, pickPhase, pickActions };
 }
 
 // 單台報工畫面：這台開了卡片「開工／停工」時，確認卡已順便記今日開工，隱藏重複分頁。
@@ -14215,6 +14747,7 @@ function machtileStationCmdNewSheet(fields) {
 }
 
 async function machtileStationCmdOpen(type, code, returnFocus) {
+  if (machtileTakeoverActive(code) && type === "stop") { await machtileTakeoverOpenStop(code, returnFocus); return; }
   const core = machtileStationCmdCore;
   if (!core || !core.COMMAND_TYPES.includes(type)) return;
   const machine = machtileStationCmdMachineByCode(code);
@@ -14244,7 +14777,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     (async () => {
       try {
         const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
-        fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+        fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null, ...(machtilePickStartEnabled(code) ? { allowPaused: true } : {}) });
       } catch (error) {
         console.warn("station command: work_order_processes re-read failed", error);
         fresh = { ok: false, reason: "read_failed", text: "讀不到最新的工單資料，請重新整理畫面再按。" };
@@ -14729,14 +15262,14 @@ async function machtileStationCmdRunSubmission(options) {
   const {
     commandUuid, commandType, machineCode, fields, recordFields, startedAt,
     previousRecord = null, attemptNumber = 1, validateRow = null,
-    onError = null, onAccepted = null, afterRecord = null,
+    onError = null, onAccepted = null, afterRecord = null, rpcName = null, payloadOverride = null,
   } = options;
-  const payload = core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
+  const payload = payloadOverride || core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
-    const rpc = payload.p_replace_stopped === true ? core.REPLACE_STOPPED_RPC : core.SUBMIT_RPC;
+    const rpc = rpcName || (payload.p_replace_stopped === true ? core.REPLACE_STOPPED_RPC : core.SUBMIT_RPC);
     const result = await supabaseFetch(`rpc/${rpc}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
@@ -14784,6 +15317,7 @@ async function machtileStationCmdRunSubmission(options) {
     unconfirmed: false, serverOffset: offset, ...(acceptedResult?.recordExtra || {}),
   });
   const view = core.statusView(row || { status: "pending" }, commandType, core.ageForHint(record, row?.requested_at, now));
+  if (commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
   record.view = view;
   record.lastStatus = String(row?.status || "pending");
   machtileStationCmd.pending[machineCode] = record;
@@ -14851,6 +15385,29 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
+  const stopDraft = record.commandType === "stop_report" ? machtileTakeoverStopDrafts.get(record.commandUuid) : null;
+  if (record.commandType === "stop_report") machtileTakeoverStopDrafts.delete(record.commandUuid);
+  if (record.commandType === "stop_report" && view?.phase === "rejected" && view.code === "DUPLICATE_SUSPECTED") {
+    machtileTakeoverReopenStopDuplicate(code, stopDraft);
+  } else if (record.commandType === "stop_report" && view?.phase === "rejected") {
+    // NOT_ELIGIBLE text is worded for takeover (target machine not allowed); a rejected stop report gets the generic text.
+    const message = view.code === "NOT_ELIGIBLE" ? "" : machtileTakeoverCore?.rejectText(view.code);
+    showToast(message || machtileTranslate("takeover_stop_report_rejected_generic"));
+    if (view.code === "TAKEOVER_DISABLED") {
+      // 工廠沒開換機台＝這個功能不存在：維持自動退回一般停工
+      machtileTakeover.availability = "off";
+      void machtileTakeoverUseLegacyStop(code, null);
+    } else {
+      // r4c（2026-10-27）：其他拒絕碼不自動退回一般停工。重開同一份停工表單（數量保留）、顯示白話原因，
+      // 「改用一般停工」讓作業員自己按。
+      machtileTakeoverReopenStopRejected(code, stopDraft, view, message);
+    }
+  }
+  if (record.commandType === "takeover" && view?.terminal) {
+    showToast(machtileTakeoverCore?.resultText(view) || view.title);
+    if (view.phase === "applied") void machtileTakeoverRefreshAfterApplied(code, record.orderNo, record.step);
+  }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
   if (record.commandType === "start" && record.standardFinishComboStart) {
@@ -14867,7 +15424,7 @@ function machtileStationCmdFinish(code, view) {
     machtileStationCmdRenderSheet();
   }
   machtileStationCmdRerender();
-  if (view.phase === "applied") showToast(`${code} ${view.title}（舊 MES）`);
+  if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
 function machtileStationCmdPoll(code) {
@@ -14888,6 +15445,7 @@ function machtileStationCmdPoll(code) {
         const wasUnconfirmed = current.unconfirmed;
         current.unconfirmed = false;
         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
+        if (current.commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
         current.view = view;
@@ -14938,6 +15496,35 @@ function machtileStationCmdPoll(code) {
 
 // 卡片按鈕與確認卡的點擊（document 層代理，於卡片「明細」判斷之前處理）
 function machtileStationCmdHandleClick(event) {
+  const takeoverSheet = event.target.closest("#machtileTakeoverSheet");
+  if (takeoverSheet) {
+    const viewState = takeoverSheet._state;
+    if (event.target.closest("[data-takeover-close]")) { machtileTakeoverClose(); return true; }
+    if (event.target.closest("[data-takeover-legacy-stop]")) { void machtileTakeoverUseLegacyStop(takeoverSheet.dataset.machine, takeoverSheet._returnFocus); return true; }
+    const candidate = event.target.closest("[data-takeover-candidate]"); if (candidate) { void machtileTakeoverSubmitCandidate(takeoverSheet, takeoverSheet._candidates?.get(candidate.dataset.takeoverCandidate)); return true; }
+    if (viewState) {
+      const reason = event.target.closest("[data-takeover-reason]"); if (reason) { const policy = viewState.policies.find((p) => p.code === reason.dataset.takeoverReason); viewState.form.reason_code = policy.code; viewState.form.allow_takeover = policy.default_allow; viewState.form.allow_takeover_touched = false; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
+      const allow = event.target.closest("[data-takeover-allow]"); if (allow) { viewState.form.allow_takeover = allow.dataset.takeoverAllow === "yes"; viewState.form.allow_takeover_touched = true; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
+      if (event.target.closest("[data-takeover-stop-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet); return true; }
+      if (event.target.closest("[data-takeover-dup-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet, { acks: ["DUPLICATE_SUSPECTED"] }); return true; }
+      if (event.target.closest("[data-takeover-dup-edit]")) {
+        if (viewState.sending) return true;
+        viewState.dupConfirm = false; viewState.error = ""; machtileTakeoverStopRender(takeoverSheet, viewState);
+        takeoverSheet.querySelector("[data-takeover-good]")?.focus();
+        return true;
+      }
+    }
+    return true;
+  }
+  const pickHolder = event.target.closest('#machtileCardSelection[data-pick-order="true"]');
+  if (pickHolder) {
+    const pickTab = event.target.closest("[data-pick-tab]");
+    if (pickTab) { machtilePickOrderSelectTab(pickHolder, pickTab); return true; }
+    const candidate = event.target.closest("[data-takeover-candidate]");
+    if (candidate) { void machtileTakeoverSubmitCandidate(pickHolder, pickHolder._candidates?.get(candidate.dataset.takeoverCandidate)); return true; }
+  }
+  const pickOpen = event.target.closest("[data-pick-order-open]");
+  if (pickOpen) { machtilePickOrderOpen(pickOpen.dataset.stationCmdMachine); return true; }
   const open = event.target.closest("[data-station-cmd]");
   if (open) { machtileStationCmdOpen(open.dataset.stationCmd, open.dataset.stationCmdMachine, open); return true; }
   const retry = event.target.closest("[data-station-cmd-retry]");
@@ -15012,10 +15599,12 @@ function renderMachineCard(machine) {
     : programSameAsPrevious
       ? "同上版"
       : `已上傳${profile.programVersion && profile.programVersion !== "-" ? ` ${profile.programVersion}` : ""}`;
-  const reportAction = order && canReport
+  // 選工單／開工分開（旗標開的機台）：pickActions 決定這個階段要不要報工／完工／選單入口；旗標關＝null＝照舊
+  const pickActions = stationCmd.pickPhase ? stationCmd.pickActions || [] : null;
+  const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
-  const finishAction = machtileFinishButtonEnabled() && order && canReport
+  const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport
     ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
@@ -15055,9 +15644,9 @@ function renderMachineCard(machine) {
       ${"" /* 原本中段「舊 MES 開工／停工」區塊的位置：已移到卡片底部（保留這一行，沒開功能的機台卡片 HTML 才會跟以前逐字相同） */}
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
-      ${!machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
+      ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
         ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
-      ${machtileCardPoolEntryMarkup(machine)}
+      ${!pickActions || pickActions.includes("select") ? machtileCardPoolEntryMarkup(machine) : ""}
 
       ${order ? `
         <details class="machine-program-details" data-no-detail>
@@ -21112,8 +21701,7 @@ function renderAll() {
   applyDashboardFilterParams();
   selectedOrder = state.workOrders.find((order) => order.id === selectedOrder?.id) || state.workOrders[0] || null;
   if (selectedOrder) setSelectedOrder(selectedOrder);
-  $("#dataSourceLabel").textContent = state.source === "supabase"
-    ? `Supabase 已連線${state.cardProcessError ? " · " + state.cardProcessError : ""}${machtileDepartmentAccessError ? " · " + machtileDepartmentAccessError : ""}` : "Mock data";
+  machtileUpdateDataSourceLabel();
   ensureHmcDashboardEntry();
   renderStats();
   renderFilters();
@@ -22303,6 +22891,7 @@ function machtileRenderSingleStationReport() {
   const holder = document.getElementById("singleStationReportPanel");
   const submit = document.querySelector("#reportForm .submit-report");
   if (!holder || !submit) return;
+  machtileRenderShortCompletion(selectedOrder);
   const code = machtileSingleStationReportState.machineCode;
   const order = machtileSingleStationReportOrder(code);
   const eligibleType = ["noon", "finish"].includes(activeReportType);
@@ -22639,10 +23228,14 @@ async function machtileStationReportSubmitPreview(code) {
       return;
     }
     const reportType = activeReportType === "finish" ? "finish" : "noon";
+    let shortCompletion = null;
+    try { if (reportType === "finish") shortCompletion = machtileShortCompletionValue(order); }
+    catch (error) { block(error.message); return; }
     flow.singleReport = {
       reportType,
       reportPayload: buildReportPayload(reportType),
       operators: machtileSelectedOperators(machtileBatchState.actorId),
+      shortCompletion,
     };
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
     // 仍建立 completed_qty=0 的正式 finish 紀錄，再沿用既有 close command 收尾。
@@ -23181,7 +23774,7 @@ async function machtileBatchSendStationCommand(code, type, retryPending = null) 
     if (!choice.eligible) throw new Error(choice.reason);
   }
   const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
-  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null });
+  const fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null, ...(machtilePickStartEnabled(code) ? { allowPaused: true } : {}) });
   if (!fresh.ok) throw new Error(fresh.text);
   const uuid = retryPending ? retryPending.commandUuid : core.newUuid(window.crypto);
   const startedAt = retryPending ? retryPending.startedAt : Date.now();
@@ -23834,6 +24427,21 @@ document.addEventListener("keyup", (event) => {
 });
 document.addEventListener("input", (event) => { machtileHandleBatchInput(event); });
 document.addEventListener("change", (event) => { machtileHandleBatchInput(event); });
+document.addEventListener("change", (event) => {
+  const holder = event.target.closest?.("#machtileTakeoverSheet"), viewState = holder?._state; if (!viewState) return;
+  if (event.target.matches("[data-takeover-fail-reason]")) viewState.form.fail_reason_code = event.target.value;
+  const submit = holder.querySelector("[data-takeover-stop-confirm]"); if (submit) submit.disabled = !machtileTakeoverCore.validateStop(viewState.form, viewState.policies).ok || viewState.sending;
+});
+document.addEventListener("input", (event) => {
+  const holder = event.target.closest?.("#machtileTakeoverSheet"), viewState = holder?._state; if (!viewState) return;
+  if (event.target.matches("[data-takeover-good]")) viewState.form.good_qty = event.target.value;
+  if (event.target.matches("[data-takeover-fail]")) {
+    viewState.form.fail_qty = event.target.value;
+    holder.querySelector("[data-takeover-fail-reason-field]")?.toggleAttribute("hidden", !(Number(event.target.value) > 0));
+  }
+  if (event.target.matches("[data-takeover-note]")) viewState.form.note = event.target.value;
+  const submit = holder.querySelector("[data-takeover-stop-confirm]"); if (submit) submit.disabled = !machtileTakeoverCore.validateStop(viewState.form, viewState.policies).ok || viewState.sending;
+});
 
 // Eager driver start (flag on only): resend leftovers from a previous
 // session without waiting for the first new submit of this one.
@@ -24536,6 +25144,7 @@ function bindEvents() {
       updateReportEstimate();
       updateNoonAdvice();
       updateReportCounterPreview();
+      if (id === "completedQty") machtileRenderShortCompletion(selectedOrder);
       if (id === "defectQty") machtileUpdateReportFailReason();
     });
   });
@@ -24933,7 +25542,7 @@ async function machtileResumeInit() {
 
   if (config.useSupabase && config.supabaseUrl && config.supabaseAnonKey) {
     try {
-      await loadFromSupabase();
+      await loadFromSupabase({ deferSecondary: true });
     } catch (error) {
       if (machtileStrictMode()) {
         machtileClearDepartmentData();

@@ -6,7 +6,8 @@ import {readFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.dirname(fileURLToPath(import.meta.url));
-const {chromium}=await import(process.env.MACHTILE_PLAYWRIGHT_MODULE?pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href:'playwright');
+const pw=await import(process.env.MACHTILE_PLAYWRIGHT_MODULE?pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href:'playwright');
+const {chromium}=pw.default||pw;
 const server=createServer(async(req,res)=>{
   if(req.method!=='GET'){res.writeHead(405);res.end();return;}
   const uri=new URL(req.url,'http://localhost');

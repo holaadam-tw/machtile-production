@@ -76,12 +76,25 @@ window.MACHTILE_CONFIG = {
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
   finishCloseMachines: ["A04"],
+  // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
+  enableShortCompletion: false,
+  shortCompletionMachines: [],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
   standardFinishFlowMachines: ["A04"],
-  // 完工後把「接下一道」與既有開工指令串成一次操作；僅 A04 試點。
-  enableFinishClaimStartCombo: true,
-  finishClaimStartComboMachines: ["A04"],
+  // 完工後「接並開工」一顆鈕：owner 2026-10-26 拍板拿掉（選工單≠開工），改兩下：先接、再按開工。
+  enableFinishClaimStartCombo: false,
+  finishClaimStartComboMachines: [],
+  // 換機台第一版先保持關閉；雲端 RPC 與 Factory 同步開通後再指定機台。
+  enableTakeover: false,
+  takeoverMachines: [],
+  // 選工單／開工分開（owner 2026-10-26）：沒掛單只出「選工單」、掛了單未開工只出「開工」、已開工出「報工／停工／完工」、
+  // 停工中（雲端 status=paused）只出「開工」接回＋「完工」。
+  // ⚠️ enableTakeover 與 enablePickStartFlow 必須一起開（機台名單也要一致）：空機台接手只剩「選工單→舊工單」這個入口；
+  // ⚠️ 而且要等雲端「開工 applied 把工序 status 改 running、寫 actual_start_at」那包上線後才能開，
+  //    否則重新整理後已開工的單會被當成未開工（卡片只剩「開工」、不能報工）。
+  enablePickStartFlow: false,
+  pickStartFlowMachines: [],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
