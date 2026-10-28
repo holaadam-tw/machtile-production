@@ -11,6 +11,33 @@ test("stop quantities require explicit non-negative integers including explicit 
   assert.equal(core.validateStop(form).errors.fail_qty, "required_nonnegative_integer");
 });
 
+test("stop good quantity is a step total and payload sends only the fresh delta", () => {
+  const policy = core.DEFAULT_POLICIES.find((row) => row.code === "RUSH_ORDER");
+  const form = { ...core.initialStopForm(policy), good_qty: "140", fail_qty: "0", allow_takeover_touched: true };
+  const totals = { goodDone: 94, failDone: 0 };
+  assert.equal(core.validateStop(form, undefined, totals).ok, true);
+  assert.equal(core.stopPayload(form, totals).good_qty, 46);
+  form.good_qty = "94";
+  assert.equal(core.validateStop(form, undefined, totals).ok, true);
+  assert.equal(core.stopPayload(form, totals).good_qty, 0);
+  form.good_qty = "90";
+  assert.equal(core.validateStop(form, undefined, totals).errors.good_qty, "total_less_than_done");
+  form.good_qty = "94.5";
+  assert.equal(core.validateStop(form, undefined, totals).errors.good_qty, "required_nonnegative_integer");
+});
+
+test("duplicate confirmation rebuilds the same quantity delta", () => {
+  const form = { good_qty: "140", fail_qty: "3", fail_reason_code: "尺寸不良", reason_code: "RUSH_ORDER", allow_takeover: true, allow_takeover_touched: true, note: "" };
+  const input = { machineCode: "A04", orderNo: "WO-1", indexSn: 1, form, totals: { goodDone: 94, failDone: 1 } };
+  const first = core.stopReportPayload({ ...input, commandUuid: "first" });
+  const confirmed = core.stopReportPayload({ ...input, commandUuid: "confirmed" });
+  assert.equal(first.p_good_qty, 46);
+  assert.equal(first.p_fail_qty, 2);
+  delete first.p_command_uuid;
+  delete confirmed.p_command_uuid;
+  assert.deepEqual(confirmed, first);
+});
+
 test("reason default is highlighted but takeover choice still requires a tap", () => {
   const policy = core.DEFAULT_POLICIES.find((row) => row.code === "RUSH_ORDER");
   const form = core.initialStopForm(policy);

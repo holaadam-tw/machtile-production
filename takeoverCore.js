@@ -36,25 +36,40 @@
     return { good_qty: "", fail_qty: "", reason_code: policy?.code || "", allow_takeover: policy?.default_allow === true,
       allow_takeover_touched: false, fail_reason_code: "", note: "" };
   }
-  function validateStop(form, policies) {
+  function stopTotals(totals) {
+    const goodDone = Math.max(0, Number(totals?.goodDone) || 0);
+    const failDone = totals?.failDone == null ? null : Math.max(0, Number(totals.failDone) || 0);
+    return { goodDone, failDone };
+  }
+  function stopDeltas(form, totals) {
+    const done = stopTotals(totals);
+    return { good: Number(form?.good_qty) - done.goodDone,
+      fail: done.failDone == null ? Number(form?.fail_qty) : Number(form?.fail_qty) - done.failDone };
+  }
+  function validateStop(form, policies, totals) {
     const policy = normalizePolicies(policies).find((row) => row.code === text(form?.reason_code).toUpperCase());
     const integer = (value) => /^\d+$/.test(text(value)) && Number(value) >= 0;
     const errors = {};
     if (!integer(form?.good_qty)) errors.good_qty = "required_nonnegative_integer";
     if (!integer(form?.fail_qty)) errors.fail_qty = "required_nonnegative_integer";
-    if (integer(form?.fail_qty) && Number(form.fail_qty) > 0 && !text(form?.fail_reason_code)) errors.fail_reason_code = "required";
+    const done = stopTotals(totals);
+    if (integer(form?.good_qty) && Number(form.good_qty) < done.goodDone) errors.good_qty = "total_less_than_done";
+    if (done.failDone != null && integer(form?.fail_qty) && Number(form.fail_qty) < done.failDone) errors.fail_qty = "total_less_than_done";
+    const delta = stopDeltas(form, done);
+    if (integer(form?.fail_qty) && delta.fail > 0 && !text(form?.fail_reason_code)) errors.fail_reason_code = "required";
     if (!policy) errors.reason_code = "required";
     if (form?.allow_takeover_touched !== true) errors.allow_takeover = "must_confirm";
     if (policy?.note_required && !text(form?.note)) errors.note = "required";
     return { ok: Object.keys(errors).length === 0, errors, policy };
   }
-  function stopPayload(form) {
-    return { good_qty: Number(form.good_qty), fail_qty: Number(form.fail_qty), reason_code: text(form.reason_code).toUpperCase(),
-      fail_reason_code: Number(form.fail_qty) > 0 ? text(form.fail_reason_code) || null : null,
+  function stopPayload(form, totals) {
+    const delta = stopDeltas(form, totals);
+    return { good_qty: delta.good, fail_qty: delta.fail, reason_code: text(form.reason_code).toUpperCase(),
+      fail_reason_code: delta.fail > 0 ? text(form.fail_reason_code) || null : null,
       allow_takeover: form.allow_takeover === true, note: text(form.note) };
   }
-  function stopReportPayload({ commandUuid, machineCode, orderNo, indexSn, partNo, manufactureIiId, expectedSimulationId, form } = {}) {
-    const stop = stopPayload(form || {});
+  function stopReportPayload({ commandUuid, machineCode, orderNo, indexSn, partNo, manufactureIiId, expectedSimulationId, form, totals } = {}) {
+    const stop = stopPayload(form || {}, totals);
     return { p_command_uuid: commandUuid, p_machine_code: text(machineCode).toUpperCase(), p_order_no: text(orderNo),
       p_index_sn: Number(indexSn), p_part_no: text(partNo) || null, p_manufacture_ii_id: text(manufactureIiId) || null,
       p_expected_simulation_id: text(expectedSimulationId) || null, p_good_qty: stop.good_qty, p_fail_qty: stop.fail_qty,
@@ -143,7 +158,7 @@
   function pickStartActions(phase) {
     return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start", "finish"] })[text(phase)] || [];
   }
-  return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, validateStop, stopPayload,
+  return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, stopTotals, stopDeltas, validateStop, stopPayload,
     stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, startTabs,
     pickStartPhase, pickStartActions, pickStartLocalStale };
 });
