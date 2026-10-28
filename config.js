@@ -4,6 +4,10 @@
 // through the signed-in session Bearer + RLS. Never put service-role or
 // other privileged keys here.
 window.MACHTILE_CONFIG = {
+  overtimePromptEnabled: false,
+  overtimeNoStartEnabled: false,
+  shiftEndTime: "17:00",
+  overtimeStartTime: "17:30",
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.
   authMode: "strict",

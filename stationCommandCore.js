@@ -672,6 +672,29 @@
     if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return { ok: false, text: DAILY_START_INVALID_TEXT };
     return { ok: true, value: n };
   }
+  function startQtyGap(machineQty, reportedQty) {
+    const machine = Number(machineQty);
+    const reported = Math.max(0, Number(reportedQty) || 0);
+    if (!Number.isInteger(machine) || machine < 0 || machine <= reported) return null;
+    return { machine, reported, gap: machine - reported };
+  }
+  function timeMinutes(value) {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(text(value));
+    if (!match) return null;
+    const hour = Number(match[1]), minute = Number(match[2]);
+    return hour < 24 && minute < 60 ? hour * 60 + minute : null;
+  }
+  function overtimePromptDue({ promptEnabled, noStartEnabled, shiftEndTime, now } = {}) {
+    if (promptEnabled !== true || noStartEnabled === true) return false;
+    const end = timeMinutes(shiftEndTime);
+    const date = now instanceof Date ? now : new Date(now == null ? Date.now() : now);
+    return end != null && !Number.isNaN(date.getTime()) && date.getHours() * 60 + date.getMinutes() > end;
+  }
+  function overtimeNote(answer, shiftEndTime, overtimeStartTime) {
+    if (answer?.continued === true) return `[加班確認：${text(shiftEndTime)} 後繼續加工，加班起點 ${text(answer.startTime || overtimeStartTime)}]`;
+    if (answer?.continued === false) return `[加班確認：${text(shiftEndTime)} 後沒有繼續加工]`;
+    return "";
+  }
   // rows＝卡片底部同一份「今天（台灣）的 dailyStart／noon／finish」列（production_reports）
   function dailyStartRecordedToday(rows, processId) {
     const pid = text(processId);
@@ -695,7 +718,7 @@
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
-    dailyStartQtyCheck, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+    dailyStartQtyCheck, startQtyGap, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };

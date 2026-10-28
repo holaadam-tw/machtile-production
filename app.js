@@ -40,6 +40,10 @@ const config = {
   finishClaimStartComboMachines: [],
   enableTakeover: false,
   takeoverMachines: [],
+  overtimePromptEnabled: false,
+  overtimeNoStartEnabled: false,
+  shiftEndTime: "17:00",
+  overtimeStartTime: "17:30",
   // 選工單／開工分開（owner 2026-10-26）：機台代號陣列；["*"]＝全部。預設全關＝卡片跟以前一樣。
   enablePickStartFlow: false,
   pickStartFlowMachines: [],
@@ -14023,16 +14027,27 @@ function machtileTakeoverStopRender(holder, viewState) {
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
     <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTakeoverStopQuestion(viewState))}</p>
     ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
-    <div class="takeover-qty"><label>${escapeHtml(machtileTranslate("takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label>${escapeHtml(machtileTranslate(viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
+    <div class="takeover-qty"><label data-takeover-field="good_qty">${escapeHtml(machtileTranslate("takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label data-takeover-field="fail_qty">${escapeHtml(machtileTranslate(viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
     <p class="takeover-question" data-takeover-add-qty>${escapeHtml(delta ? machtileTranslate("takeover_stop_add_qty", { good: delta.good, fail: delta.fail }) : machtileTranslate("takeover_stop_add_qty_waiting"))}</p>
-    <label data-takeover-fail-reason-field${delta?.fail > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
-    <fieldset><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
-    <fieldset><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${!viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
-    <label>${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
+    <label data-takeover-fail-reason-field data-takeover-field="fail_reason_code"${delta?.fail > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
+    <fieldset data-takeover-field="reason_code"><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
+    <fieldset data-takeover-field="allow_takeover" class="${viewState.form.allow_takeover_touched ? "" : "is-untouched"}"><legend>${escapeHtml(machtileTranslate("takeover_allow_question"))}</legend><div class="takeover-choice-grid"><button type="button" data-takeover-allow="yes" class="${viewState.form.allow_takeover_touched && viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("yes"))}</button><button type="button" data-takeover-allow="no" class="${viewState.form.allow_takeover_touched && !viewState.form.allow_takeover ? "is-selected" : ""}">${escapeHtml(machtileTranslate("no"))}</button></div>${!viewState.form.allow_takeover_touched ? `<small role="status">${escapeHtml(machtileTranslate("takeover_must_tap"))}</small>` : ""}</fieldset>
+    <label data-takeover-field="note">${escapeHtml(machtileTranslate("takeover_note"))}${selected?.note_required ? " *" : ""}<textarea data-takeover-note>${escapeHtml(viewState.form.note)}</textarea></label>
     <p class="station-cmd-notice is-bad" data-takeover-error ${viewState.error || quantityError ? "" : "hidden"}>${escapeHtml(viewState.error || quantityError || "")}</p>
     <footer class="station-cmd-actions">${dupConfirm
       ? `<button type="button" class="station-cmd-confirm is-stop" data-takeover-dup-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_stop_dup_confirm"))}</button><button type="button" class="station-cmd-secondary" data-takeover-dup-edit ${viewState.sending ? "disabled" : ""}>${escapeHtml(machtileTranslate("takeover_stop_dup_edit"))}</button>`
-      : `<button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm ${validation.ok && !viewState.sending && viewState.order.simulationId ? "" : "disabled"}>${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>`}${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+      : `<button type="button" class="station-cmd-confirm is-stop" data-takeover-stop-confirm aria-disabled="${validation.ok && !viewState.sending && viewState.order.simulationId ? "false" : "true"}">${escapeHtml(machtileTranslate("takeover_confirm_stop"))}</button>`}${!viewState.order.simulationId || viewState.offerLegacyStop ? `<button type="button" class="station-cmd-secondary" data-takeover-legacy-stop>改用一般停工</button>` : ""}<button type="button" class="station-cmd-secondary" data-takeover-close>${escapeHtml(machtileTranslate("cancel"))}</button></footer></section>`;
+}
+function machtileTakeoverShowMissing(holder) {
+  const validation = machtileTakeoverStopValidation(holder._state);
+  if (validation.ok) return true;
+  holder.querySelectorAll("[data-takeover-field]").forEach((el) => el.classList.toggle("is-required-missing", Boolean(validation.errors[el.dataset.takeoverField])));
+  const firstKey = ["good_qty", "fail_qty", "fail_reason_code", "reason_code", "allow_takeover", "note"].find((key) => validation.errors[key]);
+  const target = holder.querySelector(`[data-takeover-field="${firstKey}"]`) || holder.querySelector("[data-takeover-fail-reason-field]");
+  const error = holder.querySelector("[data-takeover-error]");
+  if (error) { error.textContent = machtileTranslate("takeover_missing_required"); error.hidden = false; }
+  try { target?.scrollIntoView({ block: "center", behavior: "smooth" }); (target?.querySelector("input,select,textarea,button") || target)?.focus(); } catch { /* ignore */ }
+  return false;
 }
 function machtileTakeoverStopUpdateQuantityUi(holder, viewState) {
   const validation = machtileTakeoverStopValidation(viewState);
@@ -14044,7 +14059,7 @@ function machtileTakeoverStopUpdateQuantityUi(holder, viewState) {
   const error = holder.querySelector("[data-takeover-error]");
   if (error && !viewState.error) { error.textContent = quantityError; error.toggleAttribute("hidden", !quantityError); }
   const submit = holder.querySelector("[data-takeover-stop-confirm]");
-  if (submit) submit.disabled = !validation.ok || viewState.sending || !viewState.order.simulationId;
+  if (submit) submit.setAttribute("aria-disabled", validation.ok && !viewState.sending && viewState.order.simulationId ? "false" : "true");
 }
 async function machtileTakeoverStopHasPendingReport(code, order) {
   if (machtileOutboxEnabled()) {
@@ -14087,6 +14102,13 @@ async function machtileTakeoverOpenStop(code, returnFocus) {
 }
 async function machtileTakeoverSubmitStop(holder, { acks = [] } = {}) {
   const viewState = holder._state, check = machtileTakeoverStopValidation(viewState); if (!check.ok || viewState.sending) return;
+  if (viewState.overtimeAnswer == null) {
+    const answer = machtileOvertimeAnswer();
+    if (answer === undefined) return;
+    viewState.overtimeAnswer = answer || { skipped: true };
+    const prefix = machtileOvertimePrefix(answer);
+    if (prefix) viewState.form.note = `${prefix}${viewState.form.note ? ` ${viewState.form.note}` : ""}`;
+  }
   const code = holder.dataset.machine;
   if (machtileStationCmd.pending[code] && !machtileStationCmdUnlocked(machtileStationCmd.pending[code])) return;
   viewState.sending = true; viewState.error = ""; machtileTakeoverStopRender(holder, viewState);
@@ -14136,17 +14158,17 @@ function machtileTakeoverStopRejectedText(view, message) {
     guard = card?.message && card.message !== "請聯絡管理員。" ? card.message : "";
   } catch { guard = ""; }
   const reason = message || guard || "";
-  const generic = machtileTranslate("takeover_stop_report_rejected_generic");
-  return `${reason ? `${reason}。` : ""}${generic}${code ? `（${code}）` : ""}`;
+  const generic = machtileTakeoverCore?.stopReportRejectedText?.(code) || machtileTranslate("takeover_stop_report_rejected_generic");
+  return `${reason && !generic.includes(reason) ? `${reason}。` : ""}${generic}${code ? `（${code}）` : ""}`;
 }
 function machtileTakeoverReopenStopRejected(code, draft, view, message) {
   const machine = machtileStationCmdMachineByCode(code), order = draft?.order || machine?.order;
-  // 頁面重整過、表單跟工單都不在（r4c 審查 LOW）：退回一般停工確認卡（只開卡，不自動送；作業員自己按）
-  if (!order) { void machtileTakeoverUseLegacyStop(code, null); return; }
+  // 頁面重整過、表單跟工單都不在：提示已由 toast 顯示；不要再引導一般停工，以免重複停工。
+  if (!order) return;
   const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
   const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
   holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), totals: draft?.totals || { goodDone: machtileTakeoverStopDoneQty(order), failDone: null }, sending: false,
-    error: machtileTakeoverStopRejectedText(view, message), offerLegacyStop: true, machine, order, rejectedCode: String(view?.code || "") };
+    error: machtileTakeoverStopRejectedText(view, message), offerLegacyStop: false, machine, order, rejectedCode: String(view?.code || "") };
   holder.dataset.takeoverRejected = String(view?.code || "");
   machtileTakeoverStopRender(holder, holder._state);
   // 原因在表單最下面：捲到看得到（手機一屏放不下）
@@ -14818,16 +14840,18 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
     model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others, actorRole, actorName: actorName() }),
     // 開工時一起填今日開工數量（owner 2026-10-08）：作業員＋開工＋今天這道還沒有今日開工紀錄才問；管理員不問
-    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null } : null,
+    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null, reportedQty: Math.max(0, Number(order.done) || 0), gap: null } : null,
   };
   machtileStationCmdNewSheet(sheet);
   let legacy = null;
   let legacyError = false;
   let fresh = null;
+  let freshReportedQty = Math.max(0, Number(order.done) || 0);
   await Promise.all([
     (async () => {
       try {
-        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
+        const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
+        freshReportedQty = Math.max(0, Number(Array.isArray(rows) ? rows[0]?.qty_completed : 0) || 0);
         fresh = core.freshCheck({ order, machineCode: code, row: Array.isArray(rows) ? rows[0] : null, ...(machtilePickStartEnabled(code) ? { allowPaused: true } : {}) });
       } catch (error) {
         console.warn("station command: work_order_processes re-read failed", error);
@@ -14853,6 +14877,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   });
   if (machtileStationCmd.sheet !== sheet) return;
   sheet.loading = false;
+  if (sheet.dailyStart) sheet.dailyStart.reportedQty = freshReportedQty;
   sheet.fresh = fresh;
   if (fresh && fresh.ok) sheet.fields.partNo = fresh.partNo;
   sheet.model = core.confirmModel({ commandType: type, machineCode: code, order, fresh, legacy, legacyError, otherOrderCount: others, nowMs: Date.now(), actorRole, actorName: actorName() });
@@ -14954,6 +14979,7 @@ function machtileStationCmdDailyStartHtml(sheet) {
         <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
         <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
         ${machtileStationCmdDailyStartReportHidden(sheet.code) ? "" : "<p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>"}
+        ${ds.gap ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate("start_qty_gap_warning", ds.gap))}</p>` : ""}
         ${ds.error ? `<p class="station-cmd-notice" id="stationCmdDailyErr" role="alert" data-station-cmd-daily-error>${escapeHtml(ds.error)}</p>` : ""}
       </section>`;
   }
@@ -15285,6 +15311,17 @@ document.addEventListener("input", (event) => {
   const ds = machtileStationCmd.sheet && machtileStationCmd.sheet.dailyStart;
   if (!ds || ds.state !== "ask") return;
   ds.value = input.value;
+  ds.gap = machtileStationCmdCore.startQtyGap(input.value, ds.reportedQty);
+  const section = input.closest("[data-station-cmd-daily]");
+  section?.querySelector("[data-station-cmd-start-gap]")?.remove();
+  if (ds.gap && section) {
+    const warning = document.createElement("p");
+    warning.className = "station-cmd-notice is-warn";
+    warning.setAttribute("role", "status");
+    warning.dataset.stationCmdStartGap = "";
+    warning.textContent = machtileTranslate("start_qty_gap_warning", ds.gap);
+    section.appendChild(warning);
+  }
   // 改了數字 → 上一次的提示收起來（不整張重畫，游標不跳）
   if (ds.error) {
     ds.error = "";
@@ -15293,6 +15330,20 @@ document.addEventListener("input", (event) => {
     document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-error]")?.remove();
   }
 });
+
+function machtileOvertimeAnswer() {
+  const core = machtileStationCmdCore;
+  if (!core?.overtimePromptDue({ promptEnabled: config.overtimePromptEnabled, noStartEnabled: config.overtimeNoStartEnabled, shiftEndTime: config.shiftEndTime })) return null;
+  const continued = window.confirm(machtileTranslate("overtime_continue_question", { shiftEnd: config.shiftEndTime }));
+  if (!continued) return { continued: false };
+  const entered = window.prompt(machtileTranslate("overtime_start_question"), config.overtimeStartTime);
+  if (entered == null) return undefined;
+  if (core.timeMinutes(entered) == null) { showToast(machtileTranslate("overtime_time_invalid"), "error"); return undefined; }
+  return { continued: true, startTime: entered };
+}
+function machtileOvertimePrefix(answer) {
+  return machtileStationCmdCore?.overtimeNote(answer, config.shiftEndTime, config.overtimeStartTime) || "";
+}
 
 // 送得出開工指令嗎（確認鈕的同一套條件；machtileStationCmdSubmit 也用這個）
 function machtileStationCmdCanSubmit(sheet) {
@@ -15384,6 +15435,11 @@ async function machtileStationCmdRunSubmission(options) {
 async function machtileStationCmdSubmit() {
   const sheet = machtileStationCmd.sheet;
   if (!machtileStationCmdCanSubmit(sheet)) return;
+  if (sheet.type === "stop" && sheet.overtimeAnswer == null) {
+    const answer = machtileOvertimeAnswer();
+    if (answer === undefined) return;
+    sheet.overtimeAnswer = answer || { skipped: true };
+  }
   const existing = machtileStationCmd.pending[sheet.code];
   sheet.phase = "sending";
   sheet.attempts += 1;
@@ -15392,7 +15448,7 @@ async function machtileStationCmdSubmit() {
   await machtileStationCmdRunSubmission({
     commandUuid: sheet.uuid, commandType: sheet.type, machineCode: sheet.code,
     fields: sheet.fields,
-    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName, ...(sheet.comboStart ? { standardFinishComboStart: true } : {}) },
+    recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName, ...(sheet.comboStart ? { standardFinishComboStart: true } : {}), ...(sheet.overtimeAnswer?.skipped ? {} : { overtimeGuardSnapshot: sheet.overtimeAnswer }) },
     startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
     onError: ({ error, info }) => {
       const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
@@ -15556,7 +15612,7 @@ function machtileStationCmdHandleClick(event) {
     if (viewState) {
       const reason = event.target.closest("[data-takeover-reason]"); if (reason) { const policy = viewState.policies.find((p) => p.code === reason.dataset.takeoverReason); viewState.form.reason_code = policy.code; viewState.form.allow_takeover = policy.default_allow; viewState.form.allow_takeover_touched = false; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
       const allow = event.target.closest("[data-takeover-allow]"); if (allow) { viewState.form.allow_takeover = allow.dataset.takeoverAllow === "yes"; viewState.form.allow_takeover_touched = true; machtileTakeoverStopRender(takeoverSheet, viewState); return true; }
-      if (event.target.closest("[data-takeover-stop-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet); return true; }
+      if (event.target.closest("[data-takeover-stop-confirm]")) { if (machtileTakeoverShowMissing(takeoverSheet)) void machtileTakeoverSubmitStop(takeoverSheet); return true; }
       if (event.target.closest("[data-takeover-dup-confirm]")) { void machtileTakeoverSubmitStop(takeoverSheet, { acks: ["DUPLICATE_SUSPECTED"] }); return true; }
       if (event.target.closest("[data-takeover-dup-edit]")) {
         if (viewState.sending) return true;
@@ -25269,7 +25325,10 @@ function bindEvents() {
     const meta = reportTypeMeta[activeReportType] || reportTypeMeta.workStart;
     const completed = reportCounterApplies() ? reportCounterCalculation().delta : Number($("#completedQty").value || 0);
     const defects = Number($("#defectQty").value || 0);
-    const remark = buildReportRemark(activeReportType, $("#reportNote").value.trim());
+    const overtimeAnswer = machtileOvertimeAnswer();
+    if (overtimeAnswer === undefined) return;
+    const overtimePrefix = machtileOvertimePrefix(overtimeAnswer);
+    const remark = [overtimePrefix, buildReportRemark(activeReportType, $("#reportNote").value.trim())].filter(Boolean).join(" ");
     try {
       const result = await submitReport(completed, defects, remark, activeReportType);
       if (!result.wroteCloud) handleLocalReport(meta.needsQty ? completed : 0, defects, meta);

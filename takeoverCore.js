@@ -126,6 +126,14 @@
     if (view?.phase === "rejected") return rejectText(view.code) || `接手失敗（${text(view.code) || "UNKNOWN"}） / Tiếp quản thất bại`;
     return "";
   }
+  function stopReportRejectedText(code) {
+    const reason = ({
+      ORDER_CHANGED_DURING_APPLY: "工單在送出期間已變更",
+      ORDER_MISMATCH: "目前工單和送出時不同",
+      STALE_COMMAND: "工廠收到時這筆回報已逾時",
+    })[text(code).toUpperCase()] || "工廠沒有接受這次停工回報";
+    return `${reason}；舊 MES 已停工，這次件數沒有送出，請重新整理後再停工`;
+  }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   // 選工單／開工分開（owner 2026-10-26）：卡片在哪個階段，只給那個階段該按的按鈕。
   //   pick＝沒掛單（只有「選工單」）／pending＝掛了單還沒開工（只有「開工」）／
@@ -159,6 +167,6 @@
     return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start", "finish"] })[text(phase)] || [];
   }
   return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, stopTotals, stopDeltas, validateStop, stopPayload,
-    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, startTabs,
+    stopReportPayload, takeoverPayload, candidateView, candidateMap, availabilityAfterProbeError, probeMachine, rejectText, resultText, stopReportRejectedText, startTabs,
     pickStartPhase, pickStartActions, pickStartLocalStale };
 });

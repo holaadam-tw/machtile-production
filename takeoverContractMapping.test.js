@@ -100,7 +100,8 @@ test("rejected stop_report always shows feedback before reopening the legacy sto
   assert.ok(branch.indexOf("machtileTakeoverUseLegacyStop(code, null)") > toastAt, "legacy stop dialog reopens after the toast");
   const zh = JSON.parse(fs.readFileSync(require.resolve("./locales/zh-Hant.json"), "utf8"));
   const vi = JSON.parse(fs.readFileSync(require.resolve("./locales/vi.json"), "utf8"));
-  assert.equal(zh.takeover_stop_report_rejected_generic, "停工回報沒有成功，剛才輸入的數量沒有送出，請改用一般停工並告知生管");
+  assert.equal(zh.takeover_stop_report_rejected_generic, "舊 MES 已停工，這次件數沒有送出，請重新整理後再停工");
+  assert.doesNotMatch(zh.takeover_stop_report_rejected_generic, /一般停工/);
   assert.equal(vi.takeover_stop_report_rejected_generic._draft, true);
   assert.ok(vi.takeover_stop_report_rejected_generic.value.length > 0);
 });
