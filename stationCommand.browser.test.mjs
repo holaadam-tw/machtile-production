@@ -887,7 +887,7 @@ console.log("\n== 390px：停工回報被拒其他代碼（QTY_EXCEEDS_AVAILABLE
   await page.waitForSelector('#machtileTakeoverSheet[data-takeover-rejected="QTY_EXCEEDS_AVAILABLE"]', { timeout: 15000 });
   await page.waitForTimeout(500);   // 確認沒有接著自動開一般停工
   const toasts = await page.evaluate(() => window.__toasts);
-  ok(toasts.includes("舊 MES 已停工，這次件數沒有送出，請重新整理後再停工"), "顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
+  ok(toasts.includes("這次停工沒有成功，件數沒有送出，請重新整理後再試，仍不行請找生管"), "顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
   const ts = takeoverSheet(page);
   ok(await page.locator("#machtileStationCmdSheet").count() === 0 && legacyStopSubmits(be).length === 0, "沒有自動退回一般停工（沒開一般停工確認卡、沒送 stop）");
   ok(await ts.count() === 1 && await ts.locator("[data-takeover-dup]").count() === 0, "重開停工對話框（不是重複確認）");
@@ -994,13 +994,13 @@ console.log("\n== 390px：停工回報被拒、沒有暫存表單也沒有工單
     };
   });
   be.mode = "code:QTY_EXCEEDS_AVAILABLE";
-  await page.waitForFunction(() => window.__toasts.some((text) => text.includes("舊 MES 已停工")), null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__toasts.some((text) => text.includes("件數沒有送出")), null, { timeout: 20000 });
   await page.waitForTimeout(500);
   ok(await page.locator("#machtileStationCmdSheet").count() === 0 && await page.locator("#machtileTakeoverSheet").count() === 0, "沒有工單可重開時只提示，不開一般停工確認卡");
   ok(legacyStopSubmits(be).length === 0, "沒有送出一般停工", String(legacyStopSubmits(be).length));
   ok(be.stopReportSubmits.length === 1, "停工回報沒有重送", String(be.stopReportSubmits.length));
   const toasts = await page.evaluate(() => window.__toasts);
-  ok(toasts.includes("舊 MES 已停工，這次件數沒有送出，請重新整理後再停工"), "仍顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
+  ok(toasts.includes("這次停工沒有成功，件數沒有送出，請重新整理後再試，仍不行請找生管"), "仍顯示舊 MES 已停工且件數未送出的正確提示", JSON.stringify(toasts));
   ok(realErrors(errors).length === 0, "無表單無工單被拒沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

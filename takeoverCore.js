@@ -127,12 +127,14 @@
     return "";
   }
   function stopReportRejectedText(code) {
+    const upper = text(code).toUpperCase();
+    // 只有 ORDER_CHANGED_DURING_APPLY 代表「舊 MES 已先停工」（10/28 A04 下班自動停工）；其他拒絕不可說成已停工。
+    if (upper === "ORDER_CHANGED_DURING_APPLY") return "舊 MES 已先停工，這次件數沒有送出，請重新整理後再停工";
     const reason = ({
-      ORDER_CHANGED_DURING_APPLY: "工單在送出期間已變更",
       ORDER_MISMATCH: "目前工單和送出時不同",
       STALE_COMMAND: "工廠收到時這筆回報已逾時",
-    })[text(code).toUpperCase()] || "工廠沒有接受這次停工回報";
-    return `${reason}；舊 MES 已停工，這次件數沒有送出，請重新整理後再停工`;
+    })[upper] || "工廠沒有接受這次停工回報";
+    return `${reason}；這次件數沒有送出，請重新整理後再試，仍不行請找生管`;
   }
   function startTabs(enabled) { return enabled ? ["new", "takeover"] : ["new"]; }
   // 選工單／開工分開（owner 2026-10-26）：卡片在哪個階段，只給那個階段該按的按鈕。

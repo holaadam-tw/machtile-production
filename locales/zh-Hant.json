@@ -172,7 +172,7 @@
   "takeover_old_order": "接手舊的工單", "takeover_new_order_help": "從現有待做池選擇新訂單。", "takeover_continue_new": "繼續開工新訂單",
   "takeover_step": "第 {{step}} 道", "takeover_done_remaining": "已做 {{done}}／剩下 {{remaining}}", "takeover_take": "接手", "takeover_idle_action": "接手停工單",
   "takeover_none": "目前沒有可接手的停工單", "takeover_sending": "傳送中…", "takeover_sent": "已送出，等待工廠確認", "takeover_send_failed": "送出失敗，請稍後再試",
-  "takeover_stop_report_rejected_generic": "舊 MES 已停工，這次件數沒有送出，請重新整理後再停工",
+  "takeover_stop_report_rejected_generic": "這次停工沒有成功，件數沒有送出，請重新整理後再試，仍不行請找生管",
   "yes": "是", "no": "否", "cancel": "取消", "loading": "讀取中…",
   "takeover_taken_notice": "{{order}} 已由 {{machine}} 接手（{{who}}、{{time}}）",
   "takeover_confirm_message": "從 {{source}} 接手 {{order}} 第 {{step}} 道；{{source}} 已做 {{done}}，{{target}} 接手剩下 {{remaining}}。確定接手？"
