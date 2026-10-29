@@ -22337,11 +22337,15 @@ async function hydrateDetail(order) {
         : `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
       );
       if (config.orderDetailSimplifyEnabled && reports.length) {
-        const userIds = [...new Set(reports.flatMap((report) => [report.user_id, ...(report.operator_ids || [])]).filter(Boolean))];
-        if (userIds.length) {
-          const reportUsers = await supabaseFetch(`app_users?select=id,name&id=in.(${userIds.join(",")})`);
-          const reportUserNames = new Map((reportUsers || []).map((user) => [String(user.id), user.name]));
-          reports.forEach((report) => { report.operator_names = [...new Set([report.user_id, ...(report.operator_ids || [])].map((id) => reportUserNames.get(String(id))).filter(Boolean))]; });
+        try {
+          const userIds = [...new Set(reports.flatMap((report) => [report.user_id, ...(report.operator_ids || [])]).filter(Boolean))];
+          if (userIds.length) {
+            const reportUsers = await supabaseFetch(`app_users?select=id,name&id=in.(${userIds.join(",")})`);
+            const reportUserNames = new Map((reportUsers || []).map((user) => [String(user.id), user.name]));
+            reports.forEach((report) => { report.operator_names = [...new Set([report.user_id, ...(report.operator_ids || [])].map((id) => reportUserNames.get(String(id))).filter(Boolean))]; });
+          }
+        } catch (error) {
+          console.warn("Order detail report user lookup failed:", error);
         }
       }
       abnormalities = await supabaseFetch(
@@ -22604,6 +22608,7 @@ function machtileOrderDetailProgramHasData(profile) {
 }
 
 function machtileOrderDetailReportRows(reports) {
+  const noData = machtileTranslate("order_detail_no_data");
   const machineNames = new Map((state.machineMasters || []).flatMap((machine) => [
     machine.id ? [String(machine.id), machine.code || machine.name] : null,
     machine.dbRowId ? [String(machine.dbRowId), machine.code || machine.name] : null,
@@ -22612,12 +22617,12 @@ function machtileOrderDetailReportRows(reports) {
   return `<div class="order-detail-report-table-wrap"><table class="order-detail-report-table">
     <thead><tr><th>${escapeHtml(machtileTranslate("order_detail_time"))}</th><th>${escapeHtml(machtileTranslate("order_detail_machine"))}</th><th>${escapeHtml(machtileTranslate("order_detail_person"))}</th><th>${escapeHtml(machtileTranslate("order_detail_quantity"))}</th><th>${escapeHtml(machtileTranslate("order_detail_source"))}</th></tr></thead>
     <tbody>${reports.slice(0, 20).map((report) => {
-      const machine = machineNames.get(String(report.machine_id || "")) || "無資料";
-      const people = (report.operator_names || []).join("、") || "無資料";
+      const machine = machineNames.get(String(report.machine_id || "")) || noData;
+      const people = (report.operator_names || []).join("、") || noData;
       const good = Number.isFinite(Number(report.completed_qty)) ? Number(report.completed_qty) : null;
       const bad = Number.isFinite(Number(report.defect_qty)) ? Number(report.defect_qty) : null;
-      const quantity = good === null && bad === null ? "無資料" : machtileTranslate("order_detail_qty_value", { good: good ?? "無資料", bad: bad ?? "無資料" });
-      return `<tr data-order-detail-report><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || "無資料")}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
+      const quantity = good === null && bad === null ? noData : machtileTranslate("order_detail_qty_value", { good: good ?? noData, bad: bad ?? noData });
+      return `<tr data-order-detail-report><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || noData)}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
     }).join("")}</tbody>
   </table></div>`;
 }
@@ -22634,30 +22639,35 @@ function renderSimplifiedDetail(order, detail) {
   const dailyQty = dailyPureCapacity(profile);
   const workDays = estimatedWorkDays(order, profile);
   const route = machtileProcessFlows.get(order.id);
-  const routeMarkup = route && window.MachTileProcessFlow
-    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: "full", quantityDoneLabel: "完成", quantityPlanLabel: "計畫", ...machtileProcessFlowOptions(order.id, route.auditAvailable) })
+  const routeVisibility = machtileFlowVisibilityLevel();
+  const routeOptions = machtileProcessFlowOptions(order.id, route?.auditAvailable);
+  if (routeVisibility !== "full") delete routeOptions.canPreplan;
+  const routeMarkup = routeVisibility !== "full"
+    ? `<p class="empty-note" data-flow-detail-restricted>${escapeHtml(machtileTranslate("order_detail_route_restricted"))}</p>`
+    : route && window.MachTileProcessFlow
+    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), ...routeOptions })
     : `<p class="empty-note" data-order-detail-route-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
   const programHasData = machtileOrderDetailProgramHasData(profile);
   const cncVersions = globalThis.MachTileCncProgramUploadCore?.flattenVersions(detail.cncPrograms || []) || [];
 
   $("#detailContent").innerHTML = `
     <section class="detail-head ${status.className}">
-      <div class="detail-head-order"><div class="detail-head-pills"><span class="status-pill">${escapeHtml(status.label)}</span><span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span></div><h3>${escapeHtml(order.part)}</h3><p><span class="detail-work-no">${escapeHtml(order.id)}</span> · ${escapeHtml(order.customer)} · 圖號 ${escapeHtml(order.drawing)}</p></div>
-      <div class="detail-head-machine"><span>機台</span><strong>${escapeHtml(order.machine || "未排機")}</strong><small>${escapeHtml(order.process)}</small><small>${escapeHtml(order.lastReport || "尚未回報")}</small></div>
-      <div class="detail-machine-score"><span>完成率</span><strong>${percent}%</strong><small>${order.done} / ${order.total} 件</small>${machtileCardProgressNote(order)}</div>
-      <div class="detail-progress"><div class="progress-track" aria-label="工單完成進度 ${percent}%"><div class="progress-fill" style="width:${percent}%"></div></div></div>
+      <div class="detail-head-order"><div class="detail-head-pills"><span class="status-pill">${escapeHtml(status.label)}</span><span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span></div><h3>${escapeHtml(order.part)}</h3><p><span class="detail-work-no">${escapeHtml(order.id)}</span> · ${escapeHtml(order.customer)} · ${escapeHtml(machtileTranslate("order_detail_drawing_no"))} ${escapeHtml(order.drawing)}</p></div>
+      <div class="detail-head-machine"><span>${escapeHtml(machtileTranslate("order_detail_machine"))}</span><strong>${escapeHtml(order.machine || machtileTranslate("order_detail_unassigned"))}</strong><small>${escapeHtml(order.process)}</small><small>${escapeHtml(order.lastReport || machtileTranslate("order_detail_not_reported"))}</small></div>
+      <div class="detail-machine-score"><span>${escapeHtml(machtileTranslate("order_detail_completion_rate"))}</span><strong>${percent}%</strong><small>${escapeHtml(machtileTranslate("order_detail_progress_value", { done: order.done, total: order.total }))}</small>${machtileCardProgressNote(order)}</div>
+      <div class="detail-progress"><div class="progress-track" aria-label="${escapeHtml(machtileTranslate("order_detail_progress_aria", { percent }))}"><div class="progress-fill" style="width:${percent}%"></div></div></div>
     </section>
 
     <section class="detail-section order-detail-route" data-order-detail-route>
-      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_route_title"))}</h3><span>${route ? escapeHtml(machtileTranslate("order_detail_route_count", { count: route.processes.length })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
+      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_route_title"))}</h3><span>${routeVisibility !== "full" ? escapeHtml(machtileTranslate("order_detail_role_setting")) : route ? escapeHtml(machtileTranslate("order_detail_route_count", { count: route.processes.length })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
       ${routeMarkup}
     </section>
 
     <div class="detail-summary-grid order-detail-summary">
       <div><span>${escapeHtml(machtileTranslate("due_date"))}</span><strong>${escapeHtml(due.label)}</strong><small>${escapeHtml(order.dueDate)}</small></div>
-      <div><span>${escapeHtml(machtileTranslate("order_detail_current_process"))}</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || "未排機")}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_current_process"))}</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || machtileTranslate("order_detail_unassigned"))}</small></div>
       <div><span>${escapeHtml(machtileTranslate("order_detail_priority"))}</span><strong>${escapeHtml(priorityLabel(order.priority))}</strong><small>${escapeHtml(order.lastReport)}</small></div>
-      <div><span>${escapeHtml(machtileTranslate("order_detail_inspection"))}</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${currentProcess?.inspection_required ? "需要品檢" : "未要求"}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_inspection"))}</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${escapeHtml(machtileTranslate(currentProcess?.inspection_required ? "order_detail_inspection_required" : "order_detail_inspection_not_required"))}</small></div>
     </div>
 
     ${machtileHmcDetailSection(machtileHmcMachineFor(order.machine))}
@@ -22667,7 +22677,7 @@ function renderSimplifiedDetail(order, detail) {
       ${machtileOrderDetailReportRows(reports)}
     </section>
 
-    ${programHasData ? `<section class="detail-section program-section" data-order-detail-program><div class="detail-section-title"><h3>程式與加工基準</h3><span>${profile.historyYears ? `近 ${profile.historyYears} 年 ${profile.historyRuns} 次` : ""}</span></div><div class="program-grid"><div class="program-main-card"><span>目前 CNC 程式</span><strong>${escapeHtml(profile.programName)}</strong><small>${escapeHtml(profile.programVersion)} · Hash ${escapeHtml(profile.programHash || "-")}</small></div><div><span>上次版本</span><strong>${escapeHtml(profile.previousVersion || "-")}</strong><small>${profile.changedLines === null ? "無歷史版本" : `${profile.changedLines} 行差異`}</small></div><div><span>純加工時間</span><strong>${escapeHtml(formatSeconds(profile.pureCycleSec))}</strong><small>不含上下料</small></div><div><span>標準基準</span><strong>${escapeHtml(formatSeconds(profile.baselineCycleSec))}</strong><small class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${delta === null ? "待建立" : `${delta > 0 ? "+" : ""}${delta}%`}</small></div><div><span>每日可加工</span><strong>${dailyQty ? `${dailyQty} 件` : "-"}</strong><small>以 8 小時純加工估算</small></div><div><span>預估工期</span><strong>${workDays ? `${workDays} 天` : "-"}</strong><small>未含上下料與等待</small></div></div>${profile.toolChanges ? `<p class="program-note">${escapeHtml(profile.toolChanges)}</p>` : ""}</section>` : ""}
+    ${programHasData ? `<section class="detail-section program-section" data-order-detail-program><div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_program_title"))}</h3><span>${profile.historyYears ? escapeHtml(machtileTranslate("order_detail_history_summary", { years: profile.historyYears, runs: profile.historyRuns })) : ""}</span></div><div class="program-grid"><div class="program-main-card"><span>${escapeHtml(machtileTranslate("order_detail_current_program"))}</span><strong>${escapeHtml(profile.programName)}</strong><small>${escapeHtml(profile.programVersion)} · ${escapeHtml(machtileTranslate("order_detail_hash"))} ${escapeHtml(profile.programHash || "-")}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_previous_version"))}</span><strong>${escapeHtml(profile.previousVersion || "-")}</strong><small>${escapeHtml(profile.changedLines === null ? machtileTranslate("order_detail_no_history_version") : machtileTranslate("order_detail_changed_lines", { count: profile.changedLines }))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_pure_cycle"))}</span><strong>${escapeHtml(formatSeconds(profile.pureCycleSec))}</strong><small>${escapeHtml(machtileTranslate("order_detail_excludes_handling"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_baseline"))}</span><strong>${escapeHtml(formatSeconds(profile.baselineCycleSec))}</strong><small class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${escapeHtml(delta === null ? machtileTranslate("order_detail_pending_baseline") : `${delta > 0 ? "+" : ""}${delta}%`)}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_daily_capacity"))}</span><strong>${dailyQty ? escapeHtml(machtileTranslate("order_detail_pieces", { count: dailyQty })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_daily_capacity_note"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_estimated_duration"))}</span><strong>${workDays ? escapeHtml(machtileTranslate("order_detail_days", { count: workDays })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_duration_note"))}</small></div></div>${profile.toolChanges ? `<p class="program-note">${escapeHtml(profile.toolChanges)}</p>` : ""}</section>` : ""}
     ${cncVersions.length ? machtileWorkOrderCncMarkup(order, detail.cncPrograms || []) : ""}
   `;
   if (cncVersions.length) machtileInitWorkOrderCncUpload(order, detail.cncPrograms || []);
