@@ -8260,6 +8260,7 @@ let reportCycleTouched = false;
 let reportCyclePrefilledSeconds = null;
 let reportCounterBaselineState = { status: "idle", baseline: null, processId: "" };
 let finishReportedState = { status: "idle", quantity: null, processId: "" };
+let reportTotalState = { status: "idle", reported: null, start: null, processId: "" };
 
 function reportCounterApplies(type = activeReportType) {
   return type === "noon" || type === "finish";
@@ -8275,10 +8276,41 @@ function reportCounterEffectiveBaseline() {
 }
 
 function reportCounterCalculation() {
+  if (config.reportTotalSemanticsEnabled === true) {
+    return window.MachTileReportCounterCore.totalSemantics(
+      $("#completedQty")?.value,
+      reportTotalState.status === "ready" && reportTotalState.processId === String(selectedOrder?.processId || "") ? reportTotalState.reported : null,
+      reportTotalState.start,
+    );
+  }
   if (activeReportType === "finish") {
     return window.MachTileReportCounterCore.finishTotal($("#completedQty")?.value, machtileFinishReportedQty());
   }
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
+}
+
+async function machtileRefreshReportTotalState(order = selectedOrder) {
+  const processId = String(order?.processId || "");
+  reportTotalState = { status: "loading", reported: null, start: null, processId };
+  updateReportCounterPreview();
+  try {
+    const [totals, rows] = await Promise.all([
+      machtileFreshReportedTotals(order),
+      supabaseFetch(`production_reports?select=report_type,report_payload,created_at&process_id=eq.${encodeURIComponent(processId)}&report_date=eq.${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1`),
+    ]);
+    if (String(selectedOrder?.processId || "") !== processId) return null;
+    const start = window.MachTileReportCounterCore.latestBaseline(Array.isArray(rows) ? rows : []);
+    reportTotalState = { status: "ready", reported: Number(totals.goodDone), start: start?.qty ?? null, processId };
+    finishReportedState = { status: "ready", quantity: Number(totals.goodDone), processId };
+    updateReportCounterPreview();
+    machtileRenderFinishReportedState();
+    return reportTotalState;
+  } catch (error) {
+    console.warn("report total verification unavailable", error);
+    if (String(selectedOrder?.processId || "") === processId) reportTotalState = { status: "error", reported: null, start: null, processId };
+    updateReportCounterPreview();
+    return null;
+  }
 }
 
 // 完工「已報」必須跟 Monitor 卡片已顯示的完成進度完全同源。卡片載入時已把
@@ -8370,10 +8402,21 @@ function updateReportCounterPreview() {
   if (!preview || !manual) return;
   const applies = reportCounterApplies();
   const finish = activeReportType === "finish";
-  preview.hidden = !applies || finish;
-  manual.hidden = !applies || finish || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
+  preview.hidden = !applies || (finish && config.reportTotalSemanticsEnabled !== true);
+  manual.hidden = config.reportTotalSemanticsEnabled === true || !applies || finish || reportCounterBaselineState.status === "loading" || reportCounterBaselineState.baseline !== null;
   if (rateWarning) { rateWarning.hidden = true; rateWarning.textContent = ""; }
-  if (!applies || finish) { machtileRenderSingleStationReport(); return; }
+  if (!applies) { machtileRenderSingleStationReport(); return; }
+  if (config.reportTotalSemanticsEnabled === true) {
+    if (reportTotalState.status === "loading") { preview.textContent = machtileTranslate("counter_loading"); preview.classList.remove("is-error"); return; }
+    const result = reportCounterCalculation();
+    if (reportTotalState.status !== "ready") { preview.textContent = machtileTranslate("report_total_unavailable"); preview.classList.add("is-error"); return; }
+    preview.textContent = result.valid
+      ? machtileTranslate("report_total_preview", { reported: result.reported, total: result.total, add: result.delta, backfill: result.backfill })
+      : result.message;
+    preview.classList.toggle("is-error", !result.valid);
+    machtileRenderSingleStationReport();
+    return;
+  }
   if (reportCounterBaselineState.status === "loading") {
     preview.textContent = machtileTranslate("counter_loading");
     preview.classList.remove("is-error");
@@ -8509,6 +8552,7 @@ function setReportDefaults(order) {
   const manualBaseline = $("#reportCounterManualBaseline");
   if (manualBaseline) manualBaseline.value = "";
   reportCounterBaselineState = { status: "idle", baseline: null, processId: order?.processId || "" };
+  reportTotalState = { status: "idle", reported: null, start: null, processId: order?.processId || "" };
   updateReportCounterPreview();
 }
 
@@ -8552,7 +8596,7 @@ function setReportType(type) {
   if (submitButton) submitButton.textContent = meta.submitLabel;
   if (activeReportType === "noon") updateNoonAdvice();
   const completedLabel = $("#completedQtyLabel");
-  if (completedLabel) completedLabel.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_good" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity"));
+  if (completedLabel) completedLabel.textContent = machtileTranslate(reportCounterApplies() && config.reportTotalSemanticsEnabled === true ? "machine_order_total" : (activeReportType === "finish" ? "finish_total_good" : (reportCounterApplies() ? "machine_current_counter" : "good_quantity")));
   machtileRenderFinishReportedState();
   const qtyHelp = $("#reportQtyHelp");
   if (qtyHelp) qtyHelp.textContent = machtileTranslate(activeReportType === "finish" ? "finish_total_help" : "counter_qty_help");
@@ -8636,6 +8680,7 @@ function validateReportForm(type) {
     if (type !== "finish" && reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
     const result = reportCounterCalculation();
     if (!result.valid) return result.message;
+    if (config.reportTotalSemanticsEnabled === true && type === "noon" && result.delta === 0) return machtileTranslate("counter_zero_report");
   }
   if (type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder)) {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -22074,7 +22119,8 @@ function openReport(orderId, options = {}) {
     ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
     : requestedType;
   setReportType(availableType);
-  if (availableType === "finish") void machtileLoadFinishReportedQty(order);
+  if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(availableType)) void machtileRefreshReportTotalState(order);
+  if (availableType === "finish" && config.reportTotalSemanticsEnabled !== true) void machtileLoadFinishReportedQty(order);
   updateReportCounterPreview();
   if (!order) setReportDefaults(null);
   void loadReportCounterBaseline(order);
@@ -23050,6 +23096,7 @@ const machtileBatchState = {
   progressError: "",
   progressByProcess: new Map(),
   counterBaselineByProcess: new Map(),
+  freshReportedByProcess: new Map(),
   stationShiftByMachine: new Map(),
   // 單卡與 Monitor 既有 cycle-time 快取；批次頁只讀 station_commands，不提供寫入欄位。
   machineTimeByProcess: new Map(),
@@ -23507,10 +23554,17 @@ async function machtileStationReportSubmitPreview(code) {
     catch (error) { block(error.message); return; }
     flow.singleReport = {
       reportType,
-      reportPayload: buildReportPayload(reportType),
+      reportPayload: {
+        ...buildReportPayload(reportType),
+        ...(config.reportTotalSemanticsEnabled === true
+          ? window.MachTileReportCounterCore.efficiencyPayload(reportCounterCalculation())
+          : {}),
+      },
       operators: machtileSelectedOperators(machtileBatchState.actorId),
       shortCompletion,
     };
+    const backfillQty = Number(flow.singleReport.reportPayload?.backfill_qty || 0);
+    flow.singleReport.reportNote = `${backfillQty > 0 ? `含前一班未報 ${backfillQty} 件；` : ""}${row.reportNote || ""}` || null;
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
     // 仍建立 completed_qty=0 的正式 finish 紀錄，再沿用既有 close command 收尾。
     if (reportType === "finish" && Number(row.good) === 0 && Number(row.bad) === 0) {
@@ -23545,7 +23599,7 @@ async function machtileStationReportSubmitPreview(code) {
     }
   }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-    reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: null };
+    reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null };
   let args;
   try {
     args = core.buildSubmitArgs(form, crypto.randomUUID(), true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
@@ -23614,7 +23668,7 @@ async function machtileStationReportSubmitFinal(code) {
   let args;
   try {
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-      reportNote: row.reportNote || null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
+      reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
   machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");
@@ -24004,6 +24058,11 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.users = core.operatorChoices(users);
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.counterBaselineByProcess = counters;
+    machtileBatchState.freshReportedByProcess = new Map();
+    uniq.forEach((processId) => {
+      const shown = core.displayProgress(progress.map.get(String(processId)) || null);
+      if (shown.available && shown.legacyKnown) machtileBatchState.freshReportedByProcess.set(String(processId), shown.totalOutput);
+    });
     machtileBatchState.stationShiftByMachine = stationShifts;
     machtileBatchResetCommandSelection();
     machtileBatchState.progressError = progress.error;
@@ -24163,7 +24222,9 @@ function machtileBatchRowModel(code, endedAtIso) {
   const baseline = order ? machtileBatchState.counterBaselineByProcess.get(String(order.processId)) : null;
   const counter = mode === "dailyStart"
     ? { valid: true, current: Number(order?.done || 0) || 0, baseline: null, delta: 0, message: "" }
-    : core.counterCalculation({ current: row.current, baseline: baseline?.qty ?? null });
+    : config.reportTotalSemanticsEnabled === true
+      ? window.MachTileReportCounterCore.totalSemantics(row.current, machtileBatchState.freshReportedByProcess.get(String(order?.processId)), baseline?.qty ?? null)
+      : core.counterCalculation({ current: row.current, baseline: baseline?.qty ?? null });
   row.good = counter.valid ? counter.delta : "";
   return {
     mode,
@@ -24371,6 +24432,18 @@ async function machtileSubmitBatchReport() {
   }
   const meta = mode === "dailyStart" ? core.MODES.dailyStart : { label: "報工" };
   const endedAt = new Date().toISOString();
+  if (config.reportTotalSemanticsEnabled === true && mode !== "dailyStart") {
+    try {
+      const orders = group.machines.map((code) => machtileBatchSelectedOrder(code)).filter(Boolean);
+      const totals = await Promise.all(orders.map((order) => machtileFreshReportedTotals(order)));
+      orders.forEach((order, index) => machtileBatchState.freshReportedByProcess.set(String(order.processId), Number(totals[index].goodDone)));
+    } catch (error) {
+      machtileBatchState.formError = machtileTranslate("report_total_unavailable");
+      machtileRenderBatchReport();
+      showToast(machtileBatchState.formError);
+      return;
+    }
+  }
   const models = group.machines.map((code) => machtileBatchRowModel(code, endedAt));
   const checks = models.map((m) => ({ model: m, v: core.validateRow(m) }));
   checks.forEach(({ model, v }) => {
@@ -24417,7 +24490,25 @@ async function machtileSubmitBatchReport() {
   machtileRenderBatchReport();
   const drafts = machtileBatchReadDrafts();
   const actorId = machtileBatchState.actorId || await machtileResolveAppUserId();
-  const prepared = toSend.map(({ model }) => {
+  const prepared = toSend.flatMap(({ model }) => {
+    if (config.reportTotalSemanticsEnabled === true && model.counter?.reports?.length > 1) {
+      const fingerprint = `${model.order.tenantId || ""}|${model.order.processId}|${model.mode}|${model.counter.total}|${model.counter.reported}|${model.counter.start}`;
+      return model.counter.reports.map((part) => {
+        const reportUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: model.order.tenantId, machineCode: model.machineCode,
+          processId: model.order.processId, commandUuid: fingerprint, phase: `${model.mode}-${part.kind}` });
+        const partModel = { ...model, counter: { ...model.counter, delta: part.good }, bad: part.kind === "counter_today" ? model.bad : 0,
+          finished: part.kind === "counter_today" ? model.finished : false,
+          failReasonCode: part.kind === "counter_today" ? model.failReasonCode : "",
+          reportNote: part.kind === "start_backfill" ? `${model.reportNote || ""} 開工補報（前一班未報）`.trim() : model.reportNote };
+        const built = core.buildReportPayload({ row: partModel, actorAppUserId: actorId, endedAt, reportUuid, tenantId: model.order.tenantId });
+        Object.assign(built.payload.report_payload, part.payload);
+        if (part.kind === "start_backfill") {
+          built.payload.report_type = "noon";
+          built.payload.report_payload.report_type = "noon";
+        }
+        return { model, built, part };
+      });
+    }
     const prev = drafts[model.machineCode];
     const id = core.ensureReportUuid(prev, model, () => crypto.randomUUID());
     // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致
@@ -24425,7 +24516,7 @@ async function machtileSubmitBatchReport() {
     const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
     drafts[model.machineCode] = { reportUuid: id.reportUuid, fingerprint: id.fingerprint, startedAt, endedAt: end };
     const built = core.buildReportPayload({ row: { ...model, startedAt }, actorAppUserId: actorId, endedAt: end, reportUuid: id.reportUuid, tenantId: model.order.tenantId });
-    return { model, built };
+    return [{ model, built }];
   });
   machtileBatchWriteDrafts(drafts);   // 先記下 uuid 再送：送到一半當機／斷線，再按一次還是同一筆
 
@@ -25450,6 +25541,13 @@ function bindEvents() {
       machtileShowReportSubmitError("此機台尚未指派工單，請先由主管排入工單。");
       return;
     }
+    if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(activeReportType)) {
+      const fresh = await machtileRefreshReportTotalState(selectedOrder);
+      if (!fresh) {
+        machtileShowReportSubmitError(machtileTranslate("report_total_unavailable"));
+        return;
+      }
+    }
     const smartReportAllowlisted = ["noon", "finish"].includes(activeReportType)
       && machtileSingleStationReportAllowlisted(selectedOrder.machine);
     const smartReportExplicitlyDisabled = smartReportAllowlisted
@@ -25497,14 +25595,38 @@ function bindEvents() {
       }
     }
     const meta = reportTypeMeta[activeReportType] || reportTypeMeta.workStart;
-    const completed = reportCounterApplies() ? reportCounterCalculation().delta : Number($("#completedQty").value || 0);
+    const counterPlan = reportCounterApplies() ? reportCounterCalculation() : null;
+    const completed = counterPlan ? counterPlan.delta : Number($("#completedQty").value || 0);
     const defects = Number($("#defectQty").value || 0);
     const overtimeAnswer = machtileOvertimeAnswer();
     if (overtimeAnswer === undefined) return;
     const overtimePrefix = machtileOvertimePrefix(overtimeAnswer);
     const remark = [overtimePrefix, buildReportRemark(activeReportType, $("#reportNote").value.trim())].filter(Boolean).join(" ");
     try {
-      const result = await submitReport(completed, defects, remark, activeReportType);
+      let result;
+      if (config.reportTotalSemanticsEnabled === true && counterPlan && counterPlan.reports.length > 1) {
+        const fingerprint = `${selectedOrder.tenantId || ""}|${selectedOrder.processId}|${activeReportType}|${counterPlan.total}|${counterPlan.reported}|${counterPlan.start}`;
+        const results = [];
+        for (const part of counterPlan.reports) {
+          const reportUuid = machtileStationCmdCore.startBackfillReportUuid({
+            tenantId: selectedOrder.tenantId, machineCode: selectedOrder.machine, processId: selectedOrder.processId,
+            commandUuid: fingerprint, phase: `${activeReportType}-${part.kind}`,
+          });
+          const partPayload = { ...buildReportPayload(activeReportType), ...part.payload, completed_qty: part.good };
+          const partRemark = part.kind === "start_backfill"
+            ? `${remark}；開工補報（前一班未報）`
+            : `${remark}；今日計數（開工數 ${counterPlan.start}）`;
+          results.push(await submitReport(part.good, part.kind === "counter_today" ? defects : 0, partRemark, activeReportType, {
+            reportUuid, reportPayload: partPayload, noFiles: part.kind === "start_backfill", requireStructured: true,
+          }));
+        }
+        result = results[results.length - 1];
+      } else {
+        const payload = counterPlan && config.reportTotalSemanticsEnabled === true
+          ? { ...buildReportPayload(activeReportType), ...(counterPlan.start != null ? { counter_today: true, start_counter: counterPlan.start } : {}), completed_qty: completed }
+          : undefined;
+        result = await submitReport(completed, defects, remark, activeReportType, payload ? { reportPayload: payload } : {});
+      }
       if (!result.wroteCloud) handleLocalReport(meta.needsQty ? completed : 0, defects, meta);
       closeReport();
       renderAll();

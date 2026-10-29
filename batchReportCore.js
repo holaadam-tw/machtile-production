@@ -213,6 +213,7 @@
   }
 
   function counterCalculation(row) {
+    if (row?.counter && typeof row.counter === "object") return row.counter;
     if (!counterCore?.calculate) return { valid: false, code: "COUNTER_CORE_MISSING", message: "累計數計算核心未載入。", current: null, baseline: null, delta: null };
     return counterCore.calculate(row?.current, row?.baseline);
   }
@@ -314,6 +315,7 @@
     const badN = bad === null ? 0 : bad;
     const counter = counterCalculation(row);
     if (!counter.valid) return { send: false, empty: false, error: counter.message };
+    if (counter.delta === 0 && mode === "noon") return { send: false, empty: false, error: "本次增加 0 件，不需報工。" };
     if (!Number.isInteger(counter.current) || !Number.isInteger(counter.delta) || !Number.isInteger(badN)) return { send: false, empty: false, error: "數量要填整數" };
     if (badN < 0) return { send: false, empty: false, error: "數量不能是負的" };
     const failReason = validateFailReason(row, badN);

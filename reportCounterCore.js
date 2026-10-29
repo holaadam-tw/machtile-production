@@ -50,6 +50,43 @@
     return { valid: true, code: "OK", message: "", total, reported, delta };
   }
 
+  // Owner 2026-10-29: every counter entry is the machine's current total for
+  // this order.  The reported total is authoritative and must be freshly read
+  // from the same source as the card before this function is used.
+  function totalSemantics(totalValue, reportedValue, startValue = null) {
+    const total = finiteCounter(totalValue);
+    const reported = finiteCounter(reportedValue);
+    const start = finiteCounter(startValue);
+    if (total === null) return { valid: false, code: "TOTAL_REQUIRED", message: "請填寫機台目前顯示總數（這張單）。", total, current: total, reported, baseline: reported, start, delta: null, backfill: 0, today: 0, reports: [] };
+    if (reported === null) return { valid: false, code: "REPORTED_REQUIRED", message: "暫時無法核對已報數量，請稍後再按", total, current: total, reported, baseline: reported, start, delta: null, backfill: 0, today: 0, reports: [] };
+    if (total < reported) return { valid: false, code: "TOTAL_BELOW_REPORTED", message: "機台數字比系統少，請確認是這張單的數字", total, current: total, reported, baseline: reported, start, delta: total - reported, backfill: 0, today: 0, reports: [] };
+    const delta = total - reported;
+    const split = start !== null && reported < start && total >= start;
+    const backfill = split ? start - reported : 0;
+    const today = split ? total - start : delta;
+    const reports = split
+      ? [
+          { kind: "start_backfill", good: backfill, payload: { start_backfill: true, start_counter: start } },
+          { kind: "counter_today", good: today, payload: { counter_today: true, start_counter: start } },
+        ]
+      : [{ kind: "total_delta", good: delta, payload: {} }];
+    return { valid: true, code: "OK", message: "", total, current: total, reported, baseline: reported, start, delta, backfill, today, reports };
+  }
+
+  function efficiencyPayload(result) {
+    const good = Number(result?.delta);
+    const reported = Number(result?.reported);
+    const start = Number.isInteger(result?.start) ? result.start : null;
+    if (!result?.valid || !Number.isInteger(good) || !Number.isInteger(reported)) return null;
+    const backfillQty = start === null ? 0 : Math.max(0, Math.min(result.total, start) - reported);
+    return {
+      start_counter: start,
+      reported_before: reported,
+      backfill_qty: backfillQty,
+      counter_today_qty: good - backfillQty,
+    };
+  }
+
   function rateReasonableness({ cycleSeconds, startedAt, now, reportedQty } = {}) {
     const seconds = Number(cycleSeconds);
     const startMs = Date.parse(startedAt);
@@ -62,5 +99,5 @@
       message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "" };
   }
 
-  return { latestBaseline, calculate, finishTotal, rateReasonableness };
+  return { latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayload, rateReasonableness };
 });
