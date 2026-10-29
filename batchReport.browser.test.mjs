@@ -32,7 +32,7 @@ const machines = ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"]
   machine_name: code, machine_type: code.startsWith("A") ? "車床" : "加工中心", location: "", status: "idle", display_order: index }));
 const b64 = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const jwt = `${b64({ alg: "HS256" })}.${b64({ sub: user.auth, email: "op@test.invalid", exp: Math.floor(now / 1000) + 3600, role: "authenticated", app_metadata: { tenant_id: T, role: "operator" } })}.sig`;
-const config = `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${FAKE}",supabaseAnonKey:"test",tenantId:"${T}",useSupabase:true,useTenantHeaderAuth:true,enableOutboxSubmit:false,enableFileUpload:false,enableStationReport:false,disableServiceWorker:true};`;
+const config = `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${FAKE}",supabaseAnonKey:"test",tenantId:"${T}",useSupabase:true,useTenantHeaderAuth:true,enableOutboxSubmit:false,enableFileUpload:false,enableStationReport:false,reportTotalSemanticsEnabled:true,disableServiceWorker:true};`;
 const upserts = [];
 const blocked = [];
 const stationRows = [
@@ -46,14 +46,18 @@ async function fake(route) {
   if (p.endsWith("/rpc/machine_department_context")) return json({ tenant_id: T, role: "planner", is_bridge: false, all_departments: true, department_codes: ["LATHE", "MILL"] });
   if (p.endsWith("/v_work_order_cards")) return json(cards);
   if (p.endsWith("/work_order_processes") && (url.searchParams.get("select") || "").includes("work_orders!inner")) return json(assignedCardFixture(cards, machines));
+  if (p.endsWith("/work_order_processes") && (url.searchParams.get("select") || "").includes("qty_completed")) return json([{ id: id(304), qty_completed: 0, qty_defect: 0 }]);
   if (p.endsWith("/v_machine_management_cards")) return json(machines);
   if (p.endsWith("/app_users")) return json(url.searchParams.has("auth_user_id") ? [{ id: user.id, name: user.name }] : [user]);
-  if (p.endsWith("/rpc/batch_report_progress")) return json([{ process_id: id(304), legacy_output: 10, legacy_fail: 0, pending_output: 0, pending_fail: 0,
-    pending_count: 0, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() }]);
+  if (p.endsWith("/rpc/batch_report_progress")) {
+    const pendingOutput = upserts.reduce((sum, item) => sum + Number(item.p_payload?.completed_qty || 0), 0);
+    return json([{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: pendingOutput, pending_fail: 0,
+      pending_count: upserts.length, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() }]);
+  }
   if (p.endsWith("/production_reports") && req.method() === "GET" && (url.searchParams.get("select") || "").includes("report_payload")) return json([
-    { process_id: id(304), report_type: "dailyStart", report_payload: { machine_qty: 100 }, created_at: new Date(now - 180 * 60000).toISOString() },
+    { process_id: id(304), report_type: "dailyStart", report_payload: { machine_qty: 150 }, created_at: new Date(now - 180 * 60000).toISOString() },
   ]);
-  if (p.endsWith("/station_commands") && req.method() === "GET") return json(stationRows);
+  if (p.endsWith("/station_commands") && req.method() === "GET") return json((url.searchParams.get("status") || "").includes("pending") ? [] : stationRows);
   if (p.endsWith("/rpc/field_report_upsert")) { const body = JSON.parse(req.postData() || "{}"); upserts.push(body); return json({ inserted: true, report_id: id(700) }); }
   if (p.includes("/rest/v1/")) return json([]);
   return json({});
@@ -84,26 +88,37 @@ ok(await rootView.locator("[data-batch-ct-min],[data-batch-ct-sec]").count() ===
 ok(await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').count() === 1, "each enabled machine has a finish checkbox");
 ok((await rootView.locator('[data-batch-machine-state="A04"]').innerText()).includes("停工｜本班開工→停工累計 90 分"), "station_commands drives stopped status and read-only minutes");
 ok(await rootView.locator('[data-batch-row="A01"] [data-batch-current]').isDisabled(), "machine without assignment cannot report");
-await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("115");
-ok((await rootView.locator('[data-batch-counter-preview="A04"]').innerText()).includes("上次 100｜這次＝累計－上次 15"), "DOM preview shows shared cumulative delta");
+await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("170");
+ok((await rootView.locator('[data-batch-counter-preview="A04"]').innerText()).includes("30"), "DOM preview uses card-reported total rather than today's start counter");
 await rootView.locator('[data-batch-row="A04"] [data-batch-bad]').fill("2");
 ok(await rootView.locator('[data-batch-row="A04"] [data-batch-reason-field]').isVisible(), "defect quantity reveals the centralized reason selector");
 await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').check();
 await rootView.locator("[data-batch-submit]").click();
-ok(upserts.length === 0, "batch row with defects is blocked before any write when reason is missing");
-ok((await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).includes("選擇不良原因"), "blocked row explains the missing defect reason");
-await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption({ label: "其他" });
-ok(await rootView.locator('[data-batch-row="A04"] [data-batch-note-field]').isVisible(), "Other reveals its required note field");
+ok(upserts.length === 0, "defects without a selected reason are blocked before every write");
+await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption("其他");
 await rootView.locator("[data-batch-submit]").click();
-ok(upserts.length === 0, "Other without a note is blocked before any write");
-await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption({ label: "尺寸不良" });
-await rootView.locator("[data-batch-submit]").click();
+ok(upserts.length === 0, "Other without an explanation is blocked before every write");
+await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption({ index: 1 });
+await page.evaluate(() => machtileBatchRefreshSubmitButton());
+await rootView.locator("[data-batch-submit]").evaluate((button) => button.click());
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("已送出"));
-ok(upserts.length === 1, "one machine creates exactly one report");
+ok(upserts.length === 1, "R=140, S=150, total=170 creates exactly one report");
 const payload = upserts[0].p_payload;
-ok(payload.report_type === "finish" && payload.completed_qty === 15 && payload.defect_qty === 2, "finish payload uses delta and current defect count");
+ok(payload.report_type === "finish" && payload.completed_qty === 30 && payload.defect_qty === 2, "finish keeps its report type and sends the full delta once");
+ok(payload.report_payload.backfill_qty === 10 && payload.report_payload.counter_today_qty === 20 && payload.report_payload.start_counter === 150 && payload.report_payload.reported_before === 140, "single payload carries shared backfill/today metadata");
+ok((payload.remark || "").startsWith("含前一班未報 10 件；"), "single payload remark starts with the backfill annotation");
 ok(payload.report_payload.fail_reason_code === "尺寸不良", "batch payload persists the selected defect reason");
-ok(payload.report_payload.machine_qty === 115 && payload.report_payload.counter_baseline_qty === 100 && payload.cycle_time_seconds === null, "payload matches single-card cumulative contract and does not write cycle time");
+ok(payload.report_payload.machine_qty === 170 && payload.report_payload.counter_baseline_qty === 140 && payload.cycle_time_seconds === null, "payload baseline uses the freshly reread card-reported total");
+await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"]')?.textContent.includes("170"));
+ok((await rootView.locator('[data-batch-row="A04"]').innerText()).includes("170"), "card reported total becomes the entered machine total");
+const browserCases = await page.evaluate(() => ({
+  one: MachTileReportCounterCore.totalSemantics(170, 150, 150),
+  lower: MachTileReportCounterCore.totalSemantics(130, 140, 150),
+  missing: MachTileReportCounterCore.totalSemantics(170, null, 150),
+}));
+ok(browserCases.one.reports.length === 1 && browserCases.one.reports[0].good === 20, "R=S=150, total=170 produces one report of 20");
+ok(browserCases.lower.code === "TOTAL_BELOW_REPORTED", "total below freshly reported quantity is blocked");
+ok(browserCases.missing.code === "REPORTED_REQUIRED", "missing freshly reported quantity fails closed");
 ok(blocked.length === 0, "browser did not contact production or another external host");
 await page.screenshot({ path: path.join(outDir, "batch-report-align-a04.png"), fullPage: true });
 await context.close(); await browser.close(); await new Promise((resolve) => server.close(resolve));
