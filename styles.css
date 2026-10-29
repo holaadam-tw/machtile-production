@@ -13244,3 +13244,10 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .pick-order-tabs { margin: 4px 0 10px; }
 .pick-order-note { margin: 0 0 10px; color: #4b5b6c; font-size: .95rem; }
 .pick-order-empty { margin: 12px 0; border-radius: 10px; background: #eef2f6; color: #2f3d4c; padding: 10px 12px; font-weight: 800; }
+
+.order-detail-route .process-flow { margin-top: 12px; }
+.order-detail-report-table-wrap { overflow-x: auto; }
+.order-detail-report-table { width: 100%; min-width: 640px; border-collapse: collapse; }
+.order-detail-report-table th,
+.order-detail-report-table td { padding: 10px 12px; border-bottom: 1px solid var(--line, #d8dee8); text-align: left; vertical-align: top; }
+.order-detail-report-table th { color: var(--muted, #526170); font-size: .85rem; }

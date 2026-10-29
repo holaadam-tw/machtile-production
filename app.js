@@ -23,6 +23,8 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
+  orderDetailSimplifyEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
@@ -22330,9 +22332,18 @@ async function hydrateDetail(order) {
       processes = await supabaseFetch(
         `work_order_processes?select=process_order,process_code,process_name,process_type,status,qty_planned,qty_completed,qty_defect,inspection_required,inspection_status,planned_start_at,planned_end_at,actual_start_at,actual_end_at,remark&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=process_order.asc`
       );
-      reports = await supabaseFetch(
-        `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
+      reports = await supabaseFetch(config.orderDetailSimplifyEnabled
+        ? `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at,ended_at,report_type,machine_id,user_id,operator_ids&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=20`
+        : `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
       );
+      if (config.orderDetailSimplifyEnabled && reports.length) {
+        const userIds = [...new Set(reports.flatMap((report) => [report.user_id, ...(report.operator_ids || [])]).filter(Boolean))];
+        if (userIds.length) {
+          const reportUsers = await supabaseFetch(`app_users?select=id,name&id=in.(${userIds.join(",")})`);
+          const reportUserNames = new Map((reportUsers || []).map((user) => [String(user.id), user.name]));
+          reports.forEach((report) => { report.operator_names = [...new Set([report.user_id, ...(report.operator_ids || [])].map((id) => reportUserNames.get(String(id))).filter(Boolean))]; });
+        }
+      }
       abnormalities = await supabaseFetch(
         `abnormal_events?select=event_type,severity,description,status,reported_at,resolution&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=reported_at.desc&limit=6`
       );
@@ -22354,8 +22365,8 @@ async function hydrateDetail(order) {
   }
 
   renderDetail(order, {
-    processes: processes.length ? processes : fallbackProcesses(order),
-    reports: reports.length ? reports : fallbackReports(order),
+    processes: config.orderDetailSimplifyEnabled ? processes : (processes.length ? processes : fallbackProcesses(order)),
+    reports: config.orderDetailSimplifyEnabled ? reports : (reports.length ? reports : fallbackReports(order)),
     abnormalities: abnormalities.length ? abnormalities : fallbackAbnormalities(order),
     cncPrograms,
   });
@@ -22574,6 +22585,95 @@ function machtileInitWorkOrderCncUpload(order, programs) {
 }
 
 function renderDetail(order, detail) {
+  if (config.orderDetailSimplifyEnabled) {
+    renderSimplifiedDetail(order, detail);
+    return;
+  }
+  renderLegacyDetail(order, detail);
+}
+
+function machtileOrderDetailProgramHasData(profile) {
+  return Boolean(
+    (profile.programName && profile.programName !== "待上傳")
+    || (profile.programVersion && profile.programVersion !== "-")
+    || profile.programHash
+    || Number(profile.pureCycleSec)
+    || Number(profile.baselineCycleSec)
+    || Number(profile.historyRuns)
+  );
+}
+
+function machtileOrderDetailReportRows(reports) {
+  const machineNames = new Map((state.machineMasters || []).flatMap((machine) => [
+    machine.id ? [String(machine.id), machine.code || machine.name] : null,
+    machine.dbRowId ? [String(machine.dbRowId), machine.code || machine.name] : null,
+  ].filter(Boolean)));
+  if (!reports.length) return `<p class="empty-note" data-order-detail-reports-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
+  return `<div class="order-detail-report-table-wrap"><table class="order-detail-report-table">
+    <thead><tr><th>${escapeHtml(machtileTranslate("order_detail_time"))}</th><th>${escapeHtml(machtileTranslate("order_detail_machine"))}</th><th>${escapeHtml(machtileTranslate("order_detail_person"))}</th><th>${escapeHtml(machtileTranslate("order_detail_quantity"))}</th><th>${escapeHtml(machtileTranslate("order_detail_source"))}</th></tr></thead>
+    <tbody>${reports.slice(0, 20).map((report) => {
+      const machine = machineNames.get(String(report.machine_id || "")) || "無資料";
+      const people = (report.operator_names || []).join("、") || "無資料";
+      const good = Number.isFinite(Number(report.completed_qty)) ? Number(report.completed_qty) : null;
+      const bad = Number.isFinite(Number(report.defect_qty)) ? Number(report.defect_qty) : null;
+      const quantity = good === null && bad === null ? "無資料" : machtileTranslate("order_detail_qty_value", { good: good ?? "無資料", bad: bad ?? "無資料" });
+      return `<tr data-order-detail-report><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || "無資料")}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
+    }).join("")}</tbody>
+  </table></div>`;
+}
+
+function renderSimplifiedDetail(order, detail) {
+  const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
+  const due = dueInfo(order);
+  const percent = pct(order);
+  const processes = detail.processes || [];
+  const reports = detail.reports || [];
+  const currentProcess = processes.find((process) => ["running", "waiting_inspection", "abnormal", "paused"].includes(process.status)) || processes[0];
+  const profile = getProgramProfile(order);
+  const delta = cycleDelta(profile);
+  const dailyQty = dailyPureCapacity(profile);
+  const workDays = estimatedWorkDays(order, profile);
+  const route = machtileProcessFlows.get(order.id);
+  const routeMarkup = route && window.MachTileProcessFlow
+    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: "full", quantityDoneLabel: "完成", quantityPlanLabel: "計畫", ...machtileProcessFlowOptions(order.id, route.auditAvailable) })
+    : `<p class="empty-note" data-order-detail-route-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
+  const programHasData = machtileOrderDetailProgramHasData(profile);
+  const cncVersions = globalThis.MachTileCncProgramUploadCore?.flattenVersions(detail.cncPrograms || []) || [];
+
+  $("#detailContent").innerHTML = `
+    <section class="detail-head ${status.className}">
+      <div class="detail-head-order"><div class="detail-head-pills"><span class="status-pill">${escapeHtml(status.label)}</span><span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span></div><h3>${escapeHtml(order.part)}</h3><p><span class="detail-work-no">${escapeHtml(order.id)}</span> · ${escapeHtml(order.customer)} · 圖號 ${escapeHtml(order.drawing)}</p></div>
+      <div class="detail-head-machine"><span>機台</span><strong>${escapeHtml(order.machine || "未排機")}</strong><small>${escapeHtml(order.process)}</small><small>${escapeHtml(order.lastReport || "尚未回報")}</small></div>
+      <div class="detail-machine-score"><span>完成率</span><strong>${percent}%</strong><small>${order.done} / ${order.total} 件</small>${machtileCardProgressNote(order)}</div>
+      <div class="detail-progress"><div class="progress-track" aria-label="工單完成進度 ${percent}%"><div class="progress-fill" style="width:${percent}%"></div></div></div>
+    </section>
+
+    <section class="detail-section order-detail-route" data-order-detail-route>
+      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_route_title"))}</h3><span>${route ? escapeHtml(machtileTranslate("order_detail_route_count", { count: route.processes.length })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
+      ${routeMarkup}
+    </section>
+
+    <div class="detail-summary-grid order-detail-summary">
+      <div><span>${escapeHtml(machtileTranslate("due_date"))}</span><strong>${escapeHtml(due.label)}</strong><small>${escapeHtml(order.dueDate)}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_current_process"))}</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || "未排機")}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_priority"))}</span><strong>${escapeHtml(priorityLabel(order.priority))}</strong><small>${escapeHtml(order.lastReport)}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_inspection"))}</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${currentProcess?.inspection_required ? "需要品檢" : "未要求"}</small></div>
+    </div>
+
+    ${machtileHmcDetailSection(machtileHmcMachineFor(order.machine))}
+
+    <section class="detail-section" data-order-detail-reports>
+      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_reports_title"))}</h3><span>${reports.length ? escapeHtml(machtileTranslate("order_detail_report_count", { count: Math.min(reports.length, 20) })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
+      ${machtileOrderDetailReportRows(reports)}
+    </section>
+
+    ${programHasData ? `<section class="detail-section program-section" data-order-detail-program><div class="detail-section-title"><h3>程式與加工基準</h3><span>${profile.historyYears ? `近 ${profile.historyYears} 年 ${profile.historyRuns} 次` : ""}</span></div><div class="program-grid"><div class="program-main-card"><span>目前 CNC 程式</span><strong>${escapeHtml(profile.programName)}</strong><small>${escapeHtml(profile.programVersion)} · Hash ${escapeHtml(profile.programHash || "-")}</small></div><div><span>上次版本</span><strong>${escapeHtml(profile.previousVersion || "-")}</strong><small>${profile.changedLines === null ? "無歷史版本" : `${profile.changedLines} 行差異`}</small></div><div><span>純加工時間</span><strong>${escapeHtml(formatSeconds(profile.pureCycleSec))}</strong><small>不含上下料</small></div><div><span>標準基準</span><strong>${escapeHtml(formatSeconds(profile.baselineCycleSec))}</strong><small class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${delta === null ? "待建立" : `${delta > 0 ? "+" : ""}${delta}%`}</small></div><div><span>每日可加工</span><strong>${dailyQty ? `${dailyQty} 件` : "-"}</strong><small>以 8 小時純加工估算</small></div><div><span>預估工期</span><strong>${workDays ? `${workDays} 天` : "-"}</strong><small>未含上下料與等待</small></div></div>${profile.toolChanges ? `<p class="program-note">${escapeHtml(profile.toolChanges)}</p>` : ""}</section>` : ""}
+    ${cncVersions.length ? machtileWorkOrderCncMarkup(order, detail.cncPrograms || []) : ""}
+  `;
+  if (cncVersions.length) machtileInitWorkOrderCncUpload(order, detail.cncPrograms || []);
+}
+
+function renderLegacyDetail(order, detail) {
   const statusKey = deriveOrderStatus(order);
   const status = statusMeta[statusKey] || statusMeta.normal;
   const due = dueInfo(order);
