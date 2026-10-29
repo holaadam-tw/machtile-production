@@ -8411,7 +8411,7 @@ function updateReportCounterPreview() {
     const result = reportCounterCalculation();
     if (reportTotalState.status !== "ready") { preview.textContent = machtileTranslate("report_total_unavailable"); preview.classList.add("is-error"); return; }
     preview.textContent = result.valid
-      ? machtileTranslate("report_total_preview", { reported: result.reported, total: result.total, add: result.delta, backfill: result.backfill })
+      ? machtileTranslate(Number(result.backfill) > 0 ? "report_total_preview" : "report_total_preview_plain", { reported: result.reported, total: result.total, add: result.delta, backfill: result.backfill })
       : result.message;
     preview.classList.toggle("is-error", !result.valid);
     machtileRenderSingleStationReport();
@@ -23561,8 +23561,10 @@ async function machtileStationReportSubmitPreview(code) {
       machtileBatchState.freshReportedByProcess.set(String(order.processId), reported);
       if (machtileSingleStationReportOrder(code)) {
         reportTotalState = { ...reportTotalState, status: "ready", reported, processId: String(order.processId) };
+      } else {
+        // 只有批次列需要重算 row.good；單站表單的良品來自 #completedQty，重算會把它清成空值
+        machtileBatchRowModel(code, new Date().toISOString());
       }
-      machtileBatchRowModel(code, new Date().toISOString());
     }
   } catch (error) { block(machtileTranslate("report_total_unavailable")); return; }
   if (machtileSingleStationReportOrder(code)) {

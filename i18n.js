@@ -163,6 +163,7 @@
       inspection_status_open_abnormal: "前往異常回報",
       machine_current_counter: "機台目前累計數",
       machine_order_total: "機台目前顯示總數（這張單）",
+      report_total_preview_plain: "系統已報 {{reported}} → 送出後 = {{total}}；這次加 {{add}} 件",
       report_total_preview: "系統已報 {{reported}} → 送出後 = {{total}}；這次加 {{add}} 件（其中 {{backfill}} 件是前一班未報）",
       report_total_unavailable: "暫時無法核對已報數量，請稍後再按",
       counter_zero_report: "本次增加 0 件，不需報工。",
@@ -348,6 +349,7 @@
       inspection_status_open_abnormal: "Mở báo cáo bất thường", // _draft
       machine_current_counter: "Số tích lũy hiện tại của máy",
       machine_order_total: "Tổng số hiện đang hiển thị trên máy (đơn này)",
+      report_total_preview_plain: "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm",
       report_total_preview: "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm (trong đó {{backfill}} sản phẩm ca trước chưa báo)",
       report_total_unavailable: "Tạm thời không thể đối chiếu số lượng đã báo, vui lòng bấm lại sau",
       counter_zero_report: "Lần này tăng 0 sản phẩm, không cần báo.",

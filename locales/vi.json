@@ -371,6 +371,7 @@
     "_draft": true
   },
   "machine_order_total": { "value": "Tổng số hiện đang hiển thị trên máy (đơn này)", "_draft": true },
+  "report_total_preview_plain": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm", "_draft": true },
   "report_total_preview": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm (trong đó {{backfill}} sản phẩm ca trước chưa báo)", "_draft": true },
   "report_total_unavailable": { "value": "Tạm thời không thể đối chiếu số lượng đã báo, vui lòng bấm lại sau", "_draft": true },
   "counter_zero_report": { "value": "Lần này tăng 0 sản phẩm, không cần báo.", "_draft": true },
