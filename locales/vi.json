@@ -1,6 +1,8 @@
 {
   "start_backfill_confirm": { "value": "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)", "_draft": true },
   "start_backfill_button": { "value": "Xác nhận bắt đầu và báo bù {{gap}}", "_draft": true },
+  "start_backfill_edit": { "value": "Quay lại sửa số lượng", "_draft": true },
+  "start_backfill_unavailable": { "value": "Tạm thời không thể đối chiếu tổng số đã báo của công đoạn này; lần này chỉ bắt đầu, không tự động báo bù. Hãy dùng nút báo sản lượng.", "_draft": true },
   "start_qty_less_warning": { "value": "Số trên máy thấp hơn hệ thống; hãy xác nhận đây là số của đúng phiếu này", "_draft": true },
   "start_backfill_rejected": { "value": "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.", "_draft": true },
   "start_backfill_failed": { "value": "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", "_draft": true },

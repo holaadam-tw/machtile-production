@@ -10,6 +10,8 @@
     "zh-Hant": {
       start_backfill_confirm: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
       start_backfill_button: "確認開工並補報 {{gap}} 件",
+      start_backfill_edit: "回去改數字",
+      start_backfill_unavailable: "暫時無法核對本道累計已報數量；本次只開工、不自動補報，請改按「報工」。",
       start_qty_less_warning: "機台數字比系統少，請確認機台上是這張單的數字",
       start_backfill_rejected: "開工未套用，差額沒有補報；請改按報工。",
       start_backfill_failed: "開工已套用，但補報尚未完成；請改按報工並告知主管。",
@@ -189,6 +191,8 @@
     vi: {
       start_backfill_confirm: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)",
       start_backfill_button: "Xác nhận bắt đầu và báo bù {{gap}}",
+      start_backfill_edit: "Quay lại sửa số lượng",
+      start_backfill_unavailable: "Tạm thời không thể đối chiếu tổng số đã báo của công đoạn này; lần này chỉ bắt đầu, không tự động báo bù. Hãy dùng nút báo sản lượng.", /* _draft */
       start_qty_less_warning: "Số trên máy thấp hơn hệ thống; hãy xác nhận đây là số của đúng phiếu này",
       start_backfill_rejected: "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.",
       start_backfill_failed: "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", /* _draft */

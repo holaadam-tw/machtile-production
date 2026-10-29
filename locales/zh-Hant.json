@@ -1,6 +1,8 @@
 {
   "start_backfill_confirm": "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
   "start_backfill_button": "確認開工並補報 {{gap}} 件",
+  "start_backfill_edit": "回去改數字",
+  "start_backfill_unavailable": "暫時無法核對本道累計已報數量；本次只開工、不自動補報，請改按「報工」。",
   "start_qty_less_warning": "機台數字比系統少，請確認機台上是這張單的數字",
   "start_backfill_rejected": "開工未套用，差額沒有補報；請改按報工。",
   "start_backfill_failed": "開工已套用，但補報尚未完成；請改按報工並告知主管。",

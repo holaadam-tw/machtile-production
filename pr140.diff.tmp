@@ -1,0 +1,685 @@
+diff --git a/app.js b/app.js
+index 61f6c86..ba4e29e 100644
+--- a/app.js
++++ b/app.js
+@@ -14617,6 +14617,7 @@ async function machtileLoadStationCommandAvailability(generation = machtileDefer
+     machtileStationCmd.availability = "ready";
+     machtileStationCmdRestorePending();
+     machtileDailyStartResumeAll();
++    machtileStartBackfillResumeAll();
+     if (typeof machtileBatchResetCommandSelection === "function") {
+       if (!machtileBatchState.group || machtileBatchState.commandSelected.size === 0) machtileBatchResetCommandSelection();
+       if (machtileBatchState.group) machtileRenderBatchReport();
+@@ -14771,7 +14772,10 @@ function machtileStationCmdRenderSheet(focus) {
+       ${freshBad ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-stale>${escapeHtml(sheet.fresh.text)}</p>` : ""}
+       ${model.otherOrders && !sheet.isRetry ? `<p class="station-cmd-notice is-warn" data-station-cmd-others>${escapeHtml(model.otherOrders)}；請確認你現在做的就是上面這張。</p>` : ""}
+       ${sheet.phase === "sendError" ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-error>${escapeHtml(sheet.errorText)}</p>` : ""}`;
+-    actions = `
++    const requiredBackfill = config.startBackfillEnabled === true && sheet.dailyStart?.gap;
++    actions = requiredBackfill ? `
++      <button type="button" class="station-cmd-confirm is-${escapeHtml(sheet.type)}" data-station-cmd-confirm ${canSend ? "" : "disabled"}>${sending ? "送出中…" : escapeHtml(machtileTranslate("start_backfill_button", sheet.dailyStart.gap))}</button>
++      <button type="button" class="station-cmd-secondary" data-station-cmd-backfill-edit ${sending ? "disabled" : ""}>回去改數字</button>` : `
+       <button type="button" class="station-cmd-confirm is-${escapeHtml(sheet.type)}" data-station-cmd-confirm ${canSend ? "" : "disabled"}>${sending ? "送出中…" : sheet.phase === "sendError" && sheet.canRetry ? "重送" : escapeHtml(model.confirmLabel)}</button>
+       ${sheet.isRetry ? "" : `<button type="button" class="station-cmd-secondary" data-station-cmd-notthis-open ${sending ? "disabled" : ""}>不是這張單</button>`}
+       <button type="button" class="station-cmd-secondary" data-station-cmd-close ${sending ? "disabled" : ""}>取消</button>`;
+@@ -14840,7 +14844,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
+     fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
+     model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others, actorRole, actorName: actorName() }),
+     // 開工時一起填今日開工數量（owner 2026-10-08）：作業員＋開工＋今天這道還沒有今日開工紀錄才問；管理員不問
+-    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null, reportedQty: Math.max(0, Number(order.done) || 0), gap: null } : null,
++    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null, reportedQty: Math.max(0, Number(order.done) || 0), gap: null, less: false } : null,
+   };
+   machtileStationCmdNewSheet(sheet);
+   let legacy = null;
+@@ -14979,7 +14983,8 @@ function machtileStationCmdDailyStartHtml(sheet) {
+         <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
+         <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
+         ${machtileStationCmdDailyStartReportHidden(sheet.code) ? "" : "<p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>"}
+-        ${ds.gap ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate("start_qty_gap_warning", ds.gap))}</p>` : ""}
++        ${ds.gap ? `<div class="station-cmd-notice is-warn${config.startBackfillEnabled === true ? " station-cmd-start-backfill" : ""}" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate(config.startBackfillEnabled === true ? "start_backfill_confirm" : "start_qty_gap_warning", ds.gap))}</div>` : ""}
++        ${config.startBackfillEnabled === true && ds.less ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-less>${escapeHtml(machtileTranslate("start_qty_less_warning"))}</p>` : ""}
+         ${ds.error ? `<p class="station-cmd-notice" id="stationCmdDailyErr" role="alert" data-station-cmd-daily-error>${escapeHtml(ds.error)}</p>` : ""}
+       </section>`;
+   }
+@@ -15004,7 +15009,7 @@ function machtileStationCmdDailyStartHtml(sheet) {
+ function machtileStationCmdDailyStartSnapshot(order, qty, commandUuid, machineCode, atMs) {
+   const core = machtileStationCmdCore;
+   return core.pendingDailyStart({
+-    qty, processId: order?.processId, workOrderId: order?.workOrderId, tenantId: order?.tenantId, processStatus: order?.processStatus,
++    qty, processId: order?.processId, workOrderId: order?.workOrderId, orderNo: order?.id, tenantId: order?.tenantId, processStatus: order?.processStatus,
+     reportUuid: core.dailyStartReportUuid({ tenantId: order?.tenantId, machineCode, processId: order?.processId, commandUuid, day: core.taiwanDay(atMs ?? Date.now()) }),
+   });
+ }
+@@ -15221,6 +15226,93 @@ function machtileStationCmdDelayedDailyStart(code, record, row) {
+   machtileStationCmdSavePending();
+ }
+ 
++const MACHTILE_START_BACKFILL_QUEUE_KEY = "machtile.stationCmdStartBackfill.v1";
++const machtileStartBackfillRunning = new Set();
++function machtileStartBackfillQueueRead() {
++  let raw = {};
++  try { raw = JSON.parse(localStorage.getItem(MACHTILE_START_BACKFILL_QUEUE_KEY) || "{}") || {}; } catch { raw = {}; }
++  const out = {};
++  Object.entries(raw).forEach(([commandUuid, item]) => {
++    const snap = machtileStationCmdCore?.pendingDailyStart(item?.snap);
++    if (snap && machtileStationCmdCore.isUuid(commandUuid) && item?.machineCode) out[commandUuid] = { snap, machineCode: String(item.machineCode).toUpperCase() };
++  });
++  return out;
++}
++function machtileStartBackfillQueueWrite(queue) {
++  try { localStorage.setItem(MACHTILE_START_BACKFILL_QUEUE_KEY, JSON.stringify(queue)); } catch { /* storage unavailable */ }
++}
++function machtileStartBackfillQueueRemove(commandUuid) {
++  const queue = machtileStartBackfillQueueRead();
++  delete queue[commandUuid];
++  machtileStartBackfillQueueWrite(queue);
++}
++function machtileStartBackfillEnqueue(commandUuid, machineCode, snap) {
++  const queue = machtileStartBackfillQueueRead();
++  if (!queue[commandUuid]) queue[commandUuid] = { machineCode, snap };
++  machtileStartBackfillQueueWrite(queue);
++  void machtileStartBackfillResolve(commandUuid);
++}
++function machtileStartBackfillResumeAll() {
++  Object.keys(machtileStartBackfillQueueRead()).forEach((uuid) => void machtileStartBackfillResolve(uuid));
++}
++async function machtileStartBackfillResolve(commandUuid) {
++  if (machtileStartBackfillRunning.has(commandUuid)) return;
++  const item = machtileStartBackfillQueueRead()[commandUuid];
++  if (!item) return;
++  machtileStartBackfillRunning.add(commandUuid);
++  try {
++    const order = machtileStationCmdMachineByCode(item.machineCode)?.order;
++    const target = order && String(order.processId) === String(item.snap.processId) ? order : {
++      id: item.snap.orderNo, workOrderId: item.snap.workOrderId, processId: item.snap.processId,
++      tenantId: item.snap.tenantId, processStatus: item.snap.processStatus,
++    };
++    const totals = await machtileTakeoverStopFreshTotals(item.machineCode, target);
++    const good = machtileStationCmdCore.startBackfillDelta(item.snap.qty, totals.goodDone);
++    if (good <= 0) { machtileStartBackfillQueueRemove(commandUuid); return; }
++    await machtileLoadStationReportSettings([item.machineCode]);
++    await machtileLoadStationReportIdentity([item.machineCode], [item.snap.processId]);
++    const context = machtileStationReportContext(target, item.machineCode);
++    const core = machtileStationReportCore();
++    const client = machtileStationReportCreateClient();
++    if (!context || !core || !client) throw new Error("智慧報工資料尚未就緒");
++    const remark = `開工補報（前一班未報） ${item.snap.qty} - ${totals.goodDone} = ${good}`;
++    const previewUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid, phase: "preview" });
++    const reportUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid });
++    const form = { ...context, goodQty: good, failQty: 0, failReasonCode: null, reportNote: remark, acks: [], clientGuardSnapshot: null };
++    const previewArgs = core.buildSubmitArgs(form, previewUuid, true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
++    let preview = await machtileStationReportSubmitCommand(previewArgs); preview = Array.isArray(preview) ? preview[0] : preview;
++    if (!core.isTerminal(preview)) preview = await client.waitForTerminal(previewUuid, { intervalMs: 2000, maxAttempts: 90 });
++    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw new Error("開工補報預覽未通過");
++    const finalArgs = core.buildSubmitArgs({ ...form, clientGuardSnapshot: core.buildClientGuardSnapshot(preview) }, reportUuid, false,
++      machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
++    let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
++    if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
++    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw new Error("開工補報未套用");
++    const actorId = await machtileResolveAppUserId();
++    const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
++    const saved = await submitReport(good, 0, remark, "noon", { order: target, reportUuid, reportPayload: payload, operators: actorId ? [actorId] : [], noFiles: true, requireStructured: true });
++    if (!saved?.wroteCloud || saved.deadLetter) throw new Error("開工補報正式紀錄尚未送達");
++    machtileStartBackfillQueueRemove(commandUuid);
++    showToast(`${item.machineCode} 已補報 ${good} 件`);
++  } catch (error) {
++    console.warn("start backfill pending", error);
++    showToast(machtileTranslate("start_backfill_failed"), "error");
++    window.setTimeout(() => void machtileStartBackfillResolve(commandUuid), 5000);
++  } finally {
++    machtileStartBackfillRunning.delete(commandUuid);
++  }
++}
++function machtileStationCmdDelayedStartBackfill(code, record, row) {
++  if (!record?.startBackfill) return;
++  const status = String(row?.status || "").toLowerCase();
++  if (status === "applied") machtileStartBackfillEnqueue(record.commandUuid, code, record.startBackfill);
++  if (["applied", "rejected", "expired"].includes(status)) {
++    if (status !== "applied") showToast(machtileTranslate("start_backfill_rejected"), "error");
++    record.startBackfill = null;
++    machtileStationCmdSavePending();
++  }
++}
++
+ // 送出失敗、要記成「等確認」時，跟著存的今日開工：確認卡剛送的那個數量，或（從卡片重送時）上一筆紀錄裡存的
+ function machtileStationCmdCarriedDailyStart(sheet, existing) {
+   const ds = sheet && sheet.dailyStart;
+@@ -15251,6 +15343,11 @@ function machtileStationCmdConfirm() {
+     ds.value = raw;
+     ds.qty = check.value;
+     ds.error = "";
++    ds.gap = core.startQtyGap(check.value, ds.reportedQty);
++    ds.less = check.value < Number(ds.reportedQty || 0);
++    sheet.startBackfill = config.startBackfillEnabled === true && ds.gap
++      ? machtileStationCmdDailyStartSnapshot(sheet.order, check.value, sheet.uuid, sheet.code)
++      : null;
+     ds.state = "awaitAck";   // 等開工指令被接受；送出被拒會改回 ask（數量還在）
+   }
+   machtileStationCmdSubmit();
+@@ -15303,7 +15400,7 @@ async function machtileStationCmdRefreshToday() {
+   machtileStationCmdRerender();
+ }
+ 
+-window.addEventListener("online", () => { if (machtileStationCmd.availability === "ready") machtileDailyStartResumeAll(); });
++window.addEventListener("online", () => { if (machtileStationCmd.availability === "ready") { machtileDailyStartResumeAll(); machtileStartBackfillResumeAll(); } });
+ 
+ document.addEventListener("input", (event) => {
+   const input = event.target;
+@@ -15312,16 +15409,8 @@ document.addEventListener("input", (event) => {
+   if (!ds || ds.state !== "ask") return;
+   ds.value = input.value;
+   ds.gap = machtileStationCmdCore.startQtyGap(input.value, ds.reportedQty);
+-  const section = input.closest("[data-station-cmd-daily]");
+-  section?.querySelector("[data-station-cmd-start-gap]")?.remove();
+-  if (ds.gap && section) {
+-    const warning = document.createElement("p");
+-    warning.className = "station-cmd-notice is-warn";
+-    warning.setAttribute("role", "status");
+-    warning.dataset.stationCmdStartGap = "";
+-    warning.textContent = machtileTranslate("start_qty_gap_warning", ds.gap);
+-    section.appendChild(warning);
+-  }
++  const numeric = Number(input.value);
++  ds.less = Number.isInteger(numeric) && numeric >= 0 && numeric < Number(ds.reportedQty || 0);
+   // 改了數字 → 上一次的提示收起來（不整張重畫，游標不跳）
+   if (ds.error) {
+     ds.error = "";
+@@ -15329,6 +15418,7 @@ document.addEventListener("input", (event) => {
+     input.removeAttribute("aria-describedby");
+     document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-error]")?.remove();
+   }
++  machtileStationCmdRenderSheet();
+ });
+ 
+ function machtileOvertimeAnswer() {
+@@ -15464,13 +15554,13 @@ async function machtileStationCmdSubmit() {
+         showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (${errorCode})`);
+       }
+       machtileStationCmdRenderSheet();
+-      return { recordExtra: { dailyStart: carried } };
++      return { recordExtra: { dailyStart: carried, startBackfill: sheet.startBackfill } };
+     },
+     onAccepted: ({ row }) => {
+       const carried = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
+       const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
+       machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
+-      return { recordExtra: carried && !sheetAwaitsAck ? { dailyStart: carried } : {} };
++      return { recordExtra: { ...(carried && !sheetAwaitsAck ? { dailyStart: carried } : {}), ...(sheet.startBackfill ? { startBackfill: sheet.startBackfill } : {}) } };
+     },
+     afterRecord: ({ row, record, view }) => {
+       if (machtileStationCmd.sheet === sheet) {
+@@ -15479,6 +15569,7 @@ async function machtileStationCmdSubmit() {
+         machtileStationCmdRenderSheet();
+       }
+       if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
++      if (record.startBackfill && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedStartBackfill(sheet.code, record, row);
+     },
+   });
+ }
+@@ -15549,6 +15640,7 @@ function machtileStationCmdPoll(code) {
+       if (machtileStationCmd.pending[code] !== current) return;
+       if (row) {
+         if (current.dailyStart) machtileStationCmdDelayedDailyStart(code, current, row);
++        if (current.startBackfill) machtileStationCmdDelayedStartBackfill(code, current, row);
+         const wasUnconfirmed = current.unconfirmed;
+         current.unconfirmed = false;
+         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
+@@ -15638,6 +15730,7 @@ function machtileStationCmdHandleClick(event) {
+   if (retry) { machtileStationCmdOpenRetry(retry.dataset.stationCmdRetry, retry); return true; }
+   if (!event.target.closest("#machtileStationCmdSheet")) return false;
+   if (event.target.closest("[data-station-cmd-confirm]")) { machtileStationCmdConfirm(); return true; }
++  if (event.target.closest("[data-station-cmd-backfill-edit]")) { document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-qty]")?.focus(); return true; }
+   if (event.target.closest("[data-station-cmd-daily-resend]")) { machtileStationCmdResendDailyStart(); return true; }
+   if (event.target.closest("[data-station-cmd-notthis-open]")) {
+     const sheet = machtileStationCmd.sheet;
+@@ -23295,7 +23388,7 @@ async function machtileStationReportRetryPreview(code) {
+   machtileStartStationReportPreviewTicker(code);
+   machtileRenderStationReportSurfaces();
+   try {
+-    const submitted = await machtileStationReportCreateClient().submit(flow.args);
++    const submitted = await machtileStationReportSubmitCommand(flow.args);
+     const item = Array.isArray(submitted) ? submitted[0] : submitted;
+     flow.preview = item?.command_uuid === flow.args.p_command_uuid ? item : flow.preview;
+     flow.phase = "waiting-preview";
+@@ -23395,7 +23488,7 @@ async function machtileStationReportSubmitPreview(code) {
+   machtileRenderStationReportSurfaces();
+   try {
+     const client = machtileStationReportCreateClient();
+-    const submitted = await client.submit(args);
++    const submitted = await machtileStationReportSubmitCommand(args);
+     const item = Array.isArray(submitted) ? submitted[0] : submitted;
+     flow.preview = item?.command_uuid === args.p_command_uuid ? item : null;
+     flow.phase = "waiting-preview";
+@@ -23504,7 +23597,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
+   machtileRenderStationReportSurfaces();
+   try {
+     const client = machtileStationReportCreateClient();
+-    const submitted = await client.submit(args);
++    const submitted = await machtileStationReportSubmitCommand(args);
+     const item = Array.isArray(submitted) ? submitted[0] : submitted;
+     flow.phase = "waiting-report";
+     if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; }
+@@ -23656,6 +23749,13 @@ function machtileStationReportCreateClient() {
+   return core?.createClient({ request: (path, options) => supabaseFetch(path, options) }) || null;
+ }
+ 
++// 卡片報工與開工補報共用唯一送出 seam；兩者都只能走同一個 client／RPC。
++async function machtileStationReportSubmitCommand(args) {
++  const client = machtileStationReportCreateClient();
++  if (!client) throw new Error("智慧報工介面尚未載入。");
++  return client.submit(args);
++}
++
+ function machtileBatchReadDrafts() {
+   try { return JSON.parse(localStorage.getItem(MACHTILE_BATCH_DRAFT_KEY) || "{}") || {}; } catch { return {}; }
+ }
+diff --git a/config.example.js b/config.example.js
+index 4933293..f916fe4 100644
+--- a/config.example.js
++++ b/config.example.js
+@@ -49,6 +49,7 @@ window.MACHTILE_CONFIG = {
+   takeoverMachines: [],
+   // 選工單／開工分開：機台代號陣列；預設全關＝卡片照舊。
+   enablePickStartFlow: false,
++  startBackfillEnabled: false,
+   pickStartFlowMachines: [],
+   finishClaimStartComboMachines: [],
+   enableShortCompletion: false,
+diff --git a/config.js b/config.js
+index 155dbc9..e2d8f29 100644
+--- a/config.js
++++ b/config.js
+@@ -98,6 +98,8 @@ window.MACHTILE_CONFIG = {
+   // ⚠️ 而且要等雲端「開工 applied 把工序 status 改 running、寫 actual_start_at」那包上線後才能開，
+   //    否則重新整理後已開工的單會被當成未開工（卡片只剩「開工」、不能報工）。
+   enablePickStartFlow: true,
++  // 開工計數高於系統已報時，開工 applied 後沿用卡片報工路徑補報差額。
++  startBackfillEnabled: true,
+   pickStartFlowMachines: ["A01", "A02", "A03", "A04", "A05"],
+   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
+   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
+diff --git a/config.production.example.js b/config.production.example.js
+index 6d563c8..9b4cd8c 100644
+--- a/config.production.example.js
++++ b/config.production.example.js
+@@ -12,6 +12,7 @@ window.MACHTILE_CONFIG = {
+   enableTakeover: false,
+   takeoverMachines: [],
+   enablePickStartFlow: false,
++  startBackfillEnabled: false,
+   pickStartFlowMachines: [],
+   // Strict mode: app-level login gate before any route; planner/supervisor/
+   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.
+diff --git a/i18n.js b/i18n.js
+index 1dcb095..f28a8b9 100644
+--- a/i18n.js
++++ b/i18n.js
+@@ -8,6 +8,11 @@
+ 
+   const dictionaries = {
+     "zh-Hant": {
++      start_backfill_confirm: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
++      start_backfill_button: "確認開工並補報 {{gap}} 件",
++      start_qty_less_warning: "機台數字比系統少，請確認機台上是這張單的數字",
++      start_backfill_rejected: "開工未套用，差額沒有補報；請改按報工。",
++      start_backfill_failed: "開工已套用，但補報尚未完成；請改按報工並告知主管。",
+       takeover_stop_title: "確認停工", takeover_stop_qty_question_total: "這一道目前良品總數（含已報 {{done}} 件）", takeover_good_qty_total: "良品（這一道目前總數）", takeover_fail_qty_total: "不良（這一道目前總數）", takeover_fail_qty_unreported: "不良（還沒報的件數）", takeover_stop_add_qty: "這次會新增：良品 {{good}} 件、不良 {{fail}} 件", takeover_stop_add_qty_waiting: "填完數量後會顯示這次新增件數", takeover_stop_total_less_than_done: "總數不能少於已報 {{done}} 件", takeover_stop_fail_total_less_than_done: "不良總數不能少於已報 {{done}} 件", takeover_stop_progress_unavailable: "讀不到這一道的最新進度，請重新整理後再試", takeover_stop_report_pending: "剛報的還在處理，請稍後再停工", takeover_stop_dup_question: "這個數量跟剛才報的很像，確定是另外做的嗎？", takeover_stop_dup_confirm: "確定送出", takeover_stop_dup_edit: "改數量", takeover_stop_dup_ack_unsupported: "伺服器還不能接受「確定送出」，請按「改數量」重新填（沒有就填 0）或找生管",
+       takeover_good_qty: "良品", takeover_fail_qty: "不良", takeover_reason: "停工原因", takeover_allow_question: "允許其他機台接手？", takeover_missing_required: "請完成紅框標示的必填問題", start_qty_gap_warning: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件，有 {{gap}} 件還沒報；停工或完工時填總數會自動補上", overtime_continue_question: "{{shiftEnd}} 之後有沒有繼續加工？", overtime_start_question: "請確認加班起點（HH:MM）", overtime_time_invalid: "加班起點格式不正確，請用 HH:MM",
+       takeover_must_tap: "請親自按是或否", takeover_note: "說明", takeover_confirm_stop: "確認停工", takeover_stop_sent: "停工已送出", takeover_stop_waiting: "已送出，等待工廠確認",
+@@ -182,6 +187,11 @@
+       login_timeout: "登入流程已逾時，請重新登入。"
+     },
+     vi: {
++      start_backfill_confirm: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)",
++      start_backfill_button: "Xác nhận bắt đầu và báo bù {{gap}}",
++      start_qty_less_warning: "Số trên máy thấp hơn hệ thống; hãy xác nhận đây là số của đúng phiếu này",
++      start_backfill_rejected: "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.",
++      start_backfill_failed: "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", /* _draft */
+       takeover_stop_title: "Xác nhận dừng máy", takeover_stop_qty_question_total: "Tổng số hàng tốt hiện tại của công đoạn này (bao gồm {{done}} cái đã báo)", takeover_good_qty_total: "Hàng tốt (tổng hiện tại của công đoạn)", takeover_fail_qty_total: "Hàng lỗi (tổng hiện tại của công đoạn)", takeover_fail_qty_unreported: "Hàng lỗi (số chưa báo)", takeover_stop_add_qty: "Lần này sẽ thêm: {{good}} hàng tốt, {{fail}} hàng lỗi", takeover_stop_add_qty_waiting: "Sau khi nhập số lượng sẽ hiển thị số được thêm lần này", takeover_stop_total_less_than_done: "Tổng số không được nhỏ hơn {{done}} cái đã báo", takeover_stop_fail_total_less_than_done: "Tổng hàng lỗi không được nhỏ hơn {{done}} cái đã báo", takeover_stop_progress_unavailable: "Không đọc được tiến độ mới nhất của công đoạn này. Vui lòng tải lại rồi thử lại", takeover_stop_report_pending: "Báo cáo vừa gửi vẫn đang được xử lý. Vui lòng chờ rồi mới dừng máy", takeover_stop_dup_question: "Số lượng này giống với lần vừa báo, có chắc là làm thêm riêng không?", takeover_stop_dup_confirm: "Xác nhận gửi", takeover_stop_dup_edit: "Sửa số lượng", takeover_stop_dup_ack_unsupported: "Máy chủ chưa nhận được \"Xác nhận gửi\", vui lòng bấm \"Sửa số lượng\" để nhập lại (không có thì điền 0) hoặc báo bộ phận kế hoạch", /* _draft */
+       takeover_good_qty: "Hàng tốt", takeover_fail_qty: "Hàng lỗi", takeover_reason: "Lý do dừng", takeover_allow_question: "Cho phép máy khác tiếp nhận?", takeover_missing_required: "Vui lòng hoàn tất các mục bắt buộc được đánh dấu đỏ", start_qty_gap_warning: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}, còn {{gap}} sản phẩm chưa báo; nhập tổng số khi dừng hoặc hoàn tất sẽ tự động bù", overtime_continue_question: "Sau {{shiftEnd}} có tiếp tục gia công không?", overtime_start_question: "Xác nhận giờ bắt đầu tăng ca (HH:MM)", overtime_time_invalid: "Giờ bắt đầu tăng ca không hợp lệ, vui lòng dùng HH:MM", /* _draft */
+       takeover_must_tap: "Vui lòng tự chọn Có hoặc Không", takeover_note: "Ghi chú", takeover_confirm_stop: "Xác nhận dừng", takeover_stop_sent: "Đã gửi lệnh dừng", takeover_stop_waiting: "Đã gửi, đang chờ nhà máy xác nhận",
+diff --git a/index.html b/index.html
+index bcaec93..dda6ba3 100644
+--- a/index.html
++++ b/index.html
+@@ -33,12 +33,12 @@
+   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+   <meta name="mobile-web-app-capable" content="yes">
+   <meta name="apple-mobile-web-app-title" content="MachTile">
+-  <link rel="stylesheet" href="./styles.css?v=20261028-d35-ux-r1">
++  <link rel="stylesheet" href="./styles.css?v=20261029-start-backfill">
+   <script>
+     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
+     window.MACHTILE_CONFIG_SOURCE = "fallback";
+   </script>
+-  <script src="./config.js?v=20261028-d35-a-all"></script>
++  <script src="./config.js?v=20261029-start-backfill"></script>
+   <script>
+     if (window.MACHTILE_CONFIG && window.MACHTILE_CONFIG.supabaseUrl && window.MACHTILE_CONFIG.supabaseAnonKey) {
+       window.MACHTILE_CONFIG_SOURCE = "local-config";
+@@ -740,49 +740,49 @@ <h2 id="hmcFixedStagingTitle">固定工件／工序 · Staging</h2>
+     <button type="button" class="secondary-action" data-station-report-background-dismiss hidden>知道了</button>
+   </div>
+ 
+-  <script src="./i18n.js?v=20261028-d35-ux-r1"></script>
+-  <script src="./routeConstants.js?v=20260514-p0-001"></script>
+-  <script src="./scheduleCore.js?v=20260716-capacity-calendar"></script>
+-  <script src="./attentionCenterCore.js?v=20260716-attention-center"></script>
+-  <script src="./inspectionStatusCore.js?v=20261014-ireporter-pack6-r2b"></script>
+-  <script src="./hmcRuntimeCore.js?v=20260911-hmc-runtime-simple-actions"></script>
+-  <script src="./gcodeEstimatorCore.js?v=20260716-calibration-governance"></script>
+-  <script src="./quote3dCore.js?v=20260716-quote3d-v1"></script>
+-  <script src="./operationalTrackingCore.js?v=20260716-formal-quote-v1"></script>
+-  <script src="./authSessionPersistenceCore.js?v=20260728-unified-login-v1"></script>
+-  <script src="./oauthPkceCore.js?v=20261001-pwa-oauth-handoff"></script>
+-  <script src="./workOrderPrefillCore.js?v=20260904-recent-enter-v1"></script>
+-  <script src="./reportCounterCore.js?v=20261015-finish-total-r1"></script>
+-  <script src="./batchReportCore.js?v=20261015-batch-defect-reason-r3"></script>
+-  <script src="./cardMachineTimeCore.js?v=20261014-main-stale-tests-r1"></script>
+-  <script src="./previews/hmc-fixed-slots/project-target.js?v=20260910-hmc-fixed-slots-port"></script>
+-  <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20260913-catalog-timeout-v1"></script>
+-  <script src="./previews/hmc-fixed-slots/transport.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
+-  <script src="./previews/hmc-fixed-slots/rpc-port.js?v=20260910-hmc-fixed-slots-port"></script>
+-  <script src="./previews/hmc-fixed-slots/staging-controller.js?v=20260914-static-config-v1"></script>
+-  <script src="./previews/hmc-fixed-slots/staging-rest.js?v=20260910-hmc-fixed-slots-port"></script>
+-  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20260914-static-config-v1"></script>
+-  <script src="./previews/hmc-fixed-slots/durable-transport.js?v=20260910-hmc-fixed-slots-port"></script>
+-  <script src="./previews/hmc-fixed-slots/staging-session.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
+-  <script src="./previews/hmc-fixed-slots/app-host.js?v=20260913-erp-cnc-catalog-prod-v1"></script>
+-  <script src="./mockData.js?v=20260514-p0-001"></script>
+-  <script src="./accountAdminCore.js?v=20261006-account-departments"></script>
+-  <script src="./cardActiveOrderCore.js?v=20261002-card-list-ui"></script>
+-  <script src="./pwaInstall.js?v=20261001-pwa-install"></script>
+-  <script src="./reportCycleCore.js?v=20261002-first-cycle-noop"></script>
+-  <script src="./reportPhotoCore.js?v=20261013-finish-photo-optional-r1"></script>
+-  <script src="./cardEstimateCore.js?v=20261002-card-estimate-r2"></script>
+-  <script src="./todayReportStatusCore.js?v=20261002-monitor-today-tiles-r2"></script>
+-  <script src="./analyticsCore.js?v=20261002-analytics-123-r2"></script>
+-  <script src="./workOrderListCore.js?v=20261003-wo-source-bf"></script>
+-  <script src="./cncProgramUploadCore.js?v=20261013-card-program-metadata-r1"></script>
+-  <script src="./tvWallCore.js?v=20261003-tv-wall"></script>
+-  <script src="./processFlowCore.js?v=20261006-full-route-display-r5"></script>
+-  <script src="./dispatchPoolCore.js?v=20261023-multi-station-eligible-count-r2"></script>
+-  <script src="./stationCommandCore.js?v=20261028-d35-ux-r1"></script>
+-  <script src="./takeoverCore.js?v=20261028-d35-ux-r1"></script>
+-  <script src="./stationReportCore.js?v=20261015-defect-reason-r1"></script>
+-  <script src="./inspectionLinkCore.js?v=20261013-ireporter-machine-link-p3-r2"></script>
+-  <script src="./app.js?v=20261028-d35-ux-r1"></script>
++  <script src="./i18n.js?v=20261029-start-backfill"></script>
++  <script src="./routeConstants.js?v=20261029-start-backfill"></script>
++  <script src="./scheduleCore.js?v=20261029-start-backfill"></script>
++  <script src="./attentionCenterCore.js?v=20261029-start-backfill"></script>
++  <script src="./inspectionStatusCore.js?v=20261029-start-backfill"></script>
++  <script src="./hmcRuntimeCore.js?v=20261029-start-backfill"></script>
++  <script src="./gcodeEstimatorCore.js?v=20261029-start-backfill"></script>
++  <script src="./quote3dCore.js?v=20261029-start-backfill"></script>
++  <script src="./operationalTrackingCore.js?v=20261029-start-backfill"></script>
++  <script src="./authSessionPersistenceCore.js?v=20261029-start-backfill"></script>
++  <script src="./oauthPkceCore.js?v=20261029-start-backfill"></script>
++  <script src="./workOrderPrefillCore.js?v=20261029-start-backfill"></script>
++  <script src="./reportCounterCore.js?v=20261029-start-backfill"></script>
++  <script src="./batchReportCore.js?v=20261029-start-backfill"></script>
++  <script src="./cardMachineTimeCore.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/project-target.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/transport.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/rpc-port.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/staging-controller.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/staging-rest.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/durable-transport.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/staging-session.js?v=20261029-start-backfill"></script>
++  <script src="./previews/hmc-fixed-slots/app-host.js?v=20261029-start-backfill"></script>
++  <script src="./mockData.js?v=20261029-start-backfill"></script>
++  <script src="./accountAdminCore.js?v=20261029-start-backfill"></script>
++  <script src="./cardActiveOrderCore.js?v=20261029-start-backfill"></script>
++  <script src="./pwaInstall.js?v=20261029-start-backfill"></script>
++  <script src="./reportCycleCore.js?v=20261029-start-backfill"></script>
++  <script src="./reportPhotoCore.js?v=20261029-start-backfill"></script>
++  <script src="./cardEstimateCore.js?v=20261029-start-backfill"></script>
++  <script src="./todayReportStatusCore.js?v=20261029-start-backfill"></script>
++  <script src="./analyticsCore.js?v=20261029-start-backfill"></script>
++  <script src="./workOrderListCore.js?v=20261029-start-backfill"></script>
++  <script src="./cncProgramUploadCore.js?v=20261029-start-backfill"></script>
++  <script src="./tvWallCore.js?v=20261029-start-backfill"></script>
++  <script src="./processFlowCore.js?v=20261029-start-backfill"></script>
++  <script src="./dispatchPoolCore.js?v=20261029-start-backfill"></script>
++  <script src="./stationCommandCore.js?v=20261029-start-backfill"></script>
++  <script src="./takeoverCore.js?v=20261029-start-backfill"></script>
++  <script src="./stationReportCore.js?v=20261029-start-backfill"></script>
++  <script src="./inspectionLinkCore.js?v=20261029-start-backfill"></script>
++  <script src="./app.js?v=20261029-start-backfill"></script>
+ </body>
+ </html>
+diff --git a/locales/vi.json b/locales/vi.json
+index 165287b..22adfa6 100644
+--- a/locales/vi.json
++++ b/locales/vi.json
+@@ -1,4 +1,9 @@
+ {
++  "start_backfill_confirm": { "value": "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)", "_draft": true },
++  "start_backfill_button": { "value": "Xác nhận bắt đầu và báo bù {{gap}}", "_draft": true },
++  "start_qty_less_warning": { "value": "Số trên máy thấp hơn hệ thống; hãy xác nhận đây là số của đúng phiếu này", "_draft": true },
++  "start_backfill_rejected": { "value": "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.", "_draft": true },
++  "start_backfill_failed": { "value": "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", "_draft": true },
+   "hmc_pallet_report_title_draft": {
+     "value": "Báo cáo sản lượng nhiều pallet",
+     "_draft": true
+diff --git a/locales/zh-Hant.json b/locales/zh-Hant.json
+index 1a30f42..402f19c 100644
+--- a/locales/zh-Hant.json
++++ b/locales/zh-Hant.json
+@@ -1,4 +1,9 @@
+ {
++  "start_backfill_confirm": "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
++  "start_backfill_button": "確認開工並補報 {{gap}} 件",
++  "start_qty_less_warning": "機台數字比系統少，請確認機台上是這張單的數字",
++  "start_backfill_rejected": "開工未套用，差額沒有補報；請改按報工。",
++  "start_backfill_failed": "開工已套用，但補報尚未完成；請改按報工並告知主管。",
+   "hmc_pallet_report_title_draft": "正式多盤報工",
+   "hmc_pallet_report_hint_draft": "每盤／每工件各自填本日累計，系統只送出增加量。",
+   "hmc_pallet_report_submit_draft": "送出逐盤正式報工",
+diff --git a/stationCommand.browser.test.mjs b/stationCommand.browser.test.mjs
+index aa03f13..75ee654 100644
+--- a/stationCommand.browser.test.mjs
++++ b/stationCommand.browser.test.mjs
+@@ -154,6 +154,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
+     stopReportSubmits: [], stopReportAckMissing: false, procExtra: {},
+     // 停工對話框開啟前會擋住尚未 applied 的 report；recentReports 可模擬同一道的 station_commands。
+     recentReports: [], recentQueries: [], recentReadFail: false,
++    stationReportSubmits: [], stationReportCommands: new Map(),
+   };
+   be.handle = async (route) => {
+     const req = route.request();
+@@ -214,6 +215,22 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
+       if (be.submitRowMode === "wrongUuid") return json(200, { ...row, command_uuid: "99999999-9999-4999-8999-999999999999" });
+       return json(200, row);
+     }
++    if (p === "/rest/v1/rpc/machtile_get_station_report_guard_config") {
++      return json(200, { factory_synced: true, machine_code: "A04", report_enabled_machines: { A04: true }, report_enabled: true, fail_reason_codes: ["其他"] });
++    }
++    if (p === "/rest/v1/rpc/machtile_submit_station_report") {
++      const body = JSON.parse(req.postData() || "{}");
++      be.stationReportSubmits.push(body);
++      let row = be.stationReportCommands.get(body.p_command_uuid);
++      if (!row) {
++        row = body.p_preview ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", requested_at: new Date().toISOString(), preview_result: {
++          status: "previewed", allowed: true, hard: false, available: 9999, shown_at: new Date().toISOString(),
++          legacy_snapshot: { report: { guard: { code: "", hard: false, message: "", Details: { available: 9999 } } } },
++        } } : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", requested_at: new Date().toISOString(), applied_at: new Date().toISOString() };
++        be.stationReportCommands.set(body.p_command_uuid, row);
++      }
++      return json(200, row);
++    }
+     if (p === "/rest/v1/rpc/machtile_submit_stop_report") {
+       const body = JSON.parse(req.postData() || "{}");
+       be.stopReportSubmits.push(body);
+@@ -260,6 +277,10 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
+         work_orders: { work_order_no: x.wo, part_no: "part_no" in o ? o.part_no : x.partNo, part_name: x.part, status: "in_progress" },
+         machines: { machine_code: o.machine || be.procMachine[x.wo] || x.machine } }]);
+     }
++    if (p === "/rest/v1/work_order_processes" && q.includes("legacy_index_sn")) {
++      const m = q.match(/id=in\.\(([^)]*)\)/);
++      return json(200, (m ? m[1].split(",") : []).map((pid) => ({ id: pid, legacy_index_sn: 5, manufacture_ii_id: null, simulation_id: "SIM-A04", work_orders: { part_no: "HCG-06-01" } })));
++    }
+     if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
+       be.listReads++;
+       (be.listQueries = be.listQueries || []).push(q);
+@@ -330,6 +351,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
+     if (p === "/rest/v1/stop_reason_policy") return json(200, []);
+     if (p === "/rest/v1/work_order_processes") {
+       const m = q.match(/id=in\.\(([^)]*)\)/);
++      if (m && q.includes("legacy_index_sn")) return json(200, m[1].split(",").map((pid) => ({ id: pid, legacy_index_sn: 5, manufacture_ii_id: null, simulation_id: "SIM-A04", work_orders: { part_no: "HCG-06-01" } })));
+       if (m && q.includes("actual_start_at")) return json(200, m[1].split(",").map((pid) => ({ id: pid, process_order: procs.find((x) => id(300 + x.n) === pid)?.step || 1, process_type: "cnc", actual_start_at: null })));
+       return json(200, []);
+     }
+@@ -1801,6 +1823,74 @@ for (const vp of ["phone", "desktop"]) {
+ }
+ 
+ console.log("\n== 390px：作業員、今天已經有今日開工 → 沒有數量欄，確認卡跟以前一樣 ==");
++console.log("\n== 390px：開工補報——必答確認、applied 後 fresh totals 只送一次 ==");
++{
++  const be = makeBackend({ dailyStartDone: false });
++  be.procExtra["XX01202502050012"] = { qty_completed: 140, qty_defect: 0 };
++  be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
++  const cfg = 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"], enableOutboxSubmit: true,';
++  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
++  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
++  await dailyField(page).fill("208");
++  await sheet(page).getByText("機台顯示 208 件、系統只記 140 件。按確認開工會同時補報 68 件（算前一班未報）").waitFor();
++  ok(await sheet(page).locator(".station-cmd-actions button").count() === 2, "差額確認區塊只有確認補報與回去改數字兩個按鈕");
++  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "確認開工並補報 68 件", "確認鈕明列補報差額");
++  be.mode = "hold";
++  await sheet(page).locator("[data-station-cmd-confirm]").click();
++  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
++  ok(be.stationReportSubmits.length === 0, "start 尚未 applied 不送補報");
++  be.mode = "applied";
++  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
++  await page.waitForFunction(() => window.MACHTILE_CONFIG && JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}").constructor === Object);
++  await page.waitForTimeout(1500);
++  ok(be.stationReportSubmits.length === 2 && be.stationReportSubmits[0].p_preview === true && be.stationReportSubmits[1].p_preview === false,
++    "applied 後沿用同一智慧報工 RPC：預覽一次、正式一次", JSON.stringify(be.stationReportSubmits));
++  const backfill = be.reportUpserts.map((x) => x.p_payload).find((x) => x?.report_payload?.start_backfill === true);
++  ok(backfill?.completed_qty === 68 && backfill?.defect_qty === 0 && backfill.report_payload.start_command_uuid === be.submits[0].p_command_uuid,
++    "fresh totals 140 → 補報 68，payload 標記 start_backfill 與 start command", JSON.stringify(backfill));
++  ok((backfill?.remark || "").startsWith("開工補報（前一班未報）"), "補報 remark 使用指定前綴", backfill?.remark);
++  ok(new Set(be.reportUpserts.map((x) => x.p_report_uuid)).size === be.reportUpserts.length, "補報 report_uuid 不重複");
++  ok(realErrors(errors).length === 0, "開工補報沒有 JS 錯誤", realErrors(errors).join(" | "));
++  await context.close();
++}
++
++console.log("\n== 390px：補報送出前別台已報到同數 → 不送 ==");
++{
++  const be = makeBackend({ dailyStartDone: false });
++  be.procExtra["XX01202502050012"] = { qty_completed: 140 };
++  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
++  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"],' });
++  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click(); await dailyField(page).fill("208"); await sheet(page).locator("[data-station-cmd-confirm]").click();
++  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor(); be.mode = "applied"; await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 }); await page.waitForTimeout(800);
++  ok(be.stationReportSubmits.length === 0 && !be.reportUpserts.some((x) => x.p_payload?.report_payload?.start_backfill), "fresh totals 已到 208：差額 0，不送補報");
++  await context.close();
++}
++
++console.log("\n== 390px：等於／小於／旗標 false／rejected 都不補報 ==");
++for (const [label, qty, enabled, mode] of [["等於", 140, true, "applied"], ["小於", 139, true, "applied"], ["旗標 false", 208, false, "applied"], ["rejected", 208, true, "rejected"]]) {
++  const be = makeBackend({ dailyStartDone: false }); be.procExtra["XX01202502050012"] = { qty_completed: 140 }; be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
++  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: `stationCommandMachines: ["A04"], startBackfillEnabled: ${enabled}, enableStationReport: true, stationReportMachines: ["A04"],` });
++  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click(); await dailyField(page).fill(String(qty));
++  if (label === "小於") ok(await sheet(page).getByText("機台數字比系統少，請確認機台上是這張單的數字").isVisible(), "小於顯示指定警告且仍可開工");
++  await sheet(page).locator("[data-station-cmd-confirm]").click(); await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor(); be.mode = mode;
++  await sheet(page).locator(`[data-station-cmd-result="${mode}"]`).waitFor({ timeout: 15000 }); await page.waitForTimeout(500);
++  ok(be.stationReportSubmits.length === 0, `${label}：不送補報`); await context.close();
++}
++
++console.log("\n== 390px：applied 後斷線／關頁，恢復後補送一次 ==");
++{
++  const commandUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
++  const queued = { [commandUuid]: { machineCode: "A04", snap: { qty: 208, processId: id(304), workOrderId: id(104), orderNo: "XX01202502050012", tenantId: T, processStatus: "running" } } };
++  const be = makeBackend({ dailyStartDone: true }); be.procExtra["XX01202502050012"] = { qty_completed: 140 }; be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
++  const cfg = 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"],';
++  let opened = await newPage(browser, "phone", { backend: be, configExtra: cfg, preload: { "machtile.stationCmdStartBackfill.v1": JSON.stringify(queued) } });
++  await opened.page.waitForFunction(() => JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}")["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] == null, null, { timeout: 15000 });
++  ok(be.stationReportSubmits.length === 2 && be.reportUpserts.filter((x) => x.p_payload?.report_payload?.start_backfill).length === 1, "恢復後預覽＋正式送出，正式補報只有一次");
++  await opened.page.reload({ waitUntil: "domcontentloaded" }); await opened.page.waitForTimeout(1000);
++  ok(be.stationReportSubmits.length === 2 && be.reportUpserts.filter((x) => x.p_payload?.report_payload?.start_backfill).length === 1, "再次恢復不會重複補報");
++  await opened.context.close();
++}
++
+ {
+   const be = makeBackend({ dailyStartDone: true });
+   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+diff --git a/stationCommandCore.js b/stationCommandCore.js
+index f87474d..fc73a56 100644
+--- a/stationCommandCore.js
++++ b/stationCommandCore.js
+@@ -555,6 +555,8 @@
+       serverOffset: Number.isFinite(Number(rec.serverOffset)) && rec.serverOffset !== null ? Number(rec.serverOffset) : null,
+       // 開工送出時網路斷：作業員填的今日開工數量跟著這筆指令存（owner 2026-10-08「先修」）；指令確定被接受才寫
+       dailyStart: pendingDailyStart(rec.dailyStart),
++      // 開工補報必須等指令 applied；重新整理前先跟著同一筆 command 保存。
++      startBackfill: pendingDailyStart(rec.startBackfill),
+     };
+     return out;
+   }
+@@ -567,7 +569,7 @@
+     if (d.qty === null || d.qty === "" || !Number.isInteger(qty) || qty < 0) return null;
+     if (!LOOSE_UUID.test(text(d.processId)) || !LOOSE_UUID.test(text(d.workOrderId))) return null;
+     const reportUuid = LOOSE_UUID.test(text(d.reportUuid)) ? text(d.reportUuid).toLowerCase() : null;
+-    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null, reportUuid };
++    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), ...(text(d.orderNo) ? { orderNo: text(d.orderNo) } : {}), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null, reportUuid };
+   }
+ 
+   // 台灣日期 YYYY-MM-DD（今日開工的「哪一天」）
+@@ -606,6 +608,25 @@
+     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+   }
+ 
++  function startBackfillReportUuid({ tenantId, machineCode, processId, commandUuid, phase = "report" } = {}) {
++    const key = ["startBackfill", text(phase), text(tenantId), normCode(machineCode), text(processId).toLowerCase(), text(commandUuid).toLowerCase()].join("|");
++    const hex = hash128(key).map((n) => n.toString(16).padStart(8, "0")).join("").split("");
++    hex[12] = "8";
++    hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
++    const h = hex.join("");
++    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
++  }
++
++  function startBackfillDelta(machineQty, reportedQty) {
++    const machine = Number(machineQty);
++    const reported = Math.max(0, Number(reportedQty) || 0);
++    return Number.isInteger(machine) && machine >= 0 ? Math.max(0, machine - reported) : 0;
++  }
++
++  function startBackfillPayload(payload, commandUuid) {
++    return { ...(payload || {}), start_backfill: true, start_command_uuid: text(commandUuid).toLowerCase() };
++  }
++
+   // 等確認的指令第一次查到伺服器上的列時，暫存的今日開工要不要寫：
+   // 還在等／工廠處理中／已套用＝指令被接受 → 寫；被拒、過期（沒人接手）→ 丟掉（owner 2026-10-08）
+   function delayedDailyStartAction(status) {
+@@ -718,7 +739,7 @@
+     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
+     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
+     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
+-    dailyStartQtyCheck, startQtyGap, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
++    dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
+     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
+   };
+diff --git a/stationCommandCore.test.js b/stationCommandCore.test.js
+index d440a43..90a9f0b 100644
+--- a/stationCommandCore.test.js
++++ b/stationCommandCore.test.js
+@@ -357,6 +357,13 @@ eq("今日開工 report_uuid：換機台／工序／日期／指令／租戶就
+   c.dailyStartReportUuid({ ...ruArgs, machineCode: "A05" }), c.dailyStartReportUuid({ ...ruArgs, processId: WO }),
+   c.dailyStartReportUuid({ ...ruArgs, day: "2026-10-09" }), c.dailyStartReportUuid({ ...ruArgs, commandUuid: PID }),
+   c.dailyStartReportUuid({ ...ruArgs, tenantId: "t2" })]).size, 6);
++console.log("== 開工補報 ==");
++eq("差額只補正數", [c.startBackfillDelta(208, 140), c.startBackfillDelta(140, 140), c.startBackfillDelta(139, 140)], [68, 0, 0]);
++const backfillArgs = { tenantId: "t1", machineCode: "A04", processId: PID, commandUuid: UUID };
++const backfillUuid = c.startBackfillReportUuid(backfillArgs);
++eq("補報 report_uuid 由開工 command_uuid 決定且固定", [c.isUuid(backfillUuid), c.startBackfillReportUuid(backfillArgs), c.startBackfillReportUuid({ ...backfillArgs, machineCode: "a04" })], [true, backfillUuid, backfillUuid]);
++eq("預覽與正式報工使用不同的決定性 UUID", c.startBackfillReportUuid({ ...backfillArgs, phase: "preview" }) === backfillUuid, false);
++eq("補報 payload 帶排除效率用標記", c.startBackfillPayload({ report_type: "noon", completed_qty: 68 }, UUID), { report_type: "noon", completed_qty: 68, start_backfill: true, start_command_uuid: UUID });
+ eq("結果不確定的提示", c.DAILY_START_UNCONFIRMED_TEXT, "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填");
+ eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已有今日開工紀錄");
+ eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");
