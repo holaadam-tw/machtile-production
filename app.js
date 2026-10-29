@@ -23584,6 +23584,7 @@ async function machtileStationReportSubmitPreview(code) {
       operators: machtileSelectedOperators(machtileBatchState.actorId),
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
+      reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
     };
     flow.singleReport.reportNote = window.MachTileReportCounterCore.backfillRemark(counterResult, row.reportNote || "");
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
@@ -23622,7 +23623,9 @@ async function machtileStationReportSubmitPreview(code) {
     }
   }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-    reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null };
+    reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null,
+    reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
+    reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null };
   let args;
   try {
     args = core.buildSubmitArgs(form, crypto.randomUUID(), true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
@@ -23705,7 +23708,9 @@ async function machtileStationReportSubmitFinal(code) {
   let args;
   try {
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-      reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
+      reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot,
+      reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
+      reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
   machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");

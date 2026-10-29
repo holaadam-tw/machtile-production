@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const core = require("./stationReportCore.js");
+const counterCore = require("./reportCounterCore.js");
 
 const UUID_PREVIEW = "11111111-1111-4111-8111-111111111111";
 const UUID_REPORT = "22222222-2222-4222-8222-222222222222";
@@ -124,6 +125,44 @@ check("submit payload follows the named report RPC contract exactly", () => {
     "p_expected_part_no", "p_manufacture_ii_id", "p_expected_simulation_id", "p_good_qty", "p_fail_qty",
     "p_fail_reason_code", "p_report_note", "p_acks", "p_client_guard_snapshot",
   ]);
+});
+
+check("counter metadata RPC flag adds the reportCounterCore values and preview/final match", () => {
+  const counter = counterCore.totalSemantics(170, 140, 150);
+  const input = validInput({
+    goodQty: counter.delta,
+    failQty: 0,
+    failReasonCode: null,
+    reportCounterMetaRpcEnabled: true,
+    reportCounterMeta: counterCore.efficiencyPayload(counter),
+  });
+  const preview = core.buildSubmitArgs(input, UUID_PREVIEW, true);
+  const final = core.buildSubmitArgs(input, UUID_REPORT, false);
+  assert.deepEqual(
+    [preview.p_good_qty, preview.p_backfill_qty, preview.p_counter_today_qty, preview.p_start_counter, preview.p_reported_before],
+    [30, 10, 20, 150, 140],
+  );
+  for (const field of ["p_backfill_qty", "p_counter_today_qty", "p_start_counter", "p_reported_before"]) {
+    assert.equal(preview[field], final[field]);
+  }
+});
+
+check("counter metadata RPC flag off preserves the main payload exactly", () => {
+  const baseline = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  const disabled = core.buildSubmitArgs(validInput({
+    reportCounterMetaRpcEnabled: false,
+    reportCounterMeta: { backfill_qty: 10, counter_today_qty: 20, start_counter: 150, reported_before: 140 },
+  }), UUID_PREVIEW, true);
+  assert.deepEqual(disabled, baseline);
+  for (const field of ["p_backfill_qty", "p_counter_today_qty", "p_start_counter", "p_reported_before"]) {
+    assert.equal(field in disabled, false);
+  }
+});
+
+check("invalid counter metadata fails before RPC", () => {
+  const base = { reportCounterMetaRpcEnabled: true, reportCounterMeta: { backfill_qty: 10, counter_today_qty: 20, start_counter: 150, reported_before: 140 } };
+  assert.throws(() => core.buildSubmitArgs(validInput({ ...base, reportCounterMeta: { ...base.reportCounterMeta, backfill_qty: -1 } }), UUID_PREVIEW, true), { code: "INVALID_REPORT_COUNTER_META" });
+  assert.throws(() => core.buildSubmitArgs(validInput({ ...base, goodQty: 9 }), UUID_PREVIEW, true), { code: "INVALID_REPORT_COUNTER_META" });
 });
 
 check("invalid quantities, unknown reason, invalid ack and missing G4 note fail before RPC", () => {

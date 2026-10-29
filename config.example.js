@@ -51,6 +51,7 @@ window.MACHTILE_CONFIG = {
   enablePickStartFlow: false,
   startBackfillEnabled: false,
   reportTotalSemanticsEnabled: false,
+  reportCounterMetaRpcEnabled: false,
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,

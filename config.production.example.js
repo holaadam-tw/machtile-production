@@ -14,6 +14,7 @@ window.MACHTILE_CONFIG = {
   enablePickStartFlow: false,
   startBackfillEnabled: false,
   reportTotalSemanticsEnabled: false,
+  reportCounterMetaRpcEnabled: false,
   pickStartFlowMachines: [],
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.
