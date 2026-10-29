@@ -14898,6 +14898,12 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   if (sheet.dailyStart) {
     sheet.dailyStart.reportedQty = freshReportedQty;
     sheet.dailyStart.reportedVerified = Number.isFinite(freshReportedQty);
+    // 讀取中就先打了數字：讀完已報後照目前數字重算差額，畫面才會出現必答補報區塊
+    if (sheet.dailyStart.reportedVerified && String(sheet.dailyStart.value ?? "").trim() !== "") {
+      const typed = Number(sheet.dailyStart.value);
+      sheet.dailyStart.gap = machtileStationCmdCore.startQtyGap(sheet.dailyStart.value, freshReportedQty);
+      sheet.dailyStart.less = Number.isInteger(typed) && typed >= 0 && typed < freshReportedQty;
+    }
   }
   sheet.fresh = fresh;
   if (fresh && fresh.ok) sheet.fields.partNo = fresh.partNo;
@@ -15378,6 +15384,12 @@ function machtileStationCmdConfirm() {
     ds.error = "";
     ds.gap = ds.reportedVerified === true ? core.startQtyGap(check.value, ds.reportedQty) : null;
     ds.less = ds.reportedVerified === true && check.value < Number(ds.reportedQty);
+    // 要補報但作業員還沒看到必答補報區塊（例如畫面還是一般「確認開工」）→ 先顯示區塊，不送
+    if (config.startBackfillEnabled === true && ds.reportedVerified === true && ds.gap
+      && !document.querySelector("#machtileStationCmdSheet [data-station-cmd-backfill-edit]")) {
+      machtileStationCmdUpdateBackfillUi();
+      return;
+    }
     sheet.startBackfill = config.startBackfillEnabled === true && ds.reportedVerified === true && ds.gap
       ? machtileStationCmdDailyStartSnapshot(sheet.order, check.value, sheet.uuid, sheet.code)
       : null;

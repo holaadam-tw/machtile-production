@@ -363,6 +363,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (m && q.includes("actual_start_at")) return json(200, m[1].split(",").map((pid) => ({ id: pid, process_order: procs.find((x) => id(300 + x.n) === pid)?.step || 1, process_type: "cnc", actual_start_at: null })));
       return json(200, []);
     }
+    if (p === "/rest/v1/rpc/batch_report_progress" && be.progressDelayMs) await new Promise((resolve) => setTimeout(resolve, be.progressDelayMs));
     if (p === "/rest/v1/rpc/batch_report_progress") return be.progressReadFail ? json(503, { message: "e2e: progress unavailable" }) : json(200, be.progressRows);
     const readRpc = /^\/rest\/v1\/rpc\/(batch_report_progress|[a-z_]+_snapshot|[a-z_]+_list)$/.test(p);
     if (method !== "GET" && method !== "HEAD" && !readRpc) be.otherWrites.push(`${method} ${p}`);
@@ -1840,6 +1841,8 @@ console.log("\n== 390px：連打三位數只局部更新，input identity 與完
   const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], startBackfillEnabled: true,' });
   await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
   await dailyField(page).waitFor();
+  // 讀取完成時整張確認卡會重畫一次（main 既有行為）；這裡要驗的是「打字中」不重建 input
+  await page.waitForFunction(() => { const b = document.querySelector("#machtileStationCmdSheet [data-station-cmd-confirm]"); return b && !b.disabled; });
   await page.evaluate(() => { window.__dailyInputIdentity = document.querySelector("[data-station-cmd-daily-qty]"); });
   await dailyField(page).pressSequentially("159");
   ok(await page.evaluate(() => window.__dailyInputIdentity === document.querySelector("[data-station-cmd-daily-qty]")), "連打三位數後 input 元素 identity 不變");
@@ -1865,6 +1868,23 @@ console.log("\n== 390px：B03 卡片已報 156，開工 159 → 顯示並只補�
   await page.waitForTimeout(1200);
   const backfill = be.reportUpserts.map((x) => x.p_payload).find((x) => x?.report_payload?.start_backfill === true);
   ok(backfill?.completed_qty === 3, "B03 送出的補報 good 也是 3", JSON.stringify(backfill));
+  await context.close();
+}
+
+console.log("\n== 390px：讀取中就打數字 → 讀完出現必答補報區塊；一般確認鍵不會直接送補報 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  be.procExtra["XX01202606300001"] = { qty_completed: 0 };
+  be.progressRows = [{ process_id: id(333), legacy_output: 156, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  be.progressDelayMs = 1500;
+  const cfg = 'stationCommandMachines: ["B03"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["B03"],';
+  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  await cardOf(page, "B03").locator('[data-station-cmd="start"]').click();
+  await dailyField(page).waitFor();
+  await dailyField(page).fill("159");
+  await sheet(page).locator("[data-station-cmd-backfill-edit]").waitFor({ timeout: 10000 });
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "確認開工並補報 3 件", "讀取中先打數字：讀完後確認鈕變成補報 3");
+  ok(be.reportUpserts.length === 0, "確認前沒有任何報工送出");
   await context.close();
 }
 
