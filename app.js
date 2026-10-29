@@ -22161,6 +22161,12 @@ function machtileTaiwanMinutesNow(now = new Date()) {
   return Number(value.hour) * 60 + Number(value.minute);
 }
 
+function machtileIsEveningAction(value) {
+  const timestamp = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return false;
+  return machtileTaiwanMinutesNow(timestamp) >= 17 * 60 + 30;
+}
+
 function machtileRenderHomeOvertimeCard(now = new Date()) {
   const holder = document.getElementById("homeOvertimeCard");
   if (!holder) return;
@@ -22174,12 +22180,13 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
     const order = machine?.order;
     if (!order || order.offStation === true) return [];
     const activity = machtileCardActivityOf(order) || {};
-    const reportedToday = activity.lastReportAt && machtileFactoryDateIso(activity.lastReportAt) === today;
-    const running = String(order.processStatus || "").toLowerCase() === "running";
-    return running || reportedToday ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
+    const actedTonight = [activity.actualStartAt, activity.lastReportAt].some((value) => value
+      && machtileFactoryDateIso(value) === today
+      && machtileIsEveningAction(value));
+    return actedTonight ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
   });
   holder.hidden = false;
-  holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2>${rows.length
+  holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2><p>${escapeHtml(machtileTranslate("home_overtime_note"))}</p>${rows.length
     ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
     : `<p>${escapeHtml(machtileTranslate("home_overtime_empty"))}</p>`}`;
 }
@@ -22369,8 +22376,8 @@ async function hydrateDetail(order) {
   }
 
   renderDetail(order, {
-    processes: config.orderDetailSimplifyEnabled ? processes : (processes.length ? processes : fallbackProcesses(order)),
-    reports: config.orderDetailSimplifyEnabled ? reports : (reports.length ? reports : fallbackReports(order)),
+    processes: processes.length ? processes : fallbackProcesses(order),
+    reports: reports.length ? reports : fallbackReports(order),
     abnormalities: abnormalities.length ? abnormalities : fallbackAbnormalities(order),
     cncPrograms,
   });
@@ -22638,7 +22645,14 @@ function renderSimplifiedDetail(order, detail) {
   const delta = cycleDelta(profile);
   const dailyQty = dailyPureCapacity(profile);
   const workDays = estimatedWorkDays(order, profile);
-  const route = machtileProcessFlows.get(order.id);
+  const loadedRoute = machtileProcessFlows.get(order.id);
+  const legacyRouteProcesses = processes.map((process, index) => ({
+    ...process,
+    id: process.id || process.process_id || `legacy:${order.id}:${process.process_order || index + 1}`,
+    reported: process.reported ?? process.qty_completed ?? null,
+    machine_code: process.machine_code || (String(process.process_name || "") === String(order.process || "") ? order.machine : ""),
+  }));
+  const route = loadedRoute || (legacyRouteProcesses.length ? { quantity: Number(order.total) || null, processes: legacyRouteProcesses, auditAvailable: false } : null);
   const routeVisibility = machtileFlowVisibilityLevel();
   const routeOptions = machtileProcessFlowOptions(order.id, route?.auditAvailable);
   if (routeVisibility !== "full") delete routeOptions.canPreplan;
