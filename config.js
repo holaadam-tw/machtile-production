@@ -103,7 +103,7 @@ window.MACHTILE_CONFIG = {
   startBackfillEnabled: true,
   reportTotalSemanticsEnabled: true,
   reportCounterMetaRpcEnabled: false,
-  reportQtyJumpWarnEnabled: false,
+  reportQtyJumpWarnEnabled: true,
   homeOvertimeCardEnabled: false,
   pickStartFlowMachines: ["A01", "A02", "A03", "A04", "A05"],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
