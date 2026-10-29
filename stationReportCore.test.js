@@ -163,6 +163,14 @@ check("invalid counter metadata fails before RPC", () => {
   const base = { reportCounterMetaRpcEnabled: true, reportCounterMeta: { backfill_qty: 10, counter_today_qty: 20, start_counter: 150, reported_before: 140 } };
   assert.throws(() => core.buildSubmitArgs(validInput({ ...base, reportCounterMeta: { ...base.reportCounterMeta, backfill_qty: -1 } }), UUID_PREVIEW, true), { code: "INVALID_REPORT_COUNTER_META" });
   assert.throws(() => core.buildSubmitArgs(validInput({ ...base, goodQty: 9 }), UUID_PREVIEW, true), { code: "INVALID_REPORT_COUNTER_META" });
+  const plain = core.buildSubmitArgs(validInput({ reportCounterMetaRpcEnabled: false }), UUID_PREVIEW, true);
+  for (const meta of [null, undefined]) {
+    const args = core.buildSubmitArgs(validInput({ reportCounterMetaRpcEnabled: true, reportCounterMeta: meta }), UUID_PREVIEW, true);
+    assert.deepEqual(args, plain, "flag on without metadata must send the main payload unchanged");
+  }
+  const partial = core.buildSubmitArgs(validInput({ reportCounterMetaRpcEnabled: true, reportCounterMeta: { backfill_qty: 0, counter_today_qty: 5 } }), UUID_PREVIEW, true);
+  assert.equal(partial.p_start_counter, null);
+  assert.equal(partial.p_reported_before, null);
 });
 
 check("invalid quantities, unknown reason, invalid ack and missing G4 note fail before RPC", () => {

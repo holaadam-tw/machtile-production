@@ -181,11 +181,12 @@
       p_acks: form.acks.length ? form.acks : null,
       p_client_guard_snapshot: form.clientGuardSnapshot,
     };
-    if (x.reportCounterMetaRpcEnabled === true) {
-      const meta = x.reportCounterMeta || {};
+    // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
+    if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
+      const meta = x.reportCounterMeta;
       const fields = ["backfill_qty", "counter_today_qty", "start_counter", "reported_before"];
       for (const field of fields) {
-        const value = meta[field];
+        const value = meta[field] ?? null;
         if (value !== null && (!Number.isInteger(value) || value < 0)) {
           throw new ContractError("INVALID_REPORT_COUNTER_META", "報工計數器資料不完整。");
         }
