@@ -15297,6 +15297,8 @@ async function machtileStartBackfillResolve(commandUuid) {
     const totals = await machtileTakeoverStopFreshTotals(item.machineCode, target);
     if (totals.goodDone >= item.snap.qty) { machtileStartBackfillQueueRemove(commandUuid); return; }
     const good = item.good || machtileStationCmdCore.startBackfillDelta(item.snap.qty, totals.goodDone);
+    // 第一次算好的 good 之後有人又報了：照舊數量送會超過機台數 → 不補，請作業員改按報工（寧可不補也不多補）
+    if (item.good && item.good > item.snap.qty - totals.goodDone) { machtileStartBackfillQueueRemove(commandUuid); showToast(machtileTranslate("start_backfill_unavailable"), "warn"); return; }
     if (good <= 0) { machtileStartBackfillQueueRemove(commandUuid); return; }
     if (!item.good) {
       const queue = machtileStartBackfillQueueRead();
