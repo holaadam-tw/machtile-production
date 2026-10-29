@@ -5,6 +5,8 @@
 // bundle); every read/write goes through the signed-in session Bearer.
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
+  // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
+  enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
