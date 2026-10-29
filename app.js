@@ -8395,6 +8395,26 @@ function reportCounterRateReasonableness(result = reportCounterCalculation()) {
   });
 }
 
+function machtileReportQtyJumpWarning(result = reportCounterCalculation(), order = selectedOrder, now = new Date()) {
+  if (config.reportQtyJumpWarnEnabled !== true || !["noon", "finish"].includes(activeReportType) || !result?.valid) return null;
+  if (reportTotalState.status !== "ready" || reportTotalState.processId !== String(order?.processId || "")) return null;
+  const quantity = Number(result.delta);
+  const reported = Number(reportTotalState.reported);
+  const remaining = Number(order?.total) - reported;
+  const activity = machtileCardActivityOf(order) || {};
+  const startedAt = activity.actualStartAt || reportCounterBaselineState.baseline?.createdAt;
+  const cycleSeconds = getReportCycleSeconds() || Number(order?.pureCycleSec);
+  const elapsedSeconds = startedAt ? (now.getTime() - new Date(startedAt).getTime()) / 1000 : NaN;
+  const estimate = Number(cycleSeconds) > 0 && elapsedSeconds >= 0 ? elapsedSeconds / Number(cycleSeconds) : NaN;
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(remaining) || remaining < 0 || !Number.isFinite(estimate)) return null;
+  return quantity > remaining || quantity > estimate * 1.5 ? { quantity, remaining, estimate } : null;
+}
+
+function machtileConfirmReportQtyJump(result = reportCounterCalculation()) {
+  const warning = machtileReportQtyJumpWarning(result);
+  return !warning || window.confirm(machtileTranslate("report_qty_jump_confirm", { quantity: warning.quantity }));
+}
+
 function updateReportCounterPreview() {
   const preview = $("#reportCounterPreview");
   const manual = $("#reportCounterManual");
@@ -10527,6 +10547,7 @@ async function machtileRunDeferredLoad(key, label, load, refresh, generation) {
 function machtileRefreshCardSections() {
   deriveMachines();
   renderStats();
+  machtileRenderHomeOvertimeCard();
   renderFilters();
   renderWorkOrders();
   renderAlerts();
@@ -22030,6 +22051,7 @@ function renderAll() {
   machtileUpdateDataSourceLabel();
   ensureHmcDashboardEntry();
   renderStats();
+  machtileRenderHomeOvertimeCard();
   renderFilters();
   renderWorkOrders();
   renderAlerts();
@@ -22072,6 +22094,35 @@ function switchView(view) {
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
   // 營運分析：每次進畫面讀（2 分鐘內讀過就用上次的）
   if (view === "reports") machtileLoadAnalytics().catch(() => {});
+}
+
+function machtileTaiwanMinutesNow(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(value.hour) * 60 + Number(value.minute);
+}
+
+function machtileRenderHomeOvertimeCard(now = new Date()) {
+  const holder = document.getElementById("homeOvertimeCard");
+  if (!holder) return;
+  if (config.homeOvertimeCardEnabled !== true || machtileTaiwanMinutesNow(now) < 17 * 60 + 30) {
+    holder.hidden = true;
+    holder.innerHTML = "";
+    return;
+  }
+  const today = machtileFactoryDateIso(now.toISOString());
+  const rows = (state.machines || []).flatMap((machine) => {
+    const order = machine?.order;
+    if (!order || order.offStation === true) return [];
+    const activity = machtileCardActivityOf(order) || {};
+    const reportedToday = activity.lastReportAt && machtileFactoryDateIso(activity.lastReportAt) === today;
+    const running = String(order.processStatus || "").toLowerCase() === "running";
+    return running || reportedToday ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
+  });
+  holder.hidden = false;
+  holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2>${rows.length
+    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
+    : `<p>${escapeHtml(machtileTranslate("home_overtime_empty"))}</p>`}`;
 }
 
 function setSelectedOrder(order) {
@@ -25599,6 +25650,7 @@ function bindEvents() {
       && !machtileStationReportCore()?.reportMachineEnabled(
         machtileBatchState.stationReportSettings.machines, selectedOrder.machine
       );
+    if (["noon", "finish"].includes(activeReportType) && !machtileConfirmReportQtyJump()) return;
     if (smartReportAllowlisted && !smartReportExplicitlyDisabled) {
       if (machtileSingleStationReportActive()) {
         await machtileStationReportSubmitPreview(String(selectedOrder.machine || "").trim().toUpperCase());

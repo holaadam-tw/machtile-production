@@ -33,12 +33,12 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261029-counter-meta">
+  <link rel="stylesheet" href="./styles.css?v=20261029-small-fixes">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
   </script>
-  <script src="./config.js?v=20261029-counter-meta"></script>
+  <script src="./config.js?v=20261029-small-fixes"></script>
   <script>
     if (window.MACHTILE_CONFIG && window.MACHTILE_CONFIG.supabaseUrl && window.MACHTILE_CONFIG.supabaseAnonKey) {
       window.MACHTILE_CONFIG_SOURCE = "local-config";
@@ -174,6 +174,7 @@
         </div>
 
         <div id="statsGrid" class="stats-grid" aria-label="今日狀態總覽"></div>
+        <section id="homeOvertimeCard" class="home-overtime-card" hidden></section>
         <div class="filter-area" aria-label="機台與狀態篩選">
           <div id="statusChips" class="filter-chips status-chips" aria-label="狀態篩選"></div>
         </div>
@@ -740,49 +741,49 @@
     <button type="button" class="secondary-action" data-station-report-background-dismiss hidden>知道了</button>
   </div>
 
-  <script src="./i18n.js?v=20261029-counter-meta"></script>
-  <script src="./routeConstants.js?v=20261029-counter-meta"></script>
-  <script src="./scheduleCore.js?v=20261029-counter-meta"></script>
-  <script src="./attentionCenterCore.js?v=20261029-counter-meta"></script>
-  <script src="./inspectionStatusCore.js?v=20261029-counter-meta"></script>
-  <script src="./hmcRuntimeCore.js?v=20261029-counter-meta"></script>
-  <script src="./gcodeEstimatorCore.js?v=20261029-counter-meta"></script>
-  <script src="./quote3dCore.js?v=20261029-counter-meta"></script>
-  <script src="./operationalTrackingCore.js?v=20261029-counter-meta"></script>
-  <script src="./authSessionPersistenceCore.js?v=20261029-counter-meta"></script>
-  <script src="./oauthPkceCore.js?v=20261029-counter-meta"></script>
-  <script src="./workOrderPrefillCore.js?v=20261029-counter-meta"></script>
-  <script src="./reportCounterCore.js?v=20261029-counter-meta"></script>
-  <script src="./batchReportCore.js?v=20261029-counter-meta"></script>
-  <script src="./cardMachineTimeCore.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/project-target.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/transport.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/rpc-port.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/staging-controller.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/staging-rest.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/durable-transport.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/staging-session.js?v=20261029-counter-meta"></script>
-  <script src="./previews/hmc-fixed-slots/app-host.js?v=20261029-counter-meta"></script>
-  <script src="./mockData.js?v=20261029-counter-meta"></script>
-  <script src="./accountAdminCore.js?v=20261029-counter-meta"></script>
-  <script src="./cardActiveOrderCore.js?v=20261029-counter-meta"></script>
-  <script src="./pwaInstall.js?v=20261029-counter-meta"></script>
-  <script src="./reportCycleCore.js?v=20261029-counter-meta"></script>
-  <script src="./reportPhotoCore.js?v=20261029-counter-meta"></script>
-  <script src="./cardEstimateCore.js?v=20261029-counter-meta"></script>
-  <script src="./todayReportStatusCore.js?v=20261029-counter-meta"></script>
-  <script src="./analyticsCore.js?v=20261029-counter-meta"></script>
-  <script src="./workOrderListCore.js?v=20261029-counter-meta"></script>
-  <script src="./cncProgramUploadCore.js?v=20261029-counter-meta"></script>
-  <script src="./tvWallCore.js?v=20261029-counter-meta"></script>
-  <script src="./processFlowCore.js?v=20261029-counter-meta"></script>
-  <script src="./dispatchPoolCore.js?v=20261029-counter-meta"></script>
-  <script src="./stationCommandCore.js?v=20261029-counter-meta"></script>
-  <script src="./takeoverCore.js?v=20261029-counter-meta"></script>
-  <script src="./stationReportCore.js?v=20261029-counter-meta"></script>
-  <script src="./inspectionLinkCore.js?v=20261029-counter-meta"></script>
-  <script src="./app.js?v=20261029-counter-meta"></script>
+  <script src="./i18n.js?v=20261029-small-fixes"></script>
+  <script src="./routeConstants.js?v=20261029-small-fixes"></script>
+  <script src="./scheduleCore.js?v=20261029-small-fixes"></script>
+  <script src="./attentionCenterCore.js?v=20261029-small-fixes"></script>
+  <script src="./inspectionStatusCore.js?v=20261029-small-fixes"></script>
+  <script src="./hmcRuntimeCore.js?v=20261029-small-fixes"></script>
+  <script src="./gcodeEstimatorCore.js?v=20261029-small-fixes"></script>
+  <script src="./quote3dCore.js?v=20261029-small-fixes"></script>
+  <script src="./operationalTrackingCore.js?v=20261029-small-fixes"></script>
+  <script src="./authSessionPersistenceCore.js?v=20261029-small-fixes"></script>
+  <script src="./oauthPkceCore.js?v=20261029-small-fixes"></script>
+  <script src="./workOrderPrefillCore.js?v=20261029-small-fixes"></script>
+  <script src="./reportCounterCore.js?v=20261029-small-fixes"></script>
+  <script src="./batchReportCore.js?v=20261029-small-fixes"></script>
+  <script src="./cardMachineTimeCore.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/project-target.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/cnc-part-catalog.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/transport.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/rpc-port.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/staging-controller.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/staging-rest.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/staging-view.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/durable-transport.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/staging-session.js?v=20261029-small-fixes"></script>
+  <script src="./previews/hmc-fixed-slots/app-host.js?v=20261029-small-fixes"></script>
+  <script src="./mockData.js?v=20261029-small-fixes"></script>
+  <script src="./accountAdminCore.js?v=20261029-small-fixes"></script>
+  <script src="./cardActiveOrderCore.js?v=20261029-small-fixes"></script>
+  <script src="./pwaInstall.js?v=20261029-small-fixes"></script>
+  <script src="./reportCycleCore.js?v=20261029-small-fixes"></script>
+  <script src="./reportPhotoCore.js?v=20261029-small-fixes"></script>
+  <script src="./cardEstimateCore.js?v=20261029-small-fixes"></script>
+  <script src="./todayReportStatusCore.js?v=20261029-small-fixes"></script>
+  <script src="./analyticsCore.js?v=20261029-small-fixes"></script>
+  <script src="./workOrderListCore.js?v=20261029-small-fixes"></script>
+  <script src="./cncProgramUploadCore.js?v=20261029-small-fixes"></script>
+  <script src="./tvWallCore.js?v=20261029-small-fixes"></script>
+  <script src="./processFlowCore.js?v=20261029-small-fixes"></script>
+  <script src="./dispatchPoolCore.js?v=20261029-small-fixes"></script>
+  <script src="./stationCommandCore.js?v=20261029-small-fixes"></script>
+  <script src="./takeoverCore.js?v=20261029-small-fixes"></script>
+  <script src="./stationReportCore.js?v=20261029-small-fixes"></script>
+  <script src="./inspectionLinkCore.js?v=20261029-small-fixes"></script>
+  <script src="./app.js?v=20261029-small-fixes"></script>
 </body>
 </html>

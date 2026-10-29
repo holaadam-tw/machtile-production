@@ -102,6 +102,8 @@ window.MACHTILE_CONFIG = {
   startBackfillEnabled: true,
   reportTotalSemanticsEnabled: true,
   reportCounterMetaRpcEnabled: false,
+  reportQtyJumpWarnEnabled: false,
+  homeOvertimeCardEnabled: false,
   pickStartFlowMachines: ["A01", "A02", "A03", "A04", "A05"],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。

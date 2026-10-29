@@ -263,12 +263,22 @@ textarea:focus-visible {
   font-weight: 800;
 }
 
-.nav-item.active,
-.nav-item:hover {
+.nav-item.active {
   border-bottom-color: var(--brand-blue);
   background: transparent;
   color: var(--brand-blue);
 }
+
+.nav-item:hover:not(.active) {
+  background: var(--brand-blue-soft);
+  color: var(--brand-blue);
+}
+
+.home-overtime-card { margin: 0 0 18px; padding: 16px 18px; border: 1px solid #f0c36a; border-radius: 16px; background: #fff9e8; }
+.home-overtime-card h2 { margin: 0 0 10px; font-size: 18px; }
+.home-overtime-card ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.home-overtime-card li { display: flex; justify-content: space-between; gap: 12px; }
+.home-overtime-card small { color: var(--muted); }
 
 @media (max-width: 720px) {
   .attention-batch-bar,

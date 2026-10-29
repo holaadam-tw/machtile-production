@@ -175,6 +175,9 @@
       counter_baseline_required: "今天尚無開工或報工基準；請先按開工，或手填基準。",
       counter_non_positive: "機台累計 {{current}} 必須大於上次 {{baseline}}；這次差額需大於 0。",
       counter_rate_warning: "照工時這段時間最多約 {{max}} 件，你報 {{quantity}} 件，請確認",
+      report_qty_jump_confirm: "這次加 {{quantity}} 件，比預估多很多，確定是這張單的數字？",
+      home_overtime_title: "今晚加班",
+      home_overtime_empty: "目前沒有仍在加工或今天有報工的機台。",
       counter_manual_help: "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
       report_fail_reason_label: "不良原因（有不良時必選）",
       report_fail_reason_placeholder: "選擇不良原因",
@@ -361,6 +364,9 @@
       counter_baseline_required: "Hôm nay chưa có mốc bắt đầu hoặc báo cáo; hãy bấm bắt đầu hoặc nhập mốc thủ công.",
       counter_non_positive: "Số tích lũy {{current}} phải lớn hơn lần trước {{baseline}}; chênh lệch lần này phải lớn hơn 0.",
       counter_rate_warning: "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
+      report_qty_jump_confirm: "Lần này thêm {{quantity}} sản phẩm, nhiều hơn dự kiến rất nhiều. Bạn có chắc đây là số của lệnh này không?",
+      home_overtime_title: "Tăng ca tối nay",
+      home_overtime_empty: "Hiện không có máy đang gia công hoặc đã báo công hôm nay.",
       counter_manual_help: "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
       report_fail_reason_label: "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)", // _draft
       report_fail_reason_placeholder: "Chọn lý do lỗi", // _draft
