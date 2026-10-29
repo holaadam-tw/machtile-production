@@ -225,6 +225,7 @@
       home_overtime_title: "今晚已有動作的機台",
       home_overtime_note: "加班不需開工，報工後才會出現。",
       home_overtime_empty: "目前沒有 17:30 以後有實際動作的機台。",
+      overtime_start_active: "加班開工中 {{time}} 起",
       counter_manual_help: "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
       report_fail_reason_label: "不良原因（有不良時必選）",
       report_fail_reason_placeholder: "選擇不良原因",
@@ -461,6 +462,7 @@
       home_overtime_title: "Máy đã có thao tác tối nay",
       home_overtime_note: "Tăng ca không cần bấm bắt đầu; máy sẽ xuất hiện sau khi báo công.",
       home_overtime_empty: "Hiện không có máy có thao tác thực tế sau 17:30.",
+      overtime_start_active: "Đang làm tăng ca từ {{time}}",
       counter_manual_help: "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
       report_fail_reason_label: "Lý do lỗi (bắt buộc khi có sản phẩm lỗi)", // _draft
       report_fail_reason_placeholder: "Chọn lý do lỗi", // _draft

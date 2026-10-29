@@ -369,6 +369,20 @@ eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已�
 eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");
 eq("重讀讀不到：報工提示", c.DAILY_START_UNREADABLE_TEXT, "暫時查不到伺服器今天的紀錄，請稍後再送");
 
+console.log("== 加班開工卡投影 ==");
+const ot = (type, at, extra = {}) => ({ machine_code: "A04", command_type: type, status: "applied", applied_at: at, expected_order_no: order.id, expected_index_sn: 5, ...extra });
+eq("17:29 不算、17:31 applied 才開始", [
+  c.overtimeStartSegments([ot("start", "2026-10-30T17:29:00+08:00")], new Date("2026-10-30T20:05:00+08:00")).size,
+  c.overtimeStartSegments([ot("start", "2026-10-30T17:31:00+08:00")], new Date("2026-10-30T20:05:00+08:00")).get("A04")?.startHm,
+], [0, "17:31"]);
+eq("requested_at 不得冒充 applied 時間", c.overtimeStartSegments([{ ...ot("start", null), requested_at: "2026-10-30T17:40:00+08:00" }], new Date("2026-10-30T20:05:00+08:00")).size, 0);
+eq("20:05 舊 MES 停工不在資料契約內，不影響顯示", c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00")], new Date("2026-10-30T20:05:00+08:00")).get("A04")?.startHm, "17:40");
+for (const endType of ["stop_report", "report", "close"]) {
+  eq(`${endType} applied 結束加班段`, c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00"), ot(endType, "2026-10-30T20:10:00+08:00")], new Date("2026-10-30T20:11:00+08:00")).size, 0);
+}
+eq("跨午夜不沿用前一天 stale segment", c.overtimeStartSegments([ot("start", "2026-10-30T23:55:00+08:00")], new Date("2026-10-31T00:05:00+08:00")).size, 0);
+eq("rejected close 不得結束 applied start", c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00"), ot("close", "2026-10-30T20:10:00+08:00", { status: "rejected" })], new Date("2026-10-30T20:11:00+08:00")).size, 1);
+
 console.log("== 標準完工下一步／claim_next ==");
 const nextBase = { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: true, pool_item_id: "sid|nid|sim", available_qty: 40, plan_qty: 100 };
 eq("四種 case 由 legacy snapshot 解析", ["same_class_here", "other_class", "outsource", "last_step"].map((kind) => c.standardFinishNextStep({ legacy_snapshot: { next_step: { ...nextBase, case: kind } } }).case), ["same_class_here", "other_class", "outsource", "last_step"]);

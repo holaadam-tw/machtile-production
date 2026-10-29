@@ -55,6 +55,7 @@ window.MACHTILE_CONFIG = {
   reportCounterMetaRpcEnabled: false,
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
+  overtimeStartCardEnabled: false,
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,

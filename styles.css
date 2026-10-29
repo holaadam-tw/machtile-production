@@ -279,6 +279,7 @@ textarea:focus-visible {
 .home-overtime-card ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .home-overtime-card li { display: flex; justify-content: space-between; gap: 12px; }
 .home-overtime-card small { color: var(--muted); }
+.overtime-start-pill { display: inline-flex; margin-top: 6px; padding: 3px 9px; border-radius: 999px; background: #fff0c2; color: #7a4500; font-size: 13px; font-weight: 900; }
 
 @media (max-width: 720px) {
   .attention-batch-bar,

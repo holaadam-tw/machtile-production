@@ -46,6 +46,8 @@ const config = {
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
   overtimeStartTime: "17:30",
+  // APP applied start 的加班中提示。預設關閉；關閉時不讀 ledger、不增加卡片 DOM。
+  overtimeStartCardEnabled: false,
   // 選工單／開工分開（owner 2026-10-26）：機台代號陣列；["*"]＝全部。預設全關＝卡片跟以前一樣。
   enablePickStartFlow: false,
   pickStartFlowMachines: [],
@@ -445,6 +447,7 @@ const state = {
   machineMasters: [],
   source: "mock",
   inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
+  overtimeStartSegments: new Map(),
 };
 
 const mockOrders = [
@@ -10573,6 +10576,7 @@ function machtileStartDeferredLoads(generation) {
     ["hmc", "HMC 盤況", machtileLoadHmcRuntime, () => { machtileRefreshCardSections(); ensureHmcDashboardEntry(); }],
     ["flow-visibility", "製程顯示設定", machtileLoadFlowVisibility, () => renderWorkOrders()],
     ["station-command", "機台操作狀態", () => machtileLoadStationCommandAvailability(generation), () => renderWorkOrders()],
+    ["overtime-start-card", "加班開工狀態", machtileLoadOvertimeStartSegments, machtileRefreshCardSections],
     // #130 換機台：探針要用目前可見機台（"*" 設定時），所以先 deriveMachines；旗標關＝不讀
     ["takeover", "換機台狀態", async () => { deriveMachines(); await machtileLoadTakeoverAvailability(); }, () => renderWorkOrders()],
     ["dispatch-pool", "派工待做池", machtileLoadDispatchPool, () => renderWorkOrders()],
@@ -15997,6 +16001,8 @@ function renderMachineCard(machine) {
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
   const stationCmd = machtileStationCmdParts(machine);
+  const overtimeStart = config.overtimeStartCardEnabled === true
+    ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
   const programPending = !profile || profile.programName === "待上傳";
   const programSameAsPrevious = !programPending && profile.previousVersion && profile.previousVersion === profile.programVersion;
   const programBadgeTone = programPending ? "pending" : programSameAsPrevious ? "same" : "uploaded";
@@ -16024,7 +16030,8 @@ function renderMachineCard(machine) {
           </div>
           <span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span>
           ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
-          ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}
+          ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}${overtimeStart ? `
+          <span class="overtime-start-pill" data-overtime-start-card>${escapeHtml(machtileTranslate("overtime_start_active", { time: overtimeStart.startHm }))}</span>` : ""}
         </div>
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">${escapeHtml(machtileTranslate("machine_status", { status: status.label }))}</span>
@@ -22183,12 +22190,23 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
     const actedTonight = [activity.actualStartAt, activity.lastReportAt].some((value) => value
       && machtileFactoryDateIso(value) === today
       && machtileIsEveningAction(value));
-    return actedTonight ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
+    const overtimeStart = config.overtimeStartCardEnabled === true
+      ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
+    return actedTonight || overtimeStart ? [{ machine: machine.name, order: order.id, part: order.part, overtimeStart }] : [];
   });
   holder.hidden = false;
   holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2><p>${escapeHtml(machtileTranslate("home_overtime_note"))}</p>${rows.length
-    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
+    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}${row.overtimeStart ? ` · ${escapeHtml(machtileTranslate("overtime_start_active", { time: row.overtimeStart.startHm }))}` : ""}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
     : `<p>${escapeHtml(machtileTranslate("home_overtime_empty"))}</p>`}`;
+}
+
+async function machtileLoadOvertimeStartSegments(now = new Date()) {
+  state.overtimeStartSegments = new Map();
+  if (config.overtimeStartCardEnabled !== true || state.source !== "supabase" || !machtileStationCmdCore) return;
+  const day = machtileFactoryDateIso(now.toISOString());
+  const start = new Date(`${day}T00:00:00+08:00`).toISOString();
+  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(start,stop_report,report,close)&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
+  state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
 }
 
 function setSelectedOrder(order) {

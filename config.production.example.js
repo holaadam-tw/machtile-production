@@ -18,6 +18,7 @@ window.MACHTILE_CONFIG = {
   reportCounterMetaRpcEnabled: false,
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
+  overtimeStartCardEnabled: false,
   pickStartFlowMachines: [],
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.

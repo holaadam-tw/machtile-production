@@ -412,6 +412,7 @@
   "report_qty_jump_confirm": { "value": "Lần này thêm {{quantity}} sản phẩm, nhiều hơn dự kiến rất nhiều. Bạn có chắc đây là số của lệnh này không?", "_draft": true },
   "home_overtime_title": { "value": "Tăng ca tối nay", "_draft": true },
   "home_overtime_empty": { "value": "Hiện không có máy đang gia công hoặc đã báo công hôm nay.", "_draft": true },
+  "overtime_start_active": { "value": "Đang làm tăng ca từ {{time}}", "_draft": true },
   "counter_manual_help": {
     "value": "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
     "_draft": true

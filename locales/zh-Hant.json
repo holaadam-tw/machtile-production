@@ -156,6 +156,7 @@
   "report_qty_jump_confirm": "這次加 {{quantity}} 件，比預估多很多，確定是這張單的數字？",
   "home_overtime_title": "今晚加班",
   "home_overtime_empty": "目前沒有仍在加工或今天有報工的機台。",
+  "overtime_start_active": "加班開工中 {{time}} 起",
   "counter_manual_help": "今天找不到開工或報工基準。請先按開工；若現場已有紙本基準，可手填並隨本次報工記錄。",
   "required": "必填",
   "optional": "選填",
