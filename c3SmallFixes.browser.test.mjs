@@ -66,19 +66,28 @@ check(qty.cancelled === false && qty.accepted === true && qty.prompts === 2, "qu
 
 const overtime = await page.evaluate(() => {
   config.homeOvertimeCardEnabled = true;
-  const machine = state.machines.find(item => item.order);
-  machine.order.processStatus = "running";
+  const machines = state.machines.filter(item => item.order).slice(0, 3);
+  const [dayMachine, eveningMachine, unreadableMachine] = machines;
+  machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(dayMachine.order), { lastReportAt: "2026-10-29T08:10:00Z" });
+  machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(eveningMachine.order), { lastReportAt: "2026-10-29T10:10:00Z" });
+  machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(unreadableMachine.order), { actualStartAt: "not-a-time" });
   machtileRenderHomeOvertimeCard(new Date("2026-10-29T17:29:00+08:00"));
   const before = document.getElementById("homeOvertimeCard").hidden;
   machtileRenderHomeOvertimeCard(new Date("2026-10-29T17:30:00+08:00"));
   const card = document.getElementById("homeOvertimeCard");
-  const after = !card.hidden && card.textContent.includes(machine.name) && card.textContent.includes(machine.order.id);
+  const after = !card.hidden
+    && !card.textContent.includes(dayMachine.name)
+    && card.textContent.includes(eveningMachine.name)
+    && card.textContent.includes(eveningMachine.order.id)
+    && !card.textContent.includes(unreadableMachine.name)
+    && card.textContent.includes("今晚已有動作的機台")
+    && card.textContent.includes("加班不需開工，報工後才會出現");
   MachTileI18n.setLanguage("vi");
   machtileRenderHomeOvertimeCard(new Date("2026-10-29T18:00:00+08:00"));
-  const vi = card.textContent.includes("Tăng ca tối nay");
+  const vi = card.textContent.includes("Máy đã có thao tác tối nay");
   return { before, after, vi };
 });
-check(overtime.before && overtime.after, "overtime card is hidden before 17:30 and lists active machine/order after 17:30");
+check(overtime.before && overtime.after, "overtime card excludes daytime/unreadable activity and lists an 18:10 report after 17:30");
 check(overtime.vi, "overtime card Vietnamese copy is available");
 
 await page.locator('[data-view="reports"].nav-item').click();

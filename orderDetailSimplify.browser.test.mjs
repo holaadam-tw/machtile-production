@@ -96,6 +96,41 @@ try {
     machtileFlowVisibilityState.byRole = null;
   });
 
+  await enabled.page.evaluate(() => {
+    const order = state.workOrders[0];
+    machtileProcessFlows.delete(order.id);
+    document.getElementById("detailSheet").classList.add("is-open");
+    document.getElementById("detailSheet").setAttribute("aria-hidden", "false");
+    renderSimplifiedDetail(order, { processes: fallbackProcesses(order), reports: fallbackReports(order), cncPrograms: [] });
+  });
+  const fallbackText = await detail.innerText();
+  ok(await detail.locator("[data-order-detail-route-empty]").count() === 0
+    && fallbackText.includes("備料")
+    && fallbackText.includes("CNC 銑削"), "demo simplified route falls back to legacy process progress instead of no data");
+  ok(await detail.locator("[data-order-detail-report]").count() > 0, "demo simplified reports reuse the legacy report source when available");
+  await enabled.page.evaluate(async () => {
+    const originalFetch = window.supabaseFetch;
+    const originalSource = state.source;
+    try {
+      state.source = "supabase";
+      window.supabaseFetch = async () => [];
+      const order = state.workOrders[0];
+      machtileProcessFlows.delete(order.id);
+      await hydrateDetail(order);
+    } finally {
+      window.supabaseFetch = originalFetch;
+      state.source = originalSource;
+    }
+  });
+  const realEmptyText = await detail.innerText();
+  ok(await detail.locator("[data-order-detail-route-empty]").count() > 0
+    && !realEmptyText.includes("備料")
+    && !realEmptyText.includes("正常回報"), "real (supabase) data empty shows no data, never demo fallback rows");
+  if (process.env.MACHTILE_ORDER_DETAIL_SCREENSHOT) {
+    await enabled.page.setViewportSize({ width: 1280, height: 1100 });
+    await enabled.page.locator("#detailSheet").screenshot({ path: process.env.MACHTILE_ORDER_DETAIL_SCREENSHOT });
+  }
+
   await enabled.page.evaluate(async () => {
     const originalFetch = window.supabaseFetch;
     const originalSource = state.source;
