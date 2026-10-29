@@ -322,6 +322,8 @@
     "value": "Hiện không có công đoạn chờ nhận trong cùng bộ phận.",
     "_draft": true
   },
+  "pool_syncing_after_finish": { "value": "Vừa hoàn công, đang đồng bộ lệnh, khoảng {{seconds}} giây nữa sẽ tự làm mới.", "_draft": true },
+  "pool_sync_slow_after_finish": { "value": "Vừa hoàn công, đồng bộ lệnh đang chậm, vui lòng mở lại danh sách sau.", "_draft": true },
   "pool_department_missing": {
     "value": "Máy này chưa được gán bộ phận tiện/phay nên không hiển thị danh sách chờ.",
     "_draft": true
@@ -407,6 +409,9 @@
     "value": "Theo thời gian gia công, khoảng này tối đa khoảng {{max}} sản phẩm; bạn báo {{quantity}} sản phẩm, vui lòng kiểm tra",
     "_draft": true
   },
+  "report_qty_jump_confirm": { "value": "Lần này thêm {{quantity}} sản phẩm, nhiều hơn dự kiến rất nhiều. Bạn có chắc đây là số của lệnh này không?", "_draft": true },
+  "home_overtime_title": { "value": "Tăng ca tối nay", "_draft": true },
+  "home_overtime_empty": { "value": "Hiện không có máy đang gia công hoặc đã báo công hôm nay.", "_draft": true },
   "counter_manual_help": {
     "value": "Không tìm thấy mốc bắt đầu hoặc báo cáo hôm nay. Hãy bấm bắt đầu trước; nếu hiện trường có mốc trên giấy, có thể nhập tay và lưu cùng báo cáo này.",
     "_draft": true

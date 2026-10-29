@@ -5,6 +5,7 @@
 // bundle); every read/write goes through the signed-in session Bearer.
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
+  orderDetailSimplifyEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
@@ -14,6 +15,9 @@ window.MACHTILE_CONFIG = {
   enablePickStartFlow: false,
   startBackfillEnabled: false,
   reportTotalSemanticsEnabled: false,
+  reportCounterMetaRpcEnabled: false,
+  reportQtyJumpWarnEnabled: false,
+  homeOvertimeCardEnabled: false,
   pickStartFlowMachines: [],
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.

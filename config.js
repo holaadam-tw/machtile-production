@@ -4,6 +4,7 @@
 // through the signed-in session Bearer + RLS. Never put service-role or
 // other privileged keys here.
 window.MACHTILE_CONFIG = {
+  orderDetailSimplifyEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
@@ -101,6 +102,9 @@ window.MACHTILE_CONFIG = {
   // 開工計數高於系統已報時，開工 applied 後沿用卡片報工路徑補報差額。
   startBackfillEnabled: true,
   reportTotalSemanticsEnabled: true,
+  reportCounterMetaRpcEnabled: false,
+  reportQtyJumpWarnEnabled: false,
+  homeOvertimeCardEnabled: false,
   pickStartFlowMachines: ["A01", "A02", "A03", "A04", "A05"],
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。

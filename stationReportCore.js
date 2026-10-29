@@ -165,7 +165,7 @@
       throw new ContractError("REPORT_CONTEXT_REQUIRED", "工單、工序或機台資料不完整，無法送出智慧報工。");
     }
     const form = validateReportInput(x, failReasonCodes);
-    return {
+    const args = {
       p_command_uuid: commandUuid,
       p_preview: preview === true,
       p_machine_code: machine,
@@ -181,6 +181,22 @@
       p_acks: form.acks.length ? form.acks : null,
       p_client_guard_snapshot: form.clientGuardSnapshot,
     };
+    // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
+    if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
+      const meta = x.reportCounterMeta;
+      const fields = ["backfill_qty", "counter_today_qty", "start_counter", "reported_before"];
+      for (const field of fields) {
+        const value = meta[field] ?? null;
+        if (value !== null && (!Number.isInteger(value) || value < 0)) {
+          throw new ContractError("INVALID_REPORT_COUNTER_META", "報工計數器資料不完整。");
+        }
+        args[`p_${field}`] = value;
+      }
+      if (args.p_backfill_qty !== null && args.p_backfill_qty > form.goodQty) {
+        throw new ContractError("INVALID_REPORT_COUNTER_META", "報工計數器資料不完整。");
+      }
+    }
+    return args;
   }
 
   function commandReadPath(commandUuid) {

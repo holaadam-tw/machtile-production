@@ -185,6 +185,9 @@ assert.equal(calls.commands.length, 1, "preview creates one command");
 assert.equal(calls.commands[0].p_preview, true);
 assert.equal(calls.commands[0].p_good_qty, 38);
 assert.equal(calls.commands[0].p_fail_qty, 2);
+for (const field of ["p_backfill_qty", "p_counter_today_qty", "p_start_counter", "p_reported_before"]) {
+  assert.equal(field in calls.commands[0], false, `flag off omits ${field} from the real APP RPC payload`);
+}
 assert.equal(calls.commands[0].p_fail_reason_code, "尺寸不良");
 assert.deepEqual(await page.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.operators), [id(901)], "selected mapped operator is frozen into the smart-report flow");
 assert.equal(calls.reports.length, 0, "preview never records production report");

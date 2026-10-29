@@ -23,6 +23,8 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
+  orderDetailSimplifyEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
@@ -8395,6 +8397,26 @@ function reportCounterRateReasonableness(result = reportCounterCalculation()) {
   });
 }
 
+function machtileReportQtyJumpWarning(result = reportCounterCalculation(), order = selectedOrder, now = new Date()) {
+  if (config.reportQtyJumpWarnEnabled !== true || !["noon", "finish"].includes(activeReportType) || !result?.valid) return null;
+  if (reportTotalState.status !== "ready" || reportTotalState.processId !== String(order?.processId || "")) return null;
+  const quantity = Number(result.delta);
+  const reported = Number(reportTotalState.reported);
+  const remaining = Number(order?.total) - reported;
+  const activity = machtileCardActivityOf(order) || {};
+  const startedAt = activity.actualStartAt || reportCounterBaselineState.baseline?.createdAt;
+  const cycleSeconds = getReportCycleSeconds() || Number(order?.pureCycleSec);
+  const elapsedSeconds = startedAt ? (now.getTime() - new Date(startedAt).getTime()) / 1000 : NaN;
+  const estimate = Number(cycleSeconds) > 0 && elapsedSeconds >= 0 ? elapsedSeconds / Number(cycleSeconds) : NaN;
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(remaining) || remaining < 0 || !Number.isFinite(estimate)) return null;
+  return quantity > remaining || quantity > estimate * 1.5 ? { quantity, remaining, estimate } : null;
+}
+
+function machtileConfirmReportQtyJump(result = reportCounterCalculation()) {
+  const warning = machtileReportQtyJumpWarning(result);
+  return !warning || window.confirm(machtileTranslate("report_qty_jump_confirm", { quantity: warning.quantity }));
+}
+
 function updateReportCounterPreview() {
   const preview = $("#reportCounterPreview");
   const manual = $("#reportCounterManual");
@@ -10527,6 +10549,7 @@ async function machtileRunDeferredLoad(key, label, load, refresh, generation) {
 function machtileRefreshCardSections() {
   deriveMachines();
   renderStats();
+  machtileRenderHomeOvertimeCard();
   renderFilters();
   renderWorkOrders();
   renderAlerts();
@@ -11599,6 +11622,7 @@ const MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS = 10_000;
 const machtileDispatchPoolState = {
   status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(), requestSequence: 0,
 };
+const machtilePostAppliedRefresh = { retryMs: 10000, maxRetries: 3, timers: {}, retries: {}, syncing: new Set(), exhausted: new Set() };
 
 async function machtileLoadDispatchPool({ preserveItemsOnFailure = false } = {}) {
   const requestSequence = ++machtileDispatchPoolState.requestSequence;
@@ -11699,12 +11723,63 @@ function machtileDispatchPoolSectionMarkup(machine) {
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
   }).join("");
+  const machineCode = String(machine?.code || machine?.name || "");
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
-    : pool.department ? `<li>${escapeHtml(machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
+    : pool.department ? `<li>${escapeHtml(machtilePostAppliedRefresh.syncing.has(machineCode)
+      ? machtileTranslate("pool_syncing_after_finish", { seconds: Math.round(machtilePostAppliedRefresh.retryMs / 1000) })
+      : machtilePostAppliedRefresh.exhausted.has(machineCode)
+        ? machtileTranslate("pool_sync_slow_after_finish")
+        : machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
   return `<h3>${escapeHtml(machtileTranslate("dispatch_pool_same_department"))}</h3><p class="pool-note">${escapeHtml(machtileTranslate("pool_note"))}${synced ? ` ${escapeHtml(machtileTranslate("data_time", { time: synced }))}` : ""}</p>
     ${refreshMessage ? `<p data-pool-refresh-status role="status">${escapeHtml(refreshMessage)}</p>` : ""}
     <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
+}
+
+function machtilePostAppliedNeedsRetry(code) {
+  const machine = machtileScheduleMachine(code);
+  return Boolean(machine && machtileDispatchPoolState.status === "ready"
+    && machtileDispatchPoolForMachine(machine).items.length === 0);
+}
+
+async function machtileRefreshAfterApplied(code, commandType, isRetry = false) {
+  const machineCode = String(code || "");
+  if (!machineCode) return;
+  clearTimeout(machtilePostAppliedRefresh.timers[machineCode]);
+  delete machtilePostAppliedRefresh.timers[machineCode];
+  if (!isRetry) {
+    machtilePostAppliedRefresh.retries[machineCode] = 0;
+    machtilePostAppliedRefresh.exhausted.delete(machineCode);
+  }
+  machtileDispatchPoolState.openRefreshByMachine.delete(machineCode);
+  try {
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines();
+    renderAll();
+  } catch (error) {
+    console.warn("applied machine/pool refresh failed", error);
+  }
+  machtileDispatchPoolState.openRefreshByMachine.delete(machineCode);
+  const retryEmpty = ["close", "stop_report", "claim_next"].includes(String(commandType || ""))
+    && machtilePostAppliedNeedsRetry(machineCode);
+  if (!retryEmpty) {
+    machtilePostAppliedRefresh.syncing.delete(machineCode);
+    machtilePostAppliedRefresh.exhausted.delete(machineCode);
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
+  machtilePostAppliedRefresh.syncing.add(machineCode);
+  machtileUpdateDispatchPoolSelection(machineCode);
+  if ((machtilePostAppliedRefresh.retries[machineCode] || 0) >= machtilePostAppliedRefresh.maxRetries) {
+    machtilePostAppliedRefresh.syncing.delete(machineCode);
+    machtilePostAppliedRefresh.exhausted.add(machineCode);
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
+  machtilePostAppliedRefresh.retries[machineCode] = (machtilePostAppliedRefresh.retries[machineCode] || 0) + 1;
+  machtilePostAppliedRefresh.timers[machineCode] = setTimeout(() => {
+    void machtileRefreshAfterApplied(machineCode, commandType, true);
+  }, machtilePostAppliedRefresh.retryMs);
 }
 
 function machtileUpdateDispatchPoolSelection(machineCode) {
@@ -15748,6 +15823,11 @@ function machtileStationCmdFinish(code, view) {
     machtileStationCmdRenderSheet();
   }
   machtileStationCmdRerender();
+  const refreshOccupation = ["close", "stop_report"].includes(record.commandType)
+    || (record.commandType === "claim_next" && record.replaceStopped === true);
+  if (view.phase === "applied" && refreshOccupation) {
+    void machtileRefreshAfterApplied(code, record.commandType);
+  }
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
@@ -22030,6 +22110,7 @@ function renderAll() {
   machtileUpdateDataSourceLabel();
   ensureHmcDashboardEntry();
   renderStats();
+  machtileRenderHomeOvertimeCard();
   renderFilters();
   renderWorkOrders();
   renderAlerts();
@@ -22072,6 +22153,35 @@ function switchView(view) {
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
   // 營運分析：每次進畫面讀（2 分鐘內讀過就用上次的）
   if (view === "reports") machtileLoadAnalytics().catch(() => {});
+}
+
+function machtileTaiwanMinutesNow(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(value.hour) * 60 + Number(value.minute);
+}
+
+function machtileRenderHomeOvertimeCard(now = new Date()) {
+  const holder = document.getElementById("homeOvertimeCard");
+  if (!holder) return;
+  if (config.homeOvertimeCardEnabled !== true || machtileTaiwanMinutesNow(now) < 17 * 60 + 30) {
+    holder.hidden = true;
+    holder.innerHTML = "";
+    return;
+  }
+  const today = machtileFactoryDateIso(now.toISOString());
+  const rows = (state.machines || []).flatMap((machine) => {
+    const order = machine?.order;
+    if (!order || order.offStation === true) return [];
+    const activity = machtileCardActivityOf(order) || {};
+    const reportedToday = activity.lastReportAt && machtileFactoryDateIso(activity.lastReportAt) === today;
+    const running = String(order.processStatus || "").toLowerCase() === "running";
+    return running || reportedToday ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
+  });
+  holder.hidden = false;
+  holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2>${rows.length
+    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
+    : `<p>${escapeHtml(machtileTranslate("home_overtime_empty"))}</p>`}`;
 }
 
 function setSelectedOrder(order) {
@@ -22222,9 +22332,22 @@ async function hydrateDetail(order) {
       processes = await supabaseFetch(
         `work_order_processes?select=process_order,process_code,process_name,process_type,status,qty_planned,qty_completed,qty_defect,inspection_required,inspection_status,planned_start_at,planned_end_at,actual_start_at,actual_end_at,remark&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=process_order.asc`
       );
-      reports = await supabaseFetch(
-        `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
+      reports = await supabaseFetch(config.orderDetailSimplifyEnabled
+        ? `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at,ended_at,report_type,machine_id,user_id,operator_ids&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=20`
+        : `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
       );
+      if (config.orderDetailSimplifyEnabled && reports.length) {
+        try {
+          const userIds = [...new Set(reports.flatMap((report) => [report.user_id, ...(report.operator_ids || [])]).filter(Boolean))];
+          if (userIds.length) {
+            const reportUsers = await supabaseFetch(`app_users?select=id,name&id=in.(${userIds.join(",")})`);
+            const reportUserNames = new Map((reportUsers || []).map((user) => [String(user.id), user.name]));
+            reports.forEach((report) => { report.operator_names = [...new Set([report.user_id, ...(report.operator_ids || [])].map((id) => reportUserNames.get(String(id))).filter(Boolean))]; });
+          }
+        } catch (error) {
+          console.warn("Order detail report user lookup failed:", error);
+        }
+      }
       abnormalities = await supabaseFetch(
         `abnormal_events?select=event_type,severity,description,status,reported_at,resolution&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=reported_at.desc&limit=6`
       );
@@ -22246,8 +22369,8 @@ async function hydrateDetail(order) {
   }
 
   renderDetail(order, {
-    processes: processes.length ? processes : fallbackProcesses(order),
-    reports: reports.length ? reports : fallbackReports(order),
+    processes: config.orderDetailSimplifyEnabled ? processes : (processes.length ? processes : fallbackProcesses(order)),
+    reports: config.orderDetailSimplifyEnabled ? reports : (reports.length ? reports : fallbackReports(order)),
     abnormalities: abnormalities.length ? abnormalities : fallbackAbnormalities(order),
     cncPrograms,
   });
@@ -22466,6 +22589,101 @@ function machtileInitWorkOrderCncUpload(order, programs) {
 }
 
 function renderDetail(order, detail) {
+  if (config.orderDetailSimplifyEnabled) {
+    renderSimplifiedDetail(order, detail);
+    return;
+  }
+  renderLegacyDetail(order, detail);
+}
+
+function machtileOrderDetailProgramHasData(profile) {
+  return Boolean(
+    (profile.programName && profile.programName !== "待上傳")
+    || (profile.programVersion && profile.programVersion !== "-")
+    || profile.programHash
+    || Number(profile.pureCycleSec)
+    || Number(profile.baselineCycleSec)
+    || Number(profile.historyRuns)
+  );
+}
+
+function machtileOrderDetailReportRows(reports) {
+  const noData = machtileTranslate("order_detail_no_data");
+  const machineNames = new Map((state.machineMasters || []).flatMap((machine) => [
+    machine.id ? [String(machine.id), machine.code || machine.name] : null,
+    machine.dbRowId ? [String(machine.dbRowId), machine.code || machine.name] : null,
+  ].filter(Boolean)));
+  if (!reports.length) return `<p class="empty-note" data-order-detail-reports-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
+  return `<div class="order-detail-report-table-wrap"><table class="order-detail-report-table">
+    <thead><tr><th>${escapeHtml(machtileTranslate("order_detail_time"))}</th><th>${escapeHtml(machtileTranslate("order_detail_machine"))}</th><th>${escapeHtml(machtileTranslate("order_detail_person"))}</th><th>${escapeHtml(machtileTranslate("order_detail_quantity"))}</th><th>${escapeHtml(machtileTranslate("order_detail_source"))}</th></tr></thead>
+    <tbody>${reports.slice(0, 20).map((report) => {
+      const machine = machineNames.get(String(report.machine_id || "")) || noData;
+      const people = (report.operator_names || []).join("、") || noData;
+      const good = Number.isFinite(Number(report.completed_qty)) ? Number(report.completed_qty) : null;
+      const bad = Number.isFinite(Number(report.defect_qty)) ? Number(report.defect_qty) : null;
+      const quantity = good === null && bad === null ? noData : machtileTranslate("order_detail_qty_value", { good: good ?? noData, bad: bad ?? noData });
+      return `<tr data-order-detail-report><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || noData)}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
+    }).join("")}</tbody>
+  </table></div>`;
+}
+
+function renderSimplifiedDetail(order, detail) {
+  const status = statusMeta[deriveOrderStatus(order)] || statusMeta.normal;
+  const due = dueInfo(order);
+  const percent = pct(order);
+  const processes = detail.processes || [];
+  const reports = detail.reports || [];
+  const currentProcess = processes.find((process) => ["running", "waiting_inspection", "abnormal", "paused"].includes(process.status)) || processes[0];
+  const profile = getProgramProfile(order);
+  const delta = cycleDelta(profile);
+  const dailyQty = dailyPureCapacity(profile);
+  const workDays = estimatedWorkDays(order, profile);
+  const route = machtileProcessFlows.get(order.id);
+  const routeVisibility = machtileFlowVisibilityLevel();
+  const routeOptions = machtileProcessFlowOptions(order.id, route?.auditAvailable);
+  if (routeVisibility !== "full") delete routeOptions.canPreplan;
+  const routeMarkup = routeVisibility !== "full"
+    ? `<p class="empty-note" data-flow-detail-restricted>${escapeHtml(machtileTranslate("order_detail_route_restricted"))}</p>`
+    : route && window.MachTileProcessFlow
+    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), ...routeOptions })
+    : `<p class="empty-note" data-order-detail-route-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
+  const programHasData = machtileOrderDetailProgramHasData(profile);
+  const cncVersions = globalThis.MachTileCncProgramUploadCore?.flattenVersions(detail.cncPrograms || []) || [];
+
+  $("#detailContent").innerHTML = `
+    <section class="detail-head ${status.className}">
+      <div class="detail-head-order"><div class="detail-head-pills"><span class="status-pill">${escapeHtml(status.label)}</span><span class="machine-type-pill">${escapeHtml(machineTypeLabel(order.process))}</span></div><h3>${escapeHtml(order.part)}</h3><p><span class="detail-work-no">${escapeHtml(order.id)}</span> · ${escapeHtml(order.customer)} · ${escapeHtml(machtileTranslate("order_detail_drawing_no"))} ${escapeHtml(order.drawing)}</p></div>
+      <div class="detail-head-machine"><span>${escapeHtml(machtileTranslate("order_detail_machine"))}</span><strong>${escapeHtml(order.machine || machtileTranslate("order_detail_unassigned"))}</strong><small>${escapeHtml(order.process)}</small><small>${escapeHtml(order.lastReport || machtileTranslate("order_detail_not_reported"))}</small></div>
+      <div class="detail-machine-score"><span>${escapeHtml(machtileTranslate("order_detail_completion_rate"))}</span><strong>${percent}%</strong><small>${escapeHtml(machtileTranslate("order_detail_progress_value", { done: order.done, total: order.total }))}</small>${machtileCardProgressNote(order)}</div>
+      <div class="detail-progress"><div class="progress-track" aria-label="${escapeHtml(machtileTranslate("order_detail_progress_aria", { percent }))}"><div class="progress-fill" style="width:${percent}%"></div></div></div>
+    </section>
+
+    <section class="detail-section order-detail-route" data-order-detail-route>
+      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_route_title"))}</h3><span>${routeVisibility !== "full" ? escapeHtml(machtileTranslate("order_detail_role_setting")) : route ? escapeHtml(machtileTranslate("order_detail_route_count", { count: route.processes.length })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
+      ${routeMarkup}
+    </section>
+
+    <div class="detail-summary-grid order-detail-summary">
+      <div><span>${escapeHtml(machtileTranslate("due_date"))}</span><strong>${escapeHtml(due.label)}</strong><small>${escapeHtml(order.dueDate)}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_current_process"))}</span><strong>${escapeHtml(order.process)}</strong><small>${escapeHtml(order.machine || machtileTranslate("order_detail_unassigned"))}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_priority"))}</span><strong>${escapeHtml(priorityLabel(order.priority))}</strong><small>${escapeHtml(order.lastReport)}</small></div>
+      <div><span>${escapeHtml(machtileTranslate("order_detail_inspection"))}</span><strong>${escapeHtml(inspectionLabel(currentProcess?.inspection_status))}</strong><small>${escapeHtml(machtileTranslate(currentProcess?.inspection_required ? "order_detail_inspection_required" : "order_detail_inspection_not_required"))}</small></div>
+    </div>
+
+    ${machtileHmcDetailSection(machtileHmcMachineFor(order.machine))}
+
+    <section class="detail-section" data-order-detail-reports>
+      <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_reports_title"))}</h3><span>${reports.length ? escapeHtml(machtileTranslate("order_detail_report_count", { count: Math.min(reports.length, 20) })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
+      ${machtileOrderDetailReportRows(reports)}
+    </section>
+
+    ${programHasData ? `<section class="detail-section program-section" data-order-detail-program><div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_program_title"))}</h3><span>${profile.historyYears ? escapeHtml(machtileTranslate("order_detail_history_summary", { years: profile.historyYears, runs: profile.historyRuns })) : ""}</span></div><div class="program-grid"><div class="program-main-card"><span>${escapeHtml(machtileTranslate("order_detail_current_program"))}</span><strong>${escapeHtml(profile.programName)}</strong><small>${escapeHtml(profile.programVersion)} · ${escapeHtml(machtileTranslate("order_detail_hash"))} ${escapeHtml(profile.programHash || "-")}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_previous_version"))}</span><strong>${escapeHtml(profile.previousVersion || "-")}</strong><small>${escapeHtml(profile.changedLines === null ? machtileTranslate("order_detail_no_history_version") : machtileTranslate("order_detail_changed_lines", { count: profile.changedLines }))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_pure_cycle"))}</span><strong>${escapeHtml(formatSeconds(profile.pureCycleSec))}</strong><small>${escapeHtml(machtileTranslate("order_detail_excludes_handling"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_baseline"))}</span><strong>${escapeHtml(formatSeconds(profile.baselineCycleSec))}</strong><small class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${escapeHtml(delta === null ? machtileTranslate("order_detail_pending_baseline") : `${delta > 0 ? "+" : ""}${delta}%`)}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_daily_capacity"))}</span><strong>${dailyQty ? escapeHtml(machtileTranslate("order_detail_pieces", { count: dailyQty })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_daily_capacity_note"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_estimated_duration"))}</span><strong>${workDays ? escapeHtml(machtileTranslate("order_detail_days", { count: workDays })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_duration_note"))}</small></div></div>${profile.toolChanges ? `<p class="program-note">${escapeHtml(profile.toolChanges)}</p>` : ""}</section>` : ""}
+    ${cncVersions.length ? machtileWorkOrderCncMarkup(order, detail.cncPrograms || []) : ""}
+  `;
+  if (cncVersions.length) machtileInitWorkOrderCncUpload(order, detail.cncPrograms || []);
+}
+
+function renderLegacyDetail(order, detail) {
   const statusKey = deriveOrderStatus(order);
   const status = statusMeta[statusKey] || statusMeta.normal;
   const due = dueInfo(order);
@@ -23584,6 +23802,7 @@ async function machtileStationReportSubmitPreview(code) {
       operators: machtileSelectedOperators(machtileBatchState.actorId),
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
+      reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
     };
     flow.singleReport.reportNote = window.MachTileReportCounterCore.backfillRemark(counterResult, row.reportNote || "");
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
@@ -23622,7 +23841,9 @@ async function machtileStationReportSubmitPreview(code) {
     }
   }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-    reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null };
+    reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null,
+    reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
+    reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null };
   let args;
   try {
     args = core.buildSubmitArgs(form, crypto.randomUUID(), true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
@@ -23705,7 +23926,9 @@ async function machtileStationReportSubmitFinal(code) {
   let args;
   try {
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
-      reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot }, crypto.randomUUID(), false,
+      reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot,
+      reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
+      reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
   machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");
@@ -25594,6 +25817,7 @@ function bindEvents() {
       && !machtileStationReportCore()?.reportMachineEnabled(
         machtileBatchState.stationReportSettings.machines, selectedOrder.machine
       );
+    if (["noon", "finish"].includes(activeReportType) && !machtileConfirmReportQtyJump()) return;
     if (smartReportAllowlisted && !smartReportExplicitlyDisabled) {
       if (machtileSingleStationReportActive()) {
         await machtileStationReportSubmitPreview(String(selectedOrder.machine || "").trim().toUpperCase());

@@ -1,6 +1,7 @@
 // Copy this file to config.js and fill values for Supabase Cloud.
 // Do not commit real service role keys into frontend code.
 window.MACHTILE_CONFIG = {
+  orderDetailSimplifyEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
@@ -51,6 +52,9 @@ window.MACHTILE_CONFIG = {
   enablePickStartFlow: false,
   startBackfillEnabled: false,
   reportTotalSemanticsEnabled: false,
+  reportCounterMetaRpcEnabled: false,
+  reportQtyJumpWarnEnabled: false,
+  homeOvertimeCardEnabled: false,
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,
