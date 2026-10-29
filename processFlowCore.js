@@ -82,7 +82,7 @@
     vendorMissing: "廠商無資料", closedWithoutReceipt: "已關閉未收貨 {{quantity}}",
     sentDate: "送出日 {{date}}", stockDeduction: "會自動扣倉庫料",
   });
-  const interpolate = (template, values) => Object.entries(values).reduce((value,[key,replacement]) => value.replaceAll(`{{${key}}}`,String(replacement)),template);
+  const interpolate = (template, values) => Object.entries(values).reduce((value,[key,replacement]) => value.replaceAll(`{{${key}}}`,()=>String(replacement)),template);
   const localDate = value => {
     const date = value == null || text(value) === "" ? null : new Date(value);
     if (!date || !Number.isFinite(date.getTime())) return "";
@@ -130,7 +130,7 @@
     });
     result.forEach((row,index)=>{row.outsourceStatus=outsourceDisplay(row,result[index+1],outsourceStatusEnabled,outsourceLabels,now);
       // Synced status replaces the generic "no outsource data" pill so the card never says both.
-      if(row.outsourceStatus&&row.label==="委外狀態無資料")row.label=Number(row.outsource_unconfirmed_qty)>0?"委外中":"已回廠";});
+      if(row.outsourceStatus&&row.label==="委外狀態無資料"){const sent=Number(row.outsource_sent_qty),open=Number(row.outsource_unconfirmed_qty),closed=Number(row.outsource_closed_without_receipt_qty);if(open>0)row.label="委外中";else if(sent>0&&closed===0)row.label="已回廠";}});
     return result;
   }
   const outsourceMarkup = p => p.outsourceStatus ? `<div class="process-flow-outsource is-${escape(p.outsourceStatus.severity)}"><strong>${escape(p.outsourceStatus.summary)}</strong>${p.outsourceStatus.closed?`<small>${escape(p.outsourceStatus.closed)}</small>`:""}${p.outsourceStatus.sentDate?`<small>${escape(p.outsourceStatus.sentDate)}</small>`:""}${p.outsourceStatus.warning?`<b>${escape(p.outsourceStatus.warning)}</b>`:""}</div>` : "";

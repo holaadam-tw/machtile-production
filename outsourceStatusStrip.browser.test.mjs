@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const baseRef="origin/main";
+const baseRef="55ed08ba945d6af2d48bf51e4266368b1c86a0ed"; // pinned pre-PR main so the flag-off comparison stays meaningful after merge
 childProcess.execFileSync("git",["rev-parse","--verify",baseRef],{stdio:"pipe"});
 const files=["index.html","app.js","config.js","i18n.js","processFlowCore.js","styles.css","mockData.js"];
 const baseFiles=new Map(files.map(file=>[file,childProcess.execFileSync("git",["show",`${baseRef}:${file}`],{maxBuffer:16*1024*1024})]));
