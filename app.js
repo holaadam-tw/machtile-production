@@ -22376,8 +22376,9 @@ async function hydrateDetail(order) {
   }
 
   renderDetail(order, {
-    processes: processes.length ? processes : fallbackProcesses(order),
-    reports: reports.length ? reports : fallbackReports(order),
+    // Simplified detail on real data: never show the demo fallback rows (owner: real data only, empty = 無資料).
+    processes: config.orderDetailSimplifyEnabled && state.source === "supabase" ? processes : (processes.length ? processes : fallbackProcesses(order)),
+    reports: config.orderDetailSimplifyEnabled && state.source === "supabase" ? reports : (reports.length ? reports : fallbackReports(order)),
     abnormalities: abnormalities.length ? abnormalities : fallbackAbnormalities(order),
     cncPrograms,
   });
