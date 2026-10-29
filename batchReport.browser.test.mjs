@@ -57,7 +57,7 @@ async function fake(route) {
   if (p.endsWith("/production_reports") && req.method() === "GET" && (url.searchParams.get("select") || "").includes("report_payload")) return json([
     { process_id: id(304), report_type: "dailyStart", report_payload: { machine_qty: 150 }, created_at: new Date(now - 180 * 60000).toISOString() },
   ]);
-  if (p.endsWith("/station_commands") && req.method() === "GET") return json(stationRows);
+  if (p.endsWith("/station_commands") && req.method() === "GET") return json((url.searchParams.get("status") || "").includes("pending") ? [] : stationRows);
   if (p.endsWith("/rpc/field_report_upsert")) { const body = JSON.parse(req.postData() || "{}"); upserts.push(body); return json({ inserted: true, report_id: id(700) }); }
   if (p.includes("/rest/v1/")) return json([]);
   return json({});
@@ -93,14 +93,20 @@ ok((await rootView.locator('[data-batch-counter-preview="A04"]').innerText()).in
 await rootView.locator('[data-batch-row="A04"] [data-batch-bad]').fill("2");
 ok(await rootView.locator('[data-batch-row="A04"] [data-batch-reason-field]').isVisible(), "defect quantity reveals the centralized reason selector");
 await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').check();
-await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption({ index: 1 });
 await rootView.locator("[data-batch-submit]").click();
+ok(upserts.length === 0, "defects without a selected reason are blocked before every write");
+await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption("其他");
+await rootView.locator("[data-batch-submit]").click();
+ok(upserts.length === 0, "Other without an explanation is blocked before every write");
+await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption({ index: 1 });
+await page.evaluate(() => machtileBatchRefreshSubmitButton());
+await rootView.locator("[data-batch-submit]").evaluate((button) => button.click());
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("已送出"));
-ok(upserts.length === 2, "R=140, S=150, total=170 creates backfill and today reports");
-const backfillPayload = upserts[0].p_payload;
-const payload = upserts[1].p_payload;
-ok(backfillPayload.report_type === "noon" && backfillPayload.completed_qty === 10 && backfillPayload.report_payload.start_backfill === true, "backfill payload is marked and excluded from efficiency");
-ok(payload.report_type === "finish" && payload.completed_qty === 20 && payload.defect_qty === 2 && payload.report_payload.counter_today === true && payload.report_payload.start_counter === 150, "finish today payload carries only today's delta and marker");
+ok(upserts.length === 1, "R=140, S=150, total=170 creates exactly one report");
+const payload = upserts[0].p_payload;
+ok(payload.report_type === "finish" && payload.completed_qty === 30 && payload.defect_qty === 2, "finish keeps its report type and sends the full delta once");
+ok(payload.report_payload.backfill_qty === 10 && payload.report_payload.counter_today_qty === 20 && payload.report_payload.start_counter === 150 && payload.report_payload.reported_before === 140, "single payload carries shared backfill/today metadata");
+ok((payload.remark || "").startsWith("含前一班未報 10 件；"), "single payload remark starts with the backfill annotation");
 ok(payload.report_payload.fail_reason_code === "尺寸不良", "batch payload persists the selected defect reason");
 ok(payload.report_payload.machine_qty === 170 && payload.report_payload.counter_baseline_qty === 140 && payload.cycle_time_seconds === null, "payload baseline uses the freshly reread card-reported total");
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"]')?.textContent.includes("170"));

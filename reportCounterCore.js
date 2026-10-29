@@ -61,15 +61,10 @@
     if (reported === null) return { valid: false, code: "REPORTED_REQUIRED", message: "暫時無法核對已報數量，請稍後再按", total, current: total, reported, baseline: reported, start, delta: null, backfill: 0, today: 0, reports: [] };
     if (total < reported) return { valid: false, code: "TOTAL_BELOW_REPORTED", message: "機台數字比系統少，請確認是這張單的數字", total, current: total, reported, baseline: reported, start, delta: total - reported, backfill: 0, today: 0, reports: [] };
     const delta = total - reported;
-    const split = start !== null && reported < start && total >= start;
-    const backfill = split ? start - reported : 0;
-    const today = split ? total - start : delta;
-    const reports = split
-      ? [
-          { kind: "start_backfill", good: backfill, payload: { start_backfill: true, start_counter: start } },
-          { kind: "counter_today", good: today, payload: { counter_today: true, start_counter: start } },
-        ]
-      : [{ kind: "total_delta", good: delta, payload: {} }];
+    const backfill = start === null ? 0 : Math.max(0, Math.min(total, start) - reported);
+    const today = delta - backfill;
+    const payload = { start_counter: start, reported_before: reported, backfill_qty: backfill, counter_today_qty: today };
+    const reports = [{ kind: "total_delta", good: delta, payload }];
     return { valid: true, code: "OK", message: "", total, current: total, reported, baseline: reported, start, delta, backfill, today, reports };
   }
 
@@ -87,6 +82,12 @@
     };
   }
 
+  function backfillRemark(result, remark = "") {
+    const note = String(remark || "");
+    const qty = Number(result?.backfill);
+    return `${Number.isInteger(qty) && qty > 0 ? `含前一班未報 ${qty} 件；` : ""}${note}` || null;
+  }
+
   function rateReasonableness({ cycleSeconds, startedAt, now, reportedQty } = {}) {
     const seconds = Number(cycleSeconds);
     const startMs = Date.parse(startedAt);
@@ -99,5 +100,5 @@
       message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "" };
   }
 
-  return { latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayload, rateReasonableness };
+  return { latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayload, backfillRemark, rateReasonableness };
 });

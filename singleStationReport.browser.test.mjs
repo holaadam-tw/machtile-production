@@ -46,6 +46,8 @@ let finalSubmitFails = false;
 let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
 let closeCommand = null;
+let reportedOutput = 920;
+let freshReadEnabled = false;
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -57,8 +59,9 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/v_work_order_cards")) return json([{ id: workOrderId, tenant_id: tenantId, work_order_no: "XX01202604140011", part_no: "GQ7Q", part_name: "試點件", quantity: 1000, due_date: "2026-10-20", priority: "normal", work_order_status: "in_progress", current_process_id: processId, current_process_name: "車床", current_process_status: "running", machine_name: currentMachine, qty_completed: 920, qty_defect: 0, progress_percent: 92, last_report_at: "2026-10-13T03:00:00Z", current_process_off_station: false }]);
     if (url.pathname.endsWith("/v_machine_management_cards")) return json([{ id: id(201), machine_code: currentMachine, machine_name: currentMachine, machine_type: "車床", status: "running", display_order: 1 }]);
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
+    if (freshReadEnabled && url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("qty_completed") && !url.searchParams.get("select")?.includes("machines!")) return json([{ id: processId, qty_completed: 920, qty_defect: 0 }]);
     if (url.pathname.endsWith("/app_users")) return json([{ id: id(901), name: "試點員", legacy_user_id: "TEST-001" }]);
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: 920, legacy_fail: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
@@ -103,7 +106,7 @@ await page.goto(base, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => typeof machtileRenderSingleStationReport === "function");
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await page.locator("[data-open-report]:visible").first().click();
-await page.locator('[data-report-type="noon"]').click();
+await page.locator('#reportForm [data-report-type="noon"]').click();
 assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
 await page.locator("#defectQty").fill("2");
@@ -145,6 +148,23 @@ await page.locator('#singleStationReportPanel [data-station-report-preview="A04"
 assert.equal(calls.commands.length, 0, "lathe preview rejects multiple operators before any command is created");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /車床報工一次只能選一位報工人員/);
 await page.evaluate(() => document.querySelectorAll('#machtileOperatorList input[type="checkbox"]')[1].remove());
+await page.evaluate(({ processId, workOrderId, tenantId, commandUuid }) => {
+  localStorage.setItem("machtile.stationCmdStartBackfill.v1", JSON.stringify({
+    [commandUuid]: { machineCode: "A04", snap: { qty: 10, processId, workOrderId, tenantId } },
+  }));
+}, { processId, workOrderId, tenantId, commandUuid: id(777) });
+await page.locator("#reportForm .submit-report").click();
+await page.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("這台還有報工在送出中"));
+assert.equal(calls.commands.length + calls.reports.length, 0, "start-backfill queue blocks smart preview before every write");
+await page.evaluate(() => localStorage.removeItem("machtile.stationCmdStartBackfill.v1"));
+await page.evaluate(({ processId }) => {
+  config.enableOutboxSubmit = true;
+  machtileGetOutbox = async () => ({ outbox: { list: async () => [{ status: "pending", payload: { process_id: processId } }] } });
+}, { processId });
+await page.locator("#reportForm .submit-report").click();
+await page.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("這台還有報工在送出中"));
+assert.equal(calls.commands.length + calls.reports.length, 0, "pending outbox blocks smart preview before every write");
+await page.evaluate(() => { config.enableOutboxSubmit = false; });
 await page.evaluate(() => {
   const flow = machtileStationReportState(machtileBatchRow("A04"));
   flow.phase = "waiting-preview";
@@ -181,6 +201,28 @@ assert.match(await page.locator("#singleStationReportPanel").innerText(), /工�
 await page.locator('#singleStationReportPanel [data-station-report-preview-retry="A04"]').click();
 await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
 assert.equal(calls.commands.at(-1).p_command_uuid, previewUuid, "preview retry reuses the same idempotent command_uuid");
+
+reportedOutput = 921;
+freshReadEnabled = true;
+const finalsBeforeChangedR = calls.commands.filter(command => !command.p_preview).length;
+await page.evaluate(() => {
+  config.reportTotalSemanticsEnabled = true;
+  machtileStationReportState(machtileBatchRow("A04")).singleReport.previewReported = 920;
+});
+await page.evaluate(() => machtileStationReportSubmitFinal("A04"));
+await page.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("已報數量已改變，請重新預覽"));
+assert.equal(calls.commands.filter(command => !command.p_preview).length, finalsBeforeChangedR, "changed R after preview blocks final submit with zero writes");
+reportedOutput = 920;
+freshReadEnabled = false;
+await page.evaluate(() => {
+  config.reportTotalSemanticsEnabled = false;
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "idle";
+  flow.error = "";
+  machtileRenderStationReportSurfaces();
+});
+await page.locator("#reportForm .submit-report").click();
+await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
 
 const confirm = page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
@@ -222,7 +264,7 @@ const outsider = await context.newPage();
 await outsider.goto(base, { waitUntil: "domcontentloaded" });
 await outsider.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await outsider.locator("[data-open-report]:visible").first().click();
-await outsider.locator('[data-report-type="noon"]').click();
+await outsider.locator('#reportForm [data-report-type="noon"]').click();
 assert.equal(await outsider.locator("#reportForm .submit-report").isVisible(), true, "non-allowlisted station keeps legacy submit");
 assert.equal(await outsider.locator("#singleStationReportPanel").isHidden(), true);
 await outsider.locator("#completedQty").fill("958");
@@ -407,7 +449,7 @@ const disabledGuard = await context.newPage();
 await disabledGuard.goto(base, { waitUntil: "domcontentloaded" });
 await disabledGuard.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await disabledGuard.locator("[data-open-report]:visible").first().click();
-await disabledGuard.locator('[data-report-type="noon"]').click();
+await disabledGuard.locator('#reportForm [data-report-type="noon"]').click();
 await disabledGuard.waitForFunction(() => !document.querySelector("#reportForm .submit-report").hidden);
 assert.equal(await disabledGuard.locator("#reportForm .submit-report").isVisible(), true, "loaded runtime kill switch restores legacy submit");
 await disabledGuard.close();
@@ -417,7 +459,7 @@ const reconcile = await context.newPage();
 await reconcile.goto(base, { waitUntil: "domcontentloaded" });
 await reconcile.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await reconcile.locator("[data-open-report]:visible").first().click();
-await reconcile.locator('[data-report-type="noon"]').click();
+await reconcile.locator('#reportForm [data-report-type="noon"]').click();
 await reconcile.locator("#completedQty").fill("958");
 await reconcile.locator("#defectQty").fill("2");
 await reconcile.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
@@ -449,7 +491,7 @@ const failedGuard = await context.newPage();
 await failedGuard.goto(base, { waitUntil: "domcontentloaded" });
 await failedGuard.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
 await failedGuard.locator("[data-open-report]:visible").first().click();
-await failedGuard.locator('[data-report-type="noon"]').click();
+await failedGuard.locator('#reportForm [data-report-type="noon"]').click();
 await failedGuard.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("智慧報工後端尚未同步"));
 const failedState = await failedGuard.evaluate(() => ({ submitHidden: document.querySelector("#reportForm .submit-report").hidden, submitDisabled: document.querySelector("#reportForm .submit-report").disabled, panelHidden: document.querySelector("#singleStationReportPanel").hidden, allowlisted: machtileSingleStationReportAllowlisted("A04") }));
 assert.equal(failedState.submitHidden, false, `guard failure keeps its disabled primary action visible: ${JSON.stringify(failedState)}`);
