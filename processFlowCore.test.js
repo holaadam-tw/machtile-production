@@ -89,4 +89,18 @@ check(flow.render(merged,{visibility:'hidden'})==='','merged route respects hidd
 check(!flow.render(merged,{currentId:actual[0].id,visibility:'next_only'}).includes('data-flow-process="route:TEST-ORDER:8"'),'merged route respects next_only');
 assert.throws(()=>flow.mergeRoute([metadata[0],metadata[0]],actual,'TEST'),/invalid display route/);check(true,'duplicate route fails instead of guessing');
 assert.throws(()=>flow.mergeRoute([{...metadata[0],work_order_no:'OTHER'}],actual,'TEST'),/invalid display route/);check(true,'different-order route never attaches to this order');
+const outsourceBase={...metadata[0],step_no:1,outsource_vendor_name:'廠商甲／廠商乙',outsource_sent_qty:12,
+  outsource_returned_qty:4,outsource_unconfirmed_qty:8,outsource_closed_without_receipt_qty:2,
+  outsource_oldest_open_sent_at:'2026-10-20T08:00:00+08:00',outsource_synced_at:'2026-10-29T15:00:00+08:00'};
+const outsourceRows=flow.mergeRoute([outsourceBase,{...metadata[1],step_no:2}],
+  [{id:'reported-next',process_order:2,status:'running',reported:1,hasReports:true}],'TEST-ORDER');
+const outsourceOptions={outsourceStatusEnabled:true,now:new Date('2026-10-30T09:00:00+08:00').getTime()};
+const outsourceHtml=flow.render(outsourceRows,outsourceOptions);
+check(outsourceHtml.includes('委外：廠商甲／廠商乙 送 12／回 4（未回 8）'),'complete and multi-vendor outsource snapshot');
+check(outsourceHtml.includes('已關閉未收貨 2')&&outsourceHtml.includes('送出日 2026-10-20'),'closed-without-receipt and sent date shown');
+check(outsourceHtml.includes('is-danger')&&outsourceHtml.includes('會自動扣倉庫料'),'reported next step makes prior open outsource red');
+check(flow.render(flow.mergeRoute([outsourceBase],[],'TEST-ORDER'),outsourceOptions).includes('is-warning'),'open outsource older than seven days is yellow');
+const unknownOutsource=flow.mergeRoute([{...outsourceBase,outsource_sent_qty:null}],[],'TEST-ORDER');
+check(!flow.render(unknownOutsource,outsourceOptions).includes('process-flow-outsource')&&flow.render(unknownOutsource,outsourceOptions).includes('委外狀態無資料'),'null synchronized field keeps existing unknown state and never fills zero');
+check(!flow.render(outsourceRows,{...outsourceOptions,outsourceStatusEnabled:false}).includes('process-flow-outsource'),'disabled flag preserves old outsource markup');
 console.log(`${checks}/${checks} PASS`);

@@ -11,6 +11,6 @@ const app = readFileSync("./app.js", "utf8");
 const html = readFileSync("./index.html", "utf8");
 assert.match(app, /reportCycleSecondsToSend\(type\)[\s\S]*?MachTileReportCycleCore\.cycleTimeToSend/);
 assert.match(app, /reportCyclePrefilledSeconds\s*=\s*Number\(profile\?\.pureCycleSec\)/);
-// app.js 的 ?v= 每個 PR 都會換，這裡只確認 reportCycleCore 在 app.js 之前載入、而且 app.js 有帶版本（不綁死版本字串，並行 PR 才不會互撞）
-assert.match(html, /reportCycleCore\.js\?v=20261002-first-cycle-noop[\s\S]*app\.js\?v=\d{8}-[\w-]+"/);
+// 本包要求所有靜態資產使用同一 cache-buster；同時確認 core 仍在 app.js 之前載入。
+assert.match(html, /reportCycleCore\.js\?v=20261030-outsource-strip[\s\S]*app\.js\?v=20261030-outsource-strip"/);
 console.log("PASS: first-start cycle submission rules and app wiring (8 assertions)");

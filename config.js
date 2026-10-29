@@ -4,6 +4,7 @@
 // through the signed-in session Bearer + RLS. Never put service-role or
 // other privileged keys here.
 window.MACHTILE_CONFIG = {
+  enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: true,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,

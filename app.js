@@ -10666,7 +10666,9 @@ async function machtileReadRouteSteps(orderNos) {
   }
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
-    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+    const rows = await supabaseFetch(config.enableOutsourceStatusStrip === true
+      ? `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at,outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`
+      : `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
     if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
     return rows;
   } catch (error) {
@@ -10789,8 +10791,20 @@ function machtileProcessFlowMarkup(order, { compact = true, level = "full", mach
   if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
   return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
     compact, visibility: level,
+    outsourceStatusEnabled: config.enableOutsourceStatusStrip === true,
+    outsourceLabels: machtileOutsourceStatusLabels(),
     nextQueued: level === "next_only" ? machtileCardNextQueued(machine, order) : null,
     ...machtileProcessFlowOptions(order.id,route.auditAvailable)});
+}
+
+function machtileOutsourceStatusLabels() {
+  return {
+    summary: machtileTranslate("outsource_status_summary"),
+    vendorMissing: machtileTranslate("outsource_status_vendor_missing"),
+    closedWithoutReceipt: machtileTranslate("outsource_status_closed_without_receipt"),
+    sentDate: machtileTranslate("outsource_status_sent_date"),
+    stockDeduction: machtileTranslate("outsource_status_stock_deduction"),
+  };
 }
 
 let machtileFlowReturnFocus = null;
@@ -10811,6 +10825,7 @@ function machtileOpenProcessFlow(orderNo,currentId) {
     <header><h2 id="machtileFlowTitle">${escapeHtml(orderNo)} · 完整製程路線</h2><button type="button" data-close-flow aria-label="關閉完整製程路線">關閉</button></header>
     <p>共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。</p>
     ${window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId,alignCurrent:false,
+      outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
       ...machtileProcessFlowOptions(orderNo,route.auditAvailable)})}</section>`;
   document.body.append(dialog);dialog.querySelector('[data-close-flow]').focus();
 }
@@ -10824,6 +10839,7 @@ function machtileRefreshOpenProcessFlow() {
     ?`共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。`:'製程路線尚未驗證。';
   const hadFocus=old.contains(document.activeElement);
   old.outerHTML=route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
+    outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
     ...machtileProcessFlowOptions(dialog.dataset.orderNo,route.auditAvailable)}):'<p class="process-flow-empty">製程路線讀取失敗；不顯示舊資料，請重新整理。</p>';
   if(hadFocus)dialog.querySelector('[data-close-flow]').focus();
 }
@@ -22660,7 +22676,7 @@ function renderSimplifiedDetail(order, detail) {
   const routeMarkup = routeVisibility !== "full"
     ? `<p class="empty-note" data-flow-detail-restricted>${escapeHtml(machtileTranslate("order_detail_route_restricted"))}</p>`
     : route && window.MachTileProcessFlow
-    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), ...routeOptions })
+    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(), ...routeOptions })
     : `<p class="empty-note" data-order-detail-route-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
   const programHasData = machtileOrderDetailProgramHasData(profile);
   const cncVersions = globalThis.MachTileCncProgramUploadCore?.flattenVersions(detail.cncPrograms || []) || [];
