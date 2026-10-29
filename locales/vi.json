@@ -322,6 +322,8 @@
     "value": "Hiện không có công đoạn chờ nhận trong cùng bộ phận.",
     "_draft": true
   },
+  "pool_syncing_after_finish": { "value": "Vừa hoàn công, đang đồng bộ lệnh, khoảng {{seconds}} giây nữa sẽ tự làm mới.", "_draft": true },
+  "pool_sync_slow_after_finish": { "value": "Vừa hoàn công, đồng bộ lệnh đang chậm, vui lòng mở lại danh sách sau.", "_draft": true },
   "pool_department_missing": {
     "value": "Máy này chưa được gán bộ phận tiện/phay nên không hiển thị danh sách chờ.",
     "_draft": true

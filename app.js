@@ -11725,9 +11725,9 @@ function machtileDispatchPoolSectionMarkup(machine) {
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
     : pool.department ? `<li>${escapeHtml(machtilePostAppliedRefresh.syncing.has(machineCode)
-      ? `剛完工，工單同步中，約 ${Math.round(machtilePostAppliedRefresh.retryMs / 1000)} 秒後自動重新整理。`
+      ? machtileTranslate("pool_syncing_after_finish", { seconds: Math.round(machtilePostAppliedRefresh.retryMs / 1000) })
       : machtilePostAppliedRefresh.exhausted.has(machineCode)
-        ? "剛完工，工單同步時間較久，請稍後重新開啟選單。"
+        ? machtileTranslate("pool_sync_slow_after_finish")
         : machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
   return `<h3>${escapeHtml(machtileTranslate("dispatch_pool_same_department"))}</h3><p class="pool-note">${escapeHtml(machtileTranslate("pool_note"))}${synced ? ` ${escapeHtml(machtileTranslate("data_time", { time: synced }))}` : ""}</p>
     ${refreshMessage ? `<p data-pool-refresh-status role="status">${escapeHtml(refreshMessage)}</p>` : ""}
