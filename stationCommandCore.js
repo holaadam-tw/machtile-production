@@ -718,7 +718,7 @@
   }
 
   const OVERTIME_START_MINUTES = 17 * 60 + 30;
-  const OVERTIME_END_TYPES = Object.freeze(["stop_report", "report", "close"]);
+  const OVERTIME_END_TYPES = Object.freeze(["stop", "stop_report", "report", "close"]);
   function taiwanParts(value) {
     const date = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(date.getTime())) return null;

@@ -16001,8 +16001,9 @@ function renderMachineCard(machine) {
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
   const stationCmd = machtileStationCmdParts(machine);
-  const overtimeStart = config.overtimeStartCardEnabled === true
+  const overtimeSegment = config.overtimeStartCardEnabled === true
     ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
+  const overtimeStart = overtimeSegment && (!overtimeSegment.appliedAt || machtileFactoryDateIso(overtimeSegment.appliedAt) === machtileFactoryDateIso(new Date().toISOString())) ? overtimeSegment : null;
   const programPending = !profile || profile.programName === "待上傳";
   const programSameAsPrevious = !programPending && profile.previousVersion && profile.previousVersion === profile.programVersion;
   const programBadgeTone = programPending ? "pending" : programSameAsPrevious ? "same" : "uploaded";
@@ -22190,8 +22191,10 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
     const actedTonight = [activity.actualStartAt, activity.lastReportAt].some((value) => value
       && machtileFactoryDateIso(value) === today
       && machtileIsEveningAction(value));
-    const overtimeStart = config.overtimeStartCardEnabled === true
+    const segment = config.overtimeStartCardEnabled === true
       ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
+    // Page left open past midnight keeps yesterday's segments until reload: only show today's (Taipei).
+    const overtimeStart = segment && (!segment.appliedAt || machtileFactoryDateIso(segment.appliedAt) === today) ? segment : null;
     return actedTonight || overtimeStart ? [{ machine: machine.name, order: order.id, part: order.part, overtimeStart }] : [];
   });
   holder.hidden = false;
@@ -22205,7 +22208,7 @@ async function machtileLoadOvertimeStartSegments(now = new Date()) {
   if (config.overtimeStartCardEnabled !== true || state.source !== "supabase" || !machtileStationCmdCore) return;
   const day = machtileFactoryDateIso(now.toISOString());
   const start = new Date(`${day}T00:00:00+08:00`).toISOString();
-  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(start,stop_report,report,close)&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
+  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(start,stop,stop_report,report,close)&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
   state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
 }
 
