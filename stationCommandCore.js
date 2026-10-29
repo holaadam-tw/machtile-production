@@ -555,6 +555,8 @@
       serverOffset: Number.isFinite(Number(rec.serverOffset)) && rec.serverOffset !== null ? Number(rec.serverOffset) : null,
       // 開工送出時網路斷：作業員填的今日開工數量跟著這筆指令存（owner 2026-10-08「先修」）；指令確定被接受才寫
       dailyStart: pendingDailyStart(rec.dailyStart),
+      // 開工補報必須等指令 applied；重新整理前先跟著同一筆 command 保存。
+      startBackfill: pendingDailyStart(rec.startBackfill),
     };
     return out;
   }
@@ -567,7 +569,7 @@
     if (d.qty === null || d.qty === "" || !Number.isInteger(qty) || qty < 0) return null;
     if (!LOOSE_UUID.test(text(d.processId)) || !LOOSE_UUID.test(text(d.workOrderId))) return null;
     const reportUuid = LOOSE_UUID.test(text(d.reportUuid)) ? text(d.reportUuid).toLowerCase() : null;
-    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null, reportUuid };
+    return { qty, processId: text(d.processId), workOrderId: text(d.workOrderId), ...(text(d.orderNo) ? { orderNo: text(d.orderNo) } : {}), tenantId: text(d.tenantId) || null, processStatus: text(d.processStatus) || null, reportUuid };
   }
 
   // 台灣日期 YYYY-MM-DD（今日開工的「哪一天」）
@@ -604,6 +606,25 @@
     hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
     const h = hex.join("");
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  }
+
+  function startBackfillReportUuid({ tenantId, machineCode, processId, commandUuid, phase = "report" } = {}) {
+    const key = ["startBackfill", text(phase), text(tenantId), normCode(machineCode), text(processId).toLowerCase(), text(commandUuid).toLowerCase()].join("|");
+    const hex = hash128(key).map((n) => n.toString(16).padStart(8, "0")).join("").split("");
+    hex[12] = "8";
+    hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+    const h = hex.join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  }
+
+  function startBackfillDelta(machineQty, reportedQty) {
+    const machine = Number(machineQty);
+    const reported = Math.max(0, Number(reportedQty) || 0);
+    return Number.isInteger(machine) && machine >= 0 ? Math.max(0, machine - reported) : 0;
+  }
+
+  function startBackfillPayload(payload, commandUuid) {
+    return { ...(payload || {}), start_backfill: true, start_command_uuid: text(commandUuid).toLowerCase() };
   }
 
   // 等確認的指令第一次查到伺服器上的列時，暫存的今日開工要不要寫：
@@ -718,7 +739,7 @@
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
-    dailyStartQtyCheck, startQtyGap, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+    dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };

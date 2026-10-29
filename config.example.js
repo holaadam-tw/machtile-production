@@ -49,6 +49,7 @@ window.MACHTILE_CONFIG = {
   takeoverMachines: [],
   // 選工單／開工分開：機台代號陣列；預設全關＝卡片照舊。
   enablePickStartFlow: false,
+  startBackfillEnabled: false,
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,

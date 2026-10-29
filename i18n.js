@@ -8,6 +8,11 @@
 
   const dictionaries = {
     "zh-Hant": {
+      start_backfill_confirm: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
+      start_backfill_button: "確認開工並補報 {{gap}} 件",
+      start_qty_less_warning: "機台數字比系統少，請確認機台上是這張單的數字",
+      start_backfill_rejected: "開工未套用，差額沒有補報；請改按報工。",
+      start_backfill_failed: "開工已套用，但補報尚未完成；請改按報工並告知主管。",
       takeover_stop_title: "確認停工", takeover_stop_qty_question_total: "這一道目前良品總數（含已報 {{done}} 件）", takeover_good_qty_total: "良品（這一道目前總數）", takeover_fail_qty_total: "不良（這一道目前總數）", takeover_fail_qty_unreported: "不良（還沒報的件數）", takeover_stop_add_qty: "這次會新增：良品 {{good}} 件、不良 {{fail}} 件", takeover_stop_add_qty_waiting: "填完數量後會顯示這次新增件數", takeover_stop_total_less_than_done: "總數不能少於已報 {{done}} 件", takeover_stop_fail_total_less_than_done: "不良總數不能少於已報 {{done}} 件", takeover_stop_progress_unavailable: "讀不到這一道的最新進度，請重新整理後再試", takeover_stop_report_pending: "剛報的還在處理，請稍後再停工", takeover_stop_dup_question: "這個數量跟剛才報的很像，確定是另外做的嗎？", takeover_stop_dup_confirm: "確定送出", takeover_stop_dup_edit: "改數量", takeover_stop_dup_ack_unsupported: "伺服器還不能接受「確定送出」，請按「改數量」重新填（沒有就填 0）或找生管",
       takeover_good_qty: "良品", takeover_fail_qty: "不良", takeover_reason: "停工原因", takeover_allow_question: "允許其他機台接手？", takeover_missing_required: "請完成紅框標示的必填問題", start_qty_gap_warning: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件，有 {{gap}} 件還沒報；停工或完工時填總數會自動補上", overtime_continue_question: "{{shiftEnd}} 之後有沒有繼續加工？", overtime_start_question: "請確認加班起點（HH:MM）", overtime_time_invalid: "加班起點格式不正確，請用 HH:MM",
       takeover_must_tap: "請親自按是或否", takeover_note: "說明", takeover_confirm_stop: "確認停工", takeover_stop_sent: "停工已送出", takeover_stop_waiting: "已送出，等待工廠確認",
@@ -182,6 +187,11 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      start_backfill_confirm: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)",
+      start_backfill_button: "Xác nhận bắt đầu và báo bù {{gap}}",
+      start_qty_less_warning: "Số trên máy thấp hơn hệ thống; hãy xác nhận đây là số của đúng phiếu này",
+      start_backfill_rejected: "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.",
+      start_backfill_failed: "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", /* _draft */
       takeover_stop_title: "Xác nhận dừng máy", takeover_stop_qty_question_total: "Tổng số hàng tốt hiện tại của công đoạn này (bao gồm {{done}} cái đã báo)", takeover_good_qty_total: "Hàng tốt (tổng hiện tại của công đoạn)", takeover_fail_qty_total: "Hàng lỗi (tổng hiện tại của công đoạn)", takeover_fail_qty_unreported: "Hàng lỗi (số chưa báo)", takeover_stop_add_qty: "Lần này sẽ thêm: {{good}} hàng tốt, {{fail}} hàng lỗi", takeover_stop_add_qty_waiting: "Sau khi nhập số lượng sẽ hiển thị số được thêm lần này", takeover_stop_total_less_than_done: "Tổng số không được nhỏ hơn {{done}} cái đã báo", takeover_stop_fail_total_less_than_done: "Tổng hàng lỗi không được nhỏ hơn {{done}} cái đã báo", takeover_stop_progress_unavailable: "Không đọc được tiến độ mới nhất của công đoạn này. Vui lòng tải lại rồi thử lại", takeover_stop_report_pending: "Báo cáo vừa gửi vẫn đang được xử lý. Vui lòng chờ rồi mới dừng máy", takeover_stop_dup_question: "Số lượng này giống với lần vừa báo, có chắc là làm thêm riêng không?", takeover_stop_dup_confirm: "Xác nhận gửi", takeover_stop_dup_edit: "Sửa số lượng", takeover_stop_dup_ack_unsupported: "Máy chủ chưa nhận được \"Xác nhận gửi\", vui lòng bấm \"Sửa số lượng\" để nhập lại (không có thì điền 0) hoặc báo bộ phận kế hoạch", /* _draft */
       takeover_good_qty: "Hàng tốt", takeover_fail_qty: "Hàng lỗi", takeover_reason: "Lý do dừng", takeover_allow_question: "Cho phép máy khác tiếp nhận?", takeover_missing_required: "Vui lòng hoàn tất các mục bắt buộc được đánh dấu đỏ", start_qty_gap_warning: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}, còn {{gap}} sản phẩm chưa báo; nhập tổng số khi dừng hoặc hoàn tất sẽ tự động bù", overtime_continue_question: "Sau {{shiftEnd}} có tiếp tục gia công không?", overtime_start_question: "Xác nhận giờ bắt đầu tăng ca (HH:MM)", overtime_time_invalid: "Giờ bắt đầu tăng ca không hợp lệ, vui lòng dùng HH:MM", /* _draft */
       takeover_must_tap: "Vui lòng tự chọn Có hoặc Không", takeover_note: "Ghi chú", takeover_confirm_stop: "Xác nhận dừng", takeover_stop_sent: "Đã gửi lệnh dừng", takeover_stop_waiting: "Đã gửi, đang chờ nhà máy xác nhận",

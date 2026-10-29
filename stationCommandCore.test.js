@@ -357,6 +357,13 @@ eq("今日開工 report_uuid：換機台／工序／日期／指令／租戶就�
   c.dailyStartReportUuid({ ...ruArgs, machineCode: "A05" }), c.dailyStartReportUuid({ ...ruArgs, processId: WO }),
   c.dailyStartReportUuid({ ...ruArgs, day: "2026-10-09" }), c.dailyStartReportUuid({ ...ruArgs, commandUuid: PID }),
   c.dailyStartReportUuid({ ...ruArgs, tenantId: "t2" })]).size, 6);
+console.log("== 開工補報 ==");
+eq("差額只補正數", [c.startBackfillDelta(208, 140), c.startBackfillDelta(140, 140), c.startBackfillDelta(139, 140)], [68, 0, 0]);
+const backfillArgs = { tenantId: "t1", machineCode: "A04", processId: PID, commandUuid: UUID };
+const backfillUuid = c.startBackfillReportUuid(backfillArgs);
+eq("補報 report_uuid 由開工 command_uuid 決定且固定", [c.isUuid(backfillUuid), c.startBackfillReportUuid(backfillArgs), c.startBackfillReportUuid({ ...backfillArgs, machineCode: "a04" })], [true, backfillUuid, backfillUuid]);
+eq("預覽與正式報工使用不同的決定性 UUID", c.startBackfillReportUuid({ ...backfillArgs, phase: "preview" }) === backfillUuid, false);
+eq("補報 payload 帶排除效率用標記", c.startBackfillPayload({ report_type: "noon", completed_qty: 68 }, UUID), { report_type: "noon", completed_qty: 68, start_backfill: true, start_command_uuid: UUID });
 eq("結果不確定的提示", c.DAILY_START_UNCONFIRMED_TEXT, "今日開工可能已送出，請稍等卡片底部更新；若 2 分鐘後仍顯示未開工再補填");
 eq("報工擋伺服器已有的提示", c.DAILY_START_ALREADY_TEXT, "今天已有今日開工紀錄");
 eq("重讀讀不到：確認卡提示", c.DAILY_START_RETRY_TEXT, "暫時查不到伺服器，今日開工數量先存在這台平板，會自動再試；請不要補填");

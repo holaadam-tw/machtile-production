@@ -154,6 +154,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     stopReportSubmits: [], stopReportAckMissing: false, procExtra: {},
     // 停工對話框開啟前會擋住尚未 applied 的 report；recentReports 可模擬同一道的 station_commands。
     recentReports: [], recentQueries: [], recentReadFail: false,
+    stationReportSubmits: [], stationReportCommands: new Map(),
   };
   be.handle = async (route) => {
     const req = route.request();
@@ -214,6 +215,22 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       if (be.submitRowMode === "wrongUuid") return json(200, { ...row, command_uuid: "99999999-9999-4999-8999-999999999999" });
       return json(200, row);
     }
+    if (p === "/rest/v1/rpc/machtile_get_station_report_guard_config") {
+      return json(200, { factory_synced: true, machine_code: "A04", report_enabled_machines: { A04: true }, report_enabled: true, fail_reason_codes: ["其他"] });
+    }
+    if (p === "/rest/v1/rpc/machtile_submit_station_report") {
+      const body = JSON.parse(req.postData() || "{}");
+      be.stationReportSubmits.push(body);
+      let row = be.stationReportCommands.get(body.p_command_uuid);
+      if (!row) {
+        row = body.p_preview ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", requested_at: new Date().toISOString(), preview_result: {
+          status: "previewed", allowed: true, hard: false, available: 9999, shown_at: new Date().toISOString(),
+          legacy_snapshot: { report: { guard: { code: "", hard: false, message: "", Details: { available: 9999 } } } },
+        } } : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", requested_at: new Date().toISOString(), applied_at: new Date().toISOString() };
+        be.stationReportCommands.set(body.p_command_uuid, row);
+      }
+      return json(200, row);
+    }
     if (p === "/rest/v1/rpc/machtile_submit_stop_report") {
       const body = JSON.parse(req.postData() || "{}");
       be.stopReportSubmits.push(body);
@@ -259,6 +276,10 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       return json(200, [{ id: pid, qty_completed: extra.qty_completed ?? 0, qty_defect: extra.qty_defect ?? 0, process_order: o.step ?? x.step, process_name: x.proc, status: o.status || be.procStatus[x.wo] || "pending", off_station_at: o.off_station_at ?? null,
         work_orders: { work_order_no: x.wo, part_no: "part_no" in o ? o.part_no : x.partNo, part_name: x.part, status: "in_progress" },
         machines: { machine_code: o.machine || be.procMachine[x.wo] || x.machine } }]);
+    }
+    if (p === "/rest/v1/work_order_processes" && q.includes("legacy_index_sn")) {
+      const m = q.match(/id=in\.\(([^)]*)\)/);
+      return json(200, (m ? m[1].split(",") : []).map((pid) => ({ id: pid, legacy_index_sn: 5, manufacture_ii_id: null, simulation_id: "SIM-A04", work_orders: { part_no: "HCG-06-01" } })));
     }
     if (p === "/rest/v1/work_order_processes" && (url.searchParams.get("select") || "").includes("work_orders!inner")) {
       be.listReads++;
@@ -330,6 +351,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     if (p === "/rest/v1/stop_reason_policy") return json(200, []);
     if (p === "/rest/v1/work_order_processes") {
       const m = q.match(/id=in\.\(([^)]*)\)/);
+      if (m && q.includes("legacy_index_sn")) return json(200, m[1].split(",").map((pid) => ({ id: pid, legacy_index_sn: 5, manufacture_ii_id: null, simulation_id: "SIM-A04", work_orders: { part_no: "HCG-06-01" } })));
       if (m && q.includes("actual_start_at")) return json(200, m[1].split(",").map((pid) => ({ id: pid, process_order: procs.find((x) => id(300 + x.n) === pid)?.step || 1, process_type: "cnc", actual_start_at: null })));
       return json(200, []);
     }
@@ -1801,6 +1823,74 @@ for (const vp of ["phone", "desktop"]) {
 }
 
 console.log("\n== 390px：作業員、今天已經有今日開工 → 沒有數量欄，確認卡跟以前一樣 ==");
+console.log("\n== 390px：開工補報——必答確認、applied 後 fresh totals 只送一次 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  be.procExtra["XX01202502050012"] = { qty_completed: 140, qty_defect: 0 };
+  be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const cfg = 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"], enableOutboxSubmit: true,';
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await dailyField(page).fill("208");
+  await sheet(page).getByText("機台顯示 208 件、系統只記 140 件。按確認開工會同時補報 68 件（算前一班未報）").waitFor();
+  ok(await sheet(page).locator(".station-cmd-actions button").count() === 2, "差額確認區塊只有確認補報與回去改數字兩個按鈕");
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "確認開工並補報 68 件", "確認鈕明列補報差額");
+  be.mode = "hold";
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor();
+  ok(be.stationReportSubmits.length === 0, "start 尚未 applied 不送補報");
+  be.mode = "applied";
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  await page.waitForFunction(() => window.MACHTILE_CONFIG && JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}").constructor === Object);
+  await page.waitForTimeout(1500);
+  ok(be.stationReportSubmits.length === 2 && be.stationReportSubmits[0].p_preview === true && be.stationReportSubmits[1].p_preview === false,
+    "applied 後沿用同一智慧報工 RPC：預覽一次、正式一次", JSON.stringify(be.stationReportSubmits));
+  const backfill = be.reportUpserts.map((x) => x.p_payload).find((x) => x?.report_payload?.start_backfill === true);
+  ok(backfill?.completed_qty === 68 && backfill?.defect_qty === 0 && backfill.report_payload.start_command_uuid === be.submits[0].p_command_uuid,
+    "fresh totals 140 → 補報 68，payload 標記 start_backfill 與 start command", JSON.stringify(backfill));
+  ok((backfill?.remark || "").startsWith("開工補報（前一班未報）"), "補報 remark 使用指定前綴", backfill?.remark);
+  ok(new Set(be.reportUpserts.map((x) => x.p_report_uuid)).size === be.reportUpserts.length, "補報 report_uuid 不重複");
+  ok(realErrors(errors).length === 0, "開工補報沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：補報送出前別台已報到同數 → 不送 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  be.procExtra["XX01202502050012"] = { qty_completed: 140 };
+  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"],' });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click(); await dailyField(page).fill("208"); await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor(); be.mode = "applied"; await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 }); await page.waitForTimeout(800);
+  ok(be.stationReportSubmits.length === 0 && !be.reportUpserts.some((x) => x.p_payload?.report_payload?.start_backfill), "fresh totals 已到 208：差額 0，不送補報");
+  await context.close();
+}
+
+console.log("\n== 390px：等於／小於／旗標 false／rejected 都不補報 ==");
+for (const [label, qty, enabled, mode] of [["等於", 140, true, "applied"], ["小於", 139, true, "applied"], ["旗標 false", 208, false, "applied"], ["rejected", 208, true, "rejected"]]) {
+  const be = makeBackend({ dailyStartDone: false }); be.procExtra["XX01202502050012"] = { qty_completed: 140 }; be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: `stationCommandMachines: ["A04"], startBackfillEnabled: ${enabled}, enableStationReport: true, stationReportMachines: ["A04"],` });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click(); await dailyField(page).fill(String(qty));
+  if (label === "小於") ok(await sheet(page).getByText("機台數字比系統少，請確認機台上是這張單的數字").isVisible(), "小於顯示指定警告且仍可開工");
+  await sheet(page).locator("[data-station-cmd-confirm]").click(); await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor(); be.mode = mode;
+  await sheet(page).locator(`[data-station-cmd-result="${mode}"]`).waitFor({ timeout: 15000 }); await page.waitForTimeout(500);
+  ok(be.stationReportSubmits.length === 0, `${label}：不送補報`); await context.close();
+}
+
+console.log("\n== 390px：applied 後斷線／關頁，恢復後補送一次 ==");
+{
+  const commandUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const queued = { [commandUuid]: { machineCode: "A04", snap: { qty: 208, processId: id(304), workOrderId: id(104), orderNo: "XX01202502050012", tenantId: T, processStatus: "running" } } };
+  const be = makeBackend({ dailyStartDone: true }); be.procExtra["XX01202502050012"] = { qty_completed: 140 }; be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const cfg = 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"],';
+  let opened = await newPage(browser, "phone", { backend: be, configExtra: cfg, preload: { "machtile.stationCmdStartBackfill.v1": JSON.stringify(queued) } });
+  await opened.page.waitForFunction(() => JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}")["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] == null, null, { timeout: 15000 });
+  ok(be.stationReportSubmits.length === 2 && be.reportUpserts.filter((x) => x.p_payload?.report_payload?.start_backfill).length === 1, "恢復後預覽＋正式送出，正式補報只有一次");
+  await opened.page.reload({ waitUntil: "domcontentloaded" }); await opened.page.waitForTimeout(1000);
+  ok(be.stationReportSubmits.length === 2 && be.reportUpserts.filter((x) => x.p_payload?.report_payload?.start_backfill).length === 1, "再次恢復不會重複補報");
+  await opened.context.close();
+}
+
 {
   const be = makeBackend({ dailyStartDone: true });
   const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });

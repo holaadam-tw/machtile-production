@@ -14617,6 +14617,7 @@ async function machtileLoadStationCommandAvailability(generation = machtileDefer
     machtileStationCmd.availability = "ready";
     machtileStationCmdRestorePending();
     machtileDailyStartResumeAll();
+    machtileStartBackfillResumeAll();
     if (typeof machtileBatchResetCommandSelection === "function") {
       if (!machtileBatchState.group || machtileBatchState.commandSelected.size === 0) machtileBatchResetCommandSelection();
       if (machtileBatchState.group) machtileRenderBatchReport();
@@ -14771,7 +14772,10 @@ function machtileStationCmdRenderSheet(focus) {
       ${freshBad ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-stale>${escapeHtml(sheet.fresh.text)}</p>` : ""}
       ${model.otherOrders && !sheet.isRetry ? `<p class="station-cmd-notice is-warn" data-station-cmd-others>${escapeHtml(model.otherOrders)}；請確認你現在做的就是上面這張。</p>` : ""}
       ${sheet.phase === "sendError" ? `<p class="station-cmd-notice is-bad" role="alert" data-station-cmd-error>${escapeHtml(sheet.errorText)}</p>` : ""}`;
-    actions = `
+    const requiredBackfill = config.startBackfillEnabled === true && sheet.dailyStart?.gap;
+    actions = requiredBackfill ? `
+      <button type="button" class="station-cmd-confirm is-${escapeHtml(sheet.type)}" data-station-cmd-confirm ${canSend ? "" : "disabled"}>${sending ? "送出中…" : escapeHtml(machtileTranslate("start_backfill_button", sheet.dailyStart.gap))}</button>
+      <button type="button" class="station-cmd-secondary" data-station-cmd-backfill-edit ${sending ? "disabled" : ""}>回去改數字</button>` : `
       <button type="button" class="station-cmd-confirm is-${escapeHtml(sheet.type)}" data-station-cmd-confirm ${canSend ? "" : "disabled"}>${sending ? "送出中…" : sheet.phase === "sendError" && sheet.canRetry ? "重送" : escapeHtml(model.confirmLabel)}</button>
       ${sheet.isRetry ? "" : `<button type="button" class="station-cmd-secondary" data-station-cmd-notthis-open ${sending ? "disabled" : ""}>不是這張單</button>`}
       <button type="button" class="station-cmd-secondary" data-station-cmd-close ${sending ? "disabled" : ""}>取消</button>`;
@@ -14840,7 +14844,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     fields: { orderNo: order.id, step: order.stationStep, manufactureIiId: order.manufactureIiId || null, partNo: null },
     model: core.confirmModel({ commandType: type, machineCode: code, order, otherOrderCount: others, actorRole, actorName: actorName() }),
     // 開工時一起填今日開工數量（owner 2026-10-08）：作業員＋開工＋今天這道還沒有今日開工紀錄才問；管理員不問
-    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null, reportedQty: Math.max(0, Number(order.done) || 0), gap: null } : null,
+    dailyStart: machtileStationCmdAskDailyStart(type, order) ? { state: "ask", value: "", error: "", qty: null, reportedQty: Math.max(0, Number(order.done) || 0), gap: null, less: false } : null,
   };
   machtileStationCmdNewSheet(sheet);
   let legacy = null;
@@ -14979,7 +14983,8 @@ function machtileStationCmdDailyStartHtml(sheet) {
         <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
         <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
         ${machtileStationCmdDailyStartReportHidden(sheet.code) ? "" : "<p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>"}
-        ${ds.gap ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate("start_qty_gap_warning", ds.gap))}</p>` : ""}
+        ${ds.gap ? `<div class="station-cmd-notice is-warn${config.startBackfillEnabled === true ? " station-cmd-start-backfill" : ""}" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate(config.startBackfillEnabled === true ? "start_backfill_confirm" : "start_qty_gap_warning", ds.gap))}</div>` : ""}
+        ${config.startBackfillEnabled === true && ds.less ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-less>${escapeHtml(machtileTranslate("start_qty_less_warning"))}</p>` : ""}
         ${ds.error ? `<p class="station-cmd-notice" id="stationCmdDailyErr" role="alert" data-station-cmd-daily-error>${escapeHtml(ds.error)}</p>` : ""}
       </section>`;
   }
@@ -15004,7 +15009,7 @@ function machtileStationCmdDailyStartHtml(sheet) {
 function machtileStationCmdDailyStartSnapshot(order, qty, commandUuid, machineCode, atMs) {
   const core = machtileStationCmdCore;
   return core.pendingDailyStart({
-    qty, processId: order?.processId, workOrderId: order?.workOrderId, tenantId: order?.tenantId, processStatus: order?.processStatus,
+    qty, processId: order?.processId, workOrderId: order?.workOrderId, orderNo: order?.id, tenantId: order?.tenantId, processStatus: order?.processStatus,
     reportUuid: core.dailyStartReportUuid({ tenantId: order?.tenantId, machineCode, processId: order?.processId, commandUuid, day: core.taiwanDay(atMs ?? Date.now()) }),
   });
 }
@@ -15221,6 +15226,93 @@ function machtileStationCmdDelayedDailyStart(code, record, row) {
   machtileStationCmdSavePending();
 }
 
+const MACHTILE_START_BACKFILL_QUEUE_KEY = "machtile.stationCmdStartBackfill.v1";
+const machtileStartBackfillRunning = new Set();
+function machtileStartBackfillQueueRead() {
+  let raw = {};
+  try { raw = JSON.parse(localStorage.getItem(MACHTILE_START_BACKFILL_QUEUE_KEY) || "{}") || {}; } catch { raw = {}; }
+  const out = {};
+  Object.entries(raw).forEach(([commandUuid, item]) => {
+    const snap = machtileStationCmdCore?.pendingDailyStart(item?.snap);
+    if (snap && machtileStationCmdCore.isUuid(commandUuid) && item?.machineCode) out[commandUuid] = { snap, machineCode: String(item.machineCode).toUpperCase() };
+  });
+  return out;
+}
+function machtileStartBackfillQueueWrite(queue) {
+  try { localStorage.setItem(MACHTILE_START_BACKFILL_QUEUE_KEY, JSON.stringify(queue)); } catch { /* storage unavailable */ }
+}
+function machtileStartBackfillQueueRemove(commandUuid) {
+  const queue = machtileStartBackfillQueueRead();
+  delete queue[commandUuid];
+  machtileStartBackfillQueueWrite(queue);
+}
+function machtileStartBackfillEnqueue(commandUuid, machineCode, snap) {
+  const queue = machtileStartBackfillQueueRead();
+  if (!queue[commandUuid]) queue[commandUuid] = { machineCode, snap };
+  machtileStartBackfillQueueWrite(queue);
+  void machtileStartBackfillResolve(commandUuid);
+}
+function machtileStartBackfillResumeAll() {
+  Object.keys(machtileStartBackfillQueueRead()).forEach((uuid) => void machtileStartBackfillResolve(uuid));
+}
+async function machtileStartBackfillResolve(commandUuid) {
+  if (machtileStartBackfillRunning.has(commandUuid)) return;
+  const item = machtileStartBackfillQueueRead()[commandUuid];
+  if (!item) return;
+  machtileStartBackfillRunning.add(commandUuid);
+  try {
+    const order = machtileStationCmdMachineByCode(item.machineCode)?.order;
+    const target = order && String(order.processId) === String(item.snap.processId) ? order : {
+      id: item.snap.orderNo, workOrderId: item.snap.workOrderId, processId: item.snap.processId,
+      tenantId: item.snap.tenantId, processStatus: item.snap.processStatus,
+    };
+    const totals = await machtileTakeoverStopFreshTotals(item.machineCode, target);
+    const good = machtileStationCmdCore.startBackfillDelta(item.snap.qty, totals.goodDone);
+    if (good <= 0) { machtileStartBackfillQueueRemove(commandUuid); return; }
+    await machtileLoadStationReportSettings([item.machineCode]);
+    await machtileLoadStationReportIdentity([item.machineCode], [item.snap.processId]);
+    const context = machtileStationReportContext(target, item.machineCode);
+    const core = machtileStationReportCore();
+    const client = machtileStationReportCreateClient();
+    if (!context || !core || !client) throw new Error("智慧報工資料尚未就緒");
+    const remark = `開工補報（前一班未報） ${item.snap.qty} - ${totals.goodDone} = ${good}`;
+    const previewUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid, phase: "preview" });
+    const reportUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid });
+    const form = { ...context, goodQty: good, failQty: 0, failReasonCode: null, reportNote: remark, acks: [], clientGuardSnapshot: null };
+    const previewArgs = core.buildSubmitArgs(form, previewUuid, true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
+    let preview = await machtileStationReportSubmitCommand(previewArgs); preview = Array.isArray(preview) ? preview[0] : preview;
+    if (!core.isTerminal(preview)) preview = await client.waitForTerminal(previewUuid, { intervalMs: 2000, maxAttempts: 90 });
+    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw new Error("開工補報預覽未通過");
+    const finalArgs = core.buildSubmitArgs({ ...form, clientGuardSnapshot: core.buildClientGuardSnapshot(preview) }, reportUuid, false,
+      machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
+    let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
+    if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
+    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw new Error("開工補報未套用");
+    const actorId = await machtileResolveAppUserId();
+    const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
+    const saved = await submitReport(good, 0, remark, "noon", { order: target, reportUuid, reportPayload: payload, operators: actorId ? [actorId] : [], noFiles: true, requireStructured: true });
+    if (!saved?.wroteCloud || saved.deadLetter) throw new Error("開工補報正式紀錄尚未送達");
+    machtileStartBackfillQueueRemove(commandUuid);
+    showToast(`${item.machineCode} 已補報 ${good} 件`);
+  } catch (error) {
+    console.warn("start backfill pending", error);
+    showToast(machtileTranslate("start_backfill_failed"), "error");
+    window.setTimeout(() => void machtileStartBackfillResolve(commandUuid), 5000);
+  } finally {
+    machtileStartBackfillRunning.delete(commandUuid);
+  }
+}
+function machtileStationCmdDelayedStartBackfill(code, record, row) {
+  if (!record?.startBackfill) return;
+  const status = String(row?.status || "").toLowerCase();
+  if (status === "applied") machtileStartBackfillEnqueue(record.commandUuid, code, record.startBackfill);
+  if (["applied", "rejected", "expired"].includes(status)) {
+    if (status !== "applied") showToast(machtileTranslate("start_backfill_rejected"), "error");
+    record.startBackfill = null;
+    machtileStationCmdSavePending();
+  }
+}
+
 // 送出失敗、要記成「等確認」時，跟著存的今日開工：確認卡剛送的那個數量，或（從卡片重送時）上一筆紀錄裡存的
 function machtileStationCmdCarriedDailyStart(sheet, existing) {
   const ds = sheet && sheet.dailyStart;
@@ -15251,6 +15343,11 @@ function machtileStationCmdConfirm() {
     ds.value = raw;
     ds.qty = check.value;
     ds.error = "";
+    ds.gap = core.startQtyGap(check.value, ds.reportedQty);
+    ds.less = check.value < Number(ds.reportedQty || 0);
+    sheet.startBackfill = config.startBackfillEnabled === true && ds.gap
+      ? machtileStationCmdDailyStartSnapshot(sheet.order, check.value, sheet.uuid, sheet.code)
+      : null;
     ds.state = "awaitAck";   // 等開工指令被接受；送出被拒會改回 ask（數量還在）
   }
   machtileStationCmdSubmit();
@@ -15303,7 +15400,7 @@ async function machtileStationCmdRefreshToday() {
   machtileStationCmdRerender();
 }
 
-window.addEventListener("online", () => { if (machtileStationCmd.availability === "ready") machtileDailyStartResumeAll(); });
+window.addEventListener("online", () => { if (machtileStationCmd.availability === "ready") { machtileDailyStartResumeAll(); machtileStartBackfillResumeAll(); } });
 
 document.addEventListener("input", (event) => {
   const input = event.target;
@@ -15312,16 +15409,8 @@ document.addEventListener("input", (event) => {
   if (!ds || ds.state !== "ask") return;
   ds.value = input.value;
   ds.gap = machtileStationCmdCore.startQtyGap(input.value, ds.reportedQty);
-  const section = input.closest("[data-station-cmd-daily]");
-  section?.querySelector("[data-station-cmd-start-gap]")?.remove();
-  if (ds.gap && section) {
-    const warning = document.createElement("p");
-    warning.className = "station-cmd-notice is-warn";
-    warning.setAttribute("role", "status");
-    warning.dataset.stationCmdStartGap = "";
-    warning.textContent = machtileTranslate("start_qty_gap_warning", ds.gap);
-    section.appendChild(warning);
-  }
+  const numeric = Number(input.value);
+  ds.less = Number.isInteger(numeric) && numeric >= 0 && numeric < Number(ds.reportedQty || 0);
   // 改了數字 → 上一次的提示收起來（不整張重畫，游標不跳）
   if (ds.error) {
     ds.error = "";
@@ -15329,6 +15418,7 @@ document.addEventListener("input", (event) => {
     input.removeAttribute("aria-describedby");
     document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-error]")?.remove();
   }
+  machtileStationCmdRenderSheet();
 });
 
 function machtileOvertimeAnswer() {
@@ -15464,13 +15554,13 @@ async function machtileStationCmdSubmit() {
         showToast(`${machtileTranslate("standard_finish_combo_start_failed")} (${errorCode})`);
       }
       machtileStationCmdRenderSheet();
-      return { recordExtra: { dailyStart: carried } };
+      return { recordExtra: { dailyStart: carried, startBackfill: sheet.startBackfill } };
     },
     onAccepted: ({ row }) => {
       const carried = existing?.commandUuid === sheet.uuid ? existing.dailyStart || null : null;
       const sheetAwaitsAck = sheet.dailyStart?.state === "awaitAck";
       machtileStationCmdDailyStartAfterSubmit(sheet, true, row);
-      return { recordExtra: carried && !sheetAwaitsAck ? { dailyStart: carried } : {} };
+      return { recordExtra: { ...(carried && !sheetAwaitsAck ? { dailyStart: carried } : {}), ...(sheet.startBackfill ? { startBackfill: sheet.startBackfill } : {}) } };
     },
     afterRecord: ({ row, record, view }) => {
       if (machtileStationCmd.sheet === sheet) {
@@ -15479,6 +15569,7 @@ async function machtileStationCmdSubmit() {
         machtileStationCmdRenderSheet();
       }
       if (record.dailyStart && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedDailyStart(sheet.code, record, row);
+      if (record.startBackfill && machtileStationCmdRowIsThis(row, sheet.uuid)) machtileStationCmdDelayedStartBackfill(sheet.code, record, row);
     },
   });
 }
@@ -15549,6 +15640,7 @@ function machtileStationCmdPoll(code) {
       if (machtileStationCmd.pending[code] !== current) return;
       if (row) {
         if (current.dailyStart) machtileStationCmdDelayedDailyStart(code, current, row);
+        if (current.startBackfill) machtileStationCmdDelayedStartBackfill(code, current, row);
         const wasUnconfirmed = current.unconfirmed;
         current.unconfirmed = false;
         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
@@ -15638,6 +15730,7 @@ function machtileStationCmdHandleClick(event) {
   if (retry) { machtileStationCmdOpenRetry(retry.dataset.stationCmdRetry, retry); return true; }
   if (!event.target.closest("#machtileStationCmdSheet")) return false;
   if (event.target.closest("[data-station-cmd-confirm]")) { machtileStationCmdConfirm(); return true; }
+  if (event.target.closest("[data-station-cmd-backfill-edit]")) { document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-qty]")?.focus(); return true; }
   if (event.target.closest("[data-station-cmd-daily-resend]")) { machtileStationCmdResendDailyStart(); return true; }
   if (event.target.closest("[data-station-cmd-notthis-open]")) {
     const sheet = machtileStationCmd.sheet;
@@ -23295,7 +23388,7 @@ async function machtileStationReportRetryPreview(code) {
   machtileStartStationReportPreviewTicker(code);
   machtileRenderStationReportSurfaces();
   try {
-    const submitted = await machtileStationReportCreateClient().submit(flow.args);
+    const submitted = await machtileStationReportSubmitCommand(flow.args);
     const item = Array.isArray(submitted) ? submitted[0] : submitted;
     flow.preview = item?.command_uuid === flow.args.p_command_uuid ? item : flow.preview;
     flow.phase = "waiting-preview";
@@ -23395,7 +23488,7 @@ async function machtileStationReportSubmitPreview(code) {
   machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
-    const submitted = await client.submit(args);
+    const submitted = await machtileStationReportSubmitCommand(args);
     const item = Array.isArray(submitted) ? submitted[0] : submitted;
     flow.preview = item?.command_uuid === args.p_command_uuid ? item : null;
     flow.phase = "waiting-preview";
@@ -23504,7 +23597,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
-    const submitted = await client.submit(args);
+    const submitted = await machtileStationReportSubmitCommand(args);
     const item = Array.isArray(submitted) ? submitted[0] : submitted;
     flow.phase = "waiting-report";
     if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; }
@@ -23654,6 +23747,13 @@ function machtileStationReportNew(code) {
 function machtileStationReportCreateClient() {
   const core = machtileStationReportCore();
   return core?.createClient({ request: (path, options) => supabaseFetch(path, options) }) || null;
+}
+
+// 卡片報工與開工補報共用唯一送出 seam；兩者都只能走同一個 client／RPC。
+async function machtileStationReportSubmitCommand(args) {
+  const client = machtileStationReportCreateClient();
+  if (!client) throw new Error("智慧報工介面尚未載入。");
+  return client.submit(args);
 }
 
 function machtileBatchReadDrafts() {
