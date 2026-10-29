@@ -149,7 +149,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     listReads: 0,             // 工序清單（work_orders!inner）讀取次數＝重載次數
     otherWrites: [],
     // 選工單／開工分開（2026-10-26）用：派工池列、接單請求、機台課別、工序 status（工單號 → status；預設 pending）
-    poolItems, poolClaims: [], withDepartments, procStatus: { ...procStatus }, extraCards,
+    poolItems, poolClaims: [], poolReads: 0, poolVisibleAfterRead: 0, withDepartments, procStatus: { ...procStatus }, extraCards,
     // 停工對話框（報工＋停工一次）：machtile_submit_stop_report 的 body；procExtra＝工單號 → 工序列額外欄位（simulation_id、qty_completed）
     stopReportSubmits: [], stopReportAckMissing: false, procExtra: {},
     // 停工對話框開啟前會擋住尚未 applied 的 report；recentReports 可模擬同一道的 station_commands。
@@ -249,6 +249,8 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     if (p === "/rest/v1/rpc/takeover_candidates") return json(200, be.takeoverCandidates);
     if (p === "/rest/v1/dispatch_pool_items") {
       if (!q.includes("status=eq.waiting")) return json(200, []);
+      be.poolReads += 1;
+      if (be.poolVisibleAfterRead && be.poolReads < be.poolVisibleAfterRead) return json(200, []);
       return json(200, be.poolItems.filter((item) => !be.poolClaims.some((c) => c.p_source_key === item.source_key)));
     }
     if (p === "/rest/v1/rpc/dispatch_pool_claim") {
@@ -2705,6 +2707,39 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   ok(await page.locator("#finishSheet [data-standard-finish-case]").count() === 0, "旗標關：next_step 不改變既有完工 DOM");
   ok(be.submits.length === submitsBeforeFlagOff, "旗標關：不送 claim_next request");
   ok(realErrors(errors).length === 0, "標準完工畫面沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px: finish applied then pool sync -> refresh card and picker ==");
+{
+  const be = makeBackend({ poolItems: [], withDepartments: true });
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'stationCommandMachines: ["A04"], dispatchPoolMachines: ["A04"], enablePickStartFlow: true, pickStartFlowMachines: ["A04"],' });
+  // Prime the per-machine 10 second open-refresh throttle with an empty snapshot.
+  await page.evaluate(() => machtileOpenCardSelection("A04", { poolOnly: true }));
+  await page.waitForTimeout(200);
+  await page.evaluate(() => machtileCloseCardSelection());
+  be.poolItems.push({
+    source_key: "finish-refresh-next", work_order_no: "XX01202610300001", process_order: 6,
+    operation_name: "CNC lathe", part_no: "NEXT-01", part_name: "post-finish pool item", quantity: 20,
+    due_date: "2026-10-31", planned_start: "2026-10-30", urgency: 1, department_code: "LATHE",
+    eligible_machine_codes: ["A04"], source_status: "waiting", synced_at: new Date().toISOString(),
+  });
+  be.poolVisibleAfterRead = be.poolReads + 2;       // first applied refresh is still empty; next retry sees it
+  be.procMachine[procs[1].wo] = "A02";
+  await page.evaluate(() => { machtilePostAppliedRefresh.retryMs = 20; });
+  await page.evaluate(({ commandUuid }) => {
+    machtileStationCmd.pending.A04 = { commandUuid, commandType: "close", machineCode: "A04", startedAt: Date.now() };
+    machtileStationCmdFinish("A04", MachTileStationCommandCore.statusView({ status: "applied" }, "close", 0));
+  }, { commandUuid: id(9910) });
+  const pick = cardOf(page, "A04").locator("[data-pick-order-open]");
+  const refreshed = await pick.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+  ok(refreshed, "finish applied reloads A04 from occupied to pickable");
+  if (refreshed) await pick.click();
+  const appeared = refreshed && await page.locator('[data-pool-key="finish-refresh-next"]').waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+  ok(appeared, "finish applied bypasses throttle and shows post-finish pool item");
+  ok(be.poolReads >= be.poolVisibleAfterRead, "empty post-finish pool automatically retries until the synced item appears", `${be.poolReads}/${be.poolVisibleAfterRead}`);
+  ok(realErrors(errors).length === 0, "post-finish refresh has no JS error", realErrors(errors).join(" | "));
   await context.close();
 }
 

@@ -11620,6 +11620,7 @@ const MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS = 10_000;
 const machtileDispatchPoolState = {
   status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(), requestSequence: 0,
 };
+const machtilePostAppliedRefresh = { retryMs: 10000, maxRetries: 3, timers: {}, retries: {}, syncing: new Set(), exhausted: new Set() };
 
 async function machtileLoadDispatchPool({ preserveItemsOnFailure = false } = {}) {
   const requestSequence = ++machtileDispatchPoolState.requestSequence;
@@ -11720,12 +11721,63 @@ function machtileDispatchPoolSectionMarkup(machine) {
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
   }).join("");
+  const machineCode = String(machine?.code || machine?.name || "");
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
-    : pool.department ? `<li>${escapeHtml(machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
+    : pool.department ? `<li>${escapeHtml(machtilePostAppliedRefresh.syncing.has(machineCode)
+      ? `剛完工，工單同步中，約 ${Math.round(machtilePostAppliedRefresh.retryMs / 1000)} 秒後自動重新整理。`
+      : machtilePostAppliedRefresh.exhausted.has(machineCode)
+        ? "剛完工，工單同步時間較久，請稍後重新開啟選單。"
+        : machtileTranslate("pool_empty"))}</li>` : `<li>${escapeHtml(machtileTranslate("pool_department_missing"))}</li>`;
   return `<h3>${escapeHtml(machtileTranslate("dispatch_pool_same_department"))}</h3><p class="pool-note">${escapeHtml(machtileTranslate("pool_note"))}${synced ? ` ${escapeHtml(machtileTranslate("data_time", { time: synced }))}` : ""}</p>
     ${refreshMessage ? `<p data-pool-refresh-status role="status">${escapeHtml(refreshMessage)}</p>` : ""}
     <ul class="pool-list" data-card-selection-pool>${items || empty}</ul><p class="pool-claim-message" data-pool-claim-message role="status">${escapeHtml(machtileDispatchPoolState.claimMessage)}</p>`;
+}
+
+function machtilePostAppliedNeedsRetry(code) {
+  const machine = machtileScheduleMachine(code);
+  return Boolean(machine && machtileDispatchPoolState.status === "ready"
+    && machtileDispatchPoolForMachine(machine).items.length === 0);
+}
+
+async function machtileRefreshAfterApplied(code, commandType, isRetry = false) {
+  const machineCode = String(code || "");
+  if (!machineCode) return;
+  clearTimeout(machtilePostAppliedRefresh.timers[machineCode]);
+  delete machtilePostAppliedRefresh.timers[machineCode];
+  if (!isRetry) {
+    machtilePostAppliedRefresh.retries[machineCode] = 0;
+    machtilePostAppliedRefresh.exhausted.delete(machineCode);
+  }
+  machtileDispatchPoolState.openRefreshByMachine.delete(machineCode);
+  try {
+    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    deriveMachines();
+    renderAll();
+  } catch (error) {
+    console.warn("applied machine/pool refresh failed", error);
+  }
+  machtileDispatchPoolState.openRefreshByMachine.delete(machineCode);
+  const retryEmpty = ["close", "stop_report", "claim_next"].includes(String(commandType || ""))
+    && machtilePostAppliedNeedsRetry(machineCode);
+  if (!retryEmpty) {
+    machtilePostAppliedRefresh.syncing.delete(machineCode);
+    machtilePostAppliedRefresh.exhausted.delete(machineCode);
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
+  machtilePostAppliedRefresh.syncing.add(machineCode);
+  machtileUpdateDispatchPoolSelection(machineCode);
+  if ((machtilePostAppliedRefresh.retries[machineCode] || 0) >= machtilePostAppliedRefresh.maxRetries) {
+    machtilePostAppliedRefresh.syncing.delete(machineCode);
+    machtilePostAppliedRefresh.exhausted.add(machineCode);
+    machtileUpdateDispatchPoolSelection(machineCode);
+    return;
+  }
+  machtilePostAppliedRefresh.retries[machineCode] = (machtilePostAppliedRefresh.retries[machineCode] || 0) + 1;
+  machtilePostAppliedRefresh.timers[machineCode] = setTimeout(() => {
+    void machtileRefreshAfterApplied(machineCode, commandType, true);
+  }, machtilePostAppliedRefresh.retryMs);
 }
 
 function machtileUpdateDispatchPoolSelection(machineCode) {
@@ -15769,6 +15821,11 @@ function machtileStationCmdFinish(code, view) {
     machtileStationCmdRenderSheet();
   }
   machtileStationCmdRerender();
+  const refreshOccupation = ["close", "stop_report"].includes(record.commandType)
+    || (record.commandType === "claim_next" && record.replaceStopped === true);
+  if (view.phase === "applied" && refreshOccupation) {
+    void machtileRefreshAfterApplied(code, record.commandType);
+  }
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
