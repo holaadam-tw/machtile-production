@@ -27,6 +27,10 @@
       const p = byStep.get(n);
       if (r.is_outsourced) return {id:p?.id||`route:${orderNo}:${n}`,process_order:n,process_name:text(r.operation_name),
         process_type:'outsourced',supplier_name:text(r.supplier_name),supplier_code:text(r.supplier_no),
+        outsource_vendor_name:r.outsource_vendor_name,outsource_sent_qty:r.outsource_sent_qty,
+        outsource_returned_qty:r.outsource_returned_qty,outsource_unconfirmed_qty:r.outsource_unconfirmed_qty,
+        outsource_closed_without_receipt_qty:r.outsource_closed_without_receipt_qty,
+        outsource_oldest_open_sent_at:r.outsource_oldest_open_sent_at,outsource_synced_at:r.outsource_synced_at,
         status:p?.status||'',reported:p?.reported??null,routeOnly:!p,hasReports:p?.hasReports||false,
         is_confirmed:r.is_confirmed,station_codes:r.station_codes};
       return {...(p || {id:`route:${orderNo}:${n}`,process_order:n,status:'',reported:null,routeOnly:true}),
@@ -73,13 +77,41 @@
     if (done === null || done <= 0) return "未開始";
     return qty !== null && qty > 0 && done >= qty ? "已達數" : "進行中";
   }
-  function steps(rows, currentId, quantity = null) {
+  const defaultOutsourceLabels = Object.freeze({
+    summary: "委外：{{vendor}} 送 {{sent}}／回 {{returned}}（未回 {{unconfirmed}}）",
+    vendorMissing: "廠商無資料", closedWithoutReceipt: "已關閉未收貨 {{quantity}}",
+    sentDate: "送出日 {{date}}", stockDeduction: "會自動扣倉庫料",
+  });
+  const interpolate = (template, values) => Object.entries(values).reduce((value,[key,replacement]) => value.replaceAll(`{{${key}}}`,()=>String(replacement)),template);
+  const localDate = value => {
+    const date = value == null || text(value) === "" ? null : new Date(value);
+    if (!date || !Number.isFinite(date.getTime())) return "";
+    return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Taipei",year:"numeric",month:"2-digit",day:"2-digit"}).format(date);
+  };
+  function outsourceDisplay(row, next, enabled, labels, now) {
+    if (!enabled || !row.outsourced) return null;
+    const values = [row.outsource_sent_qty,row.outsource_returned_qty,row.outsource_unconfirmed_qty,row.outsource_closed_without_receipt_qty];
+    if (values.some(value => numeric(value) === null) || row.outsource_synced_at == null) return null;
+    const sent=numeric(values[0]),returned=numeric(values[1]),unconfirmed=numeric(values[2]),closed=numeric(values[3]);
+    const copy={...defaultOutsourceLabels,...(labels||{})};
+    const sentAt=row.outsource_oldest_open_sent_at == null?null:new Date(row.outsource_oldest_open_sent_at);
+    const overdue=unconfirmed>0&&sentAt&&Number.isFinite(sentAt.getTime())&&sentAt.getTime()+7*86400000<now;
+    const stockDeduction=unconfirmed>0&&Boolean(next?.hasReports);
+    return {
+      summary:interpolate(copy.summary,{vendor:text(row.outsource_vendor_name)||text(row.supplier_name)||text(row.supplier_code)||copy.vendorMissing,sent,returned,unconfirmed}),
+      closed:closed>0?interpolate(copy.closedWithoutReceipt,{quantity:closed}):"",
+      sentDate:sentAt&&Number.isFinite(sentAt.getTime())?interpolate(copy.sentDate,{date:localDate(sentAt)}):"",
+      warning:stockDeduction?copy.stockDeduction:"", severity:stockDeduction?"danger":overdue?"warning":"normal",
+    };
+  }
+  function steps(rows, currentId, quantity = null, {outsourceStatusEnabled=false,outsourceLabels=null,now=Date.now()} = {}) {
     const qty = numeric(quantity);
     if (!currentId) {
       const active = (Array.isArray(rows) ? rows : []).filter(p => ["running", "in_progress"].includes(p.status));
       if (active.length === 1) currentId = active[0].id;
     }
-    return (Array.isArray(rows) ? rows : []).slice().sort((a,b) => Number(a.process_order)-Number(b.process_order)).map(p => {
+    const sorted=(Array.isArray(rows) ? rows : []).slice().sort((a,b) => Number(a.process_order)-Number(b.process_order));
+    const result=sorted.map(p => {
       const outsourced = ["outsource", "outsourced"].includes(p.process_type);
       const state = text(p.status);
       const done = numeric(p.reported);
@@ -93,11 +125,16 @@
         resource: outsourced ? `委外：${text(p.supplier_name) || text(p.supplier_code) || "廠商無資料"}`
           : (text(p.machine_code) || (p.routeOnly ? "機台無資料" : "未排機"))
             + (text(p.station_codes).includes(',') ? `；對應機台：${text(p.station_codes).split(',').map(text).filter(Boolean).join('、')}` : ''),
-        sourceNote: p.is_confirmed === false ? 'BOM 未發行' : '',
+        sourceNote: p.is_confirmed === false ? 'BOM 未發行' : '', outsourceStatus:null,
         done};
     });
+    result.forEach((row,index)=>{row.outsourceStatus=outsourceDisplay(row,result[index+1],outsourceStatusEnabled,outsourceLabels,now);
+      // Synced status replaces the generic "no outsource data" pill so the card never says both.
+      if(row.outsourceStatus&&row.label==="委外狀態無資料"){const sent=Number(row.outsource_sent_qty),open=Number(row.outsource_unconfirmed_qty),closed=Number(row.outsource_closed_without_receipt_qty);if(open>0)row.label="委外中";else if(sent>0&&closed===0)row.label="已回廠";}});
+    return result;
   }
-  const stepCell = (p, qty, kind) => `<li class="process-flow-step wo-step-row" data-flow-process="${escape(p.id)}"><span class="process-flow-kind">${kind}</span><div class="process-flow-head"><strong>${escape(p.number)}</strong><span class="process-flow-status"><i aria-hidden="true"></i>${escape(p.label)}</span></div><b class="process-flow-name">${escape(p.name)}</b><span>${escape(p.resource)}</span>${p.sourceNote?`<small>${escape(p.sourceNote)}</small>`:''}<span class="process-flow-quantity">${p.done === null ? "已報無資料" : `已報 ${escape(p.done)}`} / ${qty === null ? "工單量無資料" : escape(qty)}</span></li>`;
+  const outsourceMarkup = p => p.outsourceStatus ? `<div class="process-flow-outsource is-${escape(p.outsourceStatus.severity)}"><strong>${escape(p.outsourceStatus.summary)}</strong>${p.outsourceStatus.closed?`<small>${escape(p.outsourceStatus.closed)}</small>`:""}${p.outsourceStatus.sentDate?`<small>${escape(p.outsourceStatus.sentDate)}</small>`:""}${p.outsourceStatus.warning?`<b>${escape(p.outsourceStatus.warning)}</b>`:""}</div>` : "";
+  const stepCell = (p, qty, kind) => `<li class="process-flow-step wo-step-row" data-flow-process="${escape(p.id)}"><span class="process-flow-kind">${kind}</span><div class="process-flow-head"><strong>${escape(p.number)}</strong><span class="process-flow-status"><i aria-hidden="true"></i>${escape(p.label)}</span></div><b class="process-flow-name">${escape(p.name)}</b><span>${escape(p.resource)}</span>${outsourceMarkup(p)}${p.sourceNote?`<small>${escape(p.sourceNote)}</small>`:''}<span class="process-flow-quantity">${p.done === null ? "已報無資料" : `已報 ${escape(p.done)}`} / ${qty === null ? "工單量無資料" : escape(qty)}</span></li>`;
   // next_only: this order's next step + this machine's next queued order. Nothing else from the route.
   function renderNextOnly(list, currentIndex, qty, nextQueued) {
     const next = currentIndex < 0 ? null : list[currentIndex + 1] || null;
@@ -111,13 +148,13 @@
       : `<li class="process-flow-step process-flow-note" data-flow-queue=""><span class="process-flow-kind">本機下一張</span><span>${q.status === "none" ? "本機佇列沒有下一張" : "佇列資料無法確認"}</span></li>`;
     return `<div class="process-flow process-flow-compact process-flow-next" data-flow-level="next_only" data-flow-aligned="true" data-no-detail role="group" aria-label="下一步"><ol>${orderCell}${queueCell}</ol></div>`;
   }
-  function render(rows, {currentId = null, quantity = null, label = "製程流程",canPreplan=false,machines=[],orderNo='',auditAvailable=false,compact=false,alignCurrent=true,visibility='full',nextQueued=null,quantityDoneLabel='已報',quantityPlanLabel=''} = {}) {
+  function render(rows, {currentId = null, quantity = null, label = "製程流程",canPreplan=false,machines=[],orderNo='',auditAvailable=false,compact=false,alignCurrent=true,visibility='full',nextQueued=null,quantityDoneLabel='已報',quantityPlanLabel='',outsourceStatusEnabled=false,outsourceLabels=null,now=Date.now()} = {}) {
     const level = LEVELS.includes(visibility) ? visibility : "full";
     if (level === "hidden") return "";
     // Any level other than full never renders the complete route or its opener.
     if (level !== "full") compact = true;
     const opener = compact && level === "full";
-    const list = steps(rows, currentId, quantity), qty = numeric(quantity);
+    const list = steps(rows, currentId, quantity,{outsourceStatusEnabled,outsourceLabels,now}), qty = numeric(quantity);
     currentId=currentId||list.find(p=>p.current)?.id||null;
     const currentIndex=list.findIndex(p=>p.current);
     if (level === "next_only") return list.length ? renderNextOnly(list, currentIndex, qty, nextQueued) : '<p class="process-flow-empty">製程路線無資料</p>';
@@ -138,7 +175,7 @@
     });
     const countText = opener ? `共 ${list.length} 道 · 點開看完整路線${currentIndex<0?'（目前道未確認）':''}` : currentIndex<0 ? '目前道未確認' : '';
     return `<div class="process-flow${compact?' process-flow-compact':''}${compact&&!opener?' process-flow-static':''}" data-flow-level="${level}" ${opener?`data-flow-open="${escape(orderNo)}" data-flow-current="${escape(currentId)}"`:''} ${!alignCurrent||compact?'data-flow-aligned="true"':''} data-no-detail ${opener||!compact?'tabindex="0" ':''}role="${opener?'button':compact?'group':'region'}" aria-label="${escape(label)}（${opener?'點開完整路線':compact?'前後道預覽':'可橫向捲動'}）">${countText?`<span class="process-flow-count">${countText}</span>`:''}<ol>${visible.map(p =>
-      `<li class="process-flow-step wo-step-row${p.current ? " is-current" : ""}"${p.current ? ' aria-current="step"' : ""} data-flow-process="${escape(p.id)}">${compact?`<span class="process-flow-kind">${p.current?'目前道':list.indexOf(p)<currentIndex?'上一道'+(p.status==='completed'?' ✓':''):'下一道'}</span>`:''}<div class="process-flow-head"><strong>${escape(p.number)}</strong><span class="process-flow-status"><i aria-hidden="true"></i>${escape(p.label)}</span></div><b class="process-flow-name">${escape(p.name)}</b><span>${escape(p.resource)}</span>${p.sourceNote?`<small>${escape(p.sourceNote)}</small>`:''}<span class="process-flow-quantity">${quantityDoneLabel === '已報' && !quantityPlanLabel ? (p.done === null ? "已報無資料" : `已報 ${escape(p.done)}`) : `${escape(quantityDoneLabel)} ${p.done === null ? "無資料" : escape(p.done)}`} / ${quantityPlanLabel ? `${escape(quantityPlanLabel)} ` : ""}${qty === null ? "工單量無資料" : escape(qty)}${p.hasReports ? ' <small>已鎖定</small>' : ""}</span>${p.assignmentEvent?.kind==='legacy_reassigned'?'<small class="process-flow-reassigned">已依舊 MES 改派</small>':p.assignmentEvent?.kind==='preplan'?'<small>已預排，等待舊 MES 派工確認</small>':p.assignmentEvent?.kind==='legacy_confirmed'?'<small>舊 MES 已確認同台</small>':''}${controls(p)}</li>`).join("")}</ol></div>`;
+      `<li class="process-flow-step wo-step-row${p.current ? " is-current" : ""}"${p.current ? ' aria-current="step"' : ""} data-flow-process="${escape(p.id)}">${compact?`<span class="process-flow-kind">${p.current?'目前道':list.indexOf(p)<currentIndex?'上一道'+(p.status==='completed'?' ✓':''):'下一道'}</span>`:''}<div class="process-flow-head"><strong>${escape(p.number)}</strong><span class="process-flow-status"><i aria-hidden="true"></i>${escape(p.label)}</span></div><b class="process-flow-name">${escape(p.name)}</b><span>${escape(p.resource)}</span>${outsourceMarkup(p)}${p.sourceNote?`<small>${escape(p.sourceNote)}</small>`:''}<span class="process-flow-quantity">${quantityDoneLabel === '已報' && !quantityPlanLabel ? (p.done === null ? "已報無資料" : `已報 ${escape(p.done)}`) : `${escape(quantityDoneLabel)} ${p.done === null ? "無資料" : escape(p.done)}`} / ${quantityPlanLabel ? `${escape(quantityPlanLabel)} ` : ""}${qty === null ? "工單量無資料" : escape(qty)}${p.hasReports ? ' <small>已鎖定</small>' : ""}</span>${p.assignmentEvent?.kind==='legacy_reassigned'?'<small class="process-flow-reassigned">已依舊 MES 改派</small>':p.assignmentEvent?.kind==='preplan'?'<small>已預排，等待舊 MES 派工確認</small>':p.assignmentEvent?.kind==='legacy_confirmed'?'<small>舊 MES 已確認同台</small>':''}${controls(p)}</li>`).join("")}</ol></div>`;
   }
   return {steps, render,mergeRoute,department,operationDepartment,preplanTarget,candidateMachines,
     LEVELS,ROLES,visibilityLevel,normalizeVisibility,quantityLabel};

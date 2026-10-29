@@ -46,6 +46,8 @@ const config = {
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
   overtimeStartTime: "17:30",
+  // APP applied start 的加班中提示。預設關閉；關閉時不讀 ledger、不增加卡片 DOM。
+  overtimeStartCardEnabled: false,
   // 選工單／開工分開（owner 2026-10-26）：機台代號陣列；["*"]＝全部。預設全關＝卡片跟以前一樣。
   enablePickStartFlow: false,
   pickStartFlowMachines: [],
@@ -445,6 +447,7 @@ const state = {
   machineMasters: [],
   source: "mock",
   inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
+  overtimeStartSegments: new Map(),
 };
 
 const mockOrders = [
@@ -10573,6 +10576,7 @@ function machtileStartDeferredLoads(generation) {
     ["hmc", "HMC 盤況", machtileLoadHmcRuntime, () => { machtileRefreshCardSections(); ensureHmcDashboardEntry(); }],
     ["flow-visibility", "製程顯示設定", machtileLoadFlowVisibility, () => renderWorkOrders()],
     ["station-command", "機台操作狀態", () => machtileLoadStationCommandAvailability(generation), () => renderWorkOrders()],
+    ["overtime-start-card", "加班開工狀態", machtileLoadOvertimeStartSegments, machtileRefreshCardSections],
     // #130 換機台：探針要用目前可見機台（"*" 設定時），所以先 deriveMachines；旗標關＝不讀
     ["takeover", "換機台狀態", async () => { deriveMachines(); await machtileLoadTakeoverAvailability(); }, () => renderWorkOrders()],
     ["dispatch-pool", "派工待做池", machtileLoadDispatchPool, () => renderWorkOrders()],
@@ -10666,7 +10670,9 @@ async function machtileReadRouteSteps(orderNos) {
   }
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
   try {
-    const rows = await supabaseFetch(`work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+    const rows = await supabaseFetch(config.enableOutsourceStatusStrip === true
+      ? `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at,outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`
+      : `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
     if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
     return rows;
   } catch (error) {
@@ -10789,8 +10795,20 @@ function machtileProcessFlowMarkup(order, { compact = true, level = "full", mach
   if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
   return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
     compact, visibility: level,
+    outsourceStatusEnabled: config.enableOutsourceStatusStrip === true,
+    outsourceLabels: machtileOutsourceStatusLabels(),
     nextQueued: level === "next_only" ? machtileCardNextQueued(machine, order) : null,
     ...machtileProcessFlowOptions(order.id,route.auditAvailable)});
+}
+
+function machtileOutsourceStatusLabels() {
+  return {
+    summary: machtileTranslate("outsource_status_summary"),
+    vendorMissing: machtileTranslate("outsource_status_vendor_missing"),
+    closedWithoutReceipt: machtileTranslate("outsource_status_closed_without_receipt"),
+    sentDate: machtileTranslate("outsource_status_sent_date"),
+    stockDeduction: machtileTranslate("outsource_status_stock_deduction"),
+  };
 }
 
 let machtileFlowReturnFocus = null;
@@ -10811,6 +10829,7 @@ function machtileOpenProcessFlow(orderNo,currentId) {
     <header><h2 id="machtileFlowTitle">${escapeHtml(orderNo)} · 完整製程路線</h2><button type="button" data-close-flow aria-label="關閉完整製程路線">關閉</button></header>
     <p>共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。</p>
     ${window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId,alignCurrent:false,
+      outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
       ...machtileProcessFlowOptions(orderNo,route.auditAvailable)})}</section>`;
   document.body.append(dialog);dialog.querySelector('[data-close-flow]').focus();
 }
@@ -10824,6 +10843,7 @@ function machtileRefreshOpenProcessFlow() {
     ?`共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。`:'製程路線尚未驗證。';
   const hadFocus=old.contains(document.activeElement);
   old.outerHTML=route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
+    outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
     ...machtileProcessFlowOptions(dialog.dataset.orderNo,route.auditAvailable)}):'<p class="process-flow-empty">製程路線讀取失敗；不顯示舊資料，請重新整理。</p>';
   if(hadFocus)dialog.querySelector('[data-close-flow]').focus();
 }
@@ -15997,6 +16017,9 @@ function renderMachineCard(machine) {
   const dept = normalizedMachineDepartment(machine);
   const deptTone = dept === "車床課" ? "machine-dept-lathe" : dept === "銑床課" ? "machine-dept-mill" : "";
   const stationCmd = machtileStationCmdParts(machine);
+  const overtimeSegment = config.overtimeStartCardEnabled === true
+    ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
+  const overtimeStart = overtimeSegment && (!overtimeSegment.appliedAt || machtileFactoryDateIso(overtimeSegment.appliedAt) === machtileFactoryDateIso(new Date().toISOString())) ? overtimeSegment : null;
   const programPending = !profile || profile.programName === "待上傳";
   const programSameAsPrevious = !programPending && profile.previousVersion && profile.previousVersion === profile.programVersion;
   const programBadgeTone = programPending ? "pending" : programSameAsPrevious ? "same" : "uploaded";
@@ -16024,7 +16047,8 @@ function renderMachineCard(machine) {
           </div>
           <span class="machine-type-pill">${escapeHtml(machineTypeLabel(machine.type))}</span>
           ${dept === "車床課" || dept === "銑床課" ? `<span class="machine-dept-pill ${deptTone}">${escapeHtml(dept)}</span>` : ""}
-          ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}
+          ${dept === "未設定課別" ? '<span class="machine-dept-pill">未設定課別</span>' : ""}${overtimeStart ? `
+          <span class="overtime-start-pill" data-overtime-start-card>${escapeHtml(machtileTranslate("overtime_start_active", { time: overtimeStart.startHm }))}</span>` : ""}
         </div>
         <div class="machine-header-actions">
           <span class="status-pill ${escapeHtml(status.className)}">${escapeHtml(machtileTranslate("machine_status", { status: status.label }))}</span>
@@ -22183,12 +22207,25 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
     const actedTonight = [activity.actualStartAt, activity.lastReportAt].some((value) => value
       && machtileFactoryDateIso(value) === today
       && machtileIsEveningAction(value));
-    return actedTonight ? [{ machine: machine.name, order: order.id, part: order.part }] : [];
+    const segment = config.overtimeStartCardEnabled === true
+      ? state.overtimeStartSegments.get(String(machine.code || machine.name || "").trim().toUpperCase()) : null;
+    // Page left open past midnight keeps yesterday's segments until reload: only show today's (Taipei).
+    const overtimeStart = segment && (!segment.appliedAt || machtileFactoryDateIso(segment.appliedAt) === today) ? segment : null;
+    return actedTonight || overtimeStart ? [{ machine: machine.name, order: order.id, part: order.part, overtimeStart }] : [];
   });
   holder.hidden = false;
   holder.innerHTML = `<h2>${escapeHtml(machtileTranslate("home_overtime_title"))}</h2><p>${escapeHtml(machtileTranslate("home_overtime_note"))}</p>${rows.length
-    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
+    ? `<ul>${rows.map((row) => `<li><strong>${escapeHtml(row.machine)} · ${escapeHtml(row.order)}${row.overtimeStart ? ` · ${escapeHtml(machtileTranslate("overtime_start_active", { time: row.overtimeStart.startHm }))}` : ""}</strong><small>${escapeHtml(row.part || "")}</small></li>`).join("")}</ul>`
     : `<p>${escapeHtml(machtileTranslate("home_overtime_empty"))}</p>`}`;
+}
+
+async function machtileLoadOvertimeStartSegments(now = new Date()) {
+  state.overtimeStartSegments = new Map();
+  if (config.overtimeStartCardEnabled !== true || state.source !== "supabase" || !machtileStationCmdCore) return;
+  const day = machtileFactoryDateIso(now.toISOString());
+  const start = new Date(`${day}T00:00:00+08:00`).toISOString();
+  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(start,stop,stop_report,report,close)&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
+  state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
 }
 
 function setSelectedOrder(order) {
@@ -22660,7 +22697,7 @@ function renderSimplifiedDetail(order, detail) {
   const routeMarkup = routeVisibility !== "full"
     ? `<p class="empty-note" data-flow-detail-restricted>${escapeHtml(machtileTranslate("order_detail_route_restricted"))}</p>`
     : route && window.MachTileProcessFlow
-    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), ...routeOptions })
+    ? window.MachTileProcessFlow.render(route.processes, { quantity: route.quantity, currentId: order.processId, compact: false, visibility: routeVisibility, quantityDoneLabel: machtileTranslate("order_detail_completed"), quantityPlanLabel: machtileTranslate("order_detail_planned"), outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(), ...routeOptions })
     : `<p class="empty-note" data-order-detail-route-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
   const programHasData = machtileOrderDetailProgramHasData(profile);
   const cncVersions = globalThis.MachTileCncProgramUploadCore?.flattenVersions(detail.cncPrograms || []) || [];

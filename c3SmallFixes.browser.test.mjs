@@ -41,9 +41,9 @@ const flagOff = await page.evaluate(() => {
   machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(order), { actualStartAt: "2026-10-29T09:50:00+08:00" });
   const warning = machtileReportQtyJumpWarning({ valid: true, delta: 50 }, order, new Date("2026-10-29T10:00:00+08:00"));
   machtileRenderHomeOvertimeCard(new Date("2026-10-29T18:00:00+08:00"));
-  return { warning, hidden: document.getElementById("homeOvertimeCard").hidden };
+  return { warning, hidden: document.getElementById("homeOvertimeCard").hidden, overtimeDom: document.querySelectorAll("[data-overtime-start-card]").length };
 });
-check(flagOff.warning === null && flagOff.hidden, "flags off preserve base behavior");
+check(flagOff.warning === null && flagOff.hidden && flagOff.overtimeDom === 0, "flags off preserve base behavior and add no overtime-start DOM");
 
 const qty = await page.evaluate(() => {
   config.reportQtyJumpWarnEnabled = true;
@@ -66,8 +66,10 @@ check(qty.cancelled === false && qty.accepted === true && qty.prompts === 2, "qu
 
 const overtime = await page.evaluate(() => {
   config.homeOvertimeCardEnabled = true;
+  config.overtimeStartCardEnabled = true;
   const machines = state.machines.filter(item => item.order).slice(0, 3);
   const [dayMachine, eveningMachine, unreadableMachine] = machines;
+  state.overtimeStartSegments = new Map([[String(eveningMachine.code || eveningMachine.name).toUpperCase(), { startHm: "17:40" }]]);
   machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(dayMachine.order), { lastReportAt: "2026-10-29T08:10:00Z" });
   machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(eveningMachine.order), { lastReportAt: "2026-10-29T10:10:00Z" });
   machtileCardPickState.activityByKey.set(MachTileCardActiveOrderCore.orderKey(unreadableMachine.order), { actualStartAt: "not-a-time" });
@@ -85,10 +87,13 @@ const overtime = await page.evaluate(() => {
   MachTileI18n.setLanguage("vi");
   machtileRenderHomeOvertimeCard(new Date("2026-10-29T18:00:00+08:00"));
   const vi = card.textContent.includes("Máy đã có thao tác tối nay");
-  return { before, after, vi };
+  renderWorkOrders();
+  const machineBadge = [...document.querySelectorAll("[data-overtime-start-card]")].some((node) => node.textContent.includes("17:40"));
+  return { before, after, vi, machineBadge, homeStart: card.textContent.includes("17:40") };
 });
 check(overtime.before && overtime.after, "overtime card excludes daytime/unreadable activity and lists an 18:10 report after 17:30");
 check(overtime.vi, "overtime card Vietnamese copy is available");
+check(overtime.machineBadge && overtime.homeStart, "applied overtime start appears on machine card and home overtime card");
 
 await page.locator('[data-view="reports"].nav-item').click();
 const nav = await page.evaluate(() => [...document.querySelectorAll(".desktop-nav .nav-item")].map(item => ({ active: item.classList.contains("active"), border: getComputedStyle(item).borderBottomColor })));

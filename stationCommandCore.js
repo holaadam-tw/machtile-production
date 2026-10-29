@@ -716,6 +716,42 @@
     if (answer?.continued === false) return `[加班確認：${text(shiftEndTime)} 後沒有繼續加工]`;
     return "";
   }
+
+  const OVERTIME_START_MINUTES = 17 * 60 + 30;
+  const OVERTIME_END_TYPES = Object.freeze(["stop", "stop_report", "report", "close"]);
+  function taiwanParts(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(date);
+    const out = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { day: `${out.year}-${out.month}-${out.day}`, minutes: Number(out.hour) * 60 + Number(out.minute), hm: `${out.hour}:${out.minute}` };
+  }
+  function overtimeAppliedAt(row) {
+    if (String(row?.status || "").toLowerCase() !== "applied") return null;
+    // applied_at is the cloud ledger's confirmation time. Never fall back to requested_at/client click time.
+    const value = row?.applied_at;
+    return taiwanParts(value) ? String(value) : null;
+  }
+  function overtimeStartSegments(rows, now = new Date()) {
+    const today = taiwanParts(now)?.day;
+    if (!today || !Array.isArray(rows)) return new Map();
+    const applied = rows.map((row) => ({ row, at: overtimeAppliedAt(row), tw: taiwanParts(overtimeAppliedAt(row)) }))
+      .filter((entry) => entry.at && entry.tw?.day === today)
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    const active = new Map();
+    applied.forEach(({ row, at, tw }) => {
+      const machine = normCode(row.machine_code);
+      const type = String(row.command_type || "").toLowerCase();
+      if (!machine) return;
+      if (type === "start" && tw.minutes > OVERTIME_START_MINUTES) {
+        active.set(machine, { machineCode: machine, orderNo: text(row.expected_order_no), step: Number(row.expected_index_sn) || null, appliedAt: at, startHm: tw.hm });
+      } else if (OVERTIME_END_TYPES.includes(type)) {
+        active.delete(machine);
+      }
+    });
+    return active;
+  }
   // rows＝卡片底部同一份「今天（台灣）的 dailyStart／noon／finish」列（production_reports）
   function dailyStartRecordedToday(rows, processId) {
     const pid = text(processId);
@@ -739,7 +775,7 @@
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
-    dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
+    dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };
