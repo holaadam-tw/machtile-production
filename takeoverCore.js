@@ -165,7 +165,11 @@
     const local = pickStartPhase({ ...input, localRun });
     return cloud !== local;
   }
-  function pickStartActions(phase, { dailyStartWhenRunningEnabled, startedToday } = {}) {
+  function pickStartActions(phase, { dailyStartWhenRunningEnabled, startedToday, overtimeStartVisible } = {}) {
+    if (["running", "stopped"].includes(text(phase)) && overtimeStartVisible === true) {
+      const actions = ({ running: ["report", "stop", "finish"], stopped: ["finish"] })[text(phase)];
+      return ["start", ...actions];
+    }
     if (text(phase) === "running" && dailyStartWhenRunningEnabled === true && startedToday !== true)
       return ["start", "report", "stop", "finish"];
     return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start", "finish"] })[text(phase)] || [];

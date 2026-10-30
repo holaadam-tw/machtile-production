@@ -10758,6 +10758,27 @@ async function machtileLoadProcessFlows() {
 // 只控制畫面，不是資料權限：作業員報工本來就要讀工序列，資料層不擋。工單管理、排程看板（排程以上頁面）一律完整。
 // 設定存在 tenant_display_settings.settings.flow_visibility（每租戶一列）；表不存在或讀不到 → 每個角色都 full。
 const machtileFlowVisibilityState = { status: "default", byRole: null, error: "" };
+const MACHTILE_OPERATOR_PREVIEW_KEY = "machtile.operatorPreview";
+let machtileOperatorPreview = false;
+try { machtileOperatorPreview = sessionStorage.getItem(MACHTILE_OPERATOR_PREVIEW_KEY) === "1"; } catch { machtileOperatorPreview = false; }
+function machtileActualRole() {
+  return String(machtileDepartmentAccess?.role || machtileAuthState.role || "").toLowerCase();
+}
+function machtileOperatorPreviewActive() {
+  return machtileActualRole() === "admin" && machtileOperatorPreview;
+}
+function machtileUiRole() {
+  return machtileOperatorPreviewActive() ? "operator" : machtileActualRole();
+}
+function machtileSetOperatorPreview(active) {
+  machtileOperatorPreview = machtileActualRole() === "admin" && active === true;
+  try { sessionStorage.setItem(MACHTILE_OPERATOR_PREVIEW_KEY, machtileOperatorPreview ? "1" : "0"); } catch { /* best effort */ }
+  document.body.classList.toggle("operator-preview-active", machtileOperatorPreviewActive());
+  const banner = document.getElementById("operatorPreviewBanner");
+  if (banner) banner.hidden = !machtileOperatorPreviewActive();
+  machtileToggleAdminDrawer(false);
+  renderAll();
+}
 const MACHTILE_FLOW_LEVEL_LABELS = {
   full: "完整：三格預覽＋點開完整路線",
   adjacent: "前後道：只有三格預覽",
@@ -10781,7 +10802,7 @@ async function machtileLoadFlowVisibility() {
   }
 }
 function machtileFlowVisibilityRole() {
-  return String(machtileDepartmentAccess?.role || machtileAuthState.role || "").toLowerCase();
+  return machtileUiRole();
 }
 function machtileFlowVisibilityLevel(role = machtileFlowVisibilityRole()) {
   const core = window.MachTileProcessFlow;
@@ -13647,6 +13668,9 @@ function machtileAdminDrawerGroups() {
   const canPlan = strict ? machtileCanManageWorkOrders() : true;
   const canAdmin = strict ? machtileCanManageCompany() : true;
   const groups = [];
+  if (machtileActualRole() === "admin") {
+    groups.push({ title: "畫面預覽", items: [{ key: "__operatorPreview", icon: "👷", label: machtileOperatorPreviewActive() ? "退出作業員畫面" : "以作業員畫面檢視" }] });
+  }
   if (canPlan) {
     groups.push({ title: "生產管理", items: [
       { key: "workOrders", icon: "📋", label: "工單管理" },
@@ -14544,7 +14568,7 @@ function machtileStationCmdFlag() {
 }
 
 function machtileStationCmdRoleOk() {
-  return Boolean(machtileStationCmdCore) && machtileStationCmdCore.roleAllowed(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true);
+  return Boolean(machtileStationCmdCore) && machtileStationCmdCore.roleAllowed(machtileActualRole(), machtileDepartmentAccess?.is_bridge === true);
 }
 
 // 這台現在有沒有開這個功能（旗標＋作業員或管理員＋表在）
@@ -14898,10 +14922,6 @@ function machtileStationCmdParts(machine) {
   // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
   const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
   const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
-  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase, {
-    dailyStartWhenRunningEnabled: config.dailyStartWhenRunningEnabled === true,
-    startedToday: machtilePickStartedToday(machine, gate.ok ? order : null),
-  }) : [];
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
   if (!gate.ok && !pickActive && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
@@ -14931,6 +14951,11 @@ function machtileStationCmdParts(machine) {
       : machtileInstantStartPending[code],
     machineCode: code, orderNo: order?.id, step: order?.stationStep, now: new Date(),
   });
+  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase, {
+    dailyStartWhenRunningEnabled: config.dailyStartWhenRunningEnabled === true,
+    startedToday: machtilePickStartedToday(machine, gate.ok ? order : null),
+    overtimeStartVisible: startState.overtime === true && startState.visible === true,
+  }) : [];
   const startLabel = machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
   const resolvedStartButton = startState.visible ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
@@ -15083,14 +15108,14 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   if (!core || !core.COMMAND_TYPES.includes(type)) return;
   const machine = machtileStationCmdMachineByCode(code);
   const order = machine?.order || null;
-  const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+  const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket });
   const pending = machtileStationCmd.pending[code];
   if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending))) return;
   let uuid;
   try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
   const others = Number(machine?.cardOtherCount || 0);
-  const isAdmin = core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true);
+  const isAdmin = core.isAdminActor(machtileActualRole(), machtileDepartmentAccess?.is_bridge === true);
   const actorRole = isAdmin ? "admin" : "operator";
   const actorName = () => machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "";
   const sheet = {
@@ -15167,7 +15192,7 @@ function machtileStationCmdOpenRetry(code, returnFocus) {
     errorText: "上次送出時網路斷了，不知道有沒有送到。按「重送」會用同一筆指令，不會重複。",
     fields: { orderNo: rec.orderNo, step: rec.step, manufactureIiId: rec.manufactureIiId, partNo: rec.partNo, poolItemId: rec.poolItemId },
     model: core.confirmModel({ commandType: rec.commandType, machineCode: code, order, fresh,
-      actorRole: core.isAdminActor(machtileFlowVisibilityRole(), machtileDepartmentAccess?.is_bridge === true) ? "admin" : "operator",
+      actorRole: core.isAdminActor(machtileActualRole(), machtileDepartmentAccess?.is_bridge === true) ? "admin" : "operator",
       actorName: machtileAuthState.appUserName || machtileAccountDisplay(machtileAuthState.email) || "" }),
   });
 }
@@ -15181,7 +15206,7 @@ function machtileStationCmdAskDailyStart(type, order) {
   const core = machtileStationCmdCore;
   if (!core || typeof core.askDailyStart !== "function" || !order) return false;
   return core.askDailyStart({
-    commandType: type, role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    commandType: type, role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     todayStatus: machtileCardState.todayStatus, rows: machtileCardState.todayRows, processId: order.processId,
   });
 }
@@ -22244,6 +22269,9 @@ function renderMachineAdminDetail(machine) {
 }
 
 function renderAll() {
+  document.body.classList.toggle("operator-preview-active", machtileOperatorPreviewActive());
+  const previewBanner = document.getElementById("operatorPreviewBanner");
+  if (previewBanner) previewBanner.hidden = !machtileOperatorPreviewActive();
   deriveMachines();
   applyDashboardFilterParams();
   selectedOrder = state.workOrders.find((order) => order.id === selectedOrder?.id) || state.workOrders[0] || null;
@@ -22527,10 +22555,10 @@ async function hydrateDetail(order) {
   if (state.source === "supabase" && isUuid(order.workOrderId)) {
     try {
       processes = await supabaseFetch(
-        `work_order_processes?select=process_order,process_code,process_name,process_type,status,qty_planned,qty_completed,qty_defect,inspection_required,inspection_status,planned_start_at,planned_end_at,actual_start_at,actual_end_at,remark&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=process_order.asc`
+        `work_order_processes?select=id,process_order,process_code,process_name,process_type,status,qty_planned,qty_completed,qty_defect,inspection_required,inspection_status,planned_start_at,planned_end_at,actual_start_at,actual_end_at,remark&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=process_order.asc`
       );
       reports = await supabaseFetch(config.orderDetailSimplifyEnabled
-        ? `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at,ended_at,report_type,machine_id,user_id,operator_ids&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=20`
+        ? `production_reports?select=process_id,completed_qty,defect_qty,status_after_report,remark,created_at,ended_at,report_type,machine_id,user_id,operator_ids&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=20`
         : `production_reports?select=completed_qty,defect_qty,status_after_report,remark,created_at&work_order_id=eq.${encodeURIComponent(order.workOrderId)}&order=created_at.desc&limit=8`
       );
       if (config.orderDetailSimplifyEnabled && reports.length) {
@@ -22805,22 +22833,40 @@ function machtileOrderDetailProgramHasData(profile) {
   );
 }
 
-function machtileOrderDetailReportRows(reports) {
+function machtileOrderDetailReportRows(reports, route, currentProcessId) {
   const noData = machtileTranslate("order_detail_no_data");
   const machineNames = new Map((state.machineMasters || []).flatMap((machine) => [
     machine.id ? [String(machine.id), machine.code || machine.name] : null,
     machine.dbRowId ? [String(machine.dbRowId), machine.code || machine.name] : null,
   ].filter(Boolean)));
   if (!reports.length) return `<p class="empty-note" data-order-detail-reports-empty>${escapeHtml(machtileTranslate("order_detail_no_data"))}</p>`;
-  return `<div class="order-detail-report-table-wrap"><table class="order-detail-report-table">
-    <thead><tr><th>${escapeHtml(machtileTranslate("order_detail_time"))}</th><th>${escapeHtml(machtileTranslate("order_detail_machine"))}</th><th>${escapeHtml(machtileTranslate("order_detail_person"))}</th><th>${escapeHtml(machtileTranslate("order_detail_quantity"))}</th><th>${escapeHtml(machtileTranslate("order_detail_source"))}</th></tr></thead>
+  const routeProcesses = Array.isArray(route?.processes) ? route.processes : [];
+  const processById = new Map(routeProcesses.flatMap((process) => {
+    const id = process?.id || process?.process_id;
+    return id ? [[String(id), process]] : [];
+  }));
+  const processLabel = (process) => process ? `N${process.process_order ?? "?"} ${process.process_name || process.operation_name || "製程"}` : noData;
+  const reportProcessKeys = [...new Set(reports.map((report) => String(report.process_id || "")).filter((key) => processById.has(key)))];
+  const currentKey = String(currentProcessId || "");
+  const initialKey = reportProcessKeys.includes(currentKey) ? currentKey : "all";
+  const typeLabels = { dailyStart: "開工", start: "開工", stop: "停工", stop_report: "停工", noon: "報工", report: "報工", finish: "完工" };
+  const chips = reportProcessKeys.length > 1 ? `<div class="order-detail-report-filters filter-chips" data-order-detail-report-filters>
+    <button type="button" class="chip ${initialKey === "all" ? "active" : ""}" data-order-detail-report-filter="all">全部</button>
+    ${reportProcessKeys.map((key) => `<button type="button" class="chip ${key === initialKey ? "active" : ""}" data-order-detail-report-filter="${escapeHtml(key)}">${escapeHtml(`N${processById.get(key)?.process_order ?? "?"}`)}</button>`).join("")}
+  </div>` : "";
+  return `${chips}<div class="order-detail-report-table-wrap"><table class="order-detail-report-table">
+    <thead><tr><th>${escapeHtml(machtileTranslate("order_detail_time"))}</th><th>製程</th><th>${escapeHtml(machtileTranslate("order_detail_machine"))}</th><th>${escapeHtml(machtileTranslate("order_detail_person"))}</th><th>${escapeHtml(machtileTranslate("order_detail_quantity"))}</th><th>${escapeHtml(machtileTranslate("order_detail_source"))}</th></tr></thead>
     <tbody>${reports.slice(0, 20).map((report) => {
+      const processKey = String(report.process_id || "");
+      const process = processById.get(processKey);
       const machine = machineNames.get(String(report.machine_id || "")) || noData;
       const people = (report.operator_names || []).join("、") || noData;
       const good = Number.isFinite(Number(report.completed_qty)) ? Number(report.completed_qty) : null;
       const bad = Number.isFinite(Number(report.defect_qty)) ? Number(report.defect_qty) : null;
-      const quantity = good === null && bad === null ? noData : machtileTranslate("order_detail_qty_value", { good: good ?? noData, bad: bad ?? noData });
-      return `<tr data-order-detail-report><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || noData)}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
+      const typeLabel = typeLabels[report.report_type] || "報工";
+      const quantity = good === 0 && bad === 0 ? typeLabel : (good === null && bad === null ? typeLabel : machtileTranslate("order_detail_qty_value", { good: good ?? noData, bad: bad ?? noData }));
+      const hidden = initialKey !== "all" && processKey !== initialKey;
+      return `<tr data-order-detail-report data-order-detail-report-process="${escapeHtml(processKey)}" ${hidden ? "hidden" : ""}><td>${escapeHtml(formatDateTime(report.ended_at || report.created_at) || noData)}</td><td>${escapeHtml(processLabel(process))}</td><td>${escapeHtml(machine)}</td><td>${escapeHtml(people)}</td><td>${escapeHtml(quantity)}</td><td>${escapeHtml(machtileTranslate("order_detail_source_tablet"))}</td></tr>`;
     }).join("")}</tbody>
   </table></div>`;
 }
@@ -22879,7 +22925,7 @@ function renderSimplifiedDetail(order, detail) {
 
     <section class="detail-section" data-order-detail-reports>
       <div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_reports_title"))}</h3><span>${reports.length ? escapeHtml(machtileTranslate("order_detail_report_count", { count: Math.min(reports.length, 20) })) : escapeHtml(machtileTranslate("order_detail_no_data"))}</span></div>
-      ${machtileOrderDetailReportRows(reports)}
+      ${machtileOrderDetailReportRows(reports, route, order.processId)}
     </section>
 
     ${programHasData ? `<section class="detail-section program-section" data-order-detail-program><div class="detail-section-title"><h3>${escapeHtml(machtileTranslate("order_detail_program_title"))}</h3><span>${profile.historyYears ? escapeHtml(machtileTranslate("order_detail_history_summary", { years: profile.historyYears, runs: profile.historyRuns })) : ""}</span></div><div class="program-grid"><div class="program-main-card"><span>${escapeHtml(machtileTranslate("order_detail_current_program"))}</span><strong>${escapeHtml(profile.programName)}</strong><small>${escapeHtml(profile.programVersion)} · ${escapeHtml(machtileTranslate("order_detail_hash"))} ${escapeHtml(profile.programHash || "-")}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_previous_version"))}</span><strong>${escapeHtml(profile.previousVersion || "-")}</strong><small>${escapeHtml(profile.changedLines === null ? machtileTranslate("order_detail_no_history_version") : machtileTranslate("order_detail_changed_lines", { count: profile.changedLines }))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_pure_cycle"))}</span><strong>${escapeHtml(formatSeconds(profile.pureCycleSec))}</strong><small>${escapeHtml(machtileTranslate("order_detail_excludes_handling"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_baseline"))}</span><strong>${escapeHtml(formatSeconds(profile.baselineCycleSec))}</strong><small class="${delta !== null && delta > 8 ? "cycle-warn" : ""}">${escapeHtml(delta === null ? machtileTranslate("order_detail_pending_baseline") : `${delta > 0 ? "+" : ""}${delta}%`)}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_daily_capacity"))}</span><strong>${dailyQty ? escapeHtml(machtileTranslate("order_detail_pieces", { count: dailyQty })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_daily_capacity_note"))}</small></div><div><span>${escapeHtml(machtileTranslate("order_detail_estimated_duration"))}</span><strong>${workDays ? escapeHtml(machtileTranslate("order_detail_days", { count: workDays })) : "-"}</strong><small>${escapeHtml(machtileTranslate("order_detail_duration_note"))}</small></div></div>${profile.toolChanges ? `<p class="program-note">${escapeHtml(profile.toolChanges)}</p>` : ""}</section>` : ""}
@@ -24557,7 +24603,7 @@ function machtileBatchCommandChoice(code, type = machtileBatchState.commandType)
   }
   const machine = machtileStationCmdMachineByCode(code);
   const gate = machtileStationCmdCore?.eligibility({
-    flag: machtileStationCmdFlag(), role: machtileFlowVisibilityRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    flag: machtileStationCmdFlag(), role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const reasons = { multi_station_unsupported: "缺少 ManufactureII Id", unavailable: "開停工服務目前不可用", not_operator: "此帳號不可操作", flag_off: "此機台未開放" };
@@ -25699,6 +25745,14 @@ function bindEvents() {
       return;
     }
 
+    const reportFilter = event.target.closest("[data-order-detail-report-filter]");
+    if (reportFilter) {
+      const key = reportFilter.dataset.orderDetailReportFilter;
+      reportFilter.closest("[data-order-detail-report-filters]")?.querySelectorAll("button").forEach((button) => button.classList.toggle("active", button === reportFilter));
+      document.querySelectorAll("[data-order-detail-report-process]").forEach((row) => { row.hidden = key !== "all" && row.dataset.orderDetailReportProcess !== key; });
+      return;
+    }
+
     const machineAdminButton = event.target.closest("[data-machine-admin]");
     if (machineAdminButton) {
       openMachineAdmin(machineAdminButton.dataset.machineAdmin);
@@ -25756,10 +25810,12 @@ function bindEvents() {
       machtileToggleAdminDrawer(false);
       return;
     }
+    if (event.target.closest("[data-exit-operator-preview]")) { machtileSetOperatorPreview(false); return; }
     const drawerItem = event.target.closest("[data-drawer-module]");
     if (drawerItem) {
       const key = drawerItem.dataset.drawerModule;
       machtileToggleAdminDrawer(false);
+      if (key === "__operatorPreview") { machtileSetOperatorPreview(!machtileOperatorPreviewActive()); return; }
       if (key === "__guide") {
         window.location.href = hmcGuideRouteUrl("B01", "day");
         return;

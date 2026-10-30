@@ -65,22 +65,44 @@ try {
   await current.context.close(); await base.context.close();
 
   const enabled = await pageAt(false, true);
+  const overtimePickActions = await enabled.page.evaluate(() => {
+    const input = { instantEnabled: true, overtimeEnabled: true, overtimeStartTime: "17:30", machineCode: "A01", orderNo: "XX01202609290009", step: 3 };
+    const daytime = machtileStationCmdCore.startButtonState({ ...input, now: new Date("2026-10-30T11:02:00+08:00"), commandRows: [] });
+    const overtime = machtileStationCmdCore.startButtonState({ ...input, now: new Date("2026-10-30T19:28:00+08:00"), commandRows: [{ machine_code: "A01", command_type: "start", status: "applied", expected_order_no: input.orderNo, expected_index_sn: 3, applied_at: "2026-10-30T11:02:00+08:00" }] });
+    const applied = machtileStationCmdCore.startButtonState({ ...input, now: new Date("2026-10-30T19:29:00+08:00"), commandRows: [{ machine_code: "A01", command_type: "start", status: "applied", expected_order_no: input.orderNo, expected_index_sn: 3, applied_at: "2026-10-30T19:28:30+08:00" }] });
+    return {
+      daytime: machtileTakeoverCore.pickStartActions("running", { dailyStartWhenRunningEnabled: true, startedToday: true, overtimeStartVisible: daytime.overtime && daytime.visible }),
+      overtime: machtileTakeoverCore.pickStartActions("running", { dailyStartWhenRunningEnabled: true, startedToday: true, overtimeStartVisible: overtime.overtime && overtime.visible }),
+      applied: machtileTakeoverCore.pickStartActions("running", { dailyStartWhenRunningEnabled: true, startedToday: true, overtimeStartVisible: applied.overtime && applied.visible }),
+    };
+  });
+  ok(JSON.stringify(overtimePickActions.daytime) === JSON.stringify(["report", "stop", "finish"])
+    && overtimePickActions.overtime[0] === "start"
+    && JSON.stringify(overtimePickActions.applied) === JSON.stringify(["report", "stop", "finish"]), "pick-start running 卡片只在加班應開工時補入 start，套用後隱藏且白天不變");
   await enabled.page.evaluate(() => {
     const order = state.workOrders[0];
     order.processId = "process-current";
     machtileProcessFlows.set(order.id, { quantity: 40, auditAvailable: false, processes: [
-      { id: "process-done", process_order: 1, process_name: "備料", status: "completed", reported: 40, machine_code: "A01" },
-      { id: "process-current", process_order: 2, process_name: "CNC 加工", status: "running", reported: 12, machine_code: "A02" },
+      { id: "process-done", process_order: 3, process_name: "車床加工-1/2", status: "completed", reported: 40, machine_code: "A01" },
+      { id: "process-current", process_order: 4, process_name: "車床加工-2/2", status: "running", reported: 12, machine_code: "A04" },
       { id: "route-vendor", process_order: 3, process_name: "熱處理", process_type: "outsourced", status: "pending", reported: null, supplier_name: "測試委外廠" },
     ] });
     renderSimplifiedDetail(order, { processes: [{ status: "running", inspection_required: true, inspection_status: "pending" }], reports: [
-      { created_at: "2026-10-29T02:00:00Z", completed_qty: 12, defect_qty: 1, machine_id: null, operator_names: ["測試人員"] },
+      { process_id: "process-current", created_at: "2026-10-29T02:00:00Z", completed_qty: 12, defect_qty: 1, machine_id: null, operator_names: ["測試人員"], report_type: "noon" },
+      { process_id: "process-done", created_at: "2026-10-29T01:00:00Z", completed_qty: 0, defect_qty: 0, machine_id: null, operator_names: ["測試人員"], report_type: "dailyStart" },
     ], cncPrograms: [] });
   });
   const detail = enabled.page.locator("#detailContent");
   const text = await detail.innerText();
   ok(text.includes("這張單的流程") && text.includes("共 3 道") && text.includes("完成 12 / 計畫 40") && text.includes("測試委外廠") && await detail.locator('[aria-current="step"]').count() === 1, "旗標開啟顯示完整流程、完成／計畫、目前道與委外廠商");
   ok(text.includes("這張單的報工紀錄") && text.includes("測試人員") && text.includes("良品 12 · 不良 1") && text.includes("平板"), "報工紀錄顯示時間、機台、人、件數與來源");
+  ok(text.includes("製程") && text.includes("N4 車床加工-2/2")
+    && await detail.locator('[data-order-detail-report-process="process-current"]').evaluate((row) => row.hidden === false)
+    && await detail.locator('[data-order-detail-report-process="process-done"]').evaluate((row) => row.hidden === true), "預設只顯示卡片目前 N4 製程的報工");
+  ok(await detail.locator('[data-order-detail-report-filter="all"]').count() === 1 && await detail.locator('[data-order-detail-report-filter="process-current"].active').count() === 1, "多製程報工顯示全部／N3／N4 chips，預設目前製程");
+  await detail.locator('[data-order-detail-report-filter="all"]').dispatchEvent("click");
+  const allReportText = await detail.innerText();
+  ok(allReportText.includes("N3 車床加工-1/2") && allReportText.includes("開工") && !allReportText.includes("良品 0 · 不良 0"), "全部顯示其他製程，0／0 開工列以類型標示並保留");
   ok(!text.includes("首次開工") && !text.includes("今日開工") && !text.includes("查看完整工單") && !text.includes("MachTile AI 建議"), "精簡版隱藏兩個開工鍵、完整工單連結與 AI 建議");
 
   await enabled.page.evaluate(() => {
@@ -95,6 +117,17 @@ try {
     machtileAuthState.role = "admin";
     machtileFlowVisibilityState.byRole = null;
   });
+
+  await enabled.page.evaluate(() => {
+    machtileAuthState.role = "admin";
+    machtileDepartmentAccess = { role: "admin", is_bridge: false };
+    machtileFlowVisibilityState.byRole = { admin: "full", operator: "adjacent" };
+    machtileSetOperatorPreview(true);
+  });
+  ok(await enabled.page.locator("#operatorPreviewBanner").isVisible(), "管理者可進入作業員畫面預覽並顯示固定提示");
+  ok(await enabled.page.evaluate(() => machtileActualRole() === "admin" && machtileUiRole() === "operator" && sessionStorage.getItem("machtile.operatorPreview") === "1"), "預覽只改 UI role，實際管理者身分不變且 per-tab 保存");
+  await enabled.page.locator("[data-exit-operator-preview]").click();
+  ok(await enabled.page.evaluate(() => machtileActualRole() === "admin" && machtileUiRole() === "admin" && sessionStorage.getItem("machtile.operatorPreview") === "0"), "退出預覽恢復管理者 UI role");
 
   await enabled.page.evaluate(() => {
     const order = state.workOrders[0];
