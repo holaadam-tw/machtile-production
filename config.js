@@ -6,8 +6,8 @@
 window.MACHTILE_CONFIG = {
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: true,
-  cardCycleTimeWithoutStartEnabled: false,
-  dailyStartWhenRunningEnabled: false,
+  cardCycleTimeWithoutStartEnabled: true,
+  dailyStartWhenRunningEnabled: true,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
