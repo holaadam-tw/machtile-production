@@ -64,6 +64,19 @@ test("switches language, persists per device and rejects unsupported values", ()
   assert.equal(i18n.t("report"), "報工");
 });
 
+test("instant quantity and start timeout copy exists in both languages", () => {
+  const i18n = freshI18n();
+  assert.equal(i18n.t("overtime_start_work"), "加班開工");
+  assert.equal(i18n.t("card_qty_syncing"), "剛報工，同步中");
+  assert.equal(i18n.t("card_qty_sync_slow"), "同步較慢，請稍後重新整理");
+  assert.equal(i18n.t("start_unconfirmed_retry"), "上次開工尚未確認，請確認後再按");
+  i18n.setLanguage("vi");
+  assert.equal(i18n.t("overtime_start_work"), "Bắt đầu tăng ca");
+  assert.equal(i18n.t("card_qty_syncing"), "Vừa báo công, đang đồng bộ");
+  assert.equal(i18n.t("card_qty_sync_slow"), "Đồng bộ chậm, vui lòng tải lại sau");
+  assert.match(i18n.t("start_unconfirmed_retry"), /chưa được xác nhận/);
+});
+
 test("locale files have matching keys and every Vietnamese entry is marked draft", () => {
   const zh = JSON.parse(fs.readFileSync(path.join(__dirname, "locales/zh-Hant.json"), "utf8"));
   const vi = JSON.parse(fs.readFileSync(path.join(__dirname, "locales/vi.json"), "utf8"));

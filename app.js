@@ -28,9 +28,14 @@ const config = {
   cardCycleTimeWithoutStartEnabled: false,
   // Running 工序每天仍須按開工。預設關閉時不讀每日 start ledger，按鈕行為維持原樣。
   dailyStartWhenRunningEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  // Independent from dailyStartButtonInstantHideEnabled: overtime can be enabled on its own.
+  overtimeStartButtonEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
+  // Local display-only acknowledgement for quantities accepted/applied before legacy progress catches up.
+  cardQtyInstantEnabled: false,
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
   stationCommandMachines: [],
@@ -452,6 +457,7 @@ const state = {
   inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
   overtimeStartSegments: new Map(),
   dailyStationStartRows: [],
+  localStationStartRows: [],
 };
 
 const mockOrders = [
@@ -10912,6 +10918,36 @@ document.addEventListener('click',async event=>{
 // 防重複計數的規則在後端（同一個 SQL 快照）＋ batchReportCore.cardProgress。
 // 沒有同步資料或 RPC 失敗 → 照原本算法，卡片標「舊 MES 尚無資料」；絕不讓整頁壞掉。
 const MACHTILE_CARD_PROGRESS_CHUNK = 200;
+const MACHTILE_CARD_QTY_OVERLAY_KEY = "machtile.cardQtyOverlay.v1";
+
+function machtileCardQtyOverlaysRead() {
+  if (config.cardQtyInstantEnabled !== true) return {};
+  try { return JSON.parse(localStorage.getItem(MACHTILE_CARD_QTY_OVERLAY_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
+
+function machtileCardQtyOverlaysWrite(items) {
+  if (config.cardQtyInstantEnabled !== true) return;
+  try { localStorage.setItem(MACHTILE_CARD_QTY_OVERLAY_KEY, JSON.stringify(items || {})); } catch { /* display aid only */ }
+}
+
+function machtileCardQtyOverlayRecord(order, machineCode, total, status = "applied") {
+  const core = window.MachTileCardQtyOverlayCore;
+  if (config.cardQtyInstantEnabled !== true || !core || !order) return;
+  const item = core.create({ machine: machineCode || order.machineCode || order.machine, orderNo: order.id,
+    step: order.stationStep, processId: order.processId, total }, status, Date.now());
+  if (!item) return;
+  const items = machtileCardQtyOverlaysRead();
+  items[item.machine] = item;
+  machtileCardQtyOverlaysWrite(items);
+}
+
+function machtileCardQtyOverlayRemove(machineCode) {
+  if (config.cardQtyInstantEnabled !== true) return;
+  const items = machtileCardQtyOverlaysRead();
+  const code = String(machineCode || "").trim().toUpperCase();
+  if (code && Object.hasOwn(items, code)) { delete items[code]; machtileCardQtyOverlaysWrite(items); }
+}
 
 // Separate per-process read model for machine cards only. Do not change the
 // one-row-per-work-order view used by the schedule board/attention center.
@@ -11024,7 +11060,8 @@ async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDef
 
 async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
-  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.done || 0)]));
+  // Repeated progress refreshes must start from the cloud App quantity, never a prior display overlay.
+  const appDoneByOrder = new Map(orders.map(order => [order, Number(config.cardQtyInstantEnabled === true ? (order.appDone ?? order.done ?? 0) : (order.done ?? 0))]));
   const core = machtileBatchCore();
   if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") {
     if (generation === machtileDeferredLoadGeneration) orders.forEach((order) => {
@@ -11050,16 +11087,31 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
   }));
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
   const nowMs = Date.now();
+  const overlayCore = config.cardQtyInstantEnabled === true ? window.MachTileCardQtyOverlayCore : null;
+  const overlays = overlayCore ? machtileCardQtyOverlaysRead() : {};
+  let overlaysChanged = false;
   const progressByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
-      progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
+      const progress = core.cardProgress(appDoneByOrder.get(order), row, nowMs);
+      const overlay = overlays[String(order.machineCode || order.machine || "").toUpperCase()] || null;
+      const applied = overlayCore ? overlayCore.apply(progress.done, overlay, order, nowMs) : null;
+      if (applied) {
+        progress.done = applied.completed;
+        progress.cardQtyOverlayState = applied.state;
+        if (applied.clear && overlay) {
+          delete overlays[String(order.machineCode || order.machine || "").toUpperCase()];
+          overlaysChanged = true;
+        }
+      }
+      progressByOrder.set(order, progress);
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
     }
   });
   if (generation !== machtileDeferredLoadGeneration) return;
+  if (overlaysChanged) machtileCardQtyOverlaysWrite(overlays);
   machtileCardPickState.progressByProcess = byProcess;
   orders.forEach((order) => {
     order.appDone = appDoneByOrder.get(order);
@@ -11101,6 +11153,8 @@ async function machtileLoadCardMachineTimes() {
 
 function machtileCardProgressNote(order) {
   const source = order?.progressSource;
+  if (config.cardQtyInstantEnabled === true && source?.cardQtyOverlayState === "syncing") return `<em class="machine-progress-source" data-card-qty-overlay="syncing">${escapeHtml(machtileTranslate("card_qty_syncing"))}</em>`;
+  if (config.cardQtyInstantEnabled === true && source?.cardQtyOverlayState === "slow") return `<em class="machine-progress-source is-missing" data-card-qty-overlay="slow">${escapeHtml(machtileTranslate("card_qty_sync_slow"))}</em>`;
   if (!source || !source.label) return "";
   return `<em class="machine-progress-source${source.legacyKnown ? "" : " is-missing"}" data-progress-source="${escapeHtml(source.source)}">${escapeHtml(source.label)}</em>`;
 }
@@ -14362,6 +14416,7 @@ function machtilePickStartEnabled(code) {
 }
 // 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
 const machtilePickStartLocal = {};
+const machtileInstantStartPending = {};
 function machtilePickStartPhase(machine, order) {
   const code = machtileStationCmdMachineCode(machine);
   const local = machtilePickStartLocal[code];
@@ -14837,6 +14892,9 @@ function machtileStationCmdParts(machine) {
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket,
   });
   const pending = machtileStationCmd.pending[code];
+  const instantStartTimedOut = Boolean(config.dailyStartButtonInstantHideEnabled === true && pending?.commandType === "start"
+    && Date.now() - Number((machtileInstantStartPending[code] || pending).startedAt) >= machtileStationCmdCore.INSTANT_START_TIMEOUT_MS);
+  if (instantStartTimedOut) delete machtileInstantStartPending[code];
   // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
   const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
   const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
@@ -14850,7 +14908,7 @@ function machtileStationCmdParts(machine) {
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
   const releaseNote = released ? machtileStationCmdCore.releasedNote(pending.lastStatus) : null;
-  const locked = Boolean(pending) && !(releaseNote && releaseNote.unlock);
+  const locked = Boolean(pending) && !instantStartTimedOut && !(releaseNote && releaseNote.unlock);
   let line = "";
   let retry = "";
   if (pending && pending.unconfirmed) {
@@ -14862,19 +14920,31 @@ function machtileStationCmdParts(machine) {
   } else if (last) {
     line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
+  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
+  const startState = machtileStationCmdCore.startButtonState({
+    instantEnabled: config.dailyStartButtonInstantHideEnabled === true,
+    overtimeEnabled: config.overtimeStartButtonEnabled === true,
+    overtimeStartTime: config.overtimeStartTime || "17:30",
+    commandRows: [...state.dailyStationStartRows, ...state.localStationStartRows],
+    pendingStart: pending
+      ? (pending.commandType === "start" && !released ? (machtileInstantStartPending[code] || pending) : null)
+      : machtileInstantStartPending[code],
+    machineCode: code, orderNo: order?.id, step: order?.stationStep, now: new Date(),
+  });
+  const startLabel = machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
+  const resolvedStartButton = startState.visible ? `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
+  if (startState.reason === "pending_timeout") line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(machtileTranslate("start_unconfirmed_retry"))}</p>`;
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
-  const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
-  const startButton = `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>`;
   const stopButton = `
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>`;
   const pickButton = `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-pick-order-open data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("pick_order"))}</button>`;
   const buttons = pickPhase
-    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? startButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
-    : gate.ok ? `${startButton}${stopButton}` : "";
+    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? resolvedStartButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
+    : gate.ok ? `${resolvedStartButton}${stopButton}` : "";
   return { status: takenLine + status, buttons, active: true, pickPhase, pickActions };
 }
 
@@ -15501,6 +15571,7 @@ async function machtileStartBackfillResolve(commandUuid) {
     let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
     if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
     if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw new Error("開工補報未套用");
+    machtileCardQtyOverlayRecord(target, item.machineCode, item.snap.qty, "applied");
     const actorId = await machtileResolveAppUserId();
     const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
     const saved = await submitReport(good, 0, remark, "noon", { order: target, reportUuid, reportPayload: payload, operators: actorId ? [actorId] : [], noFiles: true, requireStructured: true });
@@ -15781,6 +15852,10 @@ async function machtileStationCmdSubmit() {
   }
   const existing = machtileStationCmd.pending[sheet.code];
   sheet.phase = "sending";
+  if (sheet.type === "start" && config.dailyStartButtonInstantHideEnabled === true) {
+    machtileInstantStartPending[sheet.code] = { machineCode: sheet.code, orderNo: sheet.model.workOrderNo, step: sheet.model.step, startedAt: Date.now() };
+    machtileStationCmdRerender();
+  }
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
   const startedAt = existing?.commandUuid === sheet.uuid ? existing.startedAt : Date.now();
@@ -15790,6 +15865,7 @@ async function machtileStationCmdSubmit() {
     recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName, ...(sheet.comboStart ? { standardFinishComboStart: true } : {}), ...(sheet.overtimeAnswer?.skipped ? {} : { overtimeGuardSnapshot: sheet.overtimeAnswer }) },
     startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
     onError: ({ error, info }) => {
+      if (sheet.type === "start") delete machtileInstantStartPending[sheet.code];
       const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
       machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
       if (machtileStationCmd.sheet !== sheet) return { cancel: true };
@@ -15833,9 +15909,19 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (record.commandType === "start") {
+    delete machtileInstantStartPending[code];
+    if (view?.phase === "applied") state.localStationStartRows.push({ machine_code: code, command_type: "start", status: "applied",
+      expected_order_no: record.orderNo, expected_index_sn: record.step, applied_at: new Date().toISOString() });
+  }
+  if (["stop", "stop_report"].includes(record.commandType) && view?.phase === "applied") state.localStationStartRows.push({ machine_code: code,
+    command_type: record.commandType, status: "applied", expected_order_no: record.orderNo, expected_index_sn: record.step, applied_at: new Date().toISOString() });
   if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
   const stopDraft = record.commandType === "stop_report" ? machtileTakeoverStopDrafts.get(record.commandUuid) : null;
   if (record.commandType === "stop_report") machtileTakeoverStopDrafts.delete(record.commandUuid);
+  if (record.commandType === "stop_report" && view?.phase === "applied" && stopDraft) {
+    machtileCardQtyOverlayRecord(stopDraft.order, code, Number(stopDraft.form?.good_qty), "applied");
+  }
   if (record.commandType === "stop_report" && view?.phase === "rejected" && view.code === "DUPLICATE_SUSPECTED") {
     machtileTakeoverReopenStopDuplicate(code, stopDraft);
   } else if (record.commandType === "stop_report" && view?.phase === "rejected") {
@@ -15918,6 +16004,7 @@ function machtileStationCmdPoll(code) {
           // 送出時網路斷、伺服器連續查不到這筆＝沒送到 → 解鎖（同一個 uuid 之後重送也沒問題）
           delete machtileStationCmd.timers[code];
           delete machtileStationCmd.pending[code];
+          if (current.commandType === "start") delete machtileInstantStartPending[code];
           machtileStationCmdSavePending();
           const sheet = machtileStationCmd.sheet;
           if (sheet && sheet.code === code && sheet.uuid === current.commandUuid && sheet.phase === "sendError") {
@@ -15936,6 +16023,7 @@ function machtileStationCmdPoll(code) {
         clearTimeout(machtileStationCmd.timers[code]);
         delete machtileStationCmd.timers[code];
         delete machtileStationCmd.pending[code];
+        if (current.commandType === "start") delete machtileInstantStartPending[code];
         machtileStationCmdSavePending();
         machtileStationCmdRerender();
         return;
@@ -22201,6 +22289,20 @@ function switchView(view) {
     if (root) root.innerHTML = `<p role="alert">${escapeHtml(machtileTranslate("batch_department_denied"))}</p>`;
     return;
   }
+  // Returning home must bypass the in-memory progress snapshot once.
+  if (view === "dashboard" && config.cardQtyInstantEnabled === true && state.source === "supabase") {
+    const generation = machtileDeferredLoadGeneration;
+    void machtileLoadCardLegacyProgress(generation).then(() => {
+      if (generation !== machtileDeferredLoadGeneration) return;
+      deriveMachines();
+      machtileRefreshCardSections();
+    }).catch((error) => console.warn("home progress refresh failed", error));
+  }
+  if (view === "dashboard" && state.source === "supabase"
+    && (config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true)) {
+    void machtileLoadOvertimeStartSegments(new Date()).then(machtileRefreshCardSections)
+      .catch((error) => console.warn("home start commands refresh failed; keeping the last result", error));
+  }
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
@@ -22264,16 +22366,18 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
 }
 
 async function machtileLoadOvertimeStartSegments(now = new Date()) {
-  state.overtimeStartSegments = new Map();
-  state.dailyStationStartRows = [];
   const overtimeEnabled = config.overtimeStartCardEnabled === true;
-  const dailyStartEnabled = config.dailyStartWhenRunningEnabled === true;
+  const dailyStartEnabled = config.dailyStartWhenRunningEnabled === true || config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true;
   if ((!overtimeEnabled && !dailyStartEnabled) || state.source !== "supabase" || !machtileStationCmdCore) return;
   const day = machtileFactoryDateIso(now.toISOString());
   const start = new Date(`${day}T00:00:00+08:00`).toISOString();
-  const types = overtimeEnabled ? "start,stop,stop_report,report,close" : "start";
+  const types = (overtimeEnabled || dailyStartEnabled) ? "start,stop,stop_report,report,close" : "start"; // L3 #152：開工鈕要看得到停工（別台平板／重新整理後）
   const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(${types})&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
-  if (dailyStartEnabled) state.dailyStationStartRows = rows;
+  if (dailyStartEnabled) {
+    state.dailyStationStartRows = rows;
+    const serverKeys = new Set(rows.map((row) => `${String(row.machine_code || "").toUpperCase()}|${row.command_type}|${row.expected_order_no}|${Number(row.expected_index_sn)}`));
+    state.localStationStartRows = state.localStationStartRows.filter((row) => !serverKeys.has(`${String(row.machine_code || "").toUpperCase()}|${row.command_type}|${row.expected_order_no}|${Number(row.expected_index_sn)}`));
+  }
   if (overtimeEnabled) state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
 }
 
@@ -23904,6 +24008,7 @@ async function machtileStationReportSubmitPreview(code) {
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
       reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
+      overlayTotal: counterResult?.total ?? null,
     };
     flow.singleReport.reportNote = window.MachTileReportCounterCore.backfillRemark(counterResult, row.reportNote || "");
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
@@ -24104,6 +24209,11 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   } catch (error) {
     followUpFailed = true;
     flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
+  }
+  if (["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind)) {
+    const submittedOrder = options.order || machtileStationReportOrderForCode(code);
+    const total = flow.singleReport?.overlayTotal;
+    if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
   }
   if (options.background) {
     const background = document.getElementById("stationReportBackgroundStatus");
@@ -24937,7 +25047,7 @@ async function machtileSubmitBatchReport() {
       row.finished = false;
       if (mode === "dailyStart") row.selected = false;
       row.error = "";
-    }
+    } else machtileCardQtyOverlayRemove(code);
   }
   machtileBatchWriteDrafts(drafts);
   machtileUpdateOutboxBadge();
@@ -26896,6 +27006,9 @@ function machtileToggleTodayFilter(kind) {
 async function machtileTodayTick() {
   const core = machtileTodayReportCore();
   if (!core || !document.getElementById("statsGrid")) return;
+  if (state.source === "supabase" && (config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true)) {
+    try { await machtileLoadOvertimeStartSegments(new Date()); } catch (error) { console.warn("today start commands refresh failed; keeping the last result", error); }
+  }
   const ecore = machtileCardEstimateCore();
   if (ecore && state.source === "supabase" && machtileCardState.todayStatus === "ok" && !document.hidden && !machtileTodayRefetching
     && Date.now() - (machtileCardState.todayLoadedAt || 0) >= MACHTILE_TODAY_REFETCH_MS - 5000) { // 容許計時器誤差：每 2 次重算重讀一次

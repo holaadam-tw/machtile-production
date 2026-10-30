@@ -95,6 +95,46 @@ check(overtime.before && overtime.after, "overtime card excludes daytime/unreada
 check(overtime.vi, "overtime card Vietnamese copy is available");
 check(overtime.machineBadge && overtime.homeStart, "applied overtime start appears on machine card and home overtime card");
 
+const startButton = await page.evaluate(async () => {
+  const machine = { code: "A04", name: "A04", order: { id: "WO-R3", processId: "00000000-0000-4000-8000-000000000001",
+    stationStep: 1, part: "R3", process: "R3", offStation: false } };
+  config.stationCommandMachines = "*";
+  config.dailyStartButtonInstantHideEnabled = true;
+  config.overtimeStartButtonEnabled = true;
+  config.overtimeStartTime = "00:00";
+  machtileStationCmd.availability = "ready";
+  machtileAuthState.role = "operator";
+  state.dailyStationStartRows = [];
+  state.localStationStartRows = [];
+  MachTileI18n.setLanguage("zh-Hant");
+  const zh = machtileStationCmdParts(machine).buttons;
+  MachTileI18n.setLanguage("vi");
+  const vi = machtileStationCmdParts(machine).buttons;
+  const code = machtileStationCmdMachineCode(machine);
+  machtileStationCmd.pending[code] = { commandUuid: crypto.randomUUID(), commandType: "start", machineCode: code,
+    orderNo: machine.order.id, step: machine.order.stationStep, startedAt: Date.now() };
+  machtileStationCmdFinish(code, MachTileStationCommandCore.statusView({ status: "applied" }, "start", 0));
+  const afterApplied = machtileStationCmdParts(machine).buttons;
+  state.localStationStartRows.push({ machine_code: code, command_type: "stop", status: "applied",
+    expected_order_no: machine.order.id, expected_index_sn: machine.order.stationStep, applied_at: new Date(Date.now() + 1000).toISOString() });
+  const afterStop = machtileStationCmdParts(machine).buttons;
+
+  const oldFetch = supabaseFetch;
+  const oldRows = [{ machine_code: "KEEP", command_type: "start", status: "applied", expected_order_no: "WO", expected_index_sn: 1, applied_at: new Date().toISOString() }];
+  state.source = "supabase";
+  state.dailyStationStartRows = oldRows;
+  supabaseFetch = async () => { throw new Error("fixture fetch failure"); };
+  let retained = false;
+  try { await machtileLoadOvertimeStartSegments(new Date()); } catch { retained = state.dailyStationStartRows === oldRows; }
+  supabaseFetch = oldFetch;
+  return { zh, vi, afterApplied, afterStop, retained };
+});
+check(/>加班開工<\/button>/.test(startButton.zh), "zh-Hant overtime start label is rendered as button text");
+check(/>Bắt đầu tăng ca<\/button>/.test(startButton.vi), "Vietnamese overtime start label is rendered as button text");
+check(!startButton.afterApplied.includes('data-station-cmd="start"'), "applied local start keeps the start button hidden before server refresh");
+check(startButton.afterStop.includes('data-station-cmd="start"'), "a later applied stop restores the same-day start button");
+check(startButton.retained, "failed station-command refresh preserves the previous daily start rows");
+
 await page.locator('[data-view="reports"].nav-item').click();
 const nav = await page.evaluate(() => [...document.querySelectorAll(".desktop-nav .nav-item")].map(item => ({ active: item.classList.contains("active"), border: getComputedStyle(item).borderBottomColor })));
 check(nav.filter(item => item.active).length === 1 && nav[3].active && nav[0].border !== nav[3].border, "only current nav page has active underline");

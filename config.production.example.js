@@ -5,14 +5,17 @@
 // bundle); every read/write goes through the signed-in session Bearer.
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
+  cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
-  overtimeStartTime: "17:30",
+  overtimeStartTime: "17:30", // Must match Factory OvertimeStartTime.
   enableTakeover: false,
   takeoverMachines: [],
   enablePickStartFlow: false,

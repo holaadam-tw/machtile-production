@@ -70,6 +70,13 @@
     "value": "Bắt đầu",
     "_draft": true
   },
+  "overtime_start_work": {
+    "value": "Bắt đầu tăng ca",
+    "_draft": true
+  },
+  "card_qty_syncing": { "value": "Vừa báo công, đang đồng bộ", "_draft": true },
+  "card_qty_sync_slow": { "value": "Đồng bộ chậm, vui lòng tải lại sau", "_draft": true },
+  "start_unconfirmed_retry": { "value": "Lần mở máy trước chưa được xác nhận, vui lòng kiểm tra rồi bấm lại", "_draft": true },
   "stop_work": {
     "value": "Dừng máy",
     "_draft": true

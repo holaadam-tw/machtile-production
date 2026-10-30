@@ -1,14 +1,17 @@
 // Copy this file to config.js and fill values for Supabase Cloud.
 // Do not commit real service role keys into frontend code.
 window.MACHTILE_CONFIG = {
+  cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
-  overtimeStartTime: "17:30",
+  overtimeStartTime: "17:30", // Must match Factory OvertimeStartTime.
   // "dev-nologin" (default when omitted) = public demo, fully anonymous.
   // "strict" = production: app-level login gate, all reads/writes use the
   // signed-in session. See config.production.example.js.
