@@ -38,6 +38,11 @@
   }
   const REPORT_SELECT = "command_uuid,command_type,status,good_qty,fail_qty,preview_result,reject_code,reject_message,legacy_snapshot,requested_at";
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const DOC4_FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
+  const OUTSOURCE_RECEIPT_CODES = Object.freeze([
+    "PREV_OUTSOURCE_RECEIPT_REQUIRED", "PREV_OUTSOURCE_RECEIPT_QTY_INVALID",
+    "PREV_OUTSOURCE_RECEIPT_STALE", "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED",
+  ]);
 
   class ContractError extends Error {
     constructor(code, message) { super(message); this.name = "StationReportContractError"; this.code = code; }
@@ -181,6 +186,19 @@
       p_acks: form.acks.length ? form.acks : null,
       p_client_guard_snapshot: form.clientGuardSnapshot,
     };
+    // The rollout flag deliberately owns the RPC shape. With the flag off these
+    // keys do not exist, preserving the old request byte-for-byte.
+    if (x.outsourceReceiptDialogEnabled === true) {
+      const qty = x.previousOutsourceReceiptQty ?? null;
+      const fingerprint = x.expectedDoc4Fingerprint ?? null;
+      const paired = (qty === null) === (fingerprint === null);
+      if (!paired || (qty !== null && (!Number.isInteger(qty) || qty < 1 || qty > 100000 ||
+          typeof fingerprint !== "string" || !DOC4_FINGERPRINT_RE.test(fingerprint)))) {
+        throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
+      }
+      args.p_previous_outsource_receipt_qty = qty;
+      args.p_expected_doc4_fingerprint = fingerprint;
+    }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
     if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
       const meta = x.reportCounterMeta;
@@ -197,6 +215,56 @@
       }
     }
     return args;
+  }
+
+  function findOutsourceReceiptSnapshot(value, depth = 0) {
+    if (!isPlainObject(value) || depth > 6) return null;
+    const qty = Number(value.unconfirmed_qty);
+    const fingerprint = value.expected_doc4_fingerprint;
+    if (Number.isInteger(qty) && qty > 0 && typeof fingerprint === "string" && DOC4_FINGERPRINT_RE.test(fingerprint)) {
+      const numbers = value.doc4_numbers ?? value.doc4_nos ?? value.doc4_ids ?? [];
+      return {
+        previousStepName: String(value.previous_step_name ?? value.previous_process_name ?? value.step_name ?? "").trim(),
+        doc4Numbers: Array.isArray(numbers) ? numbers.map(String) : (numbers == null ? [] : [String(numbers)]),
+        unconfirmedQty: qty,
+        expectedDoc4Fingerprint: fingerprint,
+      };
+    }
+    for (const child of Object.values(value)) {
+      const found = findOutsourceReceiptSnapshot(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function outsourceReceiptAction(command, enabled) {
+    if (enabled !== true || !isPlainObject(command) || command.status !== "rejected") return { kind: "none" };
+    const code = String(command.reject_code || "");
+    if (!OUTSOURCE_RECEIPT_CODES.includes(code)) return { kind: "none" };
+    if (code === "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED") return { kind: "retry-without-receipt", code };
+    const snapshot = findOutsourceReceiptSnapshot(command);
+    if (!snapshot) return { kind: "blocked", code, message: "委外收貨資料不完整，請重新預覽。" };
+    return { kind: "ask", code, snapshot, refresh: code === "PREV_OUTSOURCE_RECEIPT_STALE" };
+  }
+
+  function withOutsourceReceipt(previousArgs, quantity, fingerprint, nextCommandUuid) {
+    if (!isPlainObject(previousArgs) || !("p_previous_outsource_receipt_qty" in previousArgs) ||
+        !UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs.p_command_uuid ||
+        !Number.isInteger(quantity) || quantity < 1 || quantity > 100000 ||
+        typeof fingerprint !== "string" || !DOC4_FINGERPRINT_RE.test(fingerprint)) {
+      throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
+    }
+    return { ...previousArgs, p_command_uuid: nextCommandUuid,
+      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint };
+  }
+
+  function withoutOutsourceReceipt(previousArgs, nextCommandUuid) {
+    if (!isPlainObject(previousArgs) || !("p_previous_outsource_receipt_qty" in previousArgs) ||
+        !UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs.p_command_uuid) {
+      throw new ContractError("COMMAND_UUID_REQUIRED", "重新送出必須使用新的報工識別碼。");
+    }
+    return { ...previousArgs, p_command_uuid: nextCommandUuid,
+      p_previous_outsource_receipt_qty: null, p_expected_doc4_fingerprint: null };
   }
 
   function commandReadPath(commandUuid) {
@@ -352,8 +420,9 @@
   }
 
   return Object.freeze({
-    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT,
+    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
-    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck, createClient,
+    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
+    findOutsourceReceiptSnapshot, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt, createClient,
   });
 });

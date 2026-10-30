@@ -351,4 +351,42 @@ check("config client calls the confirmed config RPC only", async () => {
   assert.deepEqual(JSON.parse(call.options.body), { p_machine_code: "A04" });
 });
 
+check("outsource receipt request shape is flag-gated and the first preview sends paired NULL args", () => {
+  const legacy = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  assert.equal("p_previous_outsource_receipt_qty" in legacy, false);
+  assert.equal("p_expected_doc4_fingerprint" in legacy, false);
+  const enabled = core.buildSubmitArgs(validInput({ outsourceReceiptDialogEnabled: true }), UUID_PREVIEW, true);
+  assert.equal(enabled.p_previous_outsource_receipt_qty, null);
+  assert.equal(enabled.p_expected_doc4_fingerprint, null);
+  const fingerprint = "a".repeat(64);
+  const retry = core.withOutsourceReceipt(enabled, 17, fingerprint, UUID_RETRY);
+  assert.equal(retry.p_previous_outsource_receipt_qty, 17);
+  assert.equal(retry.p_expected_doc4_fingerprint, fingerprint);
+  assert.notEqual(retry.p_command_uuid, enabled.p_command_uuid);
+  const cleared = core.withoutOutsourceReceipt(retry, "00000000-0000-4000-8000-000000000099");
+  assert.equal(cleared.p_previous_outsource_receipt_qty, null);
+  assert.equal(cleared.p_expected_doc4_fingerprint, null);
+  assert.throws(() => core.withOutsourceReceipt(enabled, 0, fingerprint, UUID_RETRY), { code: "INVALID_OUTSOURCE_RECEIPT" });
+  assert.throws(() => core.buildSubmitArgs(validInput({ outsourceReceiptDialogEnabled: true, previousOutsourceReceiptQty: 1 }), UUID_PREVIEW, true), { code: "INVALID_OUTSOURCE_RECEIPT" });
+});
+
+check("outsource receipt state machine asks, refreshes stale, and clears not-expected payload", () => {
+  const snapshot = { previous_outsource_receipt: {
+    previous_step_name: "外包研磨", doc4_numbers: ["D4-101", "D4-102"], unconfirmed_qty: 23,
+    expected_doc4_fingerprint: "B".repeat(64),
+  } };
+  const rejected = code => ({ command_type: "report_preview", status: "rejected", reject_code: code, legacy_snapshot: snapshot });
+  assert.deepEqual(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_REQUIRED"), false), { kind: "none" });
+  const required = core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_REQUIRED"), true);
+  assert.equal(required.kind, "ask");
+  assert.equal(required.refresh, false);
+  assert.deepEqual(required.snapshot, { previousStepName: "外包研磨", doc4Numbers: ["D4-101", "D4-102"], unconfirmedQty: 23, expectedDoc4Fingerprint: "B".repeat(64) });
+  assert.equal(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_QTY_INVALID"), true).kind, "ask");
+  const stale = core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_STALE"), true);
+  assert.equal(stale.kind, "ask");
+  assert.equal(stale.refresh, true);
+  assert.deepEqual(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED"), true), { kind: "retry-without-receipt", code: "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED" });
+  assert.equal(core.outsourceReceiptAction({ status: "rejected", reject_code: "PREV_OUTSOURCE_RECEIPT_REQUIRED" }, true).kind, "blocked");
+});
+
 console.log("STATION_REPORT_CONTRACT PASS");

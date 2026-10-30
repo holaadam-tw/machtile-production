@@ -1,4 +1,13 @@
 {
+  "outsource_receipt_question": { "value": "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?", "_draft": true },
+  "outsource_receipt_previous_step": { "value": "công đoạn trước", "_draft": true },
+  "outsource_receipt_doc4": { "value": "Phiếu thuê ngoài: {{numbers}}", "_draft": true },
+  "outsource_receipt_quantity": { "value": "Số lượng thực tế đã về", "_draft": true },
+  "outsource_receipt_note": { "value": "Nhập số lượng thực tế đã về; hệ thống sẽ nhận hàng trước rồi mới báo công", "_draft": true },
+  "outsource_receipt_confirm": { "value": "Xác nhận nhận hàng và báo công", "_draft": true },
+  "outsource_receipt_range": { "value": "Vui lòng nhập từ 1 đến {{max}} sản phẩm.", "_draft": true },
+  "outsource_receipt_cancelled": { "value": "Đã hủy; lần này chưa nhận hàng hộ và chưa báo công.", "_draft": true },
+  "outsource_receipt_not_expected": { "value": "Trạng thái đã cập nhật, không cần nhận hàng hộ; hệ thống sẽ gửi lại báo công.", "_draft": true },
   "start_backfill_confirm": { "value": "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)", "_draft": true },
   "start_backfill_button": { "value": "Xác nhận bắt đầu và báo bù {{gap}}", "_draft": true },
   "start_backfill_edit": { "value": "Quay lại sửa số lượng", "_draft": true },

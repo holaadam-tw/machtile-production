@@ -23600,7 +23600,80 @@ let machtileStationReportPreviewTicker = null;
 
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
+const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
+
+function machtileAskOutsourceReceipt(snapshot) {
+  return new Promise((resolve) => {
+    document.getElementById("machtileOutsourceReceiptDialog")?.remove();
+    const holder = document.createElement("div");
+    holder.id = "machtileOutsourceReceiptDialog";
+    holder.className = "outsource-receipt-dialog-backdrop";
+    const step = snapshot.previousStepName || machtileTranslate("outsource_receipt_previous_step");
+    const doc4 = snapshot.doc4Numbers.length ? `<p class="outsource-receipt-doc4">${escapeHtml(machtileTranslate("outsource_receipt_doc4", { numbers: snapshot.doc4Numbers.join("、") }))}</p>` : "";
+    holder.innerHTML = `<section class="outsource-receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="outsourceReceiptTitle">
+      <h2 id="outsourceReceiptTitle">${escapeHtml(machtileTranslate("outsource_receipt_question", { step }))}</h2>
+      ${doc4}
+      <label><span>${escapeHtml(machtileTranslate("outsource_receipt_quantity"))}</span>
+        <input type="number" inputmode="numeric" min="1" max="${snapshot.unconfirmedQty}" step="1" value="${snapshot.unconfirmedQty}" data-outsource-receipt-qty>
+      </label>
+      <p class="outsource-receipt-note">${escapeHtml(machtileTranslate("outsource_receipt_note"))}</p>
+      <p class="outsource-receipt-error" role="alert" hidden></p>
+      <div class="outsource-receipt-actions"><button type="button" class="secondary-action" data-outsource-receipt-cancel>${escapeHtml(machtileTranslate("cancel"))}</button><button type="button" class="primary-action" data-outsource-receipt-confirm>${escapeHtml(machtileTranslate("outsource_receipt_confirm"))}</button></div>
+    </section>`;
+    document.body.append(holder);
+    const input = holder.querySelector("[data-outsource-receipt-qty]");
+    const finish = (value) => { holder.remove(); resolve(value); };
+    holder.querySelector("[data-outsource-receipt-cancel]").addEventListener("click", () => finish(null));
+    holder.querySelector("[data-outsource-receipt-confirm]").addEventListener("click", () => {
+      const quantity = Number(input.value);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > snapshot.unconfirmedQty) {
+        const error = holder.querySelector(".outsource-receipt-error");
+        error.textContent = machtileTranslate("outsource_receipt_range", { max: snapshot.unconfirmedQty });
+        error.hidden = false;
+        input.focus();
+        return;
+      }
+      finish(quantity);
+    });
+    input.focus(); input.select();
+  });
+}
+
+async function machtileHandleOutsourceReceiptResult(code, result, kind) {
+  const core = machtileStationReportCore();
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const action = core?.outsourceReceiptAction(result, machtileOutsourceReceiptDialogEnabled()) || { kind: "none" };
+  if (action.kind === "none") return false;
+  if (action.kind === "blocked") {
+    flow.phase = "blocked"; flow.error = action.message; return true;
+  }
+  let args;
+  if (action.kind === "retry-without-receipt" || action.refresh) {
+    if (action.kind === "retry-without-receipt") showToast(machtileTranslate("outsource_receipt_not_expected"));
+    args = core.withoutOutsourceReceipt(flow.args, crypto.randomUUID());
+  } else {
+    const quantity = await machtileAskOutsourceReceipt(action.snapshot);
+    if (quantity === null) { flow.phase = "blocked"; flow.error = machtileTranslate("outsource_receipt_cancelled"); return true; }
+    args = core.withOutsourceReceipt(flow.args, quantity, action.snapshot.expectedDoc4Fingerprint, crypto.randomUUID());
+  }
+  flow.args = args;
+  flow.phase = `submitting-${kind}`;
+  flow.error = "";
+  machtileRenderStationReportSurfaces();
+  const submitted = await machtileStationReportSubmitCommand(args);
+  const item = Array.isArray(submitted) ? submitted[0] : submitted;
+  flow.phase = `waiting-${kind}`;
+  if (item && core.isTerminal(item)) {
+    flow.result = item;
+    if (kind === "preview") flow.preview = item; else flow.report = item;
+    flow.phase = kind === "preview" && item.command_type === "report_preview" && item.status === "previewed" ? "previewed" : "finished";
+    await machtileHandleOutsourceReceiptResult(code, item, kind);
+  } else {
+    await machtileStationReportWait(code, args.p_command_uuid, kind);
+  }
+  return true;
+}
 
 function machtileSingleStationReportAllowlisted(machineCode = selectedOrder?.machine) {
   const code = String(machineCode || "").trim().toUpperCase();
@@ -23975,6 +24048,7 @@ async function machtileStationReportWait(code, commandUuid, kind) {
   } else {
     flow.error = core.isTerminal(result) ? "" : "套用結果仍未確認；請勿重送，先查詢原識別碼。";
   }
+  if (core.isTerminal(result)) await machtileHandleOutsourceReceiptResult(code, result, kind);
 }
 
 async function machtileStationReportRetryPreview(code) {
@@ -23992,6 +24066,7 @@ async function machtileStationReportRetryPreview(code) {
     if (item && machtileStationReportCore().isTerminal(item)) {
       flow.result = item;
       flow.phase = item.command_type === "report_preview" && item.status === "previewed" ? "previewed" : "finished";
+      await machtileHandleOutsourceReceiptResult(code, item, "preview");
     } else await machtileStationReportWait(code, flow.args.p_command_uuid, "preview");
   } catch (error) {
     flow.phase = "preview-timeout";
@@ -24094,6 +24169,7 @@ async function machtileStationReportSubmitPreview(code) {
   }
   const form = { ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
     reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: null,
+    outsourceReceiptDialogEnabled: machtileOutsourceReceiptDialogEnabled(),
     reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
     reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null };
   let args;
@@ -24119,6 +24195,7 @@ async function machtileStationReportSubmitPreview(code) {
     if (item && core.isTerminal(item)) {
       flow.result = item;
       flow.phase = item.command_type === "report_preview" && item.status === "previewed" ? "previewed" : "finished";
+      await machtileHandleOutsourceReceiptResult(code, item, "preview");
     }
     else await machtileStationReportWait(code, args.p_command_uuid, "preview");
   } catch (error) {
@@ -24179,6 +24256,7 @@ async function machtileStationReportSubmitFinal(code) {
   try {
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
       reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot,
+      outsourceReceiptDialogEnabled: machtileOutsourceReceiptDialogEnabled(),
       reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
       reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
@@ -24240,7 +24318,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     const submitted = await machtileStationReportSubmitCommand(args);
     const item = Array.isArray(submitted) ? submitted[0] : submitted;
     flow.phase = "waiting-report";
-    if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; }
+    if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; await machtileHandleOutsourceReceiptResult(code, item, "report"); }
     else await machtileStationReportWait(code, args.p_command_uuid, "report");
   } catch (error) {
     flow.phase = "blocked";

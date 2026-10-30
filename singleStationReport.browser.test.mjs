@@ -48,6 +48,8 @@ let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
 let freshReadEnabled = false;
+let outsourceReceiptEnabled = false;
+let outsourceReceiptRequired = false;
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -65,6 +67,13 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
+      if (body.p_preview && outsourceReceiptRequired && body.p_previous_outsource_receipt_qty == null) {
+        outsourceReceiptRequired = false;
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "rejected",
+          reject_code: "PREV_OUTSOURCE_RECEIPT_REQUIRED", reject_message: "上一道委外待收貨",
+          legacy_snapshot: { previous_outsource_receipt: { previous_step_name: "外包研磨", doc4_numbers: ["D4-7788"],
+            unconfirmed_qty: 12, expected_doc4_fingerprint: "a".repeat(64) } } });
+      }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
         return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "response lost" }) });
@@ -94,7 +103,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -488,6 +497,40 @@ await reconcile.evaluate(() => machtileStationReportReconcile("A04"));
 assert.equal(calls.reports.length, reconcileReportsBefore + 1, "repeated reconcile with same command_uuid stays idempotent");
 await reconcile.close();
 finalSubmitFails = false;
+
+outsourceReceiptEnabled = true; outsourceReceiptRequired = true; reconciledCommand = null;
+const receiptDialog = await context.newPage();
+await receiptDialog.goto(base, { waitUntil: "domcontentloaded" });
+await receiptDialog.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await receiptDialog.evaluate(() => { config.outsourceReceiptDialogEnabled = true; window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = true; });
+await receiptDialog.locator("[data-open-report]:visible").first().click();
+await receiptDialog.locator('#reportForm [data-report-type="noon"]').click();
+await receiptDialog.locator("#completedQty").fill("958");
+await receiptDialog.locator("#defectQty").fill("0");
+await receiptDialog.evaluate(operatorId => {
+  const list = document.createElement("div"); list.id = "machtileOperatorList";
+  list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`; document.body.append(list);
+}, id(901));
+await receiptDialog.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+const receiptCallsBefore = calls.commands.length;
+await receiptDialog.locator('[data-station-report-preview="A04"]').click();
+await receiptDialog.waitForTimeout(1000);
+assert.equal(await receiptDialog.locator("#machtileOutsourceReceiptDialog").count(), 1,
+  `receipt dialog missing; calls=${JSON.stringify(calls.commands.slice(receiptCallsBefore))}; errors=${JSON.stringify(errors)}; panel=${await receiptDialog.locator("#singleStationReportPanel").innerText()}`);
+assert.equal(calls.commands[receiptCallsBefore].p_previous_outsource_receipt_qty, null, "first preview sends receipt qty NULL");
+assert.equal(calls.commands[receiptCallsBefore].p_expected_doc4_fingerprint, null, "first preview sends fingerprint NULL");
+assert.match(await receiptDialog.locator("#outsourceReceiptTitle").innerText(), /上一道〈外包研磨〉委外還沒收貨，回來幾件？/);
+assert.equal(await receiptDialog.locator("[data-outsource-receipt-qty]").inputValue(), "12", "dialog defaults to unconfirmed_qty");
+assert.match(await receiptDialog.locator(".outsource-receipt-note").innerText(), /填實際回來的件數，系統會先收貨再報工/);
+await receiptDialog.locator("[data-outsource-receipt-qty]").fill("7");
+await receiptDialog.locator("[data-outsource-receipt-confirm]").click();
+await receiptDialog.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+assert.equal(calls.commands[receiptCallsBefore + 1].p_previous_outsource_receipt_qty, 7);
+assert.equal(calls.commands[receiptCallsBefore + 1].p_expected_doc4_fingerprint, "a".repeat(64), "fingerprint is returned verbatim");
+assert.notEqual(calls.commands[receiptCallsBefore + 1].p_command_uuid, calls.commands[receiptCallsBefore].p_command_uuid);
+await receiptDialog.close();
+outsourceReceiptEnabled = false;
+console.log("PASS required outsource receipt dialog → preview success");
 
 currentMachine = "A04"; guardFails = true;
 const failedGuard = await context.newPage();

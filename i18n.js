@@ -8,6 +8,15 @@
 
   const dictionaries = {
     "zh-Hant": {
+      outsource_receipt_question: "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
+      outsource_receipt_previous_step: "上一道",
+      outsource_receipt_doc4: "委外單：{{numbers}}",
+      outsource_receipt_quantity: "實際回來件數",
+      outsource_receipt_note: "填實際回來的件數，系統會先收貨再報工",
+      outsource_receipt_confirm: "確認收貨並報工",
+      outsource_receipt_range: "請輸入 1 到 {{max}} 件。",
+      outsource_receipt_cancelled: "已取消；本次沒有代收貨或報工。",
+      outsource_receipt_not_expected: "現況已更新，不需要代收貨；系統會重新送出報工。",
       start_backfill_confirm: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
       start_backfill_button: "確認開工並補報 {{gap}} 件",
       start_backfill_edit: "回去改數字",
@@ -254,6 +263,15 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",
+      outsource_receipt_previous_step: "công đoạn trước",
+      outsource_receipt_doc4: "Phiếu thuê ngoài: {{numbers}}",
+      outsource_receipt_quantity: "Số lượng thực tế đã về",
+      outsource_receipt_note: "Nhập số lượng thực tế đã về; hệ thống sẽ nhận hàng trước rồi mới báo công",
+      outsource_receipt_confirm: "Xác nhận nhận hàng và báo công",
+      outsource_receipt_range: "Vui lòng nhập từ 1 đến {{max}} sản phẩm.",
+      outsource_receipt_cancelled: "Đã hủy; lần này chưa nhận hàng hộ và chưa báo công.",
+      outsource_receipt_not_expected: "Trạng thái đã cập nhật, không cần nhận hàng hộ; hệ thống sẽ gửi lại báo công.",
       start_backfill_confirm: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)",
       start_backfill_button: "Xác nhận bắt đầu và báo bù {{gap}}",
       start_backfill_edit: "Quay lại sửa số lượng",
