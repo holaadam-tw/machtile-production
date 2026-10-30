@@ -18,7 +18,7 @@
   }
 
   function create(input, status = "accepted", nowMs = Date.now()) {
-    if (!["accepted", "queued", "applied", "applied-late"].includes(text(status).toLowerCase())) return null;
+    if (!["applied", "applied-late"].includes(text(status).toLowerCase())) return null;
     return normalize({ ...input, at: nowMs });
   }
 

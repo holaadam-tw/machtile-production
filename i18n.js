@@ -35,6 +35,9 @@
       report: "報工",
       start_work: "開工",
       overtime_start_work: "加班開工",
+      card_qty_syncing: "剛報工，同步中",
+      card_qty_sync_slow: "同步較慢，請稍後重新整理",
+      start_unconfirmed_retry: "上次開工尚未確認，請確認後再按",
       stop_work: "停工",
       batch_command_title: "批次開工／停工",
       batch_start: "批次開工",
@@ -278,6 +281,9 @@
       report: "Báo cáo",
       start_work: "Bắt đầu",
       overtime_start_work: "Bắt đầu tăng ca",
+      card_qty_syncing: "Vừa báo công, đang đồng bộ",
+      card_qty_sync_slow: "Đồng bộ chậm, vui lòng tải lại sau",
+      start_unconfirmed_retry: "Lần mở máy trước chưa được xác nhận, vui lòng kiểm tra rồi bấm lại",
       stop_work: "Dừng máy",
       batch_command_title: "Bắt đầu / dừng hàng loạt", // _draft
       batch_start: "Bắt đầu hàng loạt", // _draft

@@ -397,6 +397,11 @@ eq("midnight starts a new daily window", startButton({ commandRows: [startRow("2
 eq("17:29 no overtime action after daytime start", startButton({ commandRows: [startRow("2026-10-30T09:00:00+08:00")], now: new Date("2026-10-30T17:29:00+08:00") }).visible, false);
 eq("17:31 overtime action appears despite daytime start", startButton({ commandRows: [startRow("2026-10-30T09:00:00+08:00")], now: new Date("2026-10-30T17:31:00+08:00") }).visible, true);
 eq("applied overtime start hides overtime action", startButton({ commandRows: [startRow("2026-10-30T17:31:00+08:00")], now: new Date("2026-10-30T17:32:00+08:00") }).visible, false);
+eq("applied start stays hidden after local pending is cleared", startButton({ pendingStart: null, commandRows: [startRow("2026-10-30T10:01:00+08:00")] }).visible, false);
+eq("later applied stop restores start on the same day", startButton({ commandRows: [startRow("2026-10-30T09:00:00+08:00"), startRow("2026-10-30T10:00:00+08:00", { command_type: "stop" })] }).visible, true);
+eq("later applied stop_report restores overtime start", startButton({ commandRows: [startRow("2026-10-30T17:31:00+08:00"), startRow("2026-10-30T18:00:00+08:00", { command_type: "stop_report" })], now: new Date("2026-10-30T18:01:00+08:00") }).visible, true);
+eq("instant pending expires after three minutes", startButton({ pendingStart: { machineCode: "A04", orderNo: "WO-1", step: 3, startedAt: "2026-10-30T09:56:59+08:00" } }).reason, "pending_timeout");
+eq("overtime flag works independently from instant flag", startButton({ instantEnabled: false, overtimeEnabled: true, now: new Date("2026-10-30T17:31:00+08:00") }).overtime, true);
 eq("rejected close 不得結束 applied start", c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00"), ot("close", "2026-10-30T20:10:00+08:00", { status: "rejected" })], new Date("2026-10-30T20:11:00+08:00")).size, 1);
 
 console.log("== 標準完工下一步／claim_next ==");

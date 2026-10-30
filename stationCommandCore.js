@@ -787,21 +787,40 @@
         && (step == null || Number(row?.expected_index_sn) === Number(step)));
     });
   }
+  const INSTANT_START_TIMEOUT_MS = 3 * 60 * 1000;
+  function latestAppliedAction(rows, { machineCode, orderNo, step, now = new Date(), afterMinutes = null } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), today = taiwanParts(now)?.day;
+    if (!machine || !order || !today || !Array.isArray(rows)) return null;
+    return rows.reduce((latest, row) => {
+      const type = String(row?.command_type || "").toLowerCase();
+      const appliedAt = overtimeAppliedAt(row), tw = taiwanParts(appliedAt);
+      if (!["start", "stop", "stop_report"].includes(type) || !appliedAt || tw?.day !== today
+        || (afterMinutes != null && tw.minutes <= afterMinutes) || normCode(row?.machine_code) !== machine
+        || text(row?.expected_order_no) !== order || (step != null && Number(row?.expected_index_sn) !== Number(step))) return latest;
+      const at = Date.parse(appliedAt);
+      return !latest || at > latest.at ? { type, at } : latest;
+    }, null);
+  }
   function startButtonState({ instantEnabled, overtimeEnabled, overtimeStartTime = "17:30", commandRows, pendingStart,
     machineCode, orderNo, step, now = new Date() } = {}) {
-    if (instantEnabled !== true) return { visible: true, overtime: false, reason: "legacy" };
+    if (instantEnabled !== true && overtimeEnabled !== true) return { visible: true, overtime: false, reason: "legacy" };
     const tw = taiwanParts(now), threshold = timeMinutes(overtimeStartTime);
     const samePending = pendingStart && normCode(pendingStart.machineCode) === normCode(machineCode)
       && text(pendingStart.orderNo) === text(orderNo) && Number(pendingStart.step) === Number(step)
       && taiwanParts(pendingStart.startedAt)?.day === tw?.day;
-    if (samePending) return { visible: false, overtime: false, reason: "pending" };
+    const pendingStarted = Number.isFinite(Number(pendingStart?.startedAt)) ? Number(pendingStart.startedAt) : Date.parse(pendingStart?.startedAt);
+    const pendingAge = Number(now) - pendingStarted;
+    if (instantEnabled === true && samePending && Number.isFinite(pendingAge) && pendingAge < INSTANT_START_TIMEOUT_MS) return { visible: false, overtime: false, reason: "pending" };
     const overtime = overtimeEnabled === true && threshold != null && tw && tw.minutes > threshold;
+    const latest = latestAppliedAction(commandRows, { machineCode, orderNo, step, now, afterMinutes: overtime ? threshold : null });
+    const stopped = latest && ["stop", "stop_report"].includes(latest.type);
     if (overtime) {
-      const done = startAppliedInWindow(commandRows, { machineCode, orderNo, step, now, afterMinutes: threshold });
-      return { visible: !done, overtime: true, reason: done ? "overtime_applied" : "overtime_due" };
+      const done = latest?.type === "start";
+      return { visible: !done, overtime: true, reason: stopped ? "stopped" : done ? "overtime_applied" : (samePending ? "pending_timeout" : "overtime_due") };
     }
-    const done = startAppliedInWindow(commandRows, { machineCode, orderNo, step, now });
-    return { visible: !done, overtime: false, reason: done ? "daily_applied" : "daily_due" };
+    if (instantEnabled !== true) return { visible: true, overtime: false, reason: "legacy" };
+    const done = latest?.type === "start";
+    return { visible: !done, overtime: false, reason: stopped ? "stopped" : done ? "daily_applied" : (samePending ? "pending_timeout" : "daily_due") };
   }
   function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
     if (commandType !== "start") return false;
@@ -811,7 +830,7 @@
   }
 
   return {
-    COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS,
+    COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS, INSTANT_START_TIMEOUT_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
     SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
