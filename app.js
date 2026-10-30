@@ -25,6 +25,7 @@ const config = {
   enableOutboxSubmit: false,
   // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
   orderDetailSimplifyEnabled: false,
+  cardCycleTimeWithoutStartEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
@@ -22191,6 +22192,20 @@ function machtileIsEveningAction(value) {
   return machtileTaiwanMinutesNow(timestamp) >= 17 * 60 + 30;
 }
 
+function machtileLatestOperationalReportAt(processId) {
+  const core = machtileTodayReportCore();
+  const rows = machtileCardState.todayStatus === "ok" ? machtileCardState.todayRows : null;
+  if (!core || !Array.isArray(rows)) return null;
+  let latest = null;
+  rows.forEach((row) => {
+    if (String(row?.process_id || "") !== String(processId || "") || core.isTimeOnlyReport(row)) return;
+    const value = row.ended_at || row.created_at;
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms) && (!latest || ms > latest.ms)) latest = { ms, value };
+  });
+  return latest?.value || null;
+}
+
 function machtileRenderHomeOvertimeCard(now = new Date()) {
   const holder = document.getElementById("homeOvertimeCard");
   if (!holder) return;
@@ -22204,7 +22219,8 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
     const order = machine?.order;
     if (!order || order.offStation === true) return [];
     const activity = machtileCardActivityOf(order) || {};
-    const actedTonight = [activity.actualStartAt, activity.lastReportAt].some((value) => value
+    const operationalReportAt = machtileLatestOperationalReportAt(order.processId);
+    const actedTonight = [activity.actualStartAt, operationalReportAt ?? (machtileCardState.todayStatus === "ok" ? null : activity.lastReportAt)].some((value) => value
       && machtileFactoryDateIso(value) === today
       && machtileIsEveningAction(value));
     const segment = config.overtimeStartCardEnabled === true
@@ -24236,7 +24252,7 @@ async function machtileBatchFetchCounters(processIds) {
   const ids = [...new Set((processIds || []).map(String).filter(isUuid))];
   if (state.source !== "supabase" || !ids.length) return map;
   const today = machtileFactoryDateIso();
-  const rows = await supabaseFetch(`production_reports?select=process_id,report_type,report_payload,created_at&process_id=in.(${ids.map(encodeURIComponent).join(",")})&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=1000`);
+  const rows = await supabaseFetch(`production_reports?select=process_id,report_type,report_payload,created_at,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds&process_id=in.(${ids.map(encodeURIComponent).join(",")})&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=1000`);
   ids.forEach((id) => map.set(id, window.MachTileReportCounterCore.latestBaseline((rows || []).filter((r) => String(r.process_id) === id))));
   return map;
 }
@@ -26356,7 +26372,7 @@ async function machtileLoadCardTodayAndLoadUnload(orders) {
 // started_at／completed_qty／defect_qty：認出「只改機台加工時間」的 0／0 noon（不算中午報工，見 todayReportStatusCore）。
 function machtileCardTodayPath(core) {
   const since = core.todayStartIso();
-  return `production_reports?select=process_id,report_type,created_at,started_at,ended_at,completed_qty,defect_qty,user_id,operator_ids&report_type=in.(dailyStart,noon,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`;
+  return `production_reports?select=process_id,report_type,created_at,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds,user_id,operator_ids&report_type=in.(dailyStart,noon,finish)&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1000`;
 }
 
 function machtileApplyCardTodayRows(core, rows) {
@@ -26647,7 +26663,7 @@ async function machtileSaveCardMachineTime() {
     startedAt: start.startedAt,
   };
   if (parsed.seconds === ctDefault) { ed.error = "時間跟目前一樣，不用儲存。"; machtileRenderCardCtSheet(); return; }
-  if (!model.startedAt) { ed.error = "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。"; machtileRenderCardCtSheet(); return; }
+  if (!model.startedAt && config.cardCycleTimeWithoutStartEnabled !== true) { ed.error = "這張單在 App 上還沒有開工或報工紀錄，請先送「今日開工」再填時間。"; machtileRenderCardCtSheet(); return; }
 
   ed.saving = true;
   machtileRenderCardCtSheet();
@@ -26655,7 +26671,7 @@ async function machtileSaveCardMachineTime() {
   const prev = drafts[ed.processId];
   const id = timeCore.ensureReportUuid(prev, { processId: order.processId, actorAppUserId: ed.actorId, cycleTimeSeconds: parsed.seconds }, () => crypto.randomUUID());
   // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致（同批次）
-  const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : model.startedAt;
+  const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : (model.startedAt || (config.cardCycleTimeWithoutStartEnabled === true ? endedAt : null));
   const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
   drafts[ed.processId] = { reportUuid: id.reportUuid, fingerprint: id.fingerprint, startedAt, endedAt: end };
   machtileCardCtWriteDrafts(drafts);
@@ -26663,7 +26679,7 @@ async function machtileSaveCardMachineTime() {
   let message = "";
   try {
     const built = timeCore.buildPayload({ order, actorAppUserId: ed.actorId, endedAt: end, startedAt, reportUuid: id.reportUuid,
-      tenantId: order.tenantId, cycleTimeSeconds: parsed.seconds });
+      tenantId: order.tenantId, cycleTimeSeconds: parsed.seconds, allowWithoutStart: config.cardCycleTimeWithoutStartEnabled === true });
     const box = machtileOutboxEnabled() ? await machtileGetOutbox() : null;
     await machtileBatchSendOne(box, built.payload, built.operators);
     if (box) {

@@ -3,8 +3,10 @@ const { latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayloa
 
 const start = { report_type: "dailyStart", created_at: "2026-10-13T00:10:00Z", report_payload: { machine_qty: 100 } };
 const report = { report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 145 } };
+const cycleOnly = { ...report, created_at: "2026-10-13T04:00:00Z", started_at: "2026-10-13T04:00:00Z", ended_at: "2026-10-13T04:00:00Z", completed_qty: 0, defect_qty: 0, cycle_time_seconds: 125, report_payload: { machine_qty: 999, cycle_time_seconds: 125 } };
 assert.deepEqual(latestBaseline([start]), { qty: 100, source: "dailyStart", createdAt: start.created_at }, "daily start is a baseline");
 assert.deepEqual(latestBaseline([report, start]), { qty: 145, source: "report", createdAt: report.created_at }, "later report wins over daily start");
+assert.deepEqual(latestBaseline([cycleOnly, report, start]), { qty: 145, source: "report", createdAt: report.created_at }, "cycle-time-only report never becomes the counter or efficiency baseline");
 assert.equal(calculate(145, 145).code, "NON_POSITIVE_DELTA", "equal cumulative count is blocked");
 assert.equal(calculate(144, 145).code, "NON_POSITIVE_DELTA", "lower cumulative count is blocked");
 assert.deepEqual(calculate(160, 145), { valid: true, code: "OK", message: "", current: 160, baseline: 145, delta: 15 }, "positive delta is sent as good quantity");

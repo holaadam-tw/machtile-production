@@ -27,6 +27,11 @@ assert.equal(firstId.reused, false);
 assert.equal(core.ensureReportUuid(firstId, { processId: order.processId, actorAppUserId: "user-1", cycleTimeSeconds: 125 }, () => "uuid-2").reportUuid, "uuid-1");
 assert.equal(core.ensureReportUuid(firstId, { processId: order.processId, actorAppUserId: "user-1", cycleTimeSeconds: 126 }, () => "uuid-2").reportUuid, "uuid-2");
 assert.throws(() => core.buildPayload({ order, actorAppUserId: "user-1", endedAt: "2026-10-14T04:30:00.000Z", startedAt: null, reportUuid: "report-2", cycleTimeSeconds: 125 }), /沒有開工時間/);
+const withoutStart = core.buildPayload({ order, actorAppUserId: "user-1", endedAt: "2026-10-14T04:30:00.000Z", startedAt: null, reportUuid: "report-2-enabled", cycleTimeSeconds: 125, allowWithoutStart: true });
+assert.equal(withoutStart.payload.started_at, "2026-10-14T04:30:00.000Z");
+assert.equal(withoutStart.payload.ended_at, "2026-10-14T04:30:00.000Z");
+assert.equal(withoutStart.payload.completed_qty, 0);
+assert.equal(withoutStart.payload.defect_qty, 0);
 assert.throws(() => core.buildPayload({ order, actorAppUserId: "user-1", endedAt: "2026-10-14T04:30:00.000Z", startedAt: "2026-10-14T00:10:00.000Z", reportUuid: "report-3", cycleTimeSeconds: 0 }), /大於 0 秒/);
 
 console.log("CARD_MACHINE_TIME_CORE PASS");

@@ -18,9 +18,16 @@
     return finiteCounter(payload.machine_qty ?? row?.machine_qty);
   }
 
+  function isCycleTimeOnlyReport(row) {
+    if (!row || row.report_type !== "noon" || Number(row.completed_qty) !== 0 || Number(row.defect_qty) !== 0 || !(Number(row.cycle_time_seconds) > 0)) return false;
+    const start = Date.parse(row.started_at);
+    const end = Date.parse(row.ended_at);
+    return Number.isFinite(start) && Number.isFinite(end) && start === end;
+  }
+
   function latestBaseline(rows) {
     return (Array.isArray(rows) ? rows : [])
-      .filter(row => ELIGIBLE_TYPES.has(row?.report_type) && counterFromReport(row) !== null)
+      .filter(row => ELIGIBLE_TYPES.has(row?.report_type) && !isCycleTimeOnlyReport(row) && counterFromReport(row) !== null)
       .map(row => ({
         qty: counterFromReport(row),
         source: row.report_type === "noon" ? "report" : "dailyStart",
@@ -100,5 +107,5 @@
       message: qty > maxQty ? `照工時這段時間最多約 ${maxQty} 件，你報 ${qty} 件，請確認` : "" };
   }
 
-  return { latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayload, backfillRemark, rateReasonableness };
+  return { isCycleTimeOnlyReport, latestBaseline, calculate, finishTotal, totalSemantics, efficiencyPayload, backfillRemark, rateReasonableness };
 });

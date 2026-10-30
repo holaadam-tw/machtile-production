@@ -95,6 +95,16 @@ console.log("== 稼動率：今天 ==");
   eq("最低的幾台（有數字 3 台 → 標 2 台，最高的不標）", u.rows.filter((r) => r.lowest).map((r) => r.code), ["B05", "A01"]);
 }
 
+console.log("== cycle-only 不是開工或稼動起點 ==");
+{
+  const cycleOnly = rep("pCycle", "A06", "noon", "10:30", {
+    started_at: iso("10:30"), completed_qty: 0, defect_qty: 0, cycle_time_seconds: 90,
+  });
+  const day = c.machineDay({ reps: [cycleOnly], date: "2026-10-02", nowMs: tw("11:00"), cycleIndex: c.buildCycleTimeIndex([cycleOnly]) });
+  eq("cycle-only 明確辨識", c.isCycleTimeOnlyReport(cycleOnly), true);
+  eq("cycle-only 不開啟班次、不計報工數", [day.status, day.reportCount, day.startMs], ["notOpened", 0, undefined]);
+}
+
 console.log("== 稼動率：今天還沒收工（算到現在）＋一般下班 ==");
 {
   const reports = [

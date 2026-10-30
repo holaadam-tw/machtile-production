@@ -121,7 +121,7 @@ console.log("== 只改機台加工時間的 0／0 noon 不算中午報工（owne
 // PR #93（7f581fb）後批次報工改用累計數契約；只改時間由卡片專用 core 組 payload。
 const timeCore = require("./cardMachineTimeCore.js");
 const order = { workOrderId: "wo3", processId: "p3", tenantId: "t", processStatus: "running", done: 0, total: 400 };
-const timeOnly = timeCore.buildPayload({ order, actorAppUserId: "u1", endedAt: iso("12:30"), startedAt: iso("08:10"), reportUuid: "r1", tenantId: "t", cycleTimeSeconds: 100 });
+const timeOnly = timeCore.buildPayload({ order, actorAppUserId: "u1", endedAt: iso("12:30"), startedAt: null, reportUuid: "r1", tenantId: "t", cycleTimeSeconds: 100, allowWithoutStart: true });
 const realQty = { payload: { ...timeOnly.payload, report_uuid: "r2", completed_qty: 5, report_payload: { ...timeOnly.payload.report_payload, completed_qty: 5 }, started_at: iso("08:10"), ended_at: iso("12:30") } };
 eq("實際 payload：只改時間＝noon、0／0、started_at＝ended_at", [timeOnly.timeOnly, timeOnly.payload.report_type, timeOnly.payload.completed_qty, timeOnly.payload.defect_qty, timeOnly.payload.started_at === timeOnly.payload.ended_at], [true, "noon", 0, 0, true]);
 eq("isTimeOnlyReport(只改時間的 payload) → true", c.isTimeOnlyReport(timeOnly.payload), true);
