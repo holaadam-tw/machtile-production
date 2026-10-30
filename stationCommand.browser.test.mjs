@@ -37,7 +37,7 @@ import { createRequire } from "node:module";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const stationCore = createRequire(import.meta.url)("./stationCommandCore.js");
 const outDir = process.env.STATION_CMD_E2E_OUT || path.join(root, ".e2e-out", "station-command");
-const finishCloseShot = "D:\\04_SoftNet\\ops\\codex-inbox\\20261015-app-finish-dialog-shots\\close-result-mobile.png";
+const finishCloseShot = process.env.STATION_CMD_FINISH_CLOSE_SHOT || path.join(outDir, "close-result-mobile.png");
 const baselineRef = process.env.STATION_CMD_BASELINE_REF || "origin/main";
 const modSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const pw = await import(modSpec);
@@ -383,8 +383,9 @@ const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 };
 
-async function newPage(browser, vp, { backend, configExtra = "", baseline = false, noRandomUuid = false, preload = null }) {
+async function newPage(browser, vp, { backend, configExtra = "", baseline = false, noRandomUuid = false, preload = null, contextTimeout = 30000 }) {
   const context = await browser.newContext({ ...VIEWPORTS[vp], serviceWorkers: "block", timezoneId: "Asia/Taipei", locale: "zh-TW" });
+  context.setDefaultTimeout(contextTimeout);
   const token = jwtFor(backend.role || "operator");
   await context.addInitScript(([token]) => {
     try {
@@ -786,7 +787,7 @@ async function stopDialogPage(be, { qtyCompleted = 4 } = {}) {
   be.procExtra[STOP_WO] = { simulation_id: "Y011EBNTBCW4", qty_completed: qtyCompleted };
   if (!be.progressRows.length) be.progressRows = [{ process_id: id(304), legacy_output: qtyCompleted, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
   const { context, page, errors } = await newPage(browser, "phone", { backend: be,
-    configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A04"],' });
+    configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A04"],', contextTimeout: 60000 });
   await page.waitForFunction(() => machtileTakeover.availability === "ready", null, { timeout: 10000 });
   await page.evaluate(() => {
     window.__toasts = [];

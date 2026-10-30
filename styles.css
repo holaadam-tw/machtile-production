@@ -13257,3 +13257,8 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .order-detail-report-table th,
 .order-detail-report-table td { padding: 10px 12px; border-bottom: 1px solid var(--line, #d8dee8); text-align: left; vertical-align: top; }
 .order-detail-report-table th { color: var(--muted, #526170); font-size: .85rem; }
+.operator-preview-banner { position: sticky; top: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 9px 16px; background: #7c3aed; color: #fff; box-shadow: 0 2px 8px rgb(0 0 0 / 18%); }
+.operator-preview-banner[hidden] { display: none; }
+.operator-preview-banner button { border: 1px solid rgb(255 255 255 / 70%); border-radius: 999px; padding: 4px 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.order-detail-report-filters { margin: 0 0 12px; }
+.order-detail-report-table tr[hidden] { display: none; }

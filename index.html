@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261030-ctfill2">
+  <link rel="stylesheet" href="./styles.css?v=20261030-otbtn-r1">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -88,6 +88,10 @@
     </section>
   </div>
   <div class="app-shell">
+    <div id="operatorPreviewBanner" class="operator-preview-banner" hidden>
+      <strong>作業員畫面預覽中</strong>
+      <button type="button" data-exit-operator-preview>退出預覽</button>
+    </div>
     <div id="demoBanner" class="demo-banner" hidden>
       <span>自動展示中</span>
       <strong id="demoTimer">03:00:00</strong>
@@ -781,9 +785,9 @@
   <script src="./processFlowCore.js?v=20261030-ot-outsource"></script>
   <script src="./dispatchPoolCore.js?v=20261030-ot-outsource"></script>
   <script src="./stationCommandCore.js?v=20261030-cardqty3"></script>
-  <script src="./takeoverCore.js?v=20261030-ctfill2"></script>
+  <script src="./takeoverCore.js?v=20261030-otbtn-r1"></script>
   <script src="./stationReportCore.js?v=20261030-ot-outsource"></script>
   <script src="./inspectionLinkCore.js?v=20261030-ot-outsource"></script>
-  <script src="./app.js?v=20261030-cardqty3"></script>
+  <script src="./app.js?v=20261030-otbtn-r1"></script>
 </body>
 </html>
