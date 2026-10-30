@@ -14920,9 +14920,6 @@ function machtileStationCmdParts(machine) {
   } else if (last) {
     line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
-  // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
-  const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
-      ` : "";
   const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
   const startState = machtileStationCmdCore.startButtonState({
     instantEnabled: config.dailyStartButtonInstantHideEnabled === true,
@@ -14938,6 +14935,9 @@ function machtileStationCmdParts(machine) {
   const resolvedStartButton = startState.visible ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
   if (startState.reason === "pending_timeout") line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(machtileTranslate("start_unconfirmed_retry"))}</p>`;
+  // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
+  const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
+      ` : "";
   const stopButton = `
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>`;
   const pickButton = `
@@ -22371,7 +22371,7 @@ async function machtileLoadOvertimeStartSegments(now = new Date()) {
   if ((!overtimeEnabled && !dailyStartEnabled) || state.source !== "supabase" || !machtileStationCmdCore) return;
   const day = machtileFactoryDateIso(now.toISOString());
   const start = new Date(`${day}T00:00:00+08:00`).toISOString();
-  const types = overtimeEnabled ? "start,stop,stop_report,report,close" : "start";
+  const types = (overtimeEnabled || dailyStartEnabled) ? "start,stop,stop_report,report,close" : "start"; // L3 #152：開工鈕要看得到停工（別台平板／重新整理後）
   const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(${types})&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
   if (dailyStartEnabled) {
     state.dailyStationStartRows = rows;
