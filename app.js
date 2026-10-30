@@ -11385,6 +11385,15 @@ const machtileCardPickState = {
 };
 const MACHTILE_CARD_ACTIVITY_CHUNK = 80;
 
+// 沒有 App 開工／報工紀錄時，只改時間那筆的 started_at＝ended_at 要用「舊 MES 開工時間，沒有就今天 00:00（台灣）」，
+// 不能用「現在」：伺服器 last_report_at 會拿它當下一筆報工的起點，區間太短會誤跳速度警告（L3 #150 F2）。
+function machtileCardCtNoStartAnchor(order) {
+  const actual = machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null;
+  const ms = actual ? Date.parse(actual) : NaN;
+  if (Number.isFinite(ms) && ms <= Date.now()) return new Date(ms).toISOString();
+  return new Date(`${machtileFactoryDateIso()}T00:00:00+08:00`).toISOString();
+}
+
 function machtileCardActivityOf(order) {
   if (!order) return null;
   const key = machtileCardActiveCore ? machtileCardActiveCore.orderKey(order) : String(order.processId || order.id || "");
@@ -26695,7 +26704,7 @@ async function machtileSaveCardMachineTime() {
   const prev = drafts[ed.processId];
   const id = timeCore.ensureReportUuid(prev, { processId: order.processId, actorAppUserId: ed.actorId, cycleTimeSeconds: parsed.seconds }, () => crypto.randomUUID());
   // 重送同一筆時沿用第一次的時間，payload 才會跟已經進 outbox／伺服器的那筆一致（同批次）
-  const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : (model.startedAt || (config.cardCycleTimeWithoutStartEnabled === true ? endedAt : null));
+  const startedAt = id.reused && prev && "startedAt" in prev ? prev.startedAt : (model.startedAt || (config.cardCycleTimeWithoutStartEnabled === true ? machtileCardCtNoStartAnchor(order) : null));
   const end = id.reused && prev?.endedAt ? prev.endedAt : endedAt;
   drafts[ed.processId] = { reportUuid: id.reportUuid, fingerprint: id.fingerprint, startedAt, endedAt: end };
   machtileCardCtWriteDrafts(drafts);

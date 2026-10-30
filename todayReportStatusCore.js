@@ -76,7 +76,6 @@
     if (!r || r.report_type !== "noon") return false;
     if (Number(r.completed_qty) !== 0 || Number(r.defect_qty) !== 0) return false;
     if (r.completed_qty === null || r.completed_qty === undefined || r.defect_qty === null || r.defect_qty === undefined) return false;
-    if (!(Number(r.cycle_time_seconds) > 0)) return false;
     const s = Date.parse(r.started_at);
     const e = Date.parse(r.ended_at);
     return Number.isFinite(s) && Number.isFinite(e) && s === e;
