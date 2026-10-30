@@ -34,6 +34,7 @@
       batch_department_denied: "此帳號沒有這個課別的報工權限",
       report: "報工",
       start_work: "開工",
+      overtime_start_work: "加班開工",
       stop_work: "停工",
       batch_command_title: "批次開工／停工",
       batch_start: "批次開工",
@@ -276,6 +277,7 @@
       batch_department_denied: "Tài khoản này không có quyền báo cáo cho bộ phận này", // _draft
       report: "Báo cáo",
       start_work: "Bắt đầu",
+      overtime_start_work: "Bắt đầu tăng ca",
       stop_work: "Dừng máy",
       batch_command_title: "Bắt đầu / dừng hàng loạt", // _draft
       batch_start: "Bắt đầu hàng loạt", // _draft

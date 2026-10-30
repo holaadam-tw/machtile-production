@@ -70,6 +70,10 @@
     "value": "Bắt đầu",
     "_draft": true
   },
+  "overtime_start_work": {
+    "value": "Bắt đầu tăng ca",
+    "_draft": true
+  },
   "stop_work": {
     "value": "Dừng máy",
     "_draft": true

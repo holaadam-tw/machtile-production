@@ -6,10 +6,12 @@ window.MACHTILE_CONFIG = {
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
-  overtimeStartTime: "17:30",
+  overtimeStartTime: "17:30", // Must match Factory OvertimeStartTime.
   // "dev-nologin" (default when omitted) = public demo, fully anonymous.
   // "strict" = production: app-level login gate, all reads/writes use the
   // signed-in session. See config.production.example.js.

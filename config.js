@@ -9,10 +9,12 @@ window.MACHTILE_CONFIG = {
   orderDetailSimplifyEnabled: true,
   cardCycleTimeWithoutStartEnabled: true,
   dailyStartWhenRunningEnabled: true,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
-  overtimeStartTime: "17:30",
+  overtimeStartTime: "17:30", // Must stay aligned with Factory appsettings.FactoryPilot.json OvertimeStartTime.
   // Strict mode: app-level login gate before any route; planner/supervisor/
   // station accounts per Gate P P_AUTH_MODEL=AllAuthenticated.
   authMode: "strict",

@@ -386,6 +386,17 @@ for (const endType of ["stop_report", "report", "close"]) {
   eq(`${endType} applied 結束加班段`, c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00"), ot(endType, "2026-10-30T20:10:00+08:00")], new Date("2026-10-30T20:11:00+08:00")).size, 0);
 }
 eq("跨午夜不沿用前一天 stale segment", c.overtimeStartSegments([ot("start", "2026-10-30T23:55:00+08:00")], new Date("2026-10-31T00:05:00+08:00")).size, 0);
+
+const startRow = (at, extra = {}) => ({ machine_code: "A04", command_type: "start", status: "applied", expected_order_no: "WO-1", expected_index_sn: 3, applied_at: at, ...extra });
+const startButton = (extra = {}) => c.startButtonState({ instantEnabled: true, overtimeEnabled: true, overtimeStartTime: "17:30",
+  commandRows: [], machineCode: "A04", orderNo: "WO-1", step: 3, now: new Date("2026-10-30T10:00:00+08:00"), ...extra });
+eq("start pending immediately hides", startButton({ pendingStart: { machineCode: "A04", orderNo: "WO-1", step: 3, startedAt: "2026-10-30T09:59:59+08:00" } }).visible, false);
+eq("rejected removal restores start", startButton({ pendingStart: null }).visible, true);
+eq("other tablet applied refresh hides", startButton({ commandRows: [startRow("2026-10-30T10:01:00+08:00")] }).visible, false);
+eq("midnight starts a new daily window", startButton({ commandRows: [startRow("2026-10-30T23:55:00+08:00")], now: new Date("2026-10-31T00:30:00+08:00") }).visible, true);
+eq("17:29 no overtime action after daytime start", startButton({ commandRows: [startRow("2026-10-30T09:00:00+08:00")], now: new Date("2026-10-30T17:29:00+08:00") }).visible, false);
+eq("17:31 overtime action appears despite daytime start", startButton({ commandRows: [startRow("2026-10-30T09:00:00+08:00")], now: new Date("2026-10-30T17:31:00+08:00") }).visible, true);
+eq("applied overtime start hides overtime action", startButton({ commandRows: [startRow("2026-10-30T17:31:00+08:00")], now: new Date("2026-10-30T17:32:00+08:00") }).visible, false);
 eq("rejected close 不得結束 applied start", c.overtimeStartSegments([ot("start", "2026-10-30T17:40:00+08:00"), ot("close", "2026-10-30T20:10:00+08:00", { status: "rejected" })], new Date("2026-10-30T20:11:00+08:00")).size, 1);
 
 console.log("== 標準完工下一步／claim_next ==");

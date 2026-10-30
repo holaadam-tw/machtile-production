@@ -10,10 +10,12 @@ window.MACHTILE_CONFIG = {
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
-  overtimeStartTime: "17:30",
+  overtimeStartTime: "17:30", // Must match Factory OvertimeStartTime.
   enableTakeover: false,
   takeoverMachines: [],
   enablePickStartFlow: false,

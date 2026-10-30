@@ -28,6 +28,8 @@ const config = {
   cardCycleTimeWithoutStartEnabled: false,
   // Running 工序每天仍須按開工。預設關閉時不讀每日 start ledger，按鈕行為維持原樣。
   dailyStartWhenRunningEnabled: false,
+  dailyStartButtonInstantHideEnabled: false,
+  overtimeStartButtonEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
@@ -14405,6 +14407,7 @@ function machtilePickStartEnabled(code) {
 }
 // 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
 const machtilePickStartLocal = {};
+const machtileInstantStartPending = {};
 function machtilePickStartPhase(machine, order) {
   const code = machtileStationCmdMachineCode(machine);
   const local = machtilePickStartLocal[code];
@@ -14909,15 +14912,28 @@ function machtileStationCmdParts(machine) {
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
   const takenLine = taken ? `<div class="takeover-taken-notice" role="status">${escapeHtml(machtileTranslate("takeover_taken_notice", { order: order.id, machine: taken.taken_by_machine || "—", who: taken.taken_by_name || "—", time: formatDateTime(taken.taken_at) }))}</div>` : "";
-  const startButton = `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>`;
+  const startState = machtileStationCmdCore.startButtonState({
+    instantEnabled: config.dailyStartButtonInstantHideEnabled === true,
+    overtimeEnabled: config.overtimeStartButtonEnabled === true,
+    overtimeStartTime: config.overtimeStartTime || "17:30",
+    commandRows: state.dailyStationStartRows,
+    pendingStart: pending
+      ? (pending.commandType === "start" && !released ? (machtileInstantStartPending[code] || pending) : null)
+      : machtileInstantStartPending[code],
+    machineCode: code, orderNo: order?.id, step: order?.stationStep, now: new Date(),
+  });
+  const startButton = startState.visible ? `
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(machtileTranslate("start_work"))}</button>` : "";
+  const resolvedStartButton = startState.visible
+    ? startButton.replace(machtileTranslate("start_work"), machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work"))
+    : "";
   const stopButton = `
           <button type="button" class="station-cmd-button is-stop" data-no-detail data-station-cmd="stop" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 停工（會先出確認卡）" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("stop_work"))}</button>`;
   const pickButton = `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-pick-order-open data-station-cmd-machine="${escapeHtml(code)}" ${locked ? "disabled" : ""}>${escapeHtml(machtileTranslate("pick_order"))}</button>`;
   const buttons = pickPhase
-    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? startButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
-    : gate.ok ? `${startButton}${stopButton}` : "";
+    ? `${pickActions.includes("pick") ? pickButton : ""}${pickActions.includes("start") ? resolvedStartButton : ""}${pickActions.includes("stop") ? stopButton : ""}`
+    : gate.ok ? `${resolvedStartButton}${stopButton}` : "";
   return { status: takenLine + status, buttons, active: true, pickPhase, pickActions };
 }
 
@@ -15825,6 +15841,10 @@ async function machtileStationCmdSubmit() {
   }
   const existing = machtileStationCmd.pending[sheet.code];
   sheet.phase = "sending";
+  if (sheet.type === "start" && config.dailyStartButtonInstantHideEnabled === true) {
+    machtileInstantStartPending[sheet.code] = { machineCode: sheet.code, orderNo: sheet.model.workOrderNo, step: sheet.model.step, startedAt: Date.now() };
+    machtileStationCmdRerender();
+  }
   sheet.attempts += 1;
   machtileStationCmdRenderSheet();
   const startedAt = existing?.commandUuid === sheet.uuid ? existing.startedAt : Date.now();
@@ -15834,6 +15854,7 @@ async function machtileStationCmdSubmit() {
     recordFields: { ...sheet.fields, partName: sheet.model.partName, operationName: sheet.model.operationName, ...(sheet.comboStart ? { standardFinishComboStart: true } : {}), ...(sheet.overtimeAnswer?.skipped ? {} : { overtimeGuardSnapshot: sheet.overtimeAnswer }) },
     startedAt, previousRecord: existing, attemptNumber: sheet.attempts,
     onError: ({ error, info }) => {
+      if (sheet.type === "start") delete machtileInstantStartPending[sheet.code];
       const carried = machtileStationCmdCarriedDailyStart(sheet, existing);
       machtileStationCmdDailyStartAfterSubmit(sheet, false, null);
       if (machtileStationCmd.sheet !== sheet) return { cancel: true };
@@ -15877,6 +15898,7 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
+  if (record.commandType === "start") delete machtileInstantStartPending[code];
   if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
   const stopDraft = record.commandType === "stop_report" ? machtileTakeoverStopDrafts.get(record.commandUuid) : null;
   if (record.commandType === "stop_report") machtileTakeoverStopDrafts.delete(record.commandUuid);
@@ -15965,6 +15987,7 @@ function machtileStationCmdPoll(code) {
           // 送出時網路斷、伺服器連續查不到這筆＝沒送到 → 解鎖（同一個 uuid 之後重送也沒問題）
           delete machtileStationCmd.timers[code];
           delete machtileStationCmd.pending[code];
+          if (current.commandType === "start") delete machtileInstantStartPending[code];
           machtileStationCmdSavePending();
           const sheet = machtileStationCmd.sheet;
           if (sheet && sheet.code === code && sheet.uuid === current.commandUuid && sheet.phase === "sendError") {
@@ -15983,6 +16006,7 @@ function machtileStationCmdPoll(code) {
         clearTimeout(machtileStationCmd.timers[code]);
         delete machtileStationCmd.timers[code];
         delete machtileStationCmd.pending[code];
+        if (current.commandType === "start") delete machtileInstantStartPending[code];
         machtileStationCmdSavePending();
         machtileStationCmdRerender();
         return;
@@ -22257,6 +22281,11 @@ function switchView(view) {
       machtileRefreshCardSections();
     }).catch((error) => console.warn("home progress refresh failed", error));
   }
+  if (view === "dashboard" && state.source === "supabase"
+    && (config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true)) {
+    void machtileLoadOvertimeStartSegments(new Date()).then(machtileRefreshCardSections)
+      .catch((error) => console.warn("home start commands refresh failed; keeping the last result", error));
+  }
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
@@ -22323,7 +22352,7 @@ async function machtileLoadOvertimeStartSegments(now = new Date()) {
   state.overtimeStartSegments = new Map();
   state.dailyStationStartRows = [];
   const overtimeEnabled = config.overtimeStartCardEnabled === true;
-  const dailyStartEnabled = config.dailyStartWhenRunningEnabled === true;
+  const dailyStartEnabled = config.dailyStartWhenRunningEnabled === true || config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true;
   if ((!overtimeEnabled && !dailyStartEnabled) || state.source !== "supabase" || !machtileStationCmdCore) return;
   const day = machtileFactoryDateIso(now.toISOString());
   const start = new Date(`${day}T00:00:00+08:00`).toISOString();
@@ -26961,6 +26990,9 @@ function machtileToggleTodayFilter(kind) {
 async function machtileTodayTick() {
   const core = machtileTodayReportCore();
   if (!core || !document.getElementById("statsGrid")) return;
+  if (state.source === "supabase" && (config.dailyStartButtonInstantHideEnabled === true || config.overtimeStartButtonEnabled === true)) {
+    try { await machtileLoadOvertimeStartSegments(new Date()); } catch (error) { console.warn("today start commands refresh failed; keeping the last result", error); }
+  }
   const ecore = machtileCardEstimateCore();
   if (ecore && state.source === "supabase" && machtileCardState.todayStatus === "ok" && !document.hidden && !machtileTodayRefetching
     && Date.now() - (machtileCardState.todayLoadedAt || 0) >= MACHTILE_TODAY_REFETCH_MS - 5000) { // 容許計時器誤差：每 2 次重算重讀一次

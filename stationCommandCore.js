@@ -776,6 +776,33 @@
     return startAppliedToday(commandRows, { machineCode, orderNo, step, now })
       || dailyStartRecordedToday(reportRows, processId);
   }
+  function startAppliedInWindow(rows, { machineCode, orderNo, step, now = new Date(), afterMinutes = null } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), today = taiwanParts(now)?.day;
+    if (!machine || !order || !today || !Array.isArray(rows)) return false;
+    return rows.some((row) => {
+      const appliedAt = overtimeAppliedAt(row), tw = taiwanParts(appliedAt);
+      return Boolean(appliedAt && tw?.day === today && (afterMinutes == null || tw.minutes > afterMinutes)
+        && String(row?.command_type || "").toLowerCase() === "start"
+        && normCode(row?.machine_code) === machine && text(row?.expected_order_no) === order
+        && (step == null || Number(row?.expected_index_sn) === Number(step)));
+    });
+  }
+  function startButtonState({ instantEnabled, overtimeEnabled, overtimeStartTime = "17:30", commandRows, pendingStart,
+    machineCode, orderNo, step, now = new Date() } = {}) {
+    if (instantEnabled !== true) return { visible: true, overtime: false, reason: "legacy" };
+    const tw = taiwanParts(now), threshold = timeMinutes(overtimeStartTime);
+    const samePending = pendingStart && normCode(pendingStart.machineCode) === normCode(machineCode)
+      && text(pendingStart.orderNo) === text(orderNo) && Number(pendingStart.step) === Number(step)
+      && taiwanParts(pendingStart.startedAt)?.day === tw?.day;
+    if (samePending) return { visible: false, overtime: false, reason: "pending" };
+    const overtime = overtimeEnabled === true && threshold != null && tw && tw.minutes > threshold;
+    if (overtime) {
+      const done = startAppliedInWindow(commandRows, { machineCode, orderNo, step, now, afterMinutes: threshold });
+      return { visible: !done, overtime: true, reason: done ? "overtime_applied" : "overtime_due" };
+    }
+    const done = startAppliedInWindow(commandRows, { machineCode, orderNo, step, now });
+    return { visible: !done, overtime: false, reason: done ? "daily_applied" : "daily_due" };
+  }
   function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
     if (commandType !== "start") return false;
     if (normRole(role) !== "operator" || isBridge === true) return false;
@@ -794,7 +821,7 @@
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
-    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startedToday,
+    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startAppliedInWindow, startButtonState, startedToday,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };
 });
