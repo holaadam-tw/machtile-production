@@ -23572,6 +23572,7 @@ const machtileBatchState = {
   progressError: "",
   progressByProcess: new Map(),
   counterBaselineByProcess: new Map(),
+  starterByProcess: new Map(),
   freshReportedByProcess: new Map(),
   stationShiftByMachine: new Map(),
   // 單卡與 Monitor 既有 cycle-time 快取；批次頁只讀 station_commands，不提供寫入欄位。
@@ -24441,7 +24442,8 @@ async function machtileBatchFetchCounters(processIds) {
   const ids = [...new Set((processIds || []).map(String).filter(isUuid))];
   if (state.source !== "supabase" || !ids.length) return map;
   const today = machtileFactoryDateIso();
-  const rows = await supabaseFetch(`production_reports?select=process_id,report_type,report_payload,created_at,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds&process_id=in.(${ids.map(encodeURIComponent).join(",")})&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=1000`);
+  const rows = await supabaseFetch(`production_reports?select=process_id,report_type,report_payload,created_at,started_at,ended_at,completed_qty,defect_qty,cycle_time_seconds,user_id,operator_ids&process_id=in.(${ids.map(encodeURIComponent).join(",")})&report_date=eq.${today}&report_type=in.(dailyStart,noon)&order=created_at.desc&limit=1000`);
+  machtileBatchState.starterRows = Array.isArray(rows) ? rows : [];
   ids.forEach((id) => map.set(id, window.MachTileReportCounterCore.latestBaseline((rows || []).filter((r) => String(r.process_id) === id))));
   return map;
 }
@@ -24573,6 +24575,7 @@ async function machtileLoadBatchReport(groupKey) {
     await machtileLoadStationReportIdentity(group.machines);
     machtileBatchState.actorId = actorId || "";
     machtileBatchState.users = core.operatorChoices(users);
+    machtileBatchState.starterByProcess = new Map(uniq.map((processId) => [String(processId), core.starterOperatorId(machtileBatchState.starterRows, processId, machtileBatchState.users)]));
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.counterBaselineByProcess = counters;
     machtileBatchState.freshReportedByProcess = new Map();
@@ -24731,10 +24734,10 @@ function machtileBatchRowModel(code, endedAtIso) {
   const core = machtileBatchCore();
   const row = machtileBatchRow(code);
   const order = machtileBatchSelectedOrder(code);
-  const operatorId = row.operatorId === null
-    ? core.defaultOperatorId(machtileBatchState.users, machtileBatchState.actorId)
-    : row.operatorId;
   const mode = machtileBatchState.mode === "dailyStart" ? "dailyStart" : (row.finished ? "finish" : "noon");
+  const operatorId = row.operatorId === null
+    ? (machtileBatchState.starterByProcess.get(String(order?.processId || "")) || (mode === "dailyStart" ? core.defaultOperatorId(machtileBatchState.users, machtileBatchState.actorId) : ""))
+    : row.operatorId;
   const start = machtileBatchStartInfo(order, endedAtIso, mode);
   const baseline = order ? machtileBatchState.counterBaselineByProcess.get(String(order.processId)) : null;
   const counter = mode === "dailyStart"
@@ -24774,7 +24777,7 @@ function machtileBatchSendableCount(group, nowIso) {
 }
 
 function machtileBatchSubmitText(n) {
-  return machtileBatchState.mode === "dailyStart" ? `送出今日開工（${n} 台）` : `送出報工（${n} 台）`;
+  return machtileBatchState.mode === "dailyStart" ? `送出今日開工（${n} 台）` : `一次全部送出（${n} 台）`;
 }
 
 function machtileRenderBatchReport() {
@@ -24829,7 +24832,7 @@ function machtileRenderBatchReport() {
     const resultHtml = result
       ? `<p class="batch-result is-${result.status}" role="status">${escapeHtml(result.message)}</p>`
       : row.error ? `<p class="batch-result is-failed" role="alert">${escapeHtml(row.error)}</p>` : "";
-    const stationReportHtml = machtileRenderStationReportPanel(code, order, row, busy);
+    const stationReportHtml = "";
     const stationFlow = machtileStationReportState(row);
     const stationEnabled = machtileStationReportCore()?.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code);
     const reportGuardAllows = isDailyStart || demo || !machtileStationReportEnabled() ||
@@ -24840,9 +24843,13 @@ function machtileRenderBatchReport() {
     const shift = machtileBatchState.stationShiftByMachine.get(code) || { status: "notStarted", minutes: null };
     const statusText = { running: "運轉中", stopped: "停工", notStarted: "未開工" }[shift.status] || "未開工";
     const preview = model.counter;
+    const simple = core.simplifiedRowModel({ current: row.current,
+      reported: machtileBatchState.freshReportedByProcess.get(String(order?.processId || "")),
+      defectOpen: row.defectOpen, selectedOperatorId: model.operatorId,
+      starterOperatorId: machtileBatchState.starterByProcess.get(String(order?.processId || "")) });
     const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...machtileReportFailReasons().map((reason) =>
       `<option value="${escapeHtml(reason)}"${row.failReasonCode === reason ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
-    const hasBatchDefect = Number(row.bad || 0) > 0;
+    const hasBatchDefect = row.defectOpen === true;
     const inputsHtml = isDailyStart ? `
         <div class="batch-inputs">
           <label class="batch-check"><input type="checkbox" data-batch-select="${code}"${row.selected ? " checked" : ""}${disabled}><span>今日開工</span></label>
@@ -24851,15 +24858,15 @@ function machtileRenderBatchReport() {
       : reportGuardAllows ? `
         <div class="batch-inputs">
           <input class="batch-compat-entry" type="number" data-batch-good="${code}" value="${escapeHtml(row.legacyGood ?? "")}" aria-label="${code} 舊版本次良品相容入口"${disabled}>
-          <label class="batch-qty is-good"><span>機台目前累計數</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
-          <label class="batch-qty is-bad"><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
+          <label class="batch-qty is-good batch-total-input"><span>機台目前總數 <small>必填</small></span><input type="number" inputmode="numeric" min="0" step="1" data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
+          <p class="batch-add-preview${simple.belowReported ? " is-error" : ""}" data-batch-counter-preview="${code}">${simple.empty ? "輸入後顯示本次增加" : simple.belowReported ? `總數不能少於已報 ${escapeHtml(simple.reported)} 件` : `本次增加 +${escapeHtml(simple.added ?? "—")} 件`}</p>
+          <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
+          <label class="batch-defect-toggle"><input type="checkbox" data-batch-defect-toggle="${code}"${hasBatchDefect ? " checked" : ""}${disabled}><span>有不良品</span></label>
+          <label class="batch-qty is-bad" data-batch-defect-qty-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
           <label class="batch-reason" data-batch-reason-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_label"))}</span><select data-batch-reason="${code}"${disabled}>${failReasonOptions}</select></label>
           <label class="batch-note" data-batch-note-field="${code}"${hasBatchDefect && row.failReasonCode === "其他" ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_note_label"))}</span><textarea rows="2" data-batch-note="${code}" placeholder="${escapeHtml(machtileTranslate("report_fail_reason_other_note_required"))}"${disabled}>${escapeHtml(row.reportNote)}</textarea></label>
-          <label class="batch-check"><input type="checkbox" data-batch-finished="${code}"${row.finished ? " checked" : ""}${disabled}><span>完工</span></label>
-          <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
         </div>
-        <p class="batch-counter-preview${preview.valid ? "" : " is-error"}" data-batch-counter-preview="${code}">上次 ${escapeHtml(preview.baseline ?? "—")}｜這次＝累計－上次 ${escapeHtml(preview.delta ?? "—")}${preview.valid ? "" : `；${escapeHtml(preview.message)}`}</p>
-        <p class="batch-machine-state" data-batch-machine-state="${code}">${escapeHtml(statusText)}｜本班開工→停工累計 ${shift.minutes == null ? "—" : `${escapeHtml(shift.minutes)} 分`}（來源 station_commands）</p>`
+        <details class="batch-details"><summary>技術資訊</summary><p>上次 ${escapeHtml(preview.baseline ?? "—")}｜累計差 ${escapeHtml(preview.delta ?? "—")}</p><p class="batch-machine-state" data-batch-machine-state="${code}">${escapeHtml(statusText)}｜本班開工→停工累計 ${shift.minutes == null ? "—" : `${escapeHtml(shift.minutes)} 分`}（來源 station_commands）</p>${startText ? `<p>${startText}</p>` : ""}</details>`
       : `<p class="batch-notice" data-batch-guard-closed="${code}">此機台未列入 ReportPilotStations 報工名單。</p>`;
     return `
       <article class="batch-row ${tone}${!order ? " is-idle" : ""}${isDailyStart && row.selected ? " is-selected" : ""}${row.error ? " has-error" : ""}" data-batch-row="${code}">
@@ -24870,7 +24877,7 @@ function machtileRenderBatchReport() {
         <div class="batch-done">${doneHtml}</div>
         ${overHtml}
         ${inputsHtml}
-        ${startText ? `<p class="batch-start">${startText}</p>` : ""}
+        ${isDailyStart && startText ? `<p class="batch-start">${startText}</p>` : ""}
         ${resultHtml}
         ${stationReportHtml}
       </article>`;
@@ -24879,7 +24886,7 @@ function machtileRenderBatchReport() {
   const sendable = machtileBatchSendableCount(group, nowIso);
   const modeHint = isDailyStart
     ? `勾選要記下<strong>今日開工</strong>的機台，一次送出＝每台各記一筆開工。`
-    : `填寫<strong>機台目前累計數</strong>與這次不良；系統用與單卡相同的核心計算這次良品。每台可個別勾選完工。`;
+    : `只要填<strong>機台目前顯示數</strong>，系統自動算這次增加；有不良再勾「有不良品」。完工請在機台卡上按。`;
   const dailyStartCompatEntry = group.key === "mill"
     ? `<button type="button" class="batch-compat-entry" data-batch-mode="dailyStart" aria-label="今日開工相容入口"${busy ? " disabled" : ""}></button>`
     : "";
@@ -24900,7 +24907,6 @@ function machtileRenderBatchReport() {
     ${!demo && !machtileBatchState.loading && !machtileBatchState.users.length ? `<p class="batch-notice is-error" role="alert">還沒有任何人員對照到舊 MES 工號，請管理者先補上工號對照。</p>` : ""}
     <p class="batch-hint">${modeHint}</p>
     ${machtileBatchState.formError ? `<p class="batch-notice is-error" role="alert">${escapeHtml(machtileBatchState.formError)}</p>` : ""}
-    ${machtileBatchCommandPanel(group, busy)}
     <div class="batch-rows">${rowsHtml}</div>
     <div class="batch-submit-bar">
       <button type="button" class="primary-action batch-submit" data-batch-submit${busy || !sendable ? " disabled" : ""}>${busy ? "送出中…" : escapeHtml(machtileBatchSubmitText(sendable))}</button>
@@ -25214,6 +25220,7 @@ function machtileHandleBatchInput(event) {
     return true;
   }
   const code = t.dataset.batchCurrent || t.dataset.batchGood || t.dataset.batchBad || t.dataset.batchReason || t.dataset.batchNote || t.dataset.batchOperator || t.dataset.batchOrder
+    || t.dataset.batchDefectToggle
     || t.dataset.batchSelect
     || t.dataset.batchFinished
     || t.dataset.stationReportReason || t.dataset.stationReportNote;
@@ -25230,6 +25237,10 @@ function machtileHandleBatchInput(event) {
     row.legacyGood = t.value;
   }
   if (t.dataset.batchBad) row.bad = t.value;
+  if (t.dataset.batchDefectToggle) {
+    row.defectOpen = t.checked;
+    if (!t.checked) { row.bad = ""; row.failReasonCode = ""; row.reportNote = ""; }
+  }
   if (t.dataset.batchReason) row.failReasonCode = t.value;
   if (t.dataset.batchNote) row.reportNote = t.value;
   if (t.dataset.batchOperator) row.operatorId = t.value;
@@ -25248,7 +25259,7 @@ function machtileHandleBatchInput(event) {
       ["previewed", "finished"].includes(flow.phase) && coreResultWasNotApplied(flow.result)) {
     flow.phase = "idle"; flow.result = null; flow.preview = null; flow.args = null; flow.error = "";
   }
-  if (event.type === "change" && (t.dataset.batchOperator || t.dataset.batchOrder || t.dataset.batchFinished || t.dataset.batchSelect || t.dataset.batchReason)) {
+  if (event.type === "change" && (t.dataset.batchOperator || t.dataset.batchOrder || t.dataset.batchFinished || t.dataset.batchSelect || t.dataset.batchReason || t.dataset.batchDefectToggle)) {
     machtileRenderBatchReport();
     return true;
   }
@@ -25262,10 +25273,13 @@ function machtileHandleBatchInput(event) {
   }
   if (t.dataset.batchCurrent) {
     const model = machtileBatchRowModel(code, new Date().toISOString());
+    const simple = machtileBatchCore().simplifiedRowModel({ current: row.current,
+      reported: machtileBatchState.freshReportedByProcess.get(String(model.order?.processId || "")) });
     const preview = article?.querySelector("[data-batch-counter-preview]");
     if (preview) {
-      preview.textContent = `上次 ${model.counter.baseline ?? "—"}｜這次＝累計－上次 ${model.counter.delta ?? "—"}${model.counter.valid ? "" : `；${model.counter.message}`}`;
-      preview.classList.toggle("is-error", !model.counter.valid);
+      preview.textContent = simple.empty ? "輸入後顯示本次增加" : simple.belowReported
+        ? `總數不能少於已報 ${simple.reported} 件` : `本次增加 +${simple.added ?? "—"} 件`;
+      preview.classList.toggle("is-error", simple.belowReported || !model.counter.valid);
     }
   }
   article?.classList.remove("has-error");

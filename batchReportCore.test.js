@@ -25,7 +25,20 @@ assert.equal(core.validateRow({ ...base, current: "" }).error, "請填寫機台�
 assert.equal(core.validateRow({ ...base, current: "", bad: "" }).empty, true);
 assert.equal(core.validateRow({ ...base, baseline: null }).error, "今天尚無開工或報工基準；請先按開工，或手填基準。");
 
+assert.deepEqual(core.simplifiedRowModel({ current: "", reported: 12 }), {
+  empty: true, current: null, reported: 12, added: null, belowReported: false, defectOpen: false, starterId: "",
+}, "empty totals are skipped by the row model");
+assert.equal(core.simplifiedRowModel({ current: "17", reported: 12 }).added, 5, "live +N uses total minus already reported");
+assert.equal(core.simplifiedRowModel({ current: "11", reported: 12 }).belowReported, true, "below-reported totals are blocked");
+assert.equal(core.simplifiedRowModel({ current: "17", reported: 12, defectOpen: true }).defectOpen, true, "defect toggle reveals defect controls");
+const starterRows = [{ process_id: "p1", report_type: "dailyStart", user_id: "u2", created_at: "2026-10-14T00:00:00Z" }];
+assert.equal(core.starterOperatorId(starterRows, "p1", [{ id: "u2" }]), "u2", "today's starter is preselected when mapped");
+assert.equal(core.starterOperatorId(starterRows, "p1", [{ id: "u1" }]), "", "unknown starter keeps the placeholder");
+
 const report = core.buildReportPayload({ row: base, actorAppUserId: "actor", endedAt: "2026-10-14T01:00:00.000Z", reportUuid: "r1" }).payload;
+const simplifiedInput = { ...base, ...core.simplifiedRowModel({ current: base.current, reported: base.baseline }) };
+const simplifiedPayload = core.buildReportPayload({ row: simplifiedInput, actorAppUserId: "actor", endedAt: "2026-10-14T01:00:00.000Z", reportUuid: "r1" }).payload;
+assert.equal(JSON.stringify(simplifiedPayload), JSON.stringify(report), "old and simplified UI inputs produce byte-identical request payload JSON");
 assert.equal(report.report_type, "noon");
 assert.equal(report.completed_qty, 15);
 assert.equal(report.defect_qty, 2);

@@ -1,4 +1,10 @@
 {
+  "batch_total_label": "機台目前總數",
+  "batch_added_qty": "本次增加 +{{quantity}} 件",
+  "batch_total_below_reported": "總數不能少於已報 {{reported}} 件",
+  "batch_defect_toggle": "有不良品",
+  "batch_technical_details": "技術資訊",
+  "batch_submit_all": "一次全部送出",
   "start_backfill_confirm": "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
   "start_backfill_button": "確認開工並補報 {{gap}} 件",
   "start_backfill_edit": "回去改數字",

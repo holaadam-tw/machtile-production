@@ -484,6 +484,37 @@
     return (Array.isArray(choices) ? choices : []).some((c) => c.id === actorAppUserId) ? actorAppUserId : "";
   }
 
+  // Batch-card presentation model. Keep quantity validation in validateRow so this
+  // helper cannot change the payload contract; it only describes the simplified UI.
+  function simplifiedRowModel(row) {
+    const raw = row?.current;
+    const empty = raw === null || raw === undefined || String(raw).trim() === "";
+    const current = empty ? null : Number(raw);
+    const reported = Number(row?.reported);
+    const reportedKnown = Number.isFinite(reported);
+    const integer = current !== null && Number.isInteger(current) && current >= 0;
+    const belowReported = integer && reportedKnown && current < reported;
+    return {
+      empty,
+      current,
+      reported: reportedKnown ? reported : null,
+      added: integer && reportedKnown && !belowReported ? current - reported : null,
+      belowReported,
+      defectOpen: row?.defectOpen === true,
+      starterId: String(row?.selectedOperatorId || row?.starterOperatorId || ""),
+    };
+  }
+
+  function starterOperatorId(rows, processId, choices) {
+    const allowed = new Set((Array.isArray(choices) ? choices : []).map((choice) => String(choice.id)));
+    const starter = (Array.isArray(rows) ? rows : [])
+      .filter((row) => String(row?.process_id || "") === String(processId || "") && row?.report_type === "dailyStart")
+      .slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
+    const candidates = [starter?.user_id, ...(Array.isArray(starter?.operator_ids) ? starter.operator_ids : [])]
+      .map((value) => String(value || "")).filter(Boolean);
+    return candidates.find((id) => allowed.has(id)) || "";
+  }
+
   function summarizeResults(results) {
     const list = Array.isArray(results) ? results : [];
     const count = (s) => list.filter((r) => r.status === s).length;
@@ -496,6 +527,6 @@
     latestMachineTimeByProcess,
     groupFor, groupForView, machineCodeOf, candidateOrdersForMachine, displayProgress, cardProgress,
     resolveStartedAt, counterCalculation, validateRow, rowFingerprint, ensureReportUuid, buildPayload, localDate, summarizeStationCommands, batchCommandChoice,
-    operatorChoices, defaultOperatorId, summarizeResults, operatorSelectionLimit, validateOperatorSelection,
+    operatorChoices, defaultOperatorId, simplifiedRowModel, starterOperatorId, summarizeResults, operatorSelectionLimit, validateOperatorSelection,
   };
 });

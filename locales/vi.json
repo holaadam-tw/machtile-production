@@ -1,4 +1,10 @@
 {
+  "batch_total_label": { "value": "Tổng số hiện tại trên máy", "_draft": true },
+  "batch_added_qty": { "value": "Lần này tăng +{{quantity}} sản phẩm", "_draft": true },
+  "batch_total_below_reported": { "value": "Tổng số không được nhỏ hơn {{reported}} sản phẩm đã báo", "_draft": true },
+  "batch_defect_toggle": { "value": "Có hàng lỗi", "_draft": true },
+  "batch_technical_details": { "value": "Thông tin kỹ thuật", "_draft": true },
+  "batch_submit_all": { "value": "Gửi tất cả một lần", "_draft": true },
   "start_backfill_confirm": { "value": "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)", "_draft": true },
   "start_backfill_button": { "value": "Xác nhận bắt đầu và báo bù {{gap}}", "_draft": true },
   "start_backfill_edit": { "value": "Quay lại sửa số lượng", "_draft": true },

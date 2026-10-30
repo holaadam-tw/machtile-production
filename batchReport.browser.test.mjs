@@ -55,7 +55,7 @@ async function fake(route) {
       pending_count: upserts.length, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() }]);
   }
   if (p.endsWith("/production_reports") && req.method() === "GET" && (url.searchParams.get("select") || "").includes("report_payload")) return json([
-    { process_id: id(304), report_type: "dailyStart", report_payload: { machine_qty: 150 }, created_at: new Date(now - 180 * 60000).toISOString() },
+    { process_id: id(304), report_type: "dailyStart", report_payload: { machine_qty: 150 }, user_id: user.id, operator_ids: [user.id], created_at: new Date(now - 180 * 60000).toISOString() },
   ]);
   if (p.endsWith("/station_commands") && req.method() === "GET") return json((url.searchParams.get("status") || "").includes("pending") ? [] : stationRows);
   if (p.endsWith("/rpc/field_report_upsert")) { const body = JSON.parse(req.postData() || "{}"); upserts.push(body); return json({ inserted: true, report_id: id(700) }); }
@@ -65,7 +65,7 @@ async function fake(route) {
 
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch();
-const context = await browser.newContext({ ...devices["Pixel 7"], serviceWorkers: "block" });
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
 await context.addInitScript((token) => sessionStorage.setItem("machtileAuthSession", JSON.stringify({ version: 1, accessToken: token, refreshToken: "", email: "op@test.invalid", mode: "session", createdAt: Date.now() })), jwt);
 await context.route("**/*", (route) => {
   const url = route.request().url();
@@ -78,21 +78,22 @@ page.on("pageerror", (error) => console.error("PAGEERROR", error.message));
 page.on("dialog", (dialog) => dialog.accept());
 await page.goto(base, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
-await page.locator('.mobile-tab[data-view="batchLathe"]').click();
+await page.locator('.mobile-tab[data-view="batchLathe"]').evaluate((button) => button.click());
 const rootView = page.locator('[data-batch-root="lathe"]');
 await rootView.locator('[data-batch-row="A04"] [data-batch-current]').waitFor();
 await page.waitForFunction(() => !document.querySelector('[data-batch-root="lathe"] [data-batch-refresh]')?.disabled);
 ok(await rootView.locator("[data-batch-mode]").count() === 0, "three time-slot tabs are removed");
 ok((await rootView.locator(".batch-mode-tabs").innerText()).trim() === "報工", "single Report tab remains");
 ok(await rootView.locator("[data-batch-ct-min],[data-batch-ct-sec]").count() === 0, "manual machine-time fields are removed");
-ok(await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').count() === 1, "each enabled machine has a finish checkbox");
-ok((await rootView.locator('[data-batch-machine-state="A04"]').innerText()).includes("停工｜本班開工→停工累計 90 分"), "station_commands drives stopped status and read-only minutes");
+ok(await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').count() === 0, "batch cards no longer duplicate the finish checkbox");
+ok(await rootView.locator('[data-batch-row="A04"] [data-batch-operator]').inputValue() === user.id, "today's starter is preselected");
+ok((await rootView.locator('[data-batch-machine-state="A04"]').textContent()).includes("90"), "station_commands drives stopped status and read-only minutes");
 ok(await rootView.locator('[data-batch-row="A01"] [data-batch-current]').isDisabled(), "machine without assignment cannot report");
 await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("170");
 ok((await rootView.locator('[data-batch-counter-preview="A04"]').innerText()).includes("30"), "DOM preview uses card-reported total rather than today's start counter");
+await rootView.locator('[data-batch-row="A04"] [data-batch-defect-toggle]').check();
 await rootView.locator('[data-batch-row="A04"] [data-batch-bad]').fill("2");
 ok(await rootView.locator('[data-batch-row="A04"] [data-batch-reason-field]').isVisible(), "defect quantity reveals the centralized reason selector");
-await rootView.locator('[data-batch-row="A04"] [data-batch-finished]').check();
 await rootView.locator("[data-batch-submit]").click();
 ok(upserts.length === 0, "defects without a selected reason are blocked before every write");
 await rootView.locator('[data-batch-row="A04"] [data-batch-reason]').selectOption("其他");
@@ -104,7 +105,7 @@ await rootView.locator("[data-batch-submit]").evaluate((button) => button.click(
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("已送出"));
 ok(upserts.length === 1, "R=140, S=150, total=170 creates exactly one report");
 const payload = upserts[0].p_payload;
-ok(payload.report_type === "finish" && payload.completed_qty === 30 && payload.defect_qty === 2, "finish keeps its report type and sends the full delta once");
+ok(payload.report_type === "noon" && payload.completed_qty === 30 && payload.defect_qty === 2, "simplified batch card keeps the existing report payload quantities");
 ok(payload.report_payload.backfill_qty === 10 && payload.report_payload.counter_today_qty === 20 && payload.report_payload.start_counter === 150 && payload.report_payload.reported_before === 140, "single payload carries shared backfill/today metadata");
 ok((payload.remark || "").startsWith("含前一班未報 10 件；"), "single payload remark starts with the backfill annotation");
 ok(payload.report_payload.fail_reason_code === "尺寸不良", "batch payload persists the selected defect reason");
@@ -120,6 +121,8 @@ ok(browserCases.one.reports.length === 1 && browserCases.one.reports[0].good ===
 ok(browserCases.lower.code === "TOTAL_BELOW_REPORTED", "total below freshly reported quantity is blocked");
 ok(browserCases.missing.code === "REPORTED_REQUIRED", "missing freshly reported quantity fails closed");
 ok(blocked.length === 0, "browser did not contact production or another external host");
-await page.screenshot({ path: path.join(outDir, "batch-report-align-a04.png"), fullPage: true });
+await page.screenshot({ path: path.join(outDir, "preview-1280.png"), fullPage: true });
+await page.setViewportSize({ width: 1024, height: 900 });
+await page.screenshot({ path: path.join(outDir, "preview-1024.png"), fullPage: true });
 await context.close(); await browser.close(); await new Promise((resolve) => server.close(resolve));
-console.log(`PASS: ${pass} browser assertions; screenshot ${path.join(outDir, "batch-report-align-a04.png")}`);
+console.log(`PASS: ${pass} browser assertions; screenshots ${path.join(outDir, "preview-1280.png")} and preview-1024.png`);
