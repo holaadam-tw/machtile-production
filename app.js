@@ -31,6 +31,8 @@ const config = {
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
+  // Local display-only acknowledgement for quantities accepted/applied before legacy progress catches up.
+  cardQtyInstantEnabled: false,
   // 機台卡片「開工／停工」回寫舊 MES（2026-10-07 第 1 階段）。機台代號陣列，例 ["A04"]；["*"]＝全部。
   // 空陣列＝全部機台關（預設）：不讀 station_commands、不出按鈕，App 跟以前一模一樣。
   stationCommandMachines: [],
@@ -10912,6 +10914,29 @@ document.addEventListener('click',async event=>{
 // 防重複計數的規則在後端（同一個 SQL 快照）＋ batchReportCore.cardProgress。
 // 沒有同步資料或 RPC 失敗 → 照原本算法，卡片標「舊 MES 尚無資料」；絕不讓整頁壞掉。
 const MACHTILE_CARD_PROGRESS_CHUNK = 200;
+const MACHTILE_CARD_QTY_OVERLAY_KEY = "machtile.cardQtyOverlay.v1";
+
+function machtileCardQtyOverlaysRead() {
+  if (config.cardQtyInstantEnabled !== true) return {};
+  try { return JSON.parse(localStorage.getItem(MACHTILE_CARD_QTY_OVERLAY_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
+
+function machtileCardQtyOverlaysWrite(items) {
+  if (config.cardQtyInstantEnabled !== true) return;
+  try { localStorage.setItem(MACHTILE_CARD_QTY_OVERLAY_KEY, JSON.stringify(items || {})); } catch { /* display aid only */ }
+}
+
+function machtileCardQtyOverlayRecord(order, machineCode, total, status = "accepted") {
+  const core = window.MachTileCardQtyOverlayCore;
+  if (config.cardQtyInstantEnabled !== true || !core || !order) return;
+  const item = core.create({ machine: machineCode || order.machineCode || order.machine, orderNo: order.id,
+    step: order.stationStep, processId: order.processId, total }, status, Date.now());
+  if (!item) return;
+  const items = machtileCardQtyOverlaysRead();
+  items[item.machine] = item;
+  machtileCardQtyOverlaysWrite(items);
+}
 
 // Separate per-process read model for machine cards only. Do not change the
 // one-row-per-work-order view used by the schedule board/attention center.
@@ -11024,7 +11049,8 @@ async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDef
 
 async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
-  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.done || 0)]));
+  // Repeated progress refreshes must start from the cloud App quantity, never a prior display overlay.
+  const appDoneByOrder = new Map(orders.map(order => [order, Number(order.appDone ?? order.done ?? 0)]));
   const core = machtileBatchCore();
   if (!core || typeof core.cardProgress !== "function" || state.source !== "supabase") {
     if (generation === machtileDeferredLoadGeneration) orders.forEach((order) => {
@@ -11050,16 +11076,31 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
   }));
   // 卡片「目前工單」挑選要用同一批結果（last_report_at／actual_start_at），不再多查一次
   const nowMs = Date.now();
+  const overlayCore = config.cardQtyInstantEnabled === true ? window.MachTileCardQtyOverlayCore : null;
+  const overlays = overlayCore ? machtileCardQtyOverlaysRead() : {};
+  let overlaysChanged = false;
   const progressByOrder = new Map();
   orders.forEach((order) => {
     try {
       const row = order.processId ? byProcess.get(String(order.processId)) || null : null;
-      progressByOrder.set(order, core.cardProgress(appDoneByOrder.get(order), row, nowMs));
+      const progress = core.cardProgress(appDoneByOrder.get(order), row, nowMs);
+      const overlay = overlays[String(order.machineCode || order.machine || "").toUpperCase()] || null;
+      const applied = overlayCore ? overlayCore.apply(progress.done, overlay, order, nowMs) : null;
+      if (applied) {
+        progress.done = applied.completed;
+        progress.cardQtyOverlayState = applied.state;
+        if (applied.clear && overlay) {
+          delete overlays[String(order.machineCode || order.machine || "").toUpperCase()];
+          overlaysChanged = true;
+        }
+      }
+      progressByOrder.set(order, progress);
     } catch (error) {
       console.warn("card progress failed; keeping App-only completion", error);
     }
   });
   if (generation !== machtileDeferredLoadGeneration) return;
+  if (overlaysChanged) machtileCardQtyOverlaysWrite(overlays);
   machtileCardPickState.progressByProcess = byProcess;
   orders.forEach((order) => {
     order.appDone = appDoneByOrder.get(order);
@@ -11101,6 +11142,8 @@ async function machtileLoadCardMachineTimes() {
 
 function machtileCardProgressNote(order) {
   const source = order?.progressSource;
+  if (config.cardQtyInstantEnabled === true && source?.cardQtyOverlayState === "syncing") return '<em class="machine-progress-source" data-card-qty-overlay="syncing">剛報工，同步中</em>';
+  if (config.cardQtyInstantEnabled === true && source?.cardQtyOverlayState === "slow") return '<em class="machine-progress-source is-missing" data-card-qty-overlay="slow">同步較慢，請稍後重新整理</em>';
   if (!source || !source.label) return "";
   return `<em class="machine-progress-source${source.legacyKnown ? "" : " is-missing"}" data-progress-source="${escapeHtml(source.source)}">${escapeHtml(source.label)}</em>`;
 }
@@ -15501,6 +15544,7 @@ async function machtileStartBackfillResolve(commandUuid) {
     let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
     if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
     if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw new Error("開工補報未套用");
+    machtileCardQtyOverlayRecord(target, item.machineCode, item.snap.qty, "applied");
     const actorId = await machtileResolveAppUserId();
     const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
     const saved = await submitReport(good, 0, remark, "noon", { order: target, reportUuid, reportPayload: payload, operators: actorId ? [actorId] : [], noFiles: true, requireStructured: true });
@@ -15836,6 +15880,9 @@ function machtileStationCmdFinish(code, view) {
   if (view?.phase === "applied") machtilePickStartNoteApplied(code, record);
   const stopDraft = record.commandType === "stop_report" ? machtileTakeoverStopDrafts.get(record.commandUuid) : null;
   if (record.commandType === "stop_report") machtileTakeoverStopDrafts.delete(record.commandUuid);
+  if (record.commandType === "stop_report" && view?.phase === "applied" && stopDraft) {
+    machtileCardQtyOverlayRecord(stopDraft.order, code, Number(stopDraft.form?.good_qty), "applied");
+  }
   if (record.commandType === "stop_report" && view?.phase === "rejected" && view.code === "DUPLICATE_SUSPECTED") {
     machtileTakeoverReopenStopDuplicate(code, stopDraft);
   } else if (record.commandType === "stop_report" && view?.phase === "rejected") {
@@ -22201,6 +22248,15 @@ function switchView(view) {
     if (root) root.innerHTML = `<p role="alert">${escapeHtml(machtileTranslate("batch_department_denied"))}</p>`;
     return;
   }
+  // Returning home must bypass the in-memory progress snapshot once.
+  if (view === "dashboard" && config.cardQtyInstantEnabled === true && state.source === "supabase") {
+    const generation = machtileDeferredLoadGeneration;
+    void machtileLoadCardLegacyProgress(generation).then(() => {
+      if (generation !== machtileDeferredLoadGeneration) return;
+      deriveMachines();
+      machtileRefreshCardSections();
+    }).catch((error) => console.warn("home progress refresh failed", error));
+  }
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
@@ -23904,6 +23960,7 @@ async function machtileStationReportSubmitPreview(code) {
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
       reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
+      overlayTotal: counterResult?.total ?? null,
     };
     flow.singleReport.reportNote = window.MachTileReportCounterCore.backfillRemark(counterResult, row.reportNote || "");
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
@@ -24104,6 +24161,11 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   } catch (error) {
     followUpFailed = true;
     flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
+  }
+  if (["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind)) {
+    const submittedOrder = options.order || machtileStationReportOrderForCode(code);
+    const total = flow.singleReport?.overlayTotal;
+    if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
   }
   if (options.background) {
     const background = document.getElementById("stationReportBackgroundStatus");
@@ -24925,6 +24987,9 @@ async function machtileSubmitBatchReport() {
     const what = mode === "dailyStart" ? "今日開工" : `累計 ${payload.report_payload.machine_qty}／良 ${payload.completed_qty}／不良 ${payload.defect_qty}${payload.report_type === "finish" ? "／完工" : ""}`;
     row.result = { status, message: status === "failed" ? message : `${message}：${what}` };
     if (status !== "failed") {
+      if (mode !== "dailyStart" && Number.isFinite(Number(r.item.model.counter?.total))) {
+        machtileCardQtyOverlayRecord(r.item.model.order, code, Number(r.item.model.counter.total), status === "queued" ? "queued" : "accepted");
+      }
       // 只改時間的那筆 ended_at＝上一筆時間，ledger 不會往前推（rollLedger 只往後推）
       machtileBatchRollLedger(r.item.model.order.processId, payload.ended_at);
       delete drafts[code];

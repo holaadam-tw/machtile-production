@@ -1,6 +1,7 @@
 // Copy this file to config.js and fill values for Supabase Cloud.
 // Do not commit real service role keys into frontend code.
 window.MACHTILE_CONFIG = {
+  cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: false,
