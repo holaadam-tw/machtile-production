@@ -758,6 +758,24 @@
     if (!pid || !Array.isArray(rows)) return false;
     return rows.some((r) => r && r.report_type === "dailyStart" && text(r.process_id) === pid);
   }
+  function startAppliedToday(rows, { machineCode, orderNo, step, now = new Date() } = {}) {
+    const machine = normCode(machineCode);
+    const order = text(orderNo);
+    const today = taiwanParts(now)?.day;
+    if (!machine || !order || !today || !Array.isArray(rows)) return false;
+    return rows.some((row) => {
+      const appliedAt = overtimeAppliedAt(row);
+      if (!appliedAt || taiwanParts(appliedAt)?.day !== today) return false;
+      return String(row?.command_type || "").toLowerCase() === "start"
+        && normCode(row?.machine_code) === machine
+        && text(row?.expected_order_no) === order
+        && (step == null || Number(row?.expected_index_sn) === Number(step));
+    });
+  }
+  function startedToday({ commandRows, reportRows, machineCode, orderNo, step, processId, now } = {}) {
+    return startAppliedToday(commandRows, { machineCode, orderNo, step, now })
+      || dailyStartRecordedToday(reportRows, processId);
+  }
   function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
     if (commandType !== "start") return false;
     if (normRole(role) !== "operator" || isBridge === true) return false;
@@ -776,7 +794,7 @@
     statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
-    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText,
+    DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startedToday,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
   };
 });

@@ -319,6 +319,11 @@ eq("只有別道的今日開工、這道只有中午 → 還沒記", c.dailyStar
 eq("這道有今日開工 → 已記", c.dailyStartRecordedToday([...todayRows, { process_id: PID, report_type: "dailyStart" }], PID), true);
 eq("收工不算今日開工", c.dailyStartRecordedToday([{ process_id: PID, report_type: "finish" }], PID), false);
 eq("rows 不是陣列 → 當沒記", c.dailyStartRecordedToday(null, PID), false);
+const dailyCommand = (at, extra = {}) => ({ machine_code: "A04", command_type: "start", status: "applied", applied_at: at, expected_order_no: order.id, expected_index_sn: 5, ...extra });
+eq("running：今天同機同單 applied start → 已開工", c.startedToday({ commandRows: [dailyCommand("2026-10-30T08:00:00+08:00")], reportRows: [], machineCode: "A04", orderNo: order.id, step: 5, processId: PID, now: new Date("2026-10-30T09:00:00+08:00") }), true);
+eq("running：今天 production_reports dailyStart → 已開工", c.startedToday({ commandRows: [], reportRows: [{ process_id: PID, report_type: "dailyStart" }], machineCode: "A04", orderNo: order.id, step: 5, processId: PID, now: new Date("2026-10-30T09:00:00+08:00") }), true);
+eq("跨午夜：昨天 21:00 applied start、今天 07:30 → 尚未開工", c.startedToday({ commandRows: [dailyCommand("2026-10-29T21:00:00+08:00")], reportRows: [], machineCode: "A04", orderNo: order.id, step: 5, processId: PID, now: new Date("2026-10-30T07:30:00+08:00") }), false);
+eq("別台或別單的 start 不算", c.startedToday({ commandRows: [dailyCommand("2026-10-30T08:00:00+08:00", { machine_code: "A05" })], reportRows: [], machineCode: "A04", orderNo: order.id, step: 5, processId: PID, now: new Date("2026-10-30T09:00:00+08:00") }), false);
 const ask = (o) => c.askDailyStart({ commandType: "start", role: "operator", isBridge: false, todayStatus: "ok", rows: [], processId: PID, ...o });
 eq("作業員＋開工＋今天還沒記 → 問", ask({}), true);
 eq("停工 → 不問", ask({ commandType: "stop" }), false);

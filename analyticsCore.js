@@ -101,6 +101,13 @@
     return Math.max(0, Number(r?.completed_qty) || 0);
   }
 
+  function isCycleTimeOnlyReport(r) {
+    if (!r || r.report_type !== "noon" || Number(r.completed_qty) !== 0 || Number(r.defect_qty) !== 0 || !(Number(r.cycle_time_seconds) > 0)) return false;
+    const start = toMs(r.started_at);
+    const end = toMs(r.ended_at);
+    return Number.isFinite(start) && Number.isFinite(end) && start === end;
+  }
+
   function normCode(v) {
     return String(v ?? "").trim().toUpperCase();
   }
@@ -175,7 +182,7 @@
   // ---- 一台機台一天 ----
   // reps：這台這天（台灣日期）的報工。回傳在班時間、純加工、覆蓋。
   function machineDay({ reps, date, nowMs, cycleIndex, cardSecondsByProcess }) {
-    const list = Array.isArray(reps) ? reps : [];
+    const list = (Array.isArray(reps) ? reps : []).filter((r) => !isCycleTimeOnlyReport(r));
     const cardOf = (pid) => (cardSecondsByProcess instanceof Map ? cardSecondsByProcess.get(String(pid)) : cardSecondsByProcess?.[String(pid)]);
     const qty = list.reduce((s, r) => s + qtyOf(r), 0);
     const good = list.reduce((s, r) => s + goodOf(r), 0);
@@ -486,7 +493,7 @@
   return {
     WINDOW_DAYS, SHIFT_END_MINUTES, DEFAULT_WORKDAYS, TIGHT_DAYS, LOWEST_COUNT,
     taipeiDate, taipeiMinute, hhmm, dayStartMs, addDays, weekday, daysBetween, windowDates, windowStartIso,
-    reportAtMs, attachMachineCodes, buildCycleTimeIndex, cycleTimeAt, unionLength, machineDay,
+    reportAtMs, isCycleTimeOnlyReport, attachMachineCodes, buildCycleTimeIndex, cycleTimeAt, unionLength, machineDay,
     machineUtilization, dailyOutput, isWorkday, nthWorkday, actualDailyRateByProcess, dueRisk, riskLabel,
     formatHours, formatPercent,
   };

@@ -194,6 +194,9 @@ test("pick/start phase: no order = pick, pending = start only, running = report/
   assert.deepEqual(core.pickStartActions("pick"), ["pick"]);
   assert.deepEqual(core.pickStartActions("pending"), ["start"]);
   assert.deepEqual(core.pickStartActions("running"), ["report", "stop", "finish"]);
+  assert.deepEqual(core.pickStartActions("running", { dailyStartWhenRunningEnabled: true, startedToday: false }), ["start", "report", "stop", "finish"]);
+  assert.deepEqual(core.pickStartActions("running", { dailyStartWhenRunningEnabled: true, startedToday: true }), ["report", "stop", "finish"]);
+  assert.deepEqual(core.pickStartActions("running", { dailyStartWhenRunningEnabled: false, startedToday: false }), ["report", "stop", "finish"]);
   assert.deepEqual(core.pickStartActions("stopped"), ["start", "finish"]);
   assert.deepEqual(core.pickStartActions("unknown"), []);
 });

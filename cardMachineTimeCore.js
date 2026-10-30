@@ -19,13 +19,15 @@
     }
   }
 
-  function buildPayload({ order, actorAppUserId, endedAt, startedAt, reportUuid, tenantId, cycleTimeSeconds }) {
+  function buildPayload({ order, actorAppUserId, endedAt, startedAt, reportUuid, tenantId, cycleTimeSeconds, allowWithoutStart = false }) {
     const cycle = Number(cycleTimeSeconds);
     if (!order?.workOrderId || !order?.processId) throw new Error("這台目前沒有派工，不能儲存機台加工時間");
     if (!actorAppUserId) throw new Error("找不到登入者，不能儲存機台加工時間");
-    if (!startedAt) throw new Error("沒有開工時間");
+    if (!startedAt && allowWithoutStart !== true) throw new Error("沒有開工時間");
     if (!reportUuid) throw new Error("缺少 report_uuid");
     if (!Number.isInteger(cycle) || cycle <= 0) throw new Error("機台加工時間要大於 0 秒");
+    const effectiveStartedAt = startedAt || endedAt;
+    if (!effectiveStartedAt) throw new Error("沒有開工時間");
     const workTotal = Number(order.total || 0) || null;
     const machineQty = Number(order.done || 0) || 0;
     const payload = {
@@ -53,8 +55,8 @@
       },
       work_total_qty: workTotal,
       cycle_time_seconds: cycle,
-      started_at: startedAt,
-      ended_at: startedAt,
+      started_at: effectiveStartedAt,
+      ended_at: effectiveStartedAt,
       user_id: actorAppUserId,
     };
     if (!payload.tenant_id) delete payload.tenant_id;
