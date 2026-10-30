@@ -24008,6 +24008,8 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (options.batch && order) flow.batchOrder = order;
+  // 批次頁不可沿用單台報工留下的 reportType/finish 等狀態（否則可能送出關站）
+  if (options.batch) flow.singleReport = null;
   // A timed-out preview must be retried with the same command_uuid, never re-minted.
   if (flow.phase === "preview-timeout") { await machtileStationReportRetryPreview(code); return; }
   const context = machtileStationReportContext(order, code);
@@ -25367,7 +25369,7 @@ document.addEventListener("pointerdown", (event) => {
   machtileStationReportHoldTimer = setTimeout(() => {
     machtileStationReportHoldTimer = null;
     if (!button.isConnected || button.disabled) return;
-    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
+    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm, button.closest("[data-batch-root]") ? { batch: true } : {});
     else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
   }, MACHTILE_STATION_REPORT_HOLD_MS);
 });
@@ -25386,7 +25388,7 @@ document.addEventListener("keydown", (event) => {
   machtileStationReportHoldTimer = setTimeout(() => {
     machtileStationReportHoldTimer = null;
     if (!button.isConnected || button.disabled) return;
-    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm);
+    if (button.dataset.stationReportConfirm) machtileStationReportSubmitFinal(button.dataset.stationReportConfirm, button.closest("[data-batch-root]") ? { batch: true } : {});
     else machtileStationReportRetryPreviewAck(button.dataset.stationReportPreviewAck);
   }, MACHTILE_STATION_REPORT_HOLD_MS);
 });
