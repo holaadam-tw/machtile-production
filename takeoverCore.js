@@ -165,7 +165,9 @@
     const local = pickStartPhase({ ...input, localRun });
     return cloud !== local;
   }
-  function pickStartActions(phase) {
+  function pickStartActions(phase, { dailyStartWhenRunningEnabled, startedToday } = {}) {
+    if (text(phase) === "running" && dailyStartWhenRunningEnabled === true && startedToday !== true)
+      return ["start", "report", "stop", "finish"];
     return ({ pick: ["pick"], pending: ["start"], running: ["report", "stop", "finish"], stopped: ["start", "finish"] })[text(phase)] || [];
   }
   return { DEFAULT_POLICIES, enabledForMachine, idleActionVisible, normalizePolicies, initialStopForm, stopTotals, stopDeltas, validateStop, stopPayload,

@@ -38,6 +38,7 @@ function makeContext({ baseline = false, failJob = "" } = {}) {
     machtileDepartmentUnrestricted: () => true,
     machtileAvailableDepartments: () => [],
     normalizedMachineDepartment: () => "",
+    machtileRenderHomeOvertimeCard() {},
     supabaseFetch: async (path) => {
       calls.push(path.startsWith("v_work_order_cards") ? "work-orders" : path.startsWith("v_machine_management_cards") ? "machines" : path);
       await delay();
@@ -61,9 +62,10 @@ function makeContext({ baseline = false, failJob = "" } = {}) {
     machtileLoadCardActivity: loader("card-activity"),
     machtileLoadFlowVisibility: loader("flow-visibility"),
     machtileLoadStationCommandAvailability: loader("station-command"),
+    machtileLoadOvertimeStartSegments: loader("overtime-start-card"),
     machtileLoadDispatchPool: loader("dispatch-pool"),
     machtileLoadProcessFlows: loader("process-flows"),
-    deriveMachines() {}, renderStats() {}, renderFilters() {}, renderWorkOrders() {}, renderAlerts() {},
+    deriveMachines() {}, renderStats() {}, renderFilters() {}, renderWorkOrders() {}, renderAlerts() {}, machtileRefreshCardSections() {},
     renderInspectionQueue() {}, renderSchedule() {}, renderNotificationCenter() {}, renderHistory() {}, renderReports() {}, renderSettings() {}, ensureHmcDashboardEntry() {},
     machtileStationCmdRestorePendingEarly: () => calls.push("pending-restore-early"),
     renderAll: () => { calls.push("render-all"); renderTimes.push(performance.now() - startedAt); },
@@ -141,7 +143,7 @@ const stationContext = vm.createContext({
   state: { source: "supabase" },
   machtileStationCmdRoleOk: () => true,
   supabaseFetch: () => probe,
-  machtileStationCmdRestorePending() {}, machtileDailyStartResumeAll() {},
+  machtileStationCmdRestorePending() {}, machtileDailyStartResumeAll() {}, machtileStartBackfillResumeAll() {},
   machtileBatchState: { group: "lathe", commandSelected: new Set(["A01"]) },
   machtileBatchResetCommandSelection() { resetCount++; },
   machtileRenderBatchReport() { batchRenderCount++; },

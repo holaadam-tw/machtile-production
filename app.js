@@ -26,6 +26,8 @@ const config = {
   // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
+  // Running 工序每天仍須按開工。預設關閉時不讀每日 start ledger，按鈕行為維持原樣。
+  dailyStartWhenRunningEnabled: false,
   // 批次報工「待回寫」只算這個時間之後送出的 App 報工（ISO 字串，例如切換日 "2026-10-15T00:00:00+08:00"）。
   // 切換前 App 報工若也在舊 MES 手動補登過，就用它避免實物重算；null＝全部算。
   batchReportPendingSince: null,
@@ -449,6 +451,7 @@ const state = {
   source: "mock",
   inspectionStatus: { loadState: "idle", latestByTuple: new Map() },
   overtimeStartSegments: new Map(),
+  dailyStationStartRows: [],
 };
 
 const mockOrders = [
@@ -14362,6 +14365,19 @@ function machtilePickStartPhase(machine, order) {
   }
   return machtileTakeoverCore.pickStartPhase({ ...input, localRun: sameOrder ? local.type : "" });
 }
+function machtilePickStartedToday(machine, order) {
+  if (config.dailyStartWhenRunningEnabled !== true || !order || !machtileStationCmdCore) return false;
+  const code = machtileStationCmdMachineCode(machine);
+  const local = machtilePickStartLocal[code];
+  const localStart = local?.type === "start" && String(local.orderNo || "") === String(order.id || "")
+    && Number(local.step) === Number(order.stationStep)
+    && machtileStationCmdCore.taiwanParts(new Date(local.at))?.day === machtileStationCmdCore.taiwanParts(new Date())?.day;
+  return localStart || machtileStationCmdCore.startedToday({
+    commandRows: state.dailyStationStartRows,
+    reportRows: machtileCardState.todayStatus === "ok" ? machtileCardState.todayRows : [],
+    machineCode: code, orderNo: order.id, step: order.stationStep, processId: order.processId,
+  });
+}
 function machtilePickStartNoteApplied(code, record) {
   if (!code || !record) return;
   if (["takeover", "claim_next"].includes(record.commandType)) { delete machtilePickStartLocal[code]; return; }
@@ -14815,7 +14831,10 @@ function machtileStationCmdParts(machine) {
   // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
   const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
   const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
-  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase) : [];
+  const pickActions = pickPhase ? machtileTakeoverCore.pickStartActions(pickPhase, {
+    dailyStartWhenRunningEnabled: config.dailyStartWhenRunningEnabled === true,
+    startedToday: machtilePickStartedToday(machine, gate.ok ? order : null),
+  }) : [];
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
   if (!gate.ok && !pickActive && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
@@ -22237,11 +22256,16 @@ function machtileRenderHomeOvertimeCard(now = new Date()) {
 
 async function machtileLoadOvertimeStartSegments(now = new Date()) {
   state.overtimeStartSegments = new Map();
-  if (config.overtimeStartCardEnabled !== true || state.source !== "supabase" || !machtileStationCmdCore) return;
+  state.dailyStationStartRows = [];
+  const overtimeEnabled = config.overtimeStartCardEnabled === true;
+  const dailyStartEnabled = config.dailyStartWhenRunningEnabled === true;
+  if ((!overtimeEnabled && !dailyStartEnabled) || state.source !== "supabase" || !machtileStationCmdCore) return;
   const day = machtileFactoryDateIso(now.toISOString());
   const start = new Date(`${day}T00:00:00+08:00`).toISOString();
-  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(start,stop,stop_report,report,close)&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
-  state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
+  const types = overtimeEnabled ? "start,stop,stop_report,report,close" : "start";
+  const rows = await supabaseFetch(`station_commands?select=machine_code,command_type,status,expected_order_no,expected_index_sn,applied_at&command_type=in.(${types})&status=eq.applied&applied_at=gte.${encodeURIComponent(start)}&order=applied_at.asc`);
+  if (dailyStartEnabled) state.dailyStationStartRows = rows;
+  if (overtimeEnabled) state.overtimeStartSegments = machtileStationCmdCore.overtimeStartSegments(rows, now);
 }
 
 function setSelectedOrder(order) {
