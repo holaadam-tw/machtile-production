@@ -4,13 +4,13 @@
 // through the signed-in session Bearer + RLS. Never put service-role or
 // other privileged keys here.
 window.MACHTILE_CONFIG = {
-  cardQtyInstantEnabled: false,
+  cardQtyInstantEnabled: true,
   enableOutsourceStatusStrip: false,
   orderDetailSimplifyEnabled: true,
   cardCycleTimeWithoutStartEnabled: true,
   dailyStartWhenRunningEnabled: true,
-  dailyStartButtonInstantHideEnabled: false,
-  overtimeStartButtonEnabled: false,
+  dailyStartButtonInstantHideEnabled: true,
+  overtimeStartButtonEnabled: true,
   overtimePromptEnabled: false,
   overtimeNoStartEnabled: false,
   shiftEndTime: "17:00",
