@@ -49,4 +49,35 @@ assert.deepEqual(efficiencyPayload(totalSemantics(253, 250, 260)), {
 }, "when S exceeds total, all of the delta is pre-shift backfill");
 assert.equal(backfillRemark(totalSemantics(253, 250, 260), "交班"), "含前一班未報 3 件；交班", "remark uses the same core backfill calculation");
 assert.equal(backfillRemark(totalSemantics(170, 150, 150), "交班"), "交班", "zero backfill does not print a zero annotation");
-console.log("PASS: cumulative report counter and finish-total rules (30 assertions)");
+// Owner 2026-10-31: the machine counter includes defective parts.
+const pick = (r) => ({ valid: r.valid, code: r.code, good: r.delta, fail: r.fail });
+assert.deepEqual(pick(totalSemantics(761, 750, null, { failDone: 0, fail: 1 })), { valid: true, code: "OK", good: 10, fail: 1 }, "761 with 750 good reported and 1 defect now sends good 10 + fail 1");
+assert.equal(totalSemantics(761, 750, null, { failDone: 0, fail: 1 }).added, 11, "added counts the parts made since the last report, defects included");
+assert.equal(totalSemantics(761, 750, null, { failDone: 0, fail: 1 }).baseline, 750, "baseline is goodDone + failDone");
+assert.deepEqual(pick(totalSemantics(761, 750, null, { failDone: 5, fail: 1 })), { valid: true, code: "OK", good: 5, fail: 1 }, "already-reported defects are part of the counter baseline");
+assert.equal(totalSemantics(761, 750, null, { failDone: 5, fail: 1 }).baseline, 755, "baseline 750 + 5");
+const over = totalSemantics(761, 750, null, { failDone: 0, fail: 12 });
+assert.equal(over.code, "FAIL_EXCEEDS_ADDED", "this-time defects above the added parts are blocked");
+assert.equal(over.message, "不良數比這次多出來的件數還多，請確認");
+assert.equal(over.valid, false);
+assert.deepEqual(pick(totalSemantics(761, 750, null, { failDone: 0, fail: 11 })), { valid: true, code: "OK", good: 0, fail: 11 }, "fail-only stays representable (factory FAIL_ONLY ack decides)");
+assert.deepEqual(pick(totalSemantics(761, 750, null, { failDone: null, fail: 0 })), pick(totalSemantics(761, 750, null)), "failDone unknown + fail 0 keeps the old goodDone-only behaviour");
+assert.equal(totalSemantics(761, 750, null, { failDone: null, fail: 0 }).delta, 11, "unknown failDone + fail 0 = today's 11");
+const unknown = totalSemantics(761, 750, null, { failDone: null, fail: 1 });
+assert.equal(unknown.code, "FAIL_REPORTED_REQUIRED", "failDone unknown + fail > 0 fails closed");
+assert.equal(unknown.message, "暫時無法核對已報不良數，請稍後再按");
+assert.equal(totalSemantics(752, 750, null, { failDone: 5, fail: 0 }).code, "TOTAL_BELOW_REPORTED", "total below goodDone + failDone is blocked");
+assert.deepEqual(efficiencyPayload(totalSemantics(761, 750, 755, { failDone: 0, fail: 1 })), {
+  start_counter: 755, reported_before: 750, backfill_qty: 5, counter_today_qty: 5,
+}, "backfill is measured from the full counter baseline and stays within the good quantity");
+assert.deepEqual(efficiencyPayload(totalSemantics(752, 750, 760, { failDone: 0, fail: 1 })), {
+  start_counter: 760, reported_before: 750, backfill_qty: 1, counter_today_qty: 0,
+}, "backfill never exceeds the good quantity (RPC contract backfill_qty <= good)");
+assert.deepEqual(efficiencyPayload(totalSemantics(761, 750, 758, { failDone: 5, fail: 1 })), {
+  start_counter: 758, reported_before: 755, backfill_qty: 3, counter_today_qty: 2,
+}, "reported_before is the counter baseline (good + defect) the backfill was measured from");
+assert.equal(totalSemantics(761, 750, null, { failDone: 5, fail: 1 }).reports[0].payload.reported_before, 755, "report payload carries the same baseline");
+assert.deepEqual(efficiencyPayload({ valid: true, delta: 5, reported: 750, baseline: 755, total: 761, start: 758 }), {
+  start_counter: 758, reported_before: 755, backfill_qty: 3, counter_today_qty: 2,
+}, "fallback (no precomputed backfill) uses the same baseline");
+console.log("PASS: cumulative report counter and finish-total rules (49 assertions)");

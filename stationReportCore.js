@@ -200,6 +200,9 @@
       args.p_expected_doc4_fingerprint = fingerprint;
     }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
+    // reported_before = machine-counter baseline (reported good + reported defect, owner 2026-10-31: the counter
+    // includes defects), i.e. the value backfill_qty was measured from; equals reported good when no defects.
+    // Consumers: only this RPC (gated by reportCounterMetaRpcEnabled, false in production today) and report_payload.
     if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
       const meta = x.reportCounterMeta;
       const fields = ["backfill_qty", "counter_today_qty", "start_counter", "reported_before"];
@@ -460,6 +463,45 @@
     return retry;
   }
 
+  // Operator view (owner 2026-10-31 單台報工簡化): one plain-language sentence per guard/reject
+  // code. Returns an i18n key only; technical numbers stay in the admin 技術細節 view.
+  const OPERATOR_MESSAGE_KEYS = Object.freeze({
+    QTY_EXCEEDS_AVAILABLE: "simple_block_qty_exceeds",
+    AUTO_PULL_WOULD_GO_NEGATIVE: "simple_block_stock_short",
+    STATION_NOT_STARTED: "simple_block_not_started",
+    ITEM_CLOSED: "simple_block_closed",
+    INVALID_FINISH_STATUS: "simple_block_closed",
+    ORDER_MISMATCH: "simple_block_changed",
+    PART_NO_MISMATCH: "simple_block_changed",
+    STALE_COMMAND: "simple_block_changed",
+    LEGACY_STATE_INCONSISTENT: "simple_block_changed",
+    GUARD_STATE_CHANGED: "simple_block_changed",
+    EXPIRED: "simple_block_changed",
+    PREV_OUTSOURCE_RECEIPT_STALE: "simple_block_changed",
+    FAIL_REASON_REQUIRED: "simple_block_reason_required",
+    INVALID_FAIL_REASON: "simple_block_reason_required",
+    REPORT_NOTE_REQUIRED: "simple_block_note_required",
+    INVALID_REPORT_QTY: "simple_block_qty_invalid",
+    REPORT_DISABLED: "simple_block_disabled",
+    PREV_OUTSOURCE_RECEIPT_REQUIRED: "simple_block_receipt",
+    PREV_OUTSOURCE_RECEIPT_QTY_INVALID: "simple_block_receipt",
+    PREV_OUTSOURCE_UNCONFIRMED: "simple_block_receipt",
+  });
+  const OPERATOR_SOFT_KEYS = Object.freeze({
+    OLD_ORDER_NEWER_OPEN: "simple_soft_old_order",
+    HIGH_FAIL_RATIO: "simple_soft_high_fail",
+    FAIL_ONLY: "simple_soft_high_fail",
+    EXCEEDS_ORDER_QTY: "simple_soft_exceeds_order",
+    DUPLICATE_SUSPECTED: "simple_soft_duplicate",
+    AUTO_PULL_ACK: "simple_soft_auto_pull",
+    PREV_OUTSOURCE_UNCONFIRMED: "simple_soft_receipt",
+  });
+  function operatorMessageKey(code, soft = false) {
+    const key = String(code || "").trim();
+    if (soft) return OPERATOR_SOFT_KEYS[key] || "simple_soft_generic";
+    return OPERATOR_MESSAGE_KEYS[key] || "simple_block_generic";
+  }
+
   function createClient({ request, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
     if (typeof request !== "function") throw new TypeError("request callback required");
     return {
@@ -504,6 +546,6 @@
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
-    refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient,
+    refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient, operatorMessageKey,
   });
 });

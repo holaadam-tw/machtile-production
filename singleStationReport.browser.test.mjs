@@ -47,6 +47,7 @@ let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
+let reportedFail = 0; let noStartCounter = false;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
@@ -54,6 +55,9 @@ let outsourceReceiptContract = "material_confirm";
 let receiptFingerprint = "a".repeat(64);
 let finalStaleOnce = false;
 let finalRequiredOnce = false;
+let starterUserId = null;
+let previewBlockedCode = "";
+let previewSoftCode = "";
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -66,9 +70,13 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/v_machine_management_cards")) return json([{ id: id(201), machine_code: currentMachine, machine_name: currentMachine, machine_type: "車床", status: "running", display_order: 1 }]);
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
     if (freshReadEnabled && url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("qty_completed") && !url.searchParams.get("select")?.includes("machines!")) return json([{ id: processId, qty_completed: 920, qty_defect: 0 }]);
-    if (url.pathname.endsWith("/app_users")) return json([{ id: id(901), name: "試點員", legacy_user_id: "TEST-001" }]);
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
-    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
+    if (url.pathname.endsWith("/app_users")) return json([{ id: id(901), name: "試點員", legacy_user_id: "TEST-001" }, { id: id(902), name: "陳柏叡", legacy_user_id: "TEST-002" }]);
+    // 單台報工簡化：報工人預設＝今天開工（dailyStart）的人，同批次頁規則。
+    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select")?.includes("operator_ids") && url.searchParams.get("report_type") === "eq.dailyStart") {
+      return json(starterUserId ? [{ process_id: processId, report_type: "dailyStart", created_at: "2026-10-31T00:05:00Z", user_id: starterUserId, operator_ids: [starterUserId] }] : []);
+    }
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(noStartCounter ? [] : [{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
       // REAL Factory preview shape for a receipt failure (wt-deploy40 SoftNet/SoftNetWebII/Services/StationCommands):
@@ -111,6 +119,18 @@ await context.route("**/*", async route => {
               receipt_mode: "count", receipt_required_qty: 6, receipt_steps: [{ index_sn: 1, process_name: "研磨", vendor_name: "丙廠", unconfirmed_qty: 6 }],
               expected_doc4_fingerprint: "f".repeat(64), doc4_line_ids: ["L-1"] } }, guard: { code: guardCode, hard: true } } });
       }
+      if (body.p_preview && previewSoftCode) {
+        const guard = { code: previewSoftCode, hard: false, message: "同料號已有較新工單", Details: { ...previewResult.legacy_snapshot.report.guard.Details } };
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: false, guard_code: previewSoftCode, message: guard.message,
+            legacy_snapshot: { report: { guard } } } });
+      }
+      if (body.p_preview && previewBlockedCode) {
+        const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30 } };
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
+            legacy_snapshot: { report: { guard } } } });
+      }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
         return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "response lost" }) });
@@ -151,12 +171,19 @@ page.on("pageerror", error => errors.push(error.message));
 await page.goto(base, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => typeof machtileRenderSingleStationReport === "function");
 await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+// Admin keeps the full smart-report detail (preview / hold confirm / reconcile) behind 技術細節.
+await page.evaluate(() => { machtileAuthState.role = "admin"; });
 await page.locator("[data-open-report]:visible").first().click();
 await page.locator('#reportForm [data-report-type="noon"]').click();
 assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
+await page.waitForFunction(() => document.querySelector("[data-simple-report-defect]"));
+await page.locator("[data-simple-report-defect]").check();
 await page.locator("#defectQty").fill("2");
 await page.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+assert.equal(await page.locator("[data-station-report-tech]").count(), 1, "admin view has the 技術細節 expander");
+assert.equal(await page.locator('[data-station-report-preview="A04"]').isVisible(), false, "technical controls start collapsed for admin");
+await page.locator("[data-station-report-tech] > summary").click();
 assert.equal(await page.locator("#singleStationReportPanel .station-report-panel").isVisible(), true, "single-machine smart-report card remains visible by default");
 assert.equal(await page.locator("#singleStationReportPanel [data-station-report-panel]").count(), 0, "batch-only collapsed-panel marker does not leak into the single-machine report card");
 assert.equal(await page.locator("#reportFailReasonField").isHidden(), true, "A04 smart report does not show a duplicate general fail-reason field");
@@ -164,7 +191,7 @@ assert.equal(await page.locator('.station-report-reason:visible').count(), 1, "A
 
 const routeState = await page.evaluate(() => ({ allowlisted: machtileSingleStationReportAllowlisted("A04"), active: machtileSingleStationReportActive(), panelHidden: document.querySelector("#singleStationReportPanel").hidden, submitHidden: document.querySelector("#reportForm .submit-report").hidden }));
 assert.equal(routeState.submitHidden, false, `allowlisted station keeps the primary submit visible: ${JSON.stringify(routeState)}`);
-assert.equal(await page.locator("#reportForm .submit-report").innerText(), "預覽並送出");
+assert.equal(await page.locator("#reportForm .submit-report").innerText(), "送出報工");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /智慧報工/);
 assert.equal(await page.locator('[data-station-report-reason="A04"]').isEnabled(), true, `${await page.locator("#singleStationReportPanel").innerText()}\n${requestUrls.filter(u => u.includes("work_order_processes")).join("\n")}`);
 await page.evaluate(operatorId => {
@@ -175,6 +202,7 @@ await page.evaluate(operatorId => {
 }, id(901));
 await page.locator('[data-station-report-reason="A04"]').selectOption("尺寸不良");
 await page.locator("#reportForm .submit-report").click();
+await page.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("請勾選實際操作的人員"));
 assert.equal(calls.commands.length, 0, "smart preview rejects an unselected mapped operator");
 assert.match(await page.locator("#singleStationReportPanel").innerText(), /請勾選實際操作的人員/);
 assert.match(await page.locator("#toast").innerText(), /請勾選實際操作的人員/, "blocked smart report also shows a toast");
@@ -226,7 +254,7 @@ await page.evaluate(() => {
   flow.previewStartedAt = null;
   machtileRenderStationReportSurfaces();
 });
-await page.locator("#reportForm .submit-report").click();
+await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 await page.waitForTimeout(500);
 assert.equal(await page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').count(), 1, `${await page.locator("#singleStationReportPanel").innerText()} calls=${JSON.stringify(calls.commands)}`);
 assert.equal(calls.commands.length, 1, "preview creates one command");
@@ -248,8 +276,9 @@ await page.evaluate(() => {
   flow.result = null;
   machtileRenderStationReportSurfaces();
 });
-assert.match(await page.locator("#singleStationReportPanel").innerText(), /工廠沒有回應，可再按一次/, "25-second preview timeout offers a retry in place");
-await page.locator('#singleStationReportPanel [data-station-report-preview-retry="A04"]').click();
+assert.match(await page.locator("#singleStationReportPanel").innerText(), /工廠沒有回應，請再按一次送出/, "25-second preview timeout offers a retry in place");
+assert.equal(await page.locator("#reportForm .submit-report").innerText(), "重新送出", "timeout turns the one primary button into the retry");
+await page.evaluate(() => machtileStationReportRetryPreview("A04"));
 await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
 assert.equal(calls.commands.at(-1).p_command_uuid, previewUuid, "preview retry reuses the same idempotent command_uuid");
 
@@ -272,7 +301,7 @@ await page.evaluate(() => {
   flow.error = "";
   machtileRenderStationReportSurfaces();
 });
-await page.locator("#reportForm .submit-report").click();
+await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
 
 const confirm = page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
@@ -512,11 +541,15 @@ guardEnabled = true; finalSubmitFails = true; reconciledCommand = null;
 const reconcile = await context.newPage();
 await reconcile.goto(base, { waitUntil: "domcontentloaded" });
 await reconcile.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await reconcile.evaluate(() => { machtileAuthState.role = "admin"; });
 await reconcile.locator("[data-open-report]:visible").first().click();
 await reconcile.locator('#reportForm [data-report-type="noon"]').click();
 await reconcile.locator("#completedQty").fill("958");
+await reconcile.waitForFunction(() => document.querySelector("[data-simple-report-defect]"));
+await reconcile.locator("[data-simple-report-defect]").check();
 await reconcile.locator("#defectQty").fill("2");
 await reconcile.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+await reconcile.locator("[data-station-report-tech] > summary").click();
 await reconcile.locator('[data-station-report-reason="A04"]').selectOption("尺寸不良");
 await reconcile.locator('[data-station-report-preview="A04"]').click();
 await reconcile.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
@@ -547,15 +580,17 @@ async function openReceiptPage() {
   receiptPage.on("pageerror", error => errors.push(error.message));
   await receiptPage.goto(base, { waitUntil: "domcontentloaded" });
   await receiptPage.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+  await receiptPage.evaluate(() => { machtileAuthState.role = "admin"; });
   await receiptPage.locator("[data-open-report]:visible").first().click();
   await receiptPage.locator('#reportForm [data-report-type="noon"]').click();
   await receiptPage.locator("#completedQty").fill("958");
-  await receiptPage.locator("#defectQty").fill("0");
+  // 有不良品 is unchecked in the simple view, so the defect field stays 0 and hidden.
   await receiptPage.evaluate(operatorId => {
     const list = document.createElement("div"); list.id = "machtileOperatorList";
     list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`; document.body.append(list);
   }, id(901));
   await receiptPage.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+  await receiptPage.locator("[data-station-report-tech] > summary").click();
   return receiptPage;
 }
 const holdConfirm = async (receiptPage) => {
@@ -693,6 +728,352 @@ await countDialog.locator("[data-outsource-receipt-cancel]").click();
 await countDialog.close();
 console.log("PASS material/count outsource receipt dialogs → preview success");
 
+
+// ---- 單台報工簡化（owner 2026-10-31「單台報工簡化 照圖做」）：作業員畫面 ----
+const implShots = "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl-final";
+await mkdir(implShots, { recursive: true });
+currentMachine = "A04"; guardFails = false; guardEnabled = true; outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
+finalStaleOnce = false; finalRequiredOnce = false; finalSubmitFails = false; reconciledCommand = null; starterUserId = id(902);
+async function openOperatorPage() {
+  const op = await context.newPage();
+  op.on("pageerror", error => errors.push(error.message));
+  await op.setViewportSize({ width: 800, height: 1200 });
+  await op.goto(base, { waitUntil: "domcontentloaded" });
+  await op.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+  await op.evaluate(() => { machtileAuthState.role = "operator"; });
+  await op.locator("[data-open-report]:visible").first().click();
+  await op.locator('#reportForm [data-report-type="noon"]').click();
+  await op.waitForFunction(() => document.querySelector("#reportForm.is-simple-report") && machtileSingleStationReportState.starterLoaded);
+  // Strict-mode 操作人員 section stand-in (dev-nologin never renders it): two mapped people, none pre-checked.
+  await op.evaluate(([a, b]) => {
+    const section = document.createElement("section");
+    section.id = "machtileOperatorSection";
+    section.className = "report-section";
+    section.innerHTML = `<div class="report-section-head"><strong>操作人員</strong></div><div class="checklist-card" id="machtileOperatorList"><label><input type="checkbox" value="${a}" data-mapped="1"> 試點員</label><label><input type="checkbox" value="${b}" data-mapped="1"> 陳柏叡</label></div>`;
+    const form = document.getElementById("reportForm");
+    form.insertBefore(section, form.querySelector('label[for="reportNote"]'));
+    machtileApplySimpleReportChrome();
+  }, [id(901), id(902)]);
+  await op.locator("#completedQty").fill("958");
+  return op;
+}
+const sheetShot = async (op, name) => {
+  await op.evaluate(() => { const layout = document.querySelector("#reportSheet .report-layout"); if (layout) layout.scrollTop = 0; });
+  await op.locator("#reportSheet .report-panel").screenshot({ path: path.join(implShots, name) });
+};
+
+// ① 一般報工：沒有智慧報工字樣、一行摘要、大總數、良品提示、報工人＝開工的人、一顆送出鈕
+const op = await openOperatorPage();
+const formText = await op.locator("#reportForm").innerText();
+assert.doesNotMatch(formText, /智慧報工|套用端預覽|送出前會先由套用端|guard|先預覽，不寫入|查詢報工狀態|技術細節/, `operator view has no technical wording: ${formText}`);
+assert.match(await op.locator("[data-simple-report-summary]").innerText(), /^這次報：車床（第 \d+ 道）・已報 920$|^這次報：車床・已報 920$/, "one summary line: process, step, reported");
+assert.equal(await op.locator("[data-simple-report-flow-strip]").count(), 0, "process flow strip is collapsed by default");
+await op.locator("[data-simple-report-flow]").click();
+assert.equal(await op.locator("[data-simple-report-flow-strip]").isVisible(), true, "▸流程 expands the existing process-flow strip");
+await op.locator("[data-simple-report-flow]").click();
+assert.equal(await op.locator("[data-simple-report-flow-strip]").count(), 0, "▾流程 collapses it again");
+assert.equal(await op.locator("#completedQtyLabel").innerText(), "機台目前總數（這張單）");
+assert.equal(await op.locator("#simpleReportHint").innerText(), "這次良品 38 件、不良 0 件", "live hint comes from the existing counter calculation");
+assert.equal(await op.locator("#defectQty").isVisible(), false, "defect quantity stays behind 有不良品");
+assert.equal(await op.locator("#reportNote").isVisible(), false, "general note is hidden for operators");
+assert.equal(await op.locator("#reportCounterPreview").isVisible(), false, "technical counter line is hidden for operators");
+assert.deepEqual(await op.evaluate(() => [...document.querySelectorAll('#machtileOperatorList input:checked')].map(i => i.value)), [id(902)], "報工人 defaults to today's starter");
+assert.equal(await op.locator("#simpleReportOperator").innerText().then(t => t.replace(/\s+/g, "")), "報工人：陳柏叡（開工的人）換人");
+assert.equal(await op.locator("#machtileOperatorSection").isVisible(), false, "operator checklist hides behind 換人");
+await op.locator("[data-simple-report-change-operator]").click();
+assert.equal(await op.locator("#machtileOperatorSection").isVisible(), true, "換人 reveals the existing operator checklist");
+await op.locator("[data-simple-report-change-operator]").click();
+assert.equal(await op.locator("#machtileOperatorSection").isVisible(), false);
+assert.equal(await op.locator('#reportSheet [data-station-report-preview]').count(), 0, "operators never see 先預覽");
+assert.equal(await op.locator('#reportSheet [data-station-report-reconcile]').count(), 0, "operators never see 查詢報工狀態");
+assert.equal(await op.locator("[data-station-report-tech]").count(), 0, "operators have no 技術細節");
+assert.equal(await op.locator("#reportForm button.submit-report:visible").count(), 1);
+assert.equal(await op.locator("#reportForm .submit-report").innerText(), "送出報工", "one primary button 送出報工");
+await sheetShot(op, "01-operator-normal.png");
+
+// ② 有不良品：標籤含不良、不良幾件＋原因、提示同步
+await op.locator("[data-simple-report-defect]").check();
+assert.equal(await op.locator("#completedQtyLabel").innerText(), "機台目前總數（這張單，含不良）");
+assert.equal(await op.locator("#defectQty").isVisible(), true);
+assert.equal(await op.locator("#defectQtyLabelText").innerText(), "這次不良幾件");
+await op.locator("#defectQty").fill("1");
+await op.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+assert.match(await op.locator("#simpleReportHint").innerText(), /^這次良品 \d+ 件、不良 1 件$/, "hint shows this time's good / defect from the calculation");
+assert.equal(await op.locator(".station-report-reason:visible").count(), 1, "exactly one reason field");
+await op.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("其他");
+assert.equal(await op.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "其他 asks for a one-line note");
+await op.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await op.locator("[data-simple-report-defect]").uncheck();
+assert.equal(await op.locator("#defectQty").inputValue(), "0", "unchecking 有不良品 clears the defect quantity");
+assert.equal(await op.evaluate(() => machtileBatchRow("A04").failReasonCode), "", "and its reason");
+assert.equal(await op.locator("#simpleReportHint").innerText(), "這次良品 38 件、不良 0 件");
+
+// Production runs reportTotalSemanticsEnabled=true: the hint reads the same totalSemantics result.
+freshReadEnabled = true;
+await op.evaluate(async () => { config.reportTotalSemanticsEnabled = true; await machtileRefreshReportTotalState(selectedOrder); });
+await op.locator("#completedQty").fill("900");
+assert.equal(await op.locator("#simpleReportHint.is-error").count(), 1, "total below reported turns the hint into one plain warning");
+assert.equal(await op.locator("#simpleReportHint").innerText(), "機台數字比系統少，請確認是這張單的數字", "plain sentence from the existing calculation");
+await op.locator("#completedQty").fill("958");
+assert.equal(await op.locator("#simpleReportHint").innerText(), "這次良品 38 件、不良 0 件", "total semantics: 958 − 已報 920 = 38");
+await op.evaluate(() => { config.reportTotalSemanticsEnabled = false; });
+freshReadEnabled = false;
+// One button: preview → final in one press, payload unchanged.
+const oneBefore = calls.commands.length;
+const oneReportsBefore = calls.reports.length;
+await op.locator("#reportForm .submit-report").click();
+await op.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const oneSent = calls.commands.slice(oneBefore);
+assert.deepEqual(oneSent.map(c => c.p_preview), [true, false], "one press = existing preview then final");
+assert.equal(oneSent[1].p_good_qty, 38); assert.equal(oneSent[1].p_fail_qty, 0);
+assert.equal(oneSent[1].p_client_guard_snapshot.preview_command_uuid, oneSent[0].p_command_uuid, "final binds the preview just made");
+assert.equal(calls.reports.length, oneReportsBefore + 1, "applied final records production_reports once");
+assert.deepEqual(await op.evaluate(() => machtileBatchRow("A04").stationReport.singleReport.operators), [id(902)], "report credited to the starter");
+assert.equal(await op.locator("#reportSheet").getAttribute("aria-hidden"), "true", "sheet closes while the factory writes");
+await op.close();
+
+// ③ 代收貨對話框（真實 previewed 形狀）→ 取消 → 灰字＋重新送出 → 再送 → 收到了 → 正式送出帶收貨量
+outsourceReceiptEnabled = true; outsourceReceiptRequired = true; receiptFingerprint = "a".repeat(64);
+const rc = await openOperatorPage();
+const rcBefore = calls.commands.length;
+await rc.locator("#reportForm .submit-report").click();
+await rc.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+assert.match(await rc.locator("#outsourceReceiptTitle").innerText(), /上一道『素材外包（路線甲廠）』的素材收到了嗎？/);
+await rc.screenshot({ path: path.join(implShots, "03-operator-receipt-dialog.png") });
+await rc.locator("[data-outsource-receipt-cancel]").click();
+await rc.waitForFunction(() => document.querySelector('[data-simple-report-status="muted"]'));
+assert.equal(await rc.locator('[data-simple-report-status="muted"]').innerText(), "已取消，沒有收貨也沒有報工。");
+assert.equal(await rc.locator("#reportForm .submit-report").innerText(), "重新送出");
+assert.equal(await rc.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 0, "cancel shows no red box");
+assert.deepEqual(calls.commands.slice(rcBefore).map(c => c.p_preview), [true], "cancel: only the first preview, nothing written");
+await sheetShot(rc, "04-operator-cancelled.png");
+outsourceReceiptRequired = true;
+await rc.locator("#reportForm .submit-report").click();
+await rc.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+await rc.locator("[data-outsource-receipt-confirm]").click();
+await rc.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const rcSent = calls.commands.slice(rcBefore);
+assert.deepEqual(rcSent.map(c => [c.p_preview, c.p_previous_outsource_receipt_qty]), [[true, null], [true, null], [true, 12], [false, 12]], "re-send: preview → dialog → receipt preview → final with receipt");
+assert.equal(rcSent[3].p_expected_doc4_fingerprint, "a".repeat(64));
+assert.equal(await rc.locator("#machtileOutsourceReceiptDialog").count(), 0, "dialog asked only once per press");
+await rc.close();
+outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
+
+// ② 有不良品（正式環境總數語意）：機台 761、已報 750、這次不良 1 → 良品 10、不良 1；一顆鈕送出照新公式。
+// F1：按下後預覽前重讀已報不良變 5 → 一顆鈕流程送出的是重算後的良品 5，不是畫面上的舊 10。
+reportedOutput = 750; reportedFail = 0; freshReadEnabled = true; noStartCounter = true;
+const dt = await openOperatorPage();
+await dt.evaluate(async () => { config.reportTotalSemanticsEnabled = true; await machtileRefreshReportTotalState(selectedOrder); });
+await dt.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.reported === 750 && reportTotalState.failReported === 0);
+await dt.locator("#completedQty").fill("761");
+await dt.locator("[data-simple-report-defect]").check();
+await dt.locator("#defectQty").fill("1");
+await dt.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+assert.equal(await dt.locator("#completedQtyLabel").innerText(), "機台目前總數（這張單，含不良）");
+assert.equal(await dt.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件", "761 − 750 − 1 = 10 good");
+assert.match(await dt.locator("[data-simple-report-summary]").innerText(), /已報 750$/, "defect 0 → 已報 750 (no 含不良 part)");
+await sheetShot(dt, "02-operator-defect.png");
+const dtBefore = calls.commands.length;
+await dt.locator("#reportForm .submit-report").click();
+await dt.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const dtSent = calls.commands.slice(dtBefore);
+assert.deepEqual(dtSent.map(c => [c.p_preview, c.p_good_qty, c.p_fail_qty, c.p_fail_reason_code]), [[true, 10, 1, "尺寸不良"], [false, 10, 1, "尺寸不良"]], "one button sends good 10 / fail 1 (defect-aware)");
+await dt.close();
+const dt2 = await openOperatorPage();
+await dt2.evaluate(async () => { config.reportTotalSemanticsEnabled = true; await machtileRefreshReportTotalState(selectedOrder); });
+await dt2.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.failReported === 0);
+await dt2.locator("#completedQty").fill("761");
+await dt2.locator("[data-simple-report-defect]").check();
+await dt2.locator("#defectQty").fill("1");
+await dt2.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+assert.equal(await dt2.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件");
+reportedFail = 5;
+await dt2.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await dt2.waitForFunction(() => reportTotalState.failReported === 5);
+assert.match(await dt2.locator("[data-simple-report-summary]").innerText(), /已報 755（含不良 5）$/, "reported good 750 + defect 5 → 已報 755（含不良 5）");
+await dt2.evaluate(() => { reportTotalState = { ...reportTotalState, failReported: null }; machtileRenderSingleStationReport(); });
+assert.match(await dt2.locator("[data-simple-report-summary]").innerText(), /已報 750$/, "failDone unknown → reported good as before");
+reportedFail = 0;
+await dt2.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await dt2.waitForFunction(() => reportTotalState.failReported === 0);
+reportedFail = 5;   // someone else's defects landed after the screen was drawn
+const dt2Before = calls.commands.length;
+await dt2.locator("#reportForm .submit-report").click();
+await dt2.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const dt2Sent = calls.commands.slice(dt2Before);
+assert.deepEqual(dt2Sent.map(c => [c.p_preview, c.p_good_qty, c.p_fail_qty]), [[true, 5, 1], [false, 5, 1]], "F1 in the one-button flow: fresh reread → good 5 (761 − 750 − 5 − 1), never the stale 10");
+await dt2.close();
+reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+
+// L3 #1：連點兩下（含 Enter 再送一次）只能有一條寫入鏈：一筆預覽、最多一筆正式送出。
+const dbl = await openOperatorPage();
+const dblBefore = calls.commands.length;
+await dbl.evaluate(() => {
+  const form = document.getElementById("reportForm");
+  const button = form.querySelector(".submit-report");
+  button.click();
+  button.click();
+  form.requestSubmit();
+});
+assert.equal(await dbl.locator("#reportForm .submit-report").isDisabled(), true, "button is disabled synchronously after the first tap");
+await dbl.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+await dbl.waitForTimeout(1500);
+const dblSent = calls.commands.slice(dblBefore);
+assert.equal(dblSent.filter(c => c.p_preview).length, 1, `double tap → exactly one preview: ${JSON.stringify(dblSent.map(c => c.p_preview))}`);
+assert.ok(dblSent.filter(c => !c.p_preview).length <= 1, "double tap → at most one final");
+await dbl.close();
+
+// L3 #2：預覽後改了不良數 → 正式送出擋下（零寫入），要重新預覽。
+const bad = await openOperatorPage();
+await bad.locator("[data-simple-report-defect]").check();
+await bad.locator("#defectQty").fill("1");
+await bad.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await bad.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await bad.waitForFunction(() => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed");
+assert.equal(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).args.p_fail_qty), 1);
+await bad.locator("#defectQty").fill("2");
+const badFinals = calls.commands.filter(c => !c.p_preview).length;
+await bad.evaluate(() => machtileStationReportSubmitFinal("A04"));
+assert.equal(calls.commands.filter(c => !c.p_preview).length, badFinals, "changed defects after preview → no final");
+assert.match(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).error), /已報數量已改變/);
+await bad.close();
+
+// L3 #3：舊單確認（OLD_ORDER_NEWER_OPEN）沒寫原因 → 留在確認狀態、提示寫原因，不重新預覽；寫了才送出。
+previewSoftCode = "OLD_ORDER_NEWER_OPEN";
+const old = await openOperatorPage();
+const oldBefore = calls.commands.length;
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
+assert.match(await old.locator('[data-simple-report-status="warning"]').innerText(), /同一個料號已經有比較新的工單/);
+assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出");
+assert.equal(await old.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "old-order note field is shown");
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("請寫一句原因再送出"));
+assert.equal(calls.commands.length, oldBefore + 1, "missing note → no fresh preview, no final");
+assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出", "stays in the soft-confirm state");
+await old.locator('#simpleReportReason [data-station-report-note="A04"]').fill("舊單補報");
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => machtileBatchRow("A04").stationReport.result?.status === "applied", null, { timeout: 8000 });
+const oldSent = calls.commands.slice(oldBefore);
+assert.deepEqual(oldSent.map(c => c.p_preview), [true, false], "note given → one ack final, no second preview");
+assert.ok(oldSent[1].p_acks.includes("OLD_ORDER_NEWER_OPEN"));
+assert.equal(oldSent[1].p_report_note, "舊單補報");
+await old.close();
+previewSoftCode = "";
+console.log("PASS L3: double tap single chain, defect change blocks final, old-order note keeps soft state");
+
+// ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
+previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";
+const bl = await openOperatorPage();
+const blBefore = calls.commands.length;
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0, "blocked preview never sends a final");
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。");
+const blText = await bl.locator("#singleStationReportPanel").innerText();
+assert.doesNotMatch(blText, /可報|先領|guard|QTY_EXCEEDS|30/, `no technical numbers for operators: ${blText}`);
+assert.equal(await bl.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 1, "exactly one red sentence");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "重新送出");
+await sheetShot(bl, "05-operator-blocked.png");
+await bl.evaluate(() => { machtileAuthState.role = "admin"; machtileRenderSingleStationReport(); });
+assert.equal(await bl.locator("[data-station-report-tech]").count(), 1, "admin keeps 技術細節");
+await bl.locator("[data-station-report-tech] > summary").click();
+const adminText = await bl.locator("[data-station-report-tech]").innerText();
+assert.match(adminText, /目前可報 30 件/, "admin sees the technical available quantity");
+assert.match(adminText, /預估先領 38 件/);
+assert.equal(await bl.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isVisible(), true, "admin keeps 先預覽");
+assert.match(await bl.locator('[data-simple-report-status="error"]').innerText(), /這次數量比可以報的還多/, "admin still gets the same plain sentence on top");
+await sheetShot(bl, "06-admin-view.png");
+await bl.locator("[data-station-report-tech]").screenshot({ path: path.join(implShots, "07-admin-tech-details.png") });
+await bl.close();
+previewBlockedCode = ""; starterUserId = null;
+console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
+
+// Owner 2026-10-31: the machine counter includes defects. Total semantics on:
+// good = machine total - (goodDone + failDone) - this-time defects.
+currentMachine = "A04"; reportedOutput = 750; reportedFail = 0; freshReadEnabled = true; noStartCounter = true;
+const defectTotal = await context.newPage();
+defectTotal.on("pageerror", error => errors.push(error.message));
+await defectTotal.goto(base, { waitUntil: "domcontentloaded" });
+await defectTotal.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await defectTotal.evaluate(() => { config.reportTotalSemanticsEnabled = true; machtileAuthState.role = "admin"; });
+await defectTotal.locator("[data-open-report]:visible").first().click();
+await defectTotal.locator('#reportForm [data-report-type="noon"]').click();
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.reported === 750 && reportTotalState.failReported === 0);
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.waitForFunction(() => document.querySelector("[data-simple-report-defect]"));
+await defectTotal.locator("[data-simple-report-defect]").check();
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件", "simplified operator hint uses the defect-aware result (761 − 750 − 1)");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 750 → 送出後 = 761；這次良品 10 件、不良 1 件", "live hint shows the good/defect split");
+assert.deepEqual(await defectTotal.evaluate(() => { const r = reportCounterCalculation(); return { valid: r.valid, good: r.delta, fail: r.fail }; }), { valid: true, good: 10, fail: 1 }, "761 - 750 - 1 defect = 10 good");
+const defectCommandsBefore = calls.commands.length;
+await defectTotal.locator("[data-station-report-tech] > summary").click();
+await defectTotal.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await defectTotal.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
+const defectPreview = calls.commands.slice(defectCommandsBefore).find(command => command.p_preview);
+assert.equal(defectPreview.p_good_qty, 10, "smart-report preview sends good 10, not 11");
+assert.equal(defectPreview.p_fail_qty, 1);
+// F1: the preview reread sees failDone 5 → good is recomputed from the fresh baseline, never the stale 10.
+reportedFail = 5;
+const staleCommandsBefore = calls.commands.length;
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+const waitPreviewCommand = async (after) => {
+  for (let i = 0; i < 100; i++) {
+    const hit = calls.commands.slice(after).find(command => command.p_preview);
+    if (hit) return hit;
+    await defectTotal.waitForTimeout(50);
+  }
+  return null;
+};
+const freshPreview = await waitPreviewCommand(staleCommandsBefore);
+assert.equal(freshPreview?.p_good_qty, 5, "preview after a fresh reread sends the fresh good 5 (761 - 750 - 5 - 1)");
+assert.equal(await defectTotal.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).singleReport.previewGood), 5);
+reportedFail = 0;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.failReported === 0);
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
+reportedFail = 5;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 755 → 送出後 = 761；這次良品 5 件、不良 1 件", "already-reported defects move the baseline");
+assert.equal(await defectTotal.evaluate(() => reportCounterCalculation().delta), 5, "failDone 5 → good 5");
+// The preview was taken with failDone 0; a final after failDone changed is blocked with zero writes.
+const defectFinalsBefore = calls.commands.filter(command => !command.p_preview).length;
+await defectTotal.evaluate(() => machtileStationReportSubmitFinal("A04"));
+await defectTotal.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("已報數量已改變，請重新預覽"));
+assert.equal(calls.commands.filter(command => !command.p_preview).length, defectFinalsBefore, "changed reported defects after preview blocks the final");
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.error = ""; flow.preview = null; machtileRenderStationReportSurfaces(); });
+await defectTotal.locator("#defectQty").fill("7");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "不良數比這次多出來的件數還多，請確認", "this-time defects above the added parts are blocked");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "不良數比這次多出來的件數還多，請確認");
+await defectTotal.locator("#defectQty").fill("6");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "", "fail-only (good 0, defect 6) is not blocked by the zero-report rule; factory FAIL_ONLY ack decides");
+// failDone unknown (legacy progress has no reliable fail total)
+await defectTotal.evaluate(() => { reportTotalState = { ...reportTotalState, failReported: null }; updateReportCounterPreview(); });
+await defectTotal.locator("#defectQty").fill("0");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 750 → 送出後 = 761；這次良品 11 件、不良 0 件", "failDone unknown + fail 0 behaves as before");
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "暫時無法核對已報不良數，請稍後再按", "failDone unknown + fail > 0 fails closed");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
+// F5 + F3: finish prefill = reported good + reported defect; short completion compares planned vs GOOD.
+reportedFail = 5;
+await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder); });
+assert.equal(await defectTotal.locator("#completedQty").inputValue(), "755", "finish prefill = 750 good + 5 defect (machine total so far)");
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.locator("#defectQty").fill("1");
+const shortGap = await defectTotal.evaluate(() => ({ hidden: document.getElementById("shortCompletionSection")?.hidden, text: document.querySelector("[data-short-completion-gap]")?.textContent || "" }));
+assert.equal(shortGap.hidden, false, "short completion shows when good total 755 < planned 1000");
+assert.match(shortGap.text, /245/, `差幾件 = 1000 - (761 - 5 - 1) = 245: ${shortGap.text}`);
+await defectTotal.evaluate(() => { activeReportType = "noon"; });
+await defectTotal.close();
+reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+console.log("PASS total semantics subtract reported and this-time defects from the machine total");
+
 currentMachine = "A04"; guardFails = true;
 const failedGuard = await context.newPage();
 await failedGuard.goto(base, { waitUntil: "domcontentloaded" });
@@ -708,7 +1089,7 @@ assert.equal(await failedGuard.locator("[data-station-report-reload-guard]").inn
 guardFails = false;
 await failedGuard.locator("[data-station-report-reload-guard]").click();
 await failedGuard.waitForFunction(() => !document.querySelector("#reportForm .submit-report").disabled);
-assert.equal(await failedGuard.locator("#reportForm .submit-report").innerText(), "預覽並送出", "guard reload restores smart primary action");
+assert.equal(await failedGuard.locator("#reportForm .submit-report").innerText(), "送出報工", "guard reload restores the one primary action");
 assert.deepEqual(errors, []);
 console.log("PASS single station smart report browser contract");
 await browser.close();

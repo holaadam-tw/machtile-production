@@ -36,13 +36,26 @@
     return { good_qty: "", fail_qty: "", reason_code: policy?.code || "", allow_takeover: policy?.default_allow === true,
       allow_takeover_touched: false, fail_reason_code: "", note: "" };
   }
+  // totals.machineTotal === true（owner 2026-10-31「停工也填機台總數」，跟報工 reportTotalSemanticsEnabled 同一個開關）：
+  //   form.good_qty＝機台目前總數（這張單，含不良）、form.fail_qty＝這次不良幾件；
+  //   良品差額＝總數－(已報良品＋已報不良)－這次不良，不良差額＝這次不良。
+  // 沒有 machineTotal（旗標關）：維持舊語意，良品／不良各填這一道目前總數，各自減已報。
+  // 兩種都送 machtile_submit_stop_report 一樣的「這次差額」p_good_qty／p_fail_qty（伺服器合約不變）。
   function stopTotals(totals) {
     const goodDone = Math.max(0, Number(totals?.goodDone) || 0);
     const failDone = totals?.failDone == null ? null : Math.max(0, Number(totals.failDone) || 0);
-    return { goodDone, failDone };
+    return { goodDone, failDone, machineTotal: totals?.machineTotal === true };
+  }
+  function stopBaseline(totals) {
+    const done = stopTotals(totals);
+    return done.goodDone + (done.failDone ?? 0);
   }
   function stopDeltas(form, totals) {
     const done = stopTotals(totals);
+    if (done.machineTotal) {
+      const fail = Number(form?.fail_qty);
+      return { good: Number(form?.good_qty) - stopBaseline(done) - fail, fail };
+    }
     return { good: Number(form?.good_qty) - done.goodDone,
       fail: done.failDone == null ? Number(form?.fail_qty) : Number(form?.fail_qty) - done.failDone };
   }
@@ -53,8 +66,15 @@
     if (!integer(form?.good_qty)) errors.good_qty = "required_nonnegative_integer";
     if (!integer(form?.fail_qty)) errors.fail_qty = "required_nonnegative_integer";
     const done = stopTotals(totals);
-    if (integer(form?.good_qty) && Number(form.good_qty) < done.goodDone) errors.good_qty = "total_less_than_done";
-    if (done.failDone != null && integer(form?.fail_qty) && Number(form.fail_qty) < done.failDone) errors.fail_qty = "total_less_than_done";
+    if (done.machineTotal) {
+      const fail = Number(form?.fail_qty);
+      if (integer(form?.fail_qty) && fail > 0 && done.failDone == null) errors.fail_qty = "fail_done_unknown";
+      else if (integer(form?.good_qty) && Number(form.good_qty) < stopBaseline(done)) errors.good_qty = "total_below_baseline";
+      else if (integer(form?.good_qty) && integer(form?.fail_qty) && Number(form.good_qty) - stopBaseline(done) - fail < 0) errors.fail_qty = "fail_exceeds_added";
+    } else {
+      if (integer(form?.good_qty) && Number(form.good_qty) < done.goodDone) errors.good_qty = "total_less_than_done";
+      if (done.failDone != null && integer(form?.fail_qty) && Number(form.fail_qty) < done.failDone) errors.fail_qty = "total_less_than_done";
+    }
     const delta = stopDeltas(form, done);
     if (integer(form?.fail_qty) && delta.fail > 0 && !text(form?.fail_reason_code)) errors.fail_reason_code = "required";
     if (!policy) errors.reason_code = "required";

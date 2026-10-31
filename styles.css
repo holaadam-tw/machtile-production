@@ -13287,3 +13287,37 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .outsource-receipt-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 14px; margin-top: 24px; }
 .outsource-receipt-actions button { min-height: 64px; font-size: 1.05rem; font-weight: 800; }
 @media (max-width: 560px) { .outsource-receipt-dialog-backdrop { padding: 12px; } .outsource-receipt-actions { grid-template-columns: 1fr; } }
+/* 單台報工簡化（owner 2026-10-31「單台報工簡化 照圖做」）：只在作業員報工畫面（#reportForm.is-simple-report）生效 */
+#reportForm.is-simple-report [data-report-section="noon"],
+#reportForm.is-simple-report #reportQtyHelp,
+#reportForm.is-simple-report #reportCounterPreview,
+#reportForm.is-simple-report label[for="reportNote"],
+#reportForm.is-simple-report #reportNote,
+#reportForm.is-simple-report #quantitySection .field-label small,
+#reportForm.is-simple-report .simple-hidden { display: none !important; }
+#reportForm.is-simple-report > .report-actions { order: 20; }
+#reportForm.is-simple-report #quantitySection { display: grid; gap: 8px; }
+#reportForm.is-simple-report #completedQty { min-height: 64px; font-size: 34px; font-weight: 800; text-align: center; }
+#reportForm.is-simple-report #defectQty { font-size: 26px; font-weight: 800; text-align: center; border-color: #fca5a5; }
+#reportForm.is-simple-report .submit-report { min-height: 60px; font-size: 22px; font-weight: 800; }
+.simple-report-summary-holder[hidden], .simple-report-reason-holder[hidden], .simple-report-hint[hidden], .simple-report-operator[hidden], .simple-report-defect-holder[hidden] { display: none !important; }
+.simple-report-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #f1f5f9; font-size: 15px; line-height: 1.45; }
+.simple-report-flow-toggle, .simple-report-link { flex: none; border: 0; background: none; padding: 0 2px; color: #2563eb; font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
+.simple-report-flow { margin-top: 8px; overflow-x: auto; }
+.simple-report-hint { padding: 8px 12px; border-radius: 10px; background: #ecfdf5; color: #065f46; font-size: 15px; }
+.simple-report-hint.is-error { background: #fef2f2; color: #991b1b; font-weight: 700; }
+.simple-report-hint-wait { color: #475569; }
+.simple-report-operator { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 15px; }
+.simple-report-defect-toggle { display: flex; gap: 10px; align-items: center; min-height: 44px; font-size: 15px; font-weight: 700; }
+.simple-report-defect-toggle input { width: 22px; height: 22px; }
+.simple-report-reason, .simple-report-note { display: grid; gap: 6px; font-weight: 700; }
+.simple-report-reason select, .simple-report-note textarea { min-height: 44px; font: inherit; }
+.station-report-simple { display: grid; gap: 8px; }
+.station-report-simple-status { margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 16px; }
+.station-report-simple-status.is-muted { background: #f1f5f9; color: #475569; font-size: 15px; }
+.station-report-simple-status.is-error { background: #fef2f2; color: #991b1b; font-weight: 700; }
+.station-report-simple-status.is-warning { background: #fff7ed; color: #9a3412; font-weight: 700; }
+.station-report-simple-status.is-success { background: #ecfdf5; color: #065f46; }
+.station-report-tech { padding: 8px 10px; border: 1px solid var(--border, #d8dee8); border-radius: 10px; background: var(--surface-soft, #f8fafc); font-size: 13px; }
+.station-report-tech summary { cursor: pointer; font-weight: 800; }
+.station-report-tech-counter, .station-report-tech-raw { margin: 8px 0 0; color: #475569; }

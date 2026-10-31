@@ -64,7 +64,8 @@ async function fake(route) {
   if (p.endsWith("/app_users")) return json(url.searchParams.has("auth_user_id") ? [{ id: user.id, name: user.name }] : [user]);
   if (p.endsWith("/rpc/batch_report_progress")) {
     const pendingOutput = upserts.reduce((sum, item) => sum + Number(item.p_payload?.completed_qty || 0), 0);
-    return json([{ process_id: id(304), legacy_output: legacyOutputA04, legacy_fail: 0, pending_output: pendingOutput, pending_fail: 0,
+    const pendingFail = upserts.reduce((sum, item) => sum + Number(item.p_payload?.defect_qty || 0), 0);
+    return json([{ process_id: id(304), legacy_output: legacyOutputA04, legacy_fail: 0, pending_output: pendingOutput, pending_fail: pendingFail,
       pending_count: upserts.length, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() },
     { process_id: id(305), legacy_output: 50, legacy_fail: 0, pending_output: 0, pending_fail: 0,
       pending_count: 0, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() }]);
@@ -177,8 +178,9 @@ await rootView.locator("[data-batch-submit]").evaluate((button) => button.click(
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("已送出"));
 ok(upserts.length === 1, "R=140, S=150, total=170 creates exactly one report");
 const payload = upserts[0].p_payload;
-ok(payload.report_type === "noon" && payload.completed_qty === 30 && payload.defect_qty === 2, "simplified batch card keeps the existing report payload quantities");
-ok(payload.report_payload.backfill_qty === 10 && payload.report_payload.counter_today_qty === 20 && payload.report_payload.start_counter === 150 && payload.report_payload.reported_before === 140, "single payload carries shared backfill/today metadata");
+// owner 2026-10-31: machine counter includes defects → good = 170 - 140 - 2 = 28
+ok(payload.report_type === "noon" && payload.completed_qty === 28 && payload.defect_qty === 2, `machine total includes this-time defects: good 28 + fail 2 (got ${payload.completed_qty}/${payload.defect_qty})`);
+ok(payload.report_payload.backfill_qty === 10 && payload.report_payload.counter_today_qty === 18 && payload.report_payload.start_counter === 150 && payload.report_payload.reported_before === 140, "single payload carries shared backfill/today metadata");
 ok((payload.remark || "").startsWith("含前一班未報 10 件；"), "single payload remark starts with the backfill annotation");
 ok(payload.report_payload.fail_reason_code === "尺寸不良", "batch payload persists the selected defect reason");
 ok(payload.report_payload.machine_qty === 170 && payload.report_payload.counter_baseline_qty === 140 && payload.cycle_time_seconds === null, "payload baseline uses the freshly reread card-reported total");
@@ -338,6 +340,42 @@ ok(stationSubmits.slice(errorStart).filter((x) => !x.p_preview).length === 0, "p
 ok((await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).trim().length > 0, "preview error is shown on the card");
 
 await page.evaluate(() => { for (const code of ["A04", "A05"]) { const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.current = ""; row.good = ""; row.bad = ""; row.failReasonCode = ""; row.reportNote = ""; row.defectOpen = false; } machtileRenderBatchReport(); });
+
+// Owner 2026-10-31: machine total includes defects (A05 row, flag on).
+const A05 = "00000000-0000-4000-8000-000000000305";
+const setA05 = (failDone) => page.evaluate(({ processId, failDone }) => {
+  machtileBatchState.freshReportedByProcess.set(processId, 750);
+  machtileBatchState.freshFailReportedByProcess.set(processId, failDone);
+  machtileBatchState.counterBaselineByProcess.delete(processId);
+  machtileRenderBatchReport();
+}, { processId: A05, failDone });
+const a05Model = () => page.evaluate(() => { const m = machtileBatchRowModel("A05", new Date().toISOString()); const v = machtileBatchCore().validateRow(m); return { valid: m.counter.valid, code: m.counter.code, good: m.good, fail: m.counter.fail, send: v.send, error: v.error }; });
+await page.waitForFunction(() => !document.querySelector('[data-batch-root="lathe"] [data-batch-refresh]')?.disabled);
+await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("761");
+await rootView.locator('[data-batch-row="A05"] [data-batch-defect-toggle]').check();
+await setA05(0);
+await rootView.locator('[data-batch-row="A05"] [data-batch-bad]').fill("1");
+ok((await rootView.locator('[data-batch-counter-preview="A05"]').innerText()) === "這次良品 10 件、不良 1 件", `batch preview shows the split: ${await rootView.locator('[data-batch-counter-preview="A05"]').innerText()}`);
+let m05 = await a05Model();
+ok(m05.valid && m05.good === 10 && m05.fail === 1, `761 / goodDone 750 / failDone 0 / fail 1 → good 10 fail 1: ${JSON.stringify(m05)}`);
+await setA05(5);
+m05 = await a05Model();
+ok(m05.valid && m05.good === 5 && m05.fail === 1, `failDone 5 → good 5: ${JSON.stringify(m05)}`);
+await rootView.locator('[data-batch-row="A05"] [data-batch-bad]').fill("7");
+m05 = await a05Model();
+ok(!m05.valid && m05.code === "FAIL_EXCEEDS_ADDED" && m05.error === "不良數比這次多出來的件數還多，請確認", `fail above added parts is blocked: ${JSON.stringify(m05)}`);
+ok((await rootView.locator('[data-batch-counter-preview="A05"]').innerText()) === "不良數比這次多出來的件數還多，請確認", "batch preview shows the block sentence");
+await rootView.locator('[data-batch-row="A05"] [data-batch-bad]').fill("6");
+m05 = await a05Model();
+ok(m05.valid && m05.good === 0 && m05.error !== "本次增加 0 件，不需報工。", `fail-only row is not rejected by the zero-report rule: ${JSON.stringify(m05)}`);
+await setA05(null);
+await rootView.locator('[data-batch-row="A05"] [data-batch-bad]').fill("0");
+m05 = await a05Model();
+ok(m05.valid && m05.good === 11, `failDone unknown + fail 0 behaves as before: ${JSON.stringify(m05)}`);
+await rootView.locator('[data-batch-row="A05"] [data-batch-bad]').fill("1");
+m05 = await a05Model();
+ok(!m05.valid && m05.code === "FAIL_REPORTED_REQUIRED" && m05.error === "暫時無法核對已報不良數，請稍後再按", `failDone unknown + fail > 0 fails closed: ${JSON.stringify(m05)}`);
+await page.evaluate(() => { const row = machtileBatchRow("A05"); row.current = ""; row.bad = ""; row.defectOpen = false; machtileRenderBatchReport(); });
 ok(blocked.length === 0, "browser did not contact production or another external host");
 await page.screenshot({ path: path.join(outDir, "preview-r3-1280.png"), fullPage: true });
 await context.close();
