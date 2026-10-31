@@ -8,6 +8,7 @@
 
   const dictionaries = {
     "zh-Hant": {
+      batch_total_label: "機台目前總數", batch_added_qty: "本次增加 +{{quantity}} 件", batch_added_waiting: "輸入後顯示本次增加", batch_total_below_reported: "總數不能少於已報 {{reported}} 件", batch_defect_toggle: "有不良品", batch_technical_details: "技術資訊", batch_submit_all: "一次全部送出", batch_submit_all_count: "一次全部送出（{{count}} 台）", batch_report_hint: "只要填<strong>機台目前顯示數</strong>，系統自動算這次增加；有不良再勾「有不良品」。完工請在機台卡上按。",
       start_backfill_confirm: "機台顯示 {{machine}} 件、系統只記 {{reported}} 件。按確認開工會同時補報 {{gap}} 件（算前一班未報）",
       start_backfill_button: "確認開工並補報 {{gap}} 件",
       start_backfill_edit: "回去改數字",
@@ -254,6 +255,7 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      batch_total_label: "Tổng số hiện tại trên máy", batch_added_qty: "Lần này tăng +{{quantity}} sản phẩm", batch_added_waiting: "Nhập số để xem lượng tăng lần này", batch_total_below_reported: "Tổng số không được nhỏ hơn {{reported}} sản phẩm đã báo", batch_defect_toggle: "Có hàng lỗi", batch_technical_details: "Thông tin kỹ thuật", batch_submit_all: "Gửi tất cả một lần", batch_submit_all_count: "Gửi tất cả một lần ({{count}} máy)", batch_report_hint: "Chỉ cần nhập <strong>số hiện tại trên máy</strong>; hệ thống tự tính lượng tăng. Nếu có hàng lỗi, hãy chọn “Có hàng lỗi”. Hoàn tất công việc trên thẻ máy.",
       start_backfill_confirm: "Máy hiển thị {{machine}} sản phẩm, hệ thống chỉ ghi {{reported}}. Khi xác nhận bắt đầu, hệ thống sẽ báo bù {{gap}} sản phẩm (tính cho ca trước chưa báo)",
       start_backfill_button: "Xác nhận bắt đầu và báo bù {{gap}}",
       start_backfill_edit: "Quay lại sửa số lượng",

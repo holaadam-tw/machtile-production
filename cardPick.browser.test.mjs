@@ -384,6 +384,9 @@ console.log("== 批次：開始填之後卡片切換 → 這一列不會偷偷�
   ok((await page.evaluate(() => machtileCardOrderForMachine("B04")?.id)) === "XX01202606030002", "卡片已切到 P08");
   ok(await mill.locator('[data-batch-order="B04"]').inputValue() === id(343), "批次這一列仍是填的時候看到的 CPDF-16", await mill.locator('[data-batch-order="B04"]').inputValue());
   ok(await mill.locator('[data-batch-row="B04"] [data-batch-good]').inputValue() === "3", "填的數字還在");
+  // 簡化版：沒有今日開工紀錄時報工人留空要自己選（owner 10/31 核准）；選登入者＝舊版預設的同一人，payload 不變
+  await mill.locator('[data-batch-operator="B04"]').selectOption(users[0].id);
+  ok(await mill.locator('[data-batch-order="B04"]').inputValue() === id(343), "選報工人後這一列仍是 CPDF-16");
   await mill.locator("[data-batch-submit]").click();
   for (let i = 0; i < 80 && be.calls.length === 0; i++) await page.waitForTimeout(100);
   await page.waitForTimeout(300);

@@ -328,6 +328,8 @@ console.log("== 手機（Pixel 7）：Monitor 卡片 ==");
   ok(await mill.locator('[data-batch-row="B03"] [data-batch-overqty]').count() === 0, "批次 B03（預設 A37，沒滿）沒有提醒");
   ok(!(await b05Row.locator("[data-batch-good]").isDisabled()), "批次 B05 數字框可以填（不擋）");
   await b05Row.locator("[data-batch-good]").fill("3");
+  // 簡化版：沒有今日開工紀錄時報工人留空要自己選（owner 10/31 核准）；選登入者＝舊版預設的同一人，payload 不變
+  await b05Row.locator('[data-batch-operator="B05"]').selectOption(users[0].id);
   await page.screenshot({ path: path.join(outDir, "04-phone-batch-mill.png"), fullPage: true });
   const beforeBatch = calls.length;
   await mill.locator("[data-batch-submit]").click();
