@@ -97,7 +97,9 @@ function fakeFor(st) {
       return json([{ command_uuid: b.p_command_uuid, command_type: b.p_command_type, status: "pending", requested_at: new Date().toISOString() }]);
     }
     if (p.endsWith("/rpc/machtile_submit_station_report")) {
-      const b = body(); st.reportSubmits.push(structuredClone(b));
+      const b = body(); st.reportSubmits.push(structuredClone(b)); st.reportBodies = [...(st.reportBodies || []), req.postData() || ""];
+      // 多人報工：名單裡有已停用的人 → 伺服器例外（真實 PostgREST 400 形狀）
+      if ((b.p_operator_app_user_ids || []).includes(id(903))) return json({ code: "P0001", details: null, hint: null, message: "OPERATOR_LIST_MEMBER_INACTIVE" }, 400);
       if (b.p_preview) {
         // WO-F2：上一道委外未收貨（真實 Factory 預覽形狀，見 batchReport.browser.test.mjs）
         if (b.p_expected_order_no === "WO-F2" && b.p_previous_outsource_receipt_qty == null) {
@@ -333,7 +335,67 @@ ok(g1Upsert.p_payload.report_payload.assembly_line === "valve", "G01 App 紀錄�
 
 ok(errors.length === 0, "flag on: 沒有頁面錯誤");
 ok(st.blocked.length === 0, "沒有連到任何外部網址（正式 Supabase 不會被碰到）");
+ok(st.reportSubmits.length > 0 && st.reportSubmits.every((r) => !("p_operator_app_user_ids" in r))
+  && st.reportBodies.every((raw) => !raw.includes("operator_app_user_ids")), "多人旗標關：所有報工 RPC 送出內容都沒有 p_operator_app_user_ids（跟今天一樣）");
 await context.close();
+
+// ---------------------------------------------------------------- 2b. 多人報工送雲端（assemblyMultiOperatorCommandEnabled:true）
+{
+  const sm = makeState();
+  const { context: cm, page: pm, errors: em } = await openApp(sm, `${cfgOn},assemblyMultiOperatorCommandEnabled:true`);
+  await pm.locator("#dashboardView [data-assembly-entry]").click();
+  await orderCard(pm, "WO-F1").waitFor();
+  const m1 = orderCard(pm, "WO-F1");
+  await m1.locator("[data-asm-report]").click();
+  await m1.locator("[data-asm-good]").fill("4");
+  await m1.locator(`[data-asm-operator][value="${users[1].id}"]`).check();
+  await m1.locator("[data-asm-submit]").click();
+  await m1.locator("[data-asm-result].is-ok").waitFor();
+  const m1Calls = sm.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F1");
+  ok(m1Calls.length === 2 && m1Calls.every((r) => JSON.stringify(r.p_operator_app_user_ids) === JSON.stringify([users[1].id])),
+    "多人旗標開：預覽與正式都帶 p_operator_app_user_ids＝[陳大華]（登入者本人由伺服器排第一）");
+  const m1Upsert = sm.upserts.find((u) => u.p_payload?.process_id === id(301));
+  ok(JSON.stringify([...(m1Upsert?.p_payload.operators || [])].sort()) === JSON.stringify([me.id, users[1].id].sort()), "多人旗標開：App 紀錄 operators 不變（兩位）");
+
+  // 只勾自己 → 帶空陣列（伺服器視為單人）
+  const m3 = orderCard(pm, "WO-F3");
+  await m3.locator("[data-asm-report]").click();
+  await m3.locator("[data-asm-good]").fill("2");
+  await m3.locator("[data-asm-submit]").click();
+  await m3.locator("[data-asm-result].is-ok").waitFor();
+  ok(sm.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F3").every((r) => Array.isArray(r.p_operator_app_user_ids) && r.p_operator_app_user_ids.length === 0),
+    "多人旗標開：只勾自己 → p_operator_app_user_ids＝[]");
+
+  // 伺服器拒絕名單（已停用）→ 白話中文，不顯示代碼
+  await m3.locator("[data-asm-report]").click();
+  await m3.locator("[data-asm-good]").fill("1");
+  await m3.locator(`[data-asm-operator][value="${users[2].id}"]`).check();
+  await m3.locator("[data-asm-submit]").click();
+  await m3.locator("[data-asm-result].is-bad").waitFor();
+  const badText = await m3.locator("[data-asm-result]").innerText();
+  ok(badText.includes("帳號已停用") && !badText.includes("OPERATOR_"), "伺服器 OPERATOR_LIST_MEMBER_INACTIVE → 「勾選的報工人裡有人帳號已停用…」");
+  await pm.screenshot({ path: path.join(shotDir, "10-multi-operator-inactive.png"), fullPage: true });
+
+  // G01 軟性確認重送：新 uuid 的正式報工帶同一份名單
+  await pm.locator('[data-assembly-root] [data-asm-station="G01"]').click();
+  await orderCard(pm, "WO-G1").waitFor();
+  const mg = orderCard(pm, "WO-G1");
+  await mg.locator("[data-asm-report]").click();
+  await mg.locator("[data-asm-good]").fill("10");
+  await mg.locator("[data-asm-defect-toggle]").check();
+  await mg.locator("[data-asm-bad]").fill("2");
+  await mg.locator("[data-asm-reason]").selectOption("尺寸不良");
+  await mg.locator(`[data-asm-operator][value="${users[1].id}"]`).check();
+  await mg.locator("[data-asm-submit]").click();
+  await mg.locator("[data-asm-ack]").waitFor();
+  await mg.locator("[data-asm-ack-confirm]").click();
+  await mg.locator("[data-asm-result].is-ok").waitFor();
+  const mgCalls = sm.reportSubmits.filter((r) => r.p_expected_order_no === "WO-G1");
+  ok(mgCalls.length >= 2 && new Set(mgCalls.map((r) => r.p_command_uuid)).size === mgCalls.length
+    && mgCalls.every((r) => JSON.stringify(r.p_operator_app_user_ids) === JSON.stringify([users[1].id])), "軟性確認後重送：每一筆（預覽／確認後正式）都帶同一份名單");
+  ok(em.length === 0 && sm.blocked.length === 0, "多人旗標開：沒有頁面錯誤、沒有外部連線");
+  await cm.close();
+}
 
 // ---------------------------------------------------------------- 3. 越南文＋平板直式
 {

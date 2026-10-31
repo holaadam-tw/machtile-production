@@ -470,6 +470,22 @@ async function machtileAsmRecordAndFinish(processId, finalArgs, finalRow, ctx) {
   return { tone: recordNote ? "warn" : "ok", text: `${base} ${recordNote}`.trim() };
 }
 
+// 多人報工送雲端（旗標 assemblyMultiOperatorCommandEnabled，預設關）：只有組裝站、旗標開才帶
+// p_operator_app_user_ids。回傳 undefined＝不帶（跟今天一樣）；陣列＝這次報工凍結的名單（預覽、正式、
+// 再次確認、代收貨重送都沿用同一份，伺服器同一 command_uuid 重送時會比對名單）。
+function machtileAsmCoOperatorIds(valid) {
+  const core = machtileAsmCore();
+  if (!core.multiOperatorCommandEnabled(config)) return undefined;
+  if (!core.isAssemblyStation(config, machtileAsm.station, machtileAsmTenantId())) return undefined;
+  return core.coOperatorAppUserIds(valid.operatorIds, machtileAsm.actorId);
+}
+
+// 伺服器擋多人名單的錯誤 → 白話；其他錯誤照原本顯示。
+function machtileAsmErrorText(error) {
+  const key = machtileAsmCore().operatorListErrorKey(error);
+  return key ? machtileAsmT(key) : (error?.message || String(error));
+}
+
 async function machtileAsmSubmit(processId) {
   const core = machtileAsmCore();
   const reportCore = window.MachTileStationReportCore;
@@ -486,6 +502,11 @@ async function machtileAsmSubmit(processId) {
   }
   const ctxRes = machtileAsmContext(order);
   if (!ctxRes.ok) { form.error = machtileAsmT("asm_missing_identity", { fields: ctxRes.missing.join("、") }); machtileAsmRender(); return; }
+  const coOperatorIds = machtileAsmCoOperatorIds(valid);
+  if (coOperatorIds && valid.hasQty) {
+    const listError = core.checkCoOperators(coOperatorIds, { choices: machtileAsm.users, actorId: machtileAsm.actorId });
+    if (listError) { form.error = machtileAsmT(`asm_err_${listError}`); machtileAsmRender(); return; }
+  }
   // 完工：做的數量（已報良品＋最後這次良品）少於工單數量 → 先問「還差 N 個，確定短交？」＋原因（車床同一份短交合約）。
   // 預設＝做滿，不會跳這個問題。
   let shortCompletion = null;
@@ -524,12 +545,13 @@ async function machtileAsmSubmit(processId) {
       if (!machtileAsm.guard.enabled) throw new Error(machtileAsmT("asm_report_closed"));
       if (await machtileHasPendingReport(machtileAsm.station, order)) throw new Error(machtileAsmT("asm_pending_report"));
       const receiptEnabled = machtileOutsourceReceiptDialogEnabled();
-      const previewArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: true, failReasons: machtileAsmDefectReasons(), outsourceReceiptDialogEnabled: receiptEnabled });
+      const previewArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: true, failReasons: machtileAsmDefectReasons(), outsourceReceiptDialogEnabled: receiptEnabled,
+        operatorAppUserIds: coOperatorIds });
       machtileAsmSetBusyText(machtileAsmT("asm_previewing"));
       const followed = await machtileAsmFollow(previewArgs, await machtileAsmRunReportCommand(previewArgs));
       if (followed.error) throw new Error(followed.error);
       const card = reportCore.resultCard(followed.row);
-      const ctx = { order, valid, mode, shortCompletion };
+      const ctx = { order, valid, mode, shortCompletion, coOperatorIds };
       if (card.kind === "preview-soft") {
         machtileAsm.ack = { processId, message: machtileAsmOperatorText(card.guardCode, true),
           next: () => reportCore.retryPreviewWithAck(followed.args, followed.row, card.guardCode, crypto.randomUUID(), valid.note), ctx };
@@ -540,7 +562,7 @@ async function machtileAsmSubmit(processId) {
         const snapshot = reportCore.buildClientGuardSnapshot(followed.row);
         const receipt = receiptEnabled ? reportCore.confirmedPreviewReceipt(followed.args, followed.row) : null;
         const finalArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: false, failReasons: machtileAsmDefectReasons(),
-          outsourceReceiptDialogEnabled: receiptEnabled, clientGuardSnapshot: snapshot,
+          outsourceReceiptDialogEnabled: receiptEnabled, clientGuardSnapshot: snapshot, operatorAppUserIds: coOperatorIds,
           previousOutsourceReceiptQty: receipt?.previousOutsourceReceiptQty ?? null, expectedDoc4Fingerprint: receipt?.expectedDoc4Fingerprint ?? null });
         machtileAsmSetBusyText(machtileAsmT("asm_writing"));
         const done = await machtileAsmFollow(finalArgs, await machtileAsmRunReportCommand(finalArgs));
@@ -549,7 +571,7 @@ async function machtileAsmSubmit(processId) {
       }
     }
   } catch (error) {
-    outcome = { tone: "bad", text: `${machtileAsmT("asm_report_failed")}${error?.message || error}` };
+    outcome = { tone: "bad", text: `${machtileAsmT("asm_report_failed")}${machtileAsmErrorText(error)}` };
   } finally {
     machtileAsm.busy = null;
   }
@@ -571,7 +593,7 @@ async function machtileAsmConfirmAck(processId) {
     if (done.error) throw new Error(done.error);
     outcome = await machtileAsmRecordAndFinish(processId, done.args, done.row, ack.ctx);
   } catch (error) {
-    outcome = { tone: "bad", text: `${machtileAsmT("asm_report_failed")}${error?.message || error}` };
+    outcome = { tone: "bad", text: `${machtileAsmT("asm_report_failed")}${machtileAsmErrorText(error)}` };
   } finally {
     machtileAsm.busy = null;
   }
