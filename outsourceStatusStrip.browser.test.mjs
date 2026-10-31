@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const baseRef="55ed08ba945d6af2d48bf51e4266368b1c86a0ed"; // pinned pre-PR main so the flag-off comparison stays meaningful after merge
+const baseRef="55ed08ba945d6af2d48bf51e4266368b1c86a0ed"; // pinned pre-PR main; now only used for the route-select literal check
 childProcess.execFileSync("git",["rev-parse","--verify",baseRef],{stdio:"pipe"});
 const files=["index.html","app.js","config.js","i18n.js","processFlowCore.js","styles.css","mockData.js"];
 const baseFiles=new Map(files.map(file=>[file,childProcess.execFileSync("git",["show",`${baseRef}:${file}`],{maxBuffer:16*1024*1024})]));
@@ -18,28 +18,31 @@ await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
 const imported=await import(process.env.MACHTILE_PLAYWRIGHT_MODULE?pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href:"playwright");
 const {chromium}=imported.default||imported,browser=await chromium.launch();let checks=0;
 const ok=(value,label)=>{assert.ok(value,label);checks++;console.log(`PASS ${label}`)};
-const config=`window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,orderDetailSimplifyEnabled:true,enableOutsourceStatusStrip:false};`;
-async function open(base=false){const context=await browser.newContext({serviceWorkers:"block",viewport:{width:1280,height:900}});
-  if(base)await context.route("**/*",async route=>{const relative=new URL(route.request().url()).pathname.replace(/^\//,"")||"index.html";
-    if(relative!=="config.js"&&baseFiles.has(relative))await route.fulfill({contentType:mime[path.extname(relative)]||"application/octet-stream",body:baseFiles.get(relative)});else await route.fallback()});
-  await context.route("**/config.js*",route=>route.fulfill({contentType:"text/javascript",body:config}));
+const configFor=flag=>`window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,orderDetailSimplifyEnabled:true,enableOutsourceStatusStrip:${flag}};`;
+async function open(flag=false){const context=await browser.newContext({serviceWorkers:"block",viewport:{width:1280,height:900}});
+  await context.route("**/config.js*",route=>route.fulfill({contentType:"text/javascript",body:configFor(flag)}));
   const page=await context.newPage();await page.goto(`http://127.0.0.1:${server.address().port}/`,{waitUntil:"domcontentloaded"});
   await page.waitForFunction(()=>document.querySelectorAll("#workOrderGrid article").length>0);return{context,page}}
 try{
-  const current=await open(false),base=await open(true);
+  // Not a whole-body snapshot against a pinned old main (brittle: breaks on every unrelated UI PR).
+  // Instead: same current code, flag off vs flag on over the strip-free mock data must render identical
+  // DOM, and the flag-off DOM must contain no outsource strip markup.
+  const off=await open(false),on=await open(true);
   const visibleDom=page=>page.evaluate(()=>{const body=document.body.cloneNode(true);body.querySelectorAll("script").forEach(node=>node.remove());return body.innerHTML});
-  const currentDom=await visibleDom(current.page),baseDom=await visibleDom(base.page);
-  const compared=process.env.MACHTILE_OUTSOURCE_DOM_NEGATIVE_SELFTEST==="1"?currentDom+"<!-- deliberate difference -->":currentDom;
-  if(compared!==baseDom){const at=[...compared].findIndex((char,index)=>char!==baseDom[index]);console.log("DOM_DIFF",at,JSON.stringify(compared.slice(Math.max(0,at-80),at+160)),JSON.stringify(baseDom.slice(Math.max(0,at-80),at+160)))}
-  ok(compared===baseDom,"flag off body DOM is byte-for-byte origin/main");
-  await current.context.close();await base.context.close();
+  const offDom=await visibleDom(off.page),onDom=await visibleDom(on.page);
+  const compared=process.env.MACHTILE_OUTSOURCE_DOM_NEGATIVE_SELFTEST==="1"?offDom+"<!-- deliberate difference -->":offDom;
+  if(compared!==onDom){const at=[...compared].findIndex((char,index)=>char!==onDom[index]);console.log("DOM_DIFF",at,JSON.stringify(compared.slice(Math.max(0,at-80),at+160)),JSON.stringify(onDom.slice(Math.max(0,at-80),at+160)))}
+  ok(!offDom.includes("process-flow-outsource")&&await off.page.locator(".process-flow-outsource").count()===0,"flag off renders no outsource strip markup");
+  ok(await off.page.locator("#workOrderGrid article").count()>0&&offDom.length>5000,"flag off page rendered work order cards (check is not vacuous)");
+  ok(compared===onDom,"flag off body DOM equals flag on DOM when no outsource data exists (strip adds nothing by itself)");
+  await off.context.close();await on.context.close();
 
   const source=await readFile(path.join(root,"app.js"),"utf8"),baseSource=baseFiles.get("app.js").toString("utf8");
   const oldQuery=baseSource.match(/work_order_route_steps\?select=[^`]+/)[0];
   ok(source.includes(`: \`${oldQuery}\``),"flag-off route select literal is byte-for-byte origin/main");
   ok(source.includes("outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at"),"flag-on route select contains all seven contract columns");
 
-  const enabled=await open(false);await enabled.page.addStyleTag({content:"body{padding:20px;background:#eef2f5}#fixture{background:white;padding:16px}.fixture-title{font:700 18px sans-serif}"});
+  const enabled=await open(true);await enabled.page.addStyleTag({content:"body{padding:20px;background:#eef2f5}#fixture{background:white;padding:16px}.fixture-title{font:700 18px sans-serif}"});
   const result=await enabled.page.evaluate(()=>{const base={step_no:1,operation_name:"表面處理",station_no:"OUT",station_codes:"OUT",is_outsourced:true,is_confirmed:true,supplier_no:"V",supplier_name:"舊廠商",outsource_vendor_name:"廠商甲／廠商乙",outsource_sent_qty:12,outsource_returned_qty:4,outsource_unconfirmed_qty:8,outsource_closed_without_receipt_qty:2,outsource_oldest_open_sent_at:"2026-10-20T08:00:00+08:00",outsource_synced_at:"2026-10-29T15:00:00+08:00"};
     const next={step_no:2,operation_name:"精加工",station_no:"A01",station_codes:"A01",is_outsourced:false,is_confirmed:true,supplier_no:"",supplier_name:""};
     const complete=MachTileProcessFlow.mergeRoute([base,next],[{id:"next",process_order:2,status:"running",reported:1,hasReports:true}],"TEST");
