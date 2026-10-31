@@ -122,6 +122,8 @@ assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="
 await page.locator("#completedQty").fill("958");
 await page.locator("#defectQty").fill("2");
 await page.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+assert.equal(await page.locator("#singleStationReportPanel .station-report-panel").isVisible(), true, "single-machine smart-report card remains visible by default");
+assert.equal(await page.locator("#singleStationReportPanel [data-station-report-panel]").count(), 0, "batch-only collapsed-panel marker does not leak into the single-machine report card");
 assert.equal(await page.locator("#reportFailReasonField").isHidden(), true, "A04 smart report does not show a duplicate general fail-reason field");
 assert.equal(await page.locator('.station-report-reason:visible').count(), 1, "A04 with defects shows exactly one fail-reason field");
 
