@@ -23603,40 +23603,47 @@ const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStation
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
 
-function machtileAskOutsourceReceipt(snapshot) {
+function machtileAskOutsourceReceipt(snapshot, initialError = "") {
   return new Promise((resolve) => {
     document.getElementById("machtileOutsourceReceiptDialog")?.remove();
     const holder = document.createElement("div");
     holder.id = "machtileOutsourceReceiptDialog";
     holder.className = "outsource-receipt-dialog-backdrop";
-    const step = snapshot.previousStepName || machtileTranslate("outsource_receipt_previous_step");
+    const steps = snapshot.receiptSteps || [];
+    const lastStep = steps.at(-1);
+    const step = lastStep?.processName || snapshot.previousStepName || machtileTranslate("outsource_receipt_previous_step");
+    const vendor = lastStep?.vendorName || "";
+    const material = snapshot.receiptMode === "material_confirm";
+    const legacyCount = snapshot.receiptMode === "legacy_count";
+    const questionKey = material ? "outsource_receipt_material_question" : (legacyCount ? "outsource_receipt_question" : "outsource_receipt_count_question");
+    const stepsHtml = steps.length ? `<ul class="outsource-receipt-steps">${steps.map(item => `<li>${escapeHtml(item.processName)}${item.vendorName ? `（${escapeHtml(item.vendorName)}）` : ""}</li>`).join("")}</ul>` : "";
+    const countNote = legacyCount ? `<p class="outsource-receipt-note">${escapeHtml(machtileTranslate("outsource_receipt_note"))}</p>` : (!material && steps.length > 1 ? `<p class="outsource-receipt-note">${escapeHtml(machtileTranslate("outsource_receipt_multi_step", { count: steps.length }))}</p>` : "");
     const doc4 = snapshot.doc4Numbers.length ? `<p class="outsource-receipt-doc4">${escapeHtml(machtileTranslate("outsource_receipt_doc4", { numbers: snapshot.doc4Numbers.join("、") }))}</p>` : "";
     holder.innerHTML = `<section class="outsource-receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="outsourceReceiptTitle">
-      <h2 id="outsourceReceiptTitle">${escapeHtml(machtileTranslate("outsource_receipt_question", { step }))}</h2>
+      <h2 id="outsourceReceiptTitle">${escapeHtml(machtileTranslate(questionKey, { step, vendor }))}</h2>
+      ${stepsHtml}
       ${doc4}
-      <label><span>${escapeHtml(machtileTranslate("outsource_receipt_quantity"))}</span>
-        <input type="number" inputmode="numeric" min="1" max="${snapshot.unconfirmedQty}" step="1" value="${snapshot.unconfirmedQty}" data-outsource-receipt-qty>
-      </label>
-      <p class="outsource-receipt-note">${escapeHtml(machtileTranslate("outsource_receipt_note"))}</p>
-      <p class="outsource-receipt-error" role="alert" hidden></p>
-      <div class="outsource-receipt-actions"><button type="button" class="secondary-action" data-outsource-receipt-cancel>${escapeHtml(machtileTranslate("cancel"))}</button><button type="button" class="primary-action" data-outsource-receipt-confirm>${escapeHtml(machtileTranslate("outsource_receipt_confirm"))}</button></div>
+      ${material ? "" : `<label><span>${escapeHtml(machtileTranslate("outsource_receipt_quantity"))}</span><input type="number" inputmode="numeric" min="1" max="${snapshot.receiptRequiredQty}" step="1" value="${snapshot.receiptRequiredQty}" data-outsource-receipt-qty></label>`}
+      ${countNote}
+      <p class="outsource-receipt-error" role="alert"${initialError ? "" : " hidden"}>${escapeHtml(initialError)}</p>
+      <div class="outsource-receipt-actions"><button type="button" class="secondary-action" data-outsource-receipt-cancel>${escapeHtml(machtileTranslate("cancel"))}</button><button type="button" class="primary-action" data-outsource-receipt-confirm>${escapeHtml(machtileTranslate(material ? "outsource_receipt_received" : "outsource_receipt_confirm"))}</button></div>
     </section>`;
     document.body.append(holder);
     const input = holder.querySelector("[data-outsource-receipt-qty]");
     const finish = (value) => { holder.remove(); resolve(value); };
     holder.querySelector("[data-outsource-receipt-cancel]").addEventListener("click", () => finish(null));
     holder.querySelector("[data-outsource-receipt-confirm]").addEventListener("click", () => {
-      const quantity = Number(input.value);
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > snapshot.unconfirmedQty) {
+      const quantity = material ? snapshot.receiptRequiredQty : Number(input.value);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > snapshot.receiptRequiredQty) {
         const error = holder.querySelector(".outsource-receipt-error");
-        error.textContent = machtileTranslate("outsource_receipt_range", { max: snapshot.unconfirmedQty });
+        error.textContent = machtileTranslate("outsource_receipt_range", { max: snapshot.receiptRequiredQty });
         error.hidden = false;
-        input.focus();
+        input?.focus();
         return;
       }
       finish(quantity);
     });
-    input.focus(); input.select();
+    if (input) { input.focus(); input.select(); }
   });
 }
 
@@ -23649,11 +23656,14 @@ async function machtileHandleOutsourceReceiptResult(code, result, kind) {
     flow.phase = "blocked"; flow.error = action.message; return true;
   }
   let args;
-  if (action.kind === "retry-without-receipt" || action.refresh) {
+  if (action.kind === "retry-without-receipt") {
     if (action.kind === "retry-without-receipt") showToast(machtileTranslate("outsource_receipt_not_expected"));
     args = core.withoutOutsourceReceipt(flow.args, crypto.randomUUID());
+  } else if (action.kind === "refresh-preview") {
+    showToast(machtileTranslate("outsource_receipt_stale"));
+    args = core.refreshOutsourceReceiptPreview(flow.args, crypto.randomUUID());
   } else {
-    const quantity = await machtileAskOutsourceReceipt(action.snapshot);
+    const quantity = await machtileAskOutsourceReceipt(action.snapshot, action.message);
     if (quantity === null) { flow.phase = "blocked"; flow.error = machtileTranslate("outsource_receipt_cancelled"); return true; }
     args = core.withOutsourceReceipt(flow.args, quantity, action.snapshot.expectedDoc4Fingerprint, crypto.randomUUID());
   }

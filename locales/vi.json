@@ -1,5 +1,10 @@
 {
   "outsource_receipt_question": { "value": "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?", "_draft": true },
+  "outsource_receipt_material_question": { "value": "Đã nhận vật liệu từ công đoạn trước “{{step}}（{{vendor}}）” chưa?", "_draft": true },
+  "outsource_receipt_count_question": { "value": "Công đoạn trước “{{step}}（{{vendor}}）” thuê ngoài đã về bao nhiêu sản phẩm?", "_draft": true },
+  "outsource_receipt_multi_step": { "value": "Có {{count}} công đoạn thuê ngoài liên tiếp; mỗi công đoạn sẽ nhận cùng số lượng này", "_draft": true },
+  "outsource_receipt_received": { "value": "Đã nhận", "_draft": true },
+  "outsource_receipt_stale": { "value": "Phiếu thuê ngoài vừa được người khác thay đổi; vui lòng xem trước lại", "_draft": true },
   "outsource_receipt_previous_step": { "value": "công đoạn trước", "_draft": true },
   "outsource_receipt_doc4": { "value": "Phiếu thuê ngoài: {{numbers}}", "_draft": true },
   "outsource_receipt_quantity": { "value": "Số lượng thực tế đã về", "_draft": true },

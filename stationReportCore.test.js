@@ -379,14 +379,34 @@ check("outsource receipt state machine asks, refreshes stale, and clears not-exp
   assert.deepEqual(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_REQUIRED"), false), { kind: "none" });
   const required = core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_REQUIRED"), true);
   assert.equal(required.kind, "ask");
-  assert.equal(required.refresh, false);
-  assert.deepEqual(required.snapshot, { previousStepName: "外包研磨", doc4Numbers: ["D4-101", "D4-102"], unconfirmedQty: 23, expectedDoc4Fingerprint: "B".repeat(64) });
+  assert.equal(required.message, "");
+  assert.deepEqual(required.snapshot, { previousStepName: "外包研磨", doc4Numbers: ["D4-101", "D4-102"], unconfirmedQty: 23,
+    receiptMode: "legacy_count", receiptRequiredQty: 23, receiptSteps: [], expectedDoc4Fingerprint: "B".repeat(64) });
   assert.equal(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_QTY_INVALID"), true).kind, "ask");
   const stale = core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_STALE"), true);
-  assert.equal(stale.kind, "ask");
-  assert.equal(stale.refresh, true);
+  assert.equal(stale.kind, "refresh-preview");
+  const refreshed = core.refreshOutsourceReceiptPreview(core.withOutsourceReceipt(
+    core.buildSubmitArgs(validInput({ outsourceReceiptDialogEnabled: true }), UUID_PREVIEW, false), 23, "B".repeat(64), UUID_RETRY),
+    "00000000-0000-4000-8000-000000000099");
+  assert.equal(refreshed.p_preview, true);
+  assert.equal(refreshed.p_previous_outsource_receipt_qty, null);
+  assert.equal(refreshed.p_expected_doc4_fingerprint, null);
   assert.deepEqual(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED"), true), { kind: "retry-without-receipt", code: "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED" });
   assert.equal(core.outsourceReceiptAction({ status: "rejected", reject_code: "PREV_OUTSOURCE_RECEIPT_REQUIRED" }, true).kind, "blocked");
+});
+
+check("new outsource receipt contract preserves route vendors and material/count modes", () => {
+  const fingerprint = "c".repeat(64);
+  const material = core.findOutsourceReceiptSnapshot({ preview_result: { receipt_mode: "material_confirm", receipt_required_qty: 9,
+    receipt_steps: [{ index_sn: 1, process_name: "素材外包", vendor_name: "甲廠", unconfirmed_qty: 9 }], expected_doc4_fingerprint: fingerprint } });
+  assert.equal(material.receiptMode, "material_confirm");
+  assert.equal(material.receiptRequiredQty, 9);
+  assert.deepEqual(material.receiptSteps, [{ indexSn: 1, processName: "素材外包", vendorName: "甲廠", unconfirmedQty: 9 }]);
+  const count = core.findOutsourceReceiptSnapshot({ receipt_mode: "count", receipt_required_qty: 7,
+    receipt_steps: [{ index_sn: 2, process_name: "熱處理", vendor_name: "乙廠", unconfirmed_qty: 7 },
+      { index_sn: 3, process_name: "研磨", vendor_name: "丙廠", unconfirmed_qty: 7 }], expected_doc4_fingerprint: fingerprint });
+  assert.equal(count.receiptMode, "count");
+  assert.equal(count.receiptSteps.at(-1).vendorName, "丙廠");
 });
 
 console.log("STATION_REPORT_CONTRACT PASS");

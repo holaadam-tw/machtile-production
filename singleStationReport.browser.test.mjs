@@ -50,6 +50,7 @@ let reportedOutput = 920;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
+let outsourceReceiptContract = "material_confirm";
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -71,8 +72,9 @@ await context.route("**/*", async route => {
         outsourceReceiptRequired = false;
         return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "rejected",
           reject_code: "PREV_OUTSOURCE_RECEIPT_REQUIRED", reject_message: "上一道委外待收貨",
-          legacy_snapshot: { previous_outsource_receipt: { previous_step_name: "外包研磨", doc4_numbers: ["D4-7788"],
-            unconfirmed_qty: 12, expected_doc4_fingerprint: "a".repeat(64) } } });
+          preview_result: { receipt_mode: outsourceReceiptContract, receipt_required_qty: 12,
+            receipt_steps: [{ index_sn: 1, process_name: "素材外包", vendor_name: "路線甲廠", unconfirmed_qty: 12 }],
+            expected_doc4_fingerprint: "a".repeat(64) } });
       }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
@@ -519,18 +521,28 @@ assert.equal(await receiptDialog.locator("#machtileOutsourceReceiptDialog").coun
   `receipt dialog missing; calls=${JSON.stringify(calls.commands.slice(receiptCallsBefore))}; errors=${JSON.stringify(errors)}; panel=${await receiptDialog.locator("#singleStationReportPanel").innerText()}`);
 assert.equal(calls.commands[receiptCallsBefore].p_previous_outsource_receipt_qty, null, "first preview sends receipt qty NULL");
 assert.equal(calls.commands[receiptCallsBefore].p_expected_doc4_fingerprint, null, "first preview sends fingerprint NULL");
-assert.match(await receiptDialog.locator("#outsourceReceiptTitle").innerText(), /上一道〈外包研磨〉委外還沒收貨，回來幾件？/);
-assert.equal(await receiptDialog.locator("[data-outsource-receipt-qty]").inputValue(), "12", "dialog defaults to unconfirmed_qty");
-assert.match(await receiptDialog.locator(".outsource-receipt-note").innerText(), /填實際回來的件數，系統會先收貨再報工/);
-await receiptDialog.locator("[data-outsource-receipt-qty]").fill("7");
+assert.match(await receiptDialog.locator("#outsourceReceiptTitle").innerText(), /上一道『素材外包（路線甲廠）』的素材收到了嗎？/);
+assert.equal(await receiptDialog.locator("[data-outsource-receipt-qty]").count(), 0, "material confirmation has no quantity input");
 await receiptDialog.locator("[data-outsource-receipt-confirm]").click();
 await receiptDialog.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
-assert.equal(calls.commands[receiptCallsBefore + 1].p_previous_outsource_receipt_qty, 7);
+assert.equal(calls.commands[receiptCallsBefore + 1].p_previous_outsource_receipt_qty, 12, "material confirmation submits required qty exactly");
 assert.equal(calls.commands[receiptCallsBefore + 1].p_expected_doc4_fingerprint, "a".repeat(64), "fingerprint is returned verbatim");
 assert.notEqual(calls.commands[receiptCallsBefore + 1].p_command_uuid, calls.commands[receiptCallsBefore].p_command_uuid);
 await receiptDialog.close();
 outsourceReceiptEnabled = false;
-console.log("PASS required outsource receipt dialog → preview success");
+const countDialog = await context.newPage();
+await countDialog.goto(base, { waitUntil: "domcontentloaded" });
+await countDialog.evaluate(() => { void machtileAskOutsourceReceipt({ receiptMode: "count", receiptRequiredQty: 6, unconfirmedQty: 6,
+  previousStepName: "", doc4Numbers: [], expectedDoc4Fingerprint: "b".repeat(64), receiptSteps: [
+    { indexSn: 1, processName: "熱處理", vendorName: "乙廠", unconfirmedQty: 6 },
+    { indexSn: 2, processName: "研磨", vendorName: "丙廠", unconfirmedQty: 6 },
+  ] }); });
+assert.match(await countDialog.locator("#outsourceReceiptTitle").innerText(), /上一道『研磨（丙廠）』委外回來幾件？/);
+assert.equal(await countDialog.locator("[data-outsource-receipt-qty]").inputValue(), "6");
+assert.match(await countDialog.locator(".outsource-receipt-note").innerText(), /連續 2 道委外，每一道都會收這個數量/);
+await countDialog.locator("[data-outsource-receipt-cancel]").click();
+await countDialog.close();
+console.log("PASS material/count outsource receipt dialogs → preview success");
 
 currentMachine = "A04"; guardFails = true;
 const failedGuard = await context.newPage();

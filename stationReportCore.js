@@ -219,14 +219,24 @@
 
   function findOutsourceReceiptSnapshot(value, depth = 0) {
     if (!isPlainObject(value) || depth > 6) return null;
-    const qty = Number(value.unconfirmed_qty);
+    const hasNewContract = value.receipt_mode === "material_confirm" || value.receipt_mode === "count";
+    const qty = Number(hasNewContract ? value.receipt_required_qty : value.unconfirmed_qty);
     const fingerprint = value.expected_doc4_fingerprint;
     if (Number.isInteger(qty) && qty > 0 && typeof fingerprint === "string" && DOC4_FINGERPRINT_RE.test(fingerprint)) {
       const numbers = value.doc4_numbers ?? value.doc4_nos ?? value.doc4_ids ?? [];
+      const steps = Array.isArray(value.receipt_steps) ? value.receipt_steps.filter(isPlainObject).map((step) => ({
+        indexSn: Number(step.index_sn),
+        processName: String(step.process_name || "").trim(),
+        vendorName: String(step.vendor_name || "").trim(),
+        unconfirmedQty: Number(step.unconfirmed_qty),
+      })) : [];
       return {
         previousStepName: String(value.previous_step_name ?? value.previous_process_name ?? value.step_name ?? "").trim(),
         doc4Numbers: Array.isArray(numbers) ? numbers.map(String) : (numbers == null ? [] : [String(numbers)]),
         unconfirmedQty: qty,
+        receiptMode: hasNewContract ? value.receipt_mode : "legacy_count",
+        receiptRequiredQty: qty,
+        receiptSteps: steps,
         expectedDoc4Fingerprint: fingerprint,
       };
     }
@@ -244,7 +254,8 @@
     if (code === "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED") return { kind: "retry-without-receipt", code };
     const snapshot = findOutsourceReceiptSnapshot(command);
     if (!snapshot) return { kind: "blocked", code, message: "委外收貨資料不完整，請重新預覽。" };
-    return { kind: "ask", code, snapshot, refresh: code === "PREV_OUTSOURCE_RECEIPT_STALE" };
+    if (code === "PREV_OUTSOURCE_RECEIPT_STALE") return { kind: "refresh-preview", code, snapshot };
+    return { kind: "ask", code, snapshot, message: code === "PREV_OUTSOURCE_RECEIPT_QTY_INVALID" ? guardMessage(code, command.reject_message, "收貨數量無效，請重新輸入。") : "" };
   }
 
   function withOutsourceReceipt(previousArgs, quantity, fingerprint, nextCommandUuid) {
@@ -265,6 +276,10 @@
     }
     return { ...previousArgs, p_command_uuid: nextCommandUuid,
       p_previous_outsource_receipt_qty: null, p_expected_doc4_fingerprint: null };
+  }
+
+  function refreshOutsourceReceiptPreview(previousArgs, nextCommandUuid) {
+    return { ...withoutOutsourceReceipt(previousArgs, nextCommandUuid), p_preview: true, p_client_guard_snapshot: null, p_acks: [] };
   }
 
   function commandReadPath(commandUuid) {
@@ -423,6 +438,6 @@
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
-    findOutsourceReceiptSnapshot, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt, createClient,
+    findOutsourceReceiptSnapshot, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt, refreshOutsourceReceiptPreview, createClient,
   });
 });

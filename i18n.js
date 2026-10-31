@@ -9,6 +9,11 @@
   const dictionaries = {
     "zh-Hant": {
       outsource_receipt_question: "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
+      outsource_receipt_material_question: "上一道『{{step}}（{{vendor}}）』的素材收到了嗎？",
+      outsource_receipt_count_question: "上一道『{{step}}（{{vendor}}）』委外回來幾件？",
+      outsource_receipt_multi_step: "連續 {{count}} 道委外，每一道都會收這個數量",
+      outsource_receipt_received: "收到了",
+      outsource_receipt_stale: "委外單剛被別人改過，請重新預覽",
       outsource_receipt_previous_step: "上一道",
       outsource_receipt_doc4: "委外單：{{numbers}}",
       outsource_receipt_quantity: "實際回來件數",
@@ -264,6 +269,11 @@
     },
     vi: {
       outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",
+      outsource_receipt_material_question: "Đã nhận vật liệu từ công đoạn trước “{{step}}（{{vendor}}）” chưa?",
+      outsource_receipt_count_question: "Công đoạn trước “{{step}}（{{vendor}}）” thuê ngoài đã về bao nhiêu sản phẩm?",
+      outsource_receipt_multi_step: "Có {{count}} công đoạn thuê ngoài liên tiếp; mỗi công đoạn sẽ nhận cùng số lượng này",
+      outsource_receipt_received: "Đã nhận",
+      outsource_receipt_stale: "Phiếu thuê ngoài vừa được người khác thay đổi; vui lòng xem trước lại",
       outsource_receipt_previous_step: "công đoạn trước",
       outsource_receipt_doc4: "Phiếu thuê ngoài: {{numbers}}",
       outsource_receipt_quantity: "Số lượng thực tế đã về",
