@@ -478,4 +478,15 @@ check("confirmed preview receipt carries into the final; finalAfterFreshPreview 
   assert.throws(() => core.finalAfterFreshPreview(final, previewArgs, realReceiptPreview(), "44444444-4444-4444-8444-444444444444"), { code: "PREVIEW_NOT_ALLOWED" });
 });
 
+check("operator message keys map guard codes to plain-language sentences", () => {
+  assert.equal(core.operatorMessageKey("QTY_EXCEEDS_AVAILABLE"), "simple_block_qty_exceeds");
+  assert.equal(core.operatorMessageKey("STATION_NOT_STARTED"), "simple_block_not_started");
+  assert.equal(core.operatorMessageKey("ORDER_MISMATCH"), "simple_block_changed");
+  assert.equal(core.operatorMessageKey("PREV_OUTSOURCE_RECEIPT_REQUIRED"), "simple_block_receipt");
+  assert.equal(core.operatorMessageKey("SOMETHING_NEW"), "simple_block_generic");
+  assert.equal(core.operatorMessageKey(""), "simple_block_generic");
+  assert.equal(core.operatorMessageKey("OLD_ORDER_NEWER_OPEN", true), "simple_soft_old_order");
+  assert.equal(core.operatorMessageKey("UNKNOWN_SOFT", true), "simple_soft_generic");
+});
+
 console.log("STATION_REPORT_CONTRACT PASS");

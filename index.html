@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="MachTile">
-  <link rel="stylesheet" href="./styles.css?v=20261031-rcvdlg-r2">
+  <link rel="stylesheet" href="./styles.css?v=20261031-single-r1">
   <script>
     window.MACHTILE_CONFIG = window.MACHTILE_CONFIG || { useSupabase: false };
     window.MACHTILE_CONFIG_SOURCE = "fallback";
@@ -485,6 +485,7 @@
           </section>
 
           <section id="quantitySection" class="report-section quantity-section">
+            <div id="simpleReportSummary" class="simple-report-summary-holder" hidden></div>
             <label class="field-label" for="completedQty"><span id="completedQtyLabel">機台目前顯示總數（這張單）</span> <small>必填</small> <span id="finishReportedQty" class="finish-reported-qty" hidden></span></label>
             <p id="reportQtyHelp" class="report-qty-help">報工請照機台計數器填累計數量</p>
             <div class="stepper">
@@ -501,8 +502,8 @@
               <input id="reportCounterManualBaseline" class="report-input" type="number" min="0" placeholder="例如：120">
             </div>
 
-            <label class="field-label" for="defectQty">這次不良數 <small>必填</small></label>
-            <div class="stepper">
+            <label id="defectQtyLabel" class="field-label" for="defectQty"><span id="defectQtyLabelText">這次不良數</span> <small>必填</small></label>
+            <div id="defectQtyStepper" class="stepper">
               <button type="button" data-step="defectQty" data-delta="-1">−</button>
               <input id="defectQty" type="number" min="0" value="0">
               <button type="button" data-step="defectQty" data-delta="1">+</button>
@@ -511,6 +512,10 @@
               <span data-i18n="report_fail_reason_label">不良原因（有不良時必選）</span>
               <select id="reportFailReason" class="report-input"></select>
             </label>
+            <div id="simpleReportReason" class="simple-report-reason-holder" hidden></div>
+            <div id="simpleReportHint" class="simple-report-hint" role="status" hidden></div>
+            <div id="simpleReportOperator" class="simple-report-operator" hidden></div>
+            <div id="simpleReportDefectToggle" class="simple-report-defect-holder" hidden></div>
           </section>
 
           <label class="field-label" for="reportNote">備註</label>
@@ -745,7 +750,7 @@
     <button type="button" class="secondary-action" data-station-report-background-dismiss hidden>知道了</button>
   </div>
 
-  <script src="./i18n.js?v=20261031-rcvdlg-r2"></script>
+  <script src="./i18n.js?v=20261031-single-r1"></script>
   <script src="./routeConstants.js?v=20261030-ot-outsource"></script>
   <script src="./scheduleCore.js?v=20261030-ot-outsource"></script>
   <script src="./attentionCenterCore.js?v=20261030-ot-outsource"></script>
@@ -786,8 +791,8 @@
   <script src="./dispatchPoolCore.js?v=20261030-ot-outsource"></script>
   <script src="./stationCommandCore.js?v=20261030-cardqty3"></script>
   <script src="./takeoverCore.js?v=20261030-otbtn-r1"></script>
-  <script src="./stationReportCore.js?v=20261031-rcvdlg-r3"></script>
+  <script src="./stationReportCore.js?v=20261031-single-r1"></script>
   <script src="./inspectionLinkCore.js?v=20261030-ot-outsource"></script>
-  <script src="./app.js?v=20261031-rcvdlg-r4"></script>
+  <script src="./app.js?v=20261031-single-r1"></script>
 </body>
 </html>
