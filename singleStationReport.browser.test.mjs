@@ -57,6 +57,7 @@ let finalStaleOnce = false;
 let finalRequiredOnce = false;
 let starterUserId = null;
 let previewBlockedCode = "";
+let previewSoftCode = "";
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -117,6 +118,12 @@ await context.route("**/*", async route => {
             failure_detail: { previous_step_name: "研磨", vendor_name: "丙廠", doc4_numbers: ["D4-20261031-02"], unconfirmed_qty: 6,
               receipt_mode: "count", receipt_required_qty: 6, receipt_steps: [{ index_sn: 1, process_name: "研磨", vendor_name: "丙廠", unconfirmed_qty: 6 }],
               expected_doc4_fingerprint: "f".repeat(64), doc4_line_ids: ["L-1"] } }, guard: { code: guardCode, hard: true } } });
+      }
+      if (body.p_preview && previewSoftCode) {
+        const guard = { code: previewSoftCode, hard: false, message: "同料號已有較新工單", Details: { ...previewResult.legacy_snapshot.report.guard.Details } };
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: false, guard_code: previewSoftCode, message: guard.message,
+            legacy_snapshot: { report: { guard } } } });
       }
       if (body.p_preview && previewBlockedCode) {
         const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30 } };
@@ -897,6 +904,63 @@ const dt2Sent = calls.commands.slice(dt2Before);
 assert.deepEqual(dt2Sent.map(c => [c.p_preview, c.p_good_qty, c.p_fail_qty]), [[true, 5, 1], [false, 5, 1]], "F1 in the one-button flow: fresh reread → good 5 (761 − 750 − 5 − 1), never the stale 10");
 await dt2.close();
 reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+
+// L3 #1：連點兩下（含 Enter 再送一次）只能有一條寫入鏈：一筆預覽、最多一筆正式送出。
+const dbl = await openOperatorPage();
+const dblBefore = calls.commands.length;
+await dbl.evaluate(() => {
+  const form = document.getElementById("reportForm");
+  const button = form.querySelector(".submit-report");
+  button.click();
+  button.click();
+  form.requestSubmit();
+});
+assert.equal(await dbl.locator("#reportForm .submit-report").isDisabled(), true, "button is disabled synchronously after the first tap");
+await dbl.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+await dbl.waitForTimeout(1500);
+const dblSent = calls.commands.slice(dblBefore);
+assert.equal(dblSent.filter(c => c.p_preview).length, 1, `double tap → exactly one preview: ${JSON.stringify(dblSent.map(c => c.p_preview))}`);
+assert.ok(dblSent.filter(c => !c.p_preview).length <= 1, "double tap → at most one final");
+await dbl.close();
+
+// L3 #2：預覽後改了不良數 → 正式送出擋下（零寫入），要重新預覽。
+const bad = await openOperatorPage();
+await bad.locator("[data-simple-report-defect]").check();
+await bad.locator("#defectQty").fill("1");
+await bad.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await bad.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await bad.waitForFunction(() => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed");
+assert.equal(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).args.p_fail_qty), 1);
+await bad.locator("#defectQty").fill("2");
+const badFinals = calls.commands.filter(c => !c.p_preview).length;
+await bad.evaluate(() => machtileStationReportSubmitFinal("A04"));
+assert.equal(calls.commands.filter(c => !c.p_preview).length, badFinals, "changed defects after preview → no final");
+assert.match(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).error), /已報數量已改變/);
+await bad.close();
+
+// L3 #3：舊單確認（OLD_ORDER_NEWER_OPEN）沒寫原因 → 留在確認狀態、提示寫原因，不重新預覽；寫了才送出。
+previewSoftCode = "OLD_ORDER_NEWER_OPEN";
+const old = await openOperatorPage();
+const oldBefore = calls.commands.length;
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
+assert.match(await old.locator('[data-simple-report-status="warning"]').innerText(), /同一個料號已經有比較新的工單/);
+assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出");
+assert.equal(await old.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "old-order note field is shown");
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("請寫一句原因再送出"));
+assert.equal(calls.commands.length, oldBefore + 1, "missing note → no fresh preview, no final");
+assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出", "stays in the soft-confirm state");
+await old.locator('#simpleReportReason [data-station-report-note="A04"]').fill("舊單補報");
+await old.locator("#reportForm .submit-report").click();
+await old.waitForFunction(() => machtileBatchRow("A04").stationReport.result?.status === "applied", null, { timeout: 8000 });
+const oldSent = calls.commands.slice(oldBefore);
+assert.deepEqual(oldSent.map(c => c.p_preview), [true, false], "note given → one ack final, no second preview");
+assert.ok(oldSent[1].p_acks.includes("OLD_ORDER_NEWER_OPEN"));
+assert.equal(oldSent[1].p_report_note, "舊單補報");
+await old.close();
+previewSoftCode = "";
+console.log("PASS L3: double tap single chain, defect change blocks final, old-order note keeps soft state");
 
 // ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
 previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";

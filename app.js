@@ -24193,17 +24193,30 @@ function machtileApplySimpleReportChrome() {
   const submit = document.querySelector("#reportForm .submit-report");
   if (submit) {
     submit.hidden = false;
-    submit.disabled = busy;
+    const inFlight = machtileSimpleReportSubmitInFlight || machtileSimpleReportPrimaryInFlight;
+    submit.disabled = busy || inFlight;
     const retry = flow.receiptCancelled || flow.phase === "blocked" || flow.phase === "preview-timeout"
       || ["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card?.kind) || Boolean(flow.error);
     const ack = card?.kind === "preview-soft" && flow.phase === "previewed" && !flow.error;
-    machtileSetReportSubmitLabel(busy ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
+    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
   }
 }
 
 // 主按鈕「送出報工」：既有預覽 →（要代收貨就跳 PR #155 對話框）→ 正式送出。不新增任何寫入路徑。
+var machtileSimpleReportSubmitInFlight = false;
+var machtileSimpleReportPrimaryInFlight = false;
+
 async function machtileSimpleReportPrimary(code) {
+  if (machtileSimpleReportPrimaryInFlight) return;
+  machtileSimpleReportPrimaryInFlight = true;
+  try { await machtileSimpleReportPrimaryRun(code); }
+  finally { machtileSimpleReportPrimaryInFlight = false; }
+}
+
+async function machtileSimpleReportPrimaryRun(code) {
   const core = machtileStationReportCore();
+  // 批次頁的共用列計算會把同一台的 row.good 清掉（例如打備註時）；送出前一律照畫面重新同步。
+  machtileSyncSingleStationReportRow();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow)) return;
@@ -24216,6 +24229,12 @@ async function machtileSimpleReportPrimary(code) {
   const previewMatches = flow.phase === "previewed" && flow.preview && flow.preview.command_uuid === flow.args?.p_command_uuid
     && Number(flow.args?.p_good_qty) === Number(row.good) && Number(flow.args?.p_fail_qty) === Number(row.bad || 0);
   if (previewMatches && card?.kind === "preview-soft" && !flow.error) {
+    // L3 #3：舊單確認沒寫原因 → 留在「確認沒錯，送出」狀態並提示寫原因，不重新預覽繞圈。
+    if (card.guardCode === "OLD_ORDER_NEWER_OPEN" && !String(row.reportNote || "").trim()) {
+      machtileShowReportSubmitError(machtileTranslate("simple_block_note_required"),
+        document.querySelector('#simpleReportReason [data-station-report-note]'));
+      return;
+    }
     await machtileStationReportRetryPreviewAck(code);
     machtileRenderStationReportSurfaces();
     return;
@@ -24771,7 +24790,9 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
     }
   } catch (error) { flow.error = machtileTranslate("report_total_unavailable"); machtileRenderStationReportSurfaces(); return; }
   // 正式送出的良品一定要等於預覽時用最新已報數算出的良品（不能用畫面上次同步的舊值）
-  if (flow.singleReport?.previewGood !== undefined && Number(row.good) !== Number(flow.singleReport.previewGood)) {
+  // L3 #2：不良數也要等於預覽時送的不良數（改了不良就必須重新預覽）
+  if ((flow.singleReport?.previewGood !== undefined && Number(row.good) !== Number(flow.singleReport.previewGood))
+    || (flow.args && Number(row.bad || 0) !== Number(flow.args.p_fail_qty || 0))) {
     flow.phase = "blocked"; flow.error = "已報數量已改變，請重新預覽後再送出"; flow.preview = null;
     machtileRenderStationReportSurfaces();
     return;
@@ -26776,8 +26797,22 @@ function bindEvents() {
     submitAiSupportQuestion($("#aiSupportInput")?.value);
   });
 
+  // L3 #1：作業員一顆鈕畫面——點下去當下就鎖（按鈕同步停用＋模組旗標），連點或 Enter 不會開第二條寫入鏈；
+  // 任何結束路徑都在 finally 解鎖。其他畫面照舊。
   $("#reportForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!machtileSimpleReportActive()) { await machtileReportFormSubmit(event); return; }
+    if (machtileSimpleReportSubmitInFlight) return;
+    machtileSimpleReportSubmitInFlight = true;
+    const submitButton = document.querySelector("#reportForm .submit-report");
+    if (submitButton) submitButton.disabled = true;
+    try { await machtileReportFormSubmit(event); }
+    finally {
+      machtileSimpleReportSubmitInFlight = false;
+      machtileRenderSingleStationReport();
+    }
+  });
+  const machtileReportFormSubmit = async (event) => {
     machtileClearReportSubmitError();
     if (!selectedOrder) {
       machtileShowReportSubmitError("此機台尚未指派工單，請先由主管排入工單。");
@@ -26889,7 +26924,7 @@ function bindEvents() {
     } catch (error) {
       showToast(`回報失敗：${error.message}`);
     }
-  });
+  };
 }
 
 // ---- Jev triage (2026-09-24) -------------------------------------------------------------
