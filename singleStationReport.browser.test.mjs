@@ -51,6 +51,9 @@ let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
 let outsourceReceiptContract = "material_confirm";
+let receiptFingerprint = "a".repeat(64);
+let finalStaleOnce = false;
+let finalRequiredOnce = false;
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -68,13 +71,45 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
+      // REAL Factory preview shape for a receipt failure (wt-deploy40 SoftNet/SoftNetWebII/Services/StationCommands):
+      // StationReportPreview.cs Preview() :61-79 returns Status=previewed (never rejected) with
+      // SerializePreviewResult :126-178 → allowed:false, hard:true, guard_code, receipt fields at top level;
+      // StationCommandSources.cs :155-176 writes it back with p_reject_code=null, p_legacy_snapshot=null.
       if (body.p_preview && outsourceReceiptRequired && body.p_previous_outsource_receipt_qty == null) {
         outsourceReceiptRequired = false;
-        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "rejected",
-          reject_code: "PREV_OUTSOURCE_RECEIPT_REQUIRED", reject_message: "上一道委外待收貨",
-          preview_result: { receipt_mode: outsourceReceiptContract, receipt_required_qty: 12,
+        const guardCode = "PREV_OUTSOURCE_RECEIPT_REQUIRED";
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed",
+          reject_code: null, reject_message: null, legacy_snapshot: null,
+          preview_result: { status: "previewed", allowed: false, guard_code: guardCode, hard: true,
+            message: "請確認『素材外包』（路線甲廠）原料委外已收貨。",
+            legacy_snapshot: { report: { guard: { code: guardCode, hard: true, message: "請確認『素材外包』（路線甲廠）原料委外已收貨。", Details: {} } } },
+            command_uuid: body.p_command_uuid, available: 0, supply: 0, done_c: 0, prev_index_sn: 1, prev_kind: "OUTSOURCE", predicted_ac03_qty: 0,
+            previous_outsource_step_name: "素材外包", previous_outsource_doc4_numbers: ["D4-20261031-01"], outsource_unconfirmed_qty: 12,
+            expected_doc4_fingerprint: receiptFingerprint, receipt_mode: outsourceReceiptContract, receipt_required_qty: 12,
             receipt_steps: [{ index_sn: 1, process_name: "素材外包", vendor_name: "路線甲廠", unconfirmed_qty: 12 }],
-            expected_doc4_fingerprint: "a".repeat(64) } });
+            order_qty: 1000, order_start: "2026-10-01", shown_at: "2026-10-31T01:00:00.000Z" } });
+      }
+      // REAL Factory final reject shapes: StationReportApplier.cs :90-92 (Validate → WithSnapshot :276-301 merges
+      // failure_detail from StationReportOutsourceReceipt.cs :56-67) and :119-121 (in-transaction STALE, no detail);
+      // StationCommandSources.cs :159-161 stores legacy_snapshot={report, guard}, :163-176 preview_result=null.
+      if (!body.p_preview && finalStaleOnce && body.p_previous_outsource_receipt_qty != null) {
+        finalStaleOnce = false;
+        receiptFingerprint = "e".repeat(64);
+        outsourceReceiptRequired = true;
+        return json({ command_uuid: body.p_command_uuid, command_type: "report", status: "rejected",
+          reject_code: "PREV_OUTSOURCE_RECEIPT_STALE", reject_message: "委外未收貨明細已改變，請重新預覽後再送。", preview_result: null,
+          legacy_snapshot: { report: { command_uuid: body.p_command_uuid, guard: { code: "PREV_OUTSOURCE_RECEIPT_STALE", hard: true } },
+            guard: { code: "PREV_OUTSOURCE_RECEIPT_STALE", hard: true } } });
+      }
+      if (!body.p_preview && finalRequiredOnce && body.p_previous_outsource_receipt_qty == null) {
+        finalRequiredOnce = false;
+        const guardCode = "PREV_OUTSOURCE_RECEIPT_REQUIRED";
+        return json({ command_uuid: body.p_command_uuid, command_type: "report", status: "rejected",
+          reject_code: guardCode, reject_message: "上一道『研磨』（丙廠）還沒收貨，回來幾件？", preview_result: null,
+          legacy_snapshot: { report: { command_uuid: body.p_command_uuid, guard: { code: guardCode, hard: true },
+            failure_detail: { previous_step_name: "研磨", vendor_name: "丙廠", doc4_numbers: ["D4-20261031-02"], unconfirmed_qty: 6,
+              receipt_mode: "count", receipt_required_qty: 6, receipt_steps: [{ index_sn: 1, process_name: "研磨", vendor_name: "丙廠", unconfirmed_qty: 6 }],
+              expected_doc4_fingerprint: "f".repeat(64), doc4_line_ids: ["L-1"] } }, guard: { code: guardCode, hard: true } } });
       }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
@@ -256,6 +291,9 @@ const finalCommand = calls.commands.find(command => !command.p_preview);
 assert.equal(finalCommand.p_preview, false);
 assert.equal(finalCommand.p_good_qty, 38);
 assert.equal(finalCommand.p_fail_qty, 2);
+assert.equal("p_previous_outsource_receipt_qty" in finalCommand, false, "flag off: final RPC body has no receipt keys");
+assert.equal("p_expected_doc4_fingerprint" in finalCommand, false, "flag off: final RPC body has no fingerprint key");
+assert.equal(calls.commands.some(command => "p_previous_outsource_receipt_qty" in command), false, "flag off: no RPC body carries receipt keys");
 assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "true", "confirmation closes the report sheet immediately");
 assert.match(await page.locator("#toast").innerText(), /已送出，工廠寫入中|工廠已完成寫入/, "background submission gives immediate or completed feedback");
 await page.evaluate(() => { selectedOrder = { id: "OTHER-WO", processId: "other-process", machine: "A01" }; });
@@ -502,36 +540,145 @@ assert.equal(calls.reports.length, reconcileReportsBefore + 1, "repeated reconci
 await reconcile.close();
 finalSubmitFails = false;
 
-outsourceReceiptEnabled = true; outsourceReceiptRequired = true; reconciledCommand = null;
-const receiptDialog = await context.newPage();
-await receiptDialog.goto(base, { waitUntil: "domcontentloaded" });
-await receiptDialog.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
-await receiptDialog.evaluate(() => { config.outsourceReceiptDialogEnabled = true; window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = true; });
-await receiptDialog.locator("[data-open-report]:visible").first().click();
-await receiptDialog.locator('#reportForm [data-report-type="noon"]').click();
-await receiptDialog.locator("#completedQty").fill("958");
-await receiptDialog.locator("#defectQty").fill("0");
-await receiptDialog.evaluate(operatorId => {
-  const list = document.createElement("div"); list.id = "machtileOperatorList";
-  list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`; document.body.append(list);
-}, id(901));
-await receiptDialog.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+// Flag OFF + Factory asks for a receipt (real previewed/allowed:false shape): no dialog, behaviour unchanged.
+outsourceReceiptEnabled = false; outsourceReceiptRequired = true; reconciledCommand = null;
+async function openReceiptPage() {
+  const receiptPage = await context.newPage();
+  receiptPage.on("pageerror", error => errors.push(error.message));
+  await receiptPage.goto(base, { waitUntil: "domcontentloaded" });
+  await receiptPage.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+  await receiptPage.locator("[data-open-report]:visible").first().click();
+  await receiptPage.locator('#reportForm [data-report-type="noon"]').click();
+  await receiptPage.locator("#completedQty").fill("958");
+  await receiptPage.locator("#defectQty").fill("0");
+  await receiptPage.evaluate(operatorId => {
+    const list = document.createElement("div"); list.id = "machtileOperatorList";
+    list.innerHTML = `<input type="checkbox" value="${operatorId}" data-mapped="1" checked>`; document.body.append(list);
+  }, id(901));
+  await receiptPage.waitForFunction(() => document.querySelector('[data-station-report-preview="A04"]'));
+  return receiptPage;
+}
+const holdConfirm = async (receiptPage) => {
+  await receiptPage.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
+};
+const flagOff = await openReceiptPage();
+const flagOffBefore = calls.commands.length;
+await flagOff.locator('[data-station-report-preview="A04"]').click();
+await flagOff.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("預覽遭 guard 阻擋"));
+await flagOff.waitForTimeout(300);
+assert.equal(await flagOff.locator("#machtileOutsourceReceiptDialog").count(), 0, "flag off: real receipt preview never opens the dialog");
+assert.equal(calls.commands.length, flagOffBefore + 1, "flag off: exactly one preview, nothing re-sent");
+assert.equal("p_previous_outsource_receipt_qty" in calls.commands[flagOffBefore], false, "flag off: preview RPC body has no receipt keys");
+assert.equal(await flagOff.locator('[data-station-report-confirm="A04"]').count(), 0, "flag off: blocked preview offers no confirm");
+await flagOff.close();
+
+// Flag ON, real preview shape → material dialog → preview with receipt → final carries qty+fingerprint once.
+outsourceReceiptEnabled = true; outsourceReceiptRequired = true; receiptFingerprint = "a".repeat(64); reconciledCommand = null;
+const receiptDialog = await openReceiptPage();
 const receiptCallsBefore = calls.commands.length;
+const receiptReportsBefore = calls.reports.length;
 await receiptDialog.locator('[data-station-report-preview="A04"]').click();
-await receiptDialog.waitForTimeout(1000);
+await receiptDialog.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 }).catch(() => null);
 assert.equal(await receiptDialog.locator("#machtileOutsourceReceiptDialog").count(), 1,
   `receipt dialog missing; calls=${JSON.stringify(calls.commands.slice(receiptCallsBefore))}; errors=${JSON.stringify(errors)}; panel=${await receiptDialog.locator("#singleStationReportPanel").innerText()}`);
 assert.equal(calls.commands[receiptCallsBefore].p_previous_outsource_receipt_qty, null, "first preview sends receipt qty NULL");
 assert.equal(calls.commands[receiptCallsBefore].p_expected_doc4_fingerprint, null, "first preview sends fingerprint NULL");
 assert.match(await receiptDialog.locator("#outsourceReceiptTitle").innerText(), /上一道『素材外包（路線甲廠）』的素材收到了嗎？/);
 assert.equal(await receiptDialog.locator("[data-outsource-receipt-qty]").count(), 0, "material confirmation has no quantity input");
+assert.match(await receiptDialog.locator(".outsource-receipt-doc4").innerText(), /D4-20261031-01/, "doc4 numbers come from previous_outsource_doc4_numbers");
 await receiptDialog.locator("[data-outsource-receipt-confirm]").click();
 await receiptDialog.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+assert.equal(calls.commands[receiptCallsBefore + 1].p_preview, true);
 assert.equal(calls.commands[receiptCallsBefore + 1].p_previous_outsource_receipt_qty, 12, "material confirmation submits required qty exactly");
 assert.equal(calls.commands[receiptCallsBefore + 1].p_expected_doc4_fingerprint, "a".repeat(64), "fingerprint is returned verbatim");
 assert.notEqual(calls.commands[receiptCallsBefore + 1].p_command_uuid, calls.commands[receiptCallsBefore].p_command_uuid);
+await holdConfirm(receiptDialog);
+await receiptDialog.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 5000 });
+const receiptFinals = calls.commands.slice(receiptCallsBefore).filter(command => !command.p_preview);
+assert.equal(receiptFinals.length, 1, "exactly one final command");
+assert.equal(receiptFinals[0].p_previous_outsource_receipt_qty, 12, "final carries the confirmed receipt qty");
+assert.equal(receiptFinals[0].p_expected_doc4_fingerprint, "a".repeat(64), "final carries the confirmed fingerprint");
+assert.equal(await receiptDialog.locator("#machtileOutsourceReceiptDialog").count(), 0, "operator is not asked a second time");
+assert.equal(calls.reports.length, receiptReportsBefore + 1, "applied final records production_reports once");
+assert.equal(calls.reports.at(-1).report_uuid, receiptFinals[0].p_command_uuid);
 await receiptDialog.close();
-outsourceReceiptEnabled = false;
+
+// Final rejected STALE → fresh preview (receipt NULL) → dialog again → preview with new fingerprint →
+// final re-sent with a NEW uuid; App production_reports uses the applied command uuid.
+outsourceReceiptRequired = true; receiptFingerprint = "a".repeat(64); finalStaleOnce = true;
+const stale = await openReceiptPage();
+const staleBefore = calls.commands.length;
+const staleReportsBefore = calls.reports.length;
+await stale.locator('[data-station-report-preview="A04"]').click();
+await stale.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+await stale.locator("[data-outsource-receipt-confirm]").click();
+await stale.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+await holdConfirm(stale);
+await stale.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+const staleSent = calls.commands.slice(staleBefore);
+assert.equal(staleSent.length, 4, `preview, receipt preview, stale final, fresh preview: ${JSON.stringify(staleSent.map(c => [c.p_preview, c.p_previous_outsource_receipt_qty]))}`);
+assert.equal(staleSent[2].p_preview, false);
+assert.equal(staleSent[3].p_preview, true, "STALE final re-runs a fresh PREVIEW");
+assert.equal(staleSent[3].p_previous_outsource_receipt_qty, null, "fresh preview sends receipt NULL");
+assert.equal(staleSent[3].p_expected_doc4_fingerprint, null);
+assert.equal(staleSent[3].p_client_guard_snapshot, null, "fresh preview has no stale client snapshot");
+assert.equal(await stale.locator("#machtileOutsourceReceiptDialog").count(), 1, "dialog shown again after STALE");
+await stale.locator("[data-outsource-receipt-confirm]").click();
+await stale.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 5000 });
+const staleAll = calls.commands.slice(staleBefore);
+assert.equal(staleAll.length, 6, "then receipt preview + final re-send");
+assert.equal(staleAll[4].p_preview, true);
+assert.equal(staleAll[4].p_expected_doc4_fingerprint, "e".repeat(64), "re-confirmed against the new fingerprint");
+assert.equal(staleAll[5].p_preview, false);
+assert.equal(staleAll[5].p_previous_outsource_receipt_qty, 12);
+assert.equal(staleAll[5].p_expected_doc4_fingerprint, "e".repeat(64));
+assert.notEqual(staleAll[5].p_command_uuid, staleAll[2].p_command_uuid, "re-sent final uses a new uuid");
+assert.equal(staleAll[5].p_client_guard_snapshot.preview_command_uuid, staleAll[4].p_command_uuid, "re-sent final binds the fresh preview");
+assert.equal(calls.reports.length, staleReportsBefore + 1, "only the applied final is recorded");
+assert.equal(calls.reports.at(-1).report_uuid, staleAll[5].p_command_uuid, "recorded report uuid = applied command uuid");
+assert.equal(calls.reports.at(-1).report_payload.station_command_uuid, staleAll[5].p_command_uuid);
+assert.equal(await stale.evaluate(() => machtileBatchRow("A04").stationReport.args.p_command_uuid), staleAll[5].p_command_uuid);
+await stale.close();
+
+// Final rejected REQUIRED (real failure_detail shape) → count dialog → final re-submit; record uses the new uuid.
+outsourceReceiptRequired = false; finalRequiredOnce = true;
+const finalAsk = await openReceiptPage();
+const finalAskBefore = calls.commands.length;
+const finalAskReportsBefore = calls.reports.length;
+await finalAsk.locator('[data-station-report-preview="A04"]').click();
+await finalAsk.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+assert.equal(await finalAsk.locator("#machtileOutsourceReceiptDialog").count(), 0);
+await holdConfirm(finalAsk);
+await finalAsk.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+assert.match(await finalAsk.locator("#outsourceReceiptTitle").innerText(), /上一道『研磨（丙廠）』委外回來幾件？/);
+await finalAsk.locator("[data-outsource-receipt-qty]").fill("5");
+await finalAsk.locator("[data-outsource-receipt-confirm]").click();
+await finalAsk.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 5000 });
+const finalAskSent = calls.commands.slice(finalAskBefore).filter(command => !command.p_preview);
+assert.equal(finalAskSent.length, 2);
+assert.equal(finalAskSent[1].p_previous_outsource_receipt_qty, 5);
+assert.equal(finalAskSent[1].p_expected_doc4_fingerprint, "f".repeat(64));
+assert.equal(calls.reports.length, finalAskReportsBefore + 1);
+assert.equal(calls.reports.at(-1).report_uuid, finalAskSent[1].p_command_uuid, "recorded report uuid = applied (re-submitted) command uuid");
+assert.notEqual(calls.reports.at(-1).report_uuid, finalAskSent[0].p_command_uuid);
+await finalAsk.close();
+
+// F6: replacing an open dialog settles the earlier promise instead of leaving it pending.
+const superseded = await context.newPage();
+await superseded.goto(base, { waitUntil: "domcontentloaded" });
+await superseded.waitForFunction(() => typeof machtileAskOutsourceReceipt === "function");
+const supersededResult = await superseded.evaluate(async () => {
+  const snapshot = { receiptMode: "count", receiptRequiredQty: 3, unconfirmedQty: 3, previousStepName: "", doc4Numbers: [], expectedDoc4Fingerprint: "c".repeat(64), receiptSteps: [] };
+  const first = machtileAskOutsourceReceipt(snapshot);
+  const second = machtileAskOutsourceReceipt(snapshot);
+  const firstValue = await Promise.race([first, new Promise(resolve => setTimeout(() => resolve("pending"), 500))]);
+  const count = document.querySelectorAll("#machtileOutsourceReceiptDialog").length;
+  document.querySelector("[data-outsource-receipt-cancel]").click();
+  return { first: firstValue, second: await second, count };
+});
+assert.deepEqual(supersededResult, { first: { superseded: true }, second: null, count: 1 });
+await superseded.close();
+outsourceReceiptEnabled = false; finalStaleOnce = false; finalRequiredOnce = false;
 const countDialog = await context.newPage();
 await countDialog.goto(base, { waitUntil: "domcontentloaded" });
 await countDialog.evaluate(() => { void machtileAskOutsourceReceipt({ receiptMode: "count", receiptRequiredQty: 6, unconfirmedQty: 6,

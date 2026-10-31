@@ -77,6 +77,18 @@ async function fake(route) {
   if (p.endsWith("/rpc/machtile_submit_station_report")) {
     const body = JSON.parse(req.postData() || "{}"); stationSubmits.push(structuredClone(body));
     if (stationScenario === "error" && body.p_preview) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "preview exploded" }) });
+    // REAL Factory receipt preview shape: StationReportPreview.cs Preview() :61-79 + SerializePreviewResult :126-178
+    // (wt-deploy40) → status previewed, preview_result.allowed:false/hard:true/guard_code, written back by
+    // StationCommandSources.cs :155-176 with reject_code null.
+    if (body.p_preview && stationScenario === "receipt-a04" && body.p_expected_order_no === "WO-A04" && body.p_previous_outsource_receipt_qty == null) {
+      const code = "PREV_OUTSOURCE_RECEIPT_REQUIRED";
+      return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+        preview_result: { status: "previewed", allowed: false, hard: true, guard_code: code, message: "請確認原料委外已收貨。", available: 0,
+          legacy_snapshot: { report: { guard: { code, hard: true, message: "請確認原料委外已收貨。", Details: { available: 0 } } } },
+          previous_outsource_step_name: "素材外包", previous_outsource_doc4_numbers: ["D4-B1"], outsource_unconfirmed_qty: 30,
+          expected_doc4_fingerprint: "9".repeat(64), receipt_mode: "material_confirm", receipt_required_qty: 30,
+          receipt_steps: [{ index_sn: 1, process_name: "素材外包", vendor_name: "批次甲廠", unconfirmed_qty: 30 }] } }]);
+    }
     if (body.p_preview) {
       const soft = stationScenario === "ack" || (stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04");
       const code = soft ? "HIGH_FAIL_RATIO" : "";
@@ -214,6 +226,37 @@ await page.waitForFunction(() => document.querySelector('[data-batch-needs-confi
 ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-panel]').isVisible(), "preview needing acknowledgement expands the panel with a confirmation marker");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A04" && !x.p_preview).length === 0, "ack row is not submitted automatically");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A05" && !x.p_preview).length === 1, "other rows continue after an acknowledgement is required");
+
+// Receipt flag ON: the batch row stops for the dialog (explicit click), then the final carries the
+// confirmed receipt once — no second prompt mid-batch.
+// Let the previous scenario's background refresh (which reloads the identity map) settle first.
+await page.waitForTimeout(1500);
+await page.evaluate(() => {
+  window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = true;
+  for (const [code, processId] of [["A04", "00000000-0000-4000-8000-000000000304"], ["A05", "00000000-0000-4000-8000-000000000305"]]) {
+    const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.processId = processId; row.operatorId = machtileBatchState.users[0].id;
+  }
+  machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000304", { legacy_index_sn: 1, manufacture_ii_id: "MII-A04", simulation_id: "SIM-A04", part_no: "D-1" });
+  machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000305", { legacy_index_sn: 1, manufacture_ii_id: "MII-A05", simulation_id: "SIM-A05", part_no: "D-2" });
+  machtileRenderBatchReport();
+});
+stationScenario = "receipt-a04";
+const receiptStart = stationSubmits.length;
+await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("180");
+await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("");
+await rootView.locator("[data-batch-submit]").click();
+await page.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+ok(stationSubmits.slice(receiptStart).filter((x) => !x.p_preview).length === 0, "batch row waits for the receipt dialog; no final sent before the click");
+ok((await page.locator("#outsourceReceiptTitle").innerText()).includes("素材外包（批次甲廠）"), "batch receipt dialog names the route step and vendor");
+await page.locator("[data-outsource-receipt-confirm]").click();
+await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("✓"));
+const receiptSent = stationSubmits.slice(receiptStart).filter((x) => x.p_expected_order_no === "WO-A04");
+const receiptFinals = receiptSent.filter((x) => !x.p_preview);
+ok(receiptSent.length === 3 && receiptSent[1].p_previous_outsource_receipt_qty === 30, "batch: blocked preview → receipt preview → final");
+ok(receiptFinals.length === 1 && receiptFinals[0].p_previous_outsource_receipt_qty === 30 && receiptFinals[0].p_expected_doc4_fingerprint === "9".repeat(64), "batch final carries the confirmed receipt qty + fingerprint");
+ok(await page.locator("#machtileOutsourceReceiptDialog").count() === 0, "batch final does not prompt a second time");
+await page.evaluate(() => { window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = false; });
+stationScenario = "clean";
 
 // A preview transport error is attached to the card and does not submit.
 await page.evaluate(() => { const row = machtileBatchRow("A04"); row.stationReport = null; row.result = null; row.error = ""; machtileRenderBatchReport(); });

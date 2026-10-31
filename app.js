@@ -23604,9 +23604,17 @@ const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStation
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
 
+// Resolved when a newer dialog replaces an open one, so the older flow ends instead of hanging.
+const MACHTILE_OUTSOURCE_RECEIPT_SUPERSEDED = Object.freeze({ superseded: true });
+let machtileOutsourceReceiptDialogResolve = null;
+
 function machtileAskOutsourceReceipt(snapshot, initialError = "") {
   return new Promise((resolve) => {
+    const previousResolve = machtileOutsourceReceiptDialogResolve;
+    machtileOutsourceReceiptDialogResolve = null;
     document.getElementById("machtileOutsourceReceiptDialog")?.remove();
+    if (previousResolve) previousResolve(MACHTILE_OUTSOURCE_RECEIPT_SUPERSEDED);
+    machtileOutsourceReceiptDialogResolve = resolve;
     const holder = document.createElement("div");
     holder.id = "machtileOutsourceReceiptDialog";
     holder.className = "outsource-receipt-dialog-backdrop";
@@ -23631,7 +23639,12 @@ function machtileAskOutsourceReceipt(snapshot, initialError = "") {
     </section>`;
     document.body.append(holder);
     const input = holder.querySelector("[data-outsource-receipt-qty]");
-    const finish = (value) => { holder.remove(); resolve(value); };
+    const finish = (value) => {
+      if (machtileOutsourceReceiptDialogResolve !== resolve) return;
+      machtileOutsourceReceiptDialogResolve = null;
+      holder.remove();
+      resolve(value);
+    };
     holder.querySelector("[data-outsource-receipt-cancel]").addEventListener("click", () => finish(null));
     holder.querySelector("[data-outsource-receipt-confirm]").addEventListener("click", () => {
       const quantity = material ? snapshot.receiptRequiredQty : Number(input.value);
@@ -23656,21 +23669,39 @@ async function machtileHandleOutsourceReceiptResult(code, result, kind) {
   if (action.kind === "blocked") {
     flow.phase = "blocked"; flow.error = action.message; return true;
   }
+  // A final rejected STALE re-runs the whole preview flow (fresh preview → dialog again) instead of
+  // sending a preview while the flow is in its report phase.
+  if (kind === "report" && action.kind === "refresh-preview") return machtileStationReportRefreshAfterStaleFinal(code);
   let args;
   if (action.kind === "retry-without-receipt") {
-    if (action.kind === "retry-without-receipt") showToast(machtileTranslate("outsource_receipt_not_expected"));
+    showToast(machtileTranslate("outsource_receipt_not_expected"));
     args = core.withoutOutsourceReceipt(flow.args, crypto.randomUUID());
   } else if (action.kind === "refresh-preview") {
     showToast(machtileTranslate("outsource_receipt_stale"));
     args = core.refreshOutsourceReceiptPreview(flow.args, crypto.randomUUID());
   } else {
     const quantity = await machtileAskOutsourceReceipt(action.snapshot, action.message);
+    if (quantity === MACHTILE_OUTSOURCE_RECEIPT_SUPERSEDED) return true;
     if (quantity === null) { flow.phase = "blocked"; flow.error = machtileTranslate("outsource_receipt_cancelled"); return true; }
     args = core.withOutsourceReceipt(flow.args, quantity, action.snapshot.expectedDoc4Fingerprint, crypto.randomUUID());
   }
+  await machtileStationReportRunCommand(code, args, kind);
+  return true;
+}
+
+// Submits one station-report command and follows it to a terminal row; receipt outcomes recurse
+// through machtileHandleOutsourceReceiptResult. flow.args always ends as the last command sent.
+async function machtileStationReportRunCommand(code, args, kind) {
+  const core = machtileStationReportCore();
+  const flow = machtileStationReportState(machtileBatchRow(code));
   flow.args = args;
   flow.phase = `submitting-${kind}`;
   flow.error = "";
+  if (kind === "preview") {
+    flow.preview = null;
+    flow.previewStartedAt = Date.now();
+    machtileStartStationReportPreviewTicker(code);
+  }
   machtileRenderStationReportSurfaces();
   const submitted = await machtileStationReportSubmitCommand(args);
   const item = Array.isArray(submitted) ? submitted[0] : submitted;
@@ -23683,6 +23714,26 @@ async function machtileHandleOutsourceReceiptResult(code, result, kind) {
   } else {
     await machtileStationReportWait(code, args.p_command_uuid, kind);
   }
+}
+
+async function machtileStationReportRefreshAfterStaleFinal(code) {
+  const core = machtileStationReportCore();
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const finalArgs = flow.args;
+  const staleMessage = machtileTranslate("outsource_receipt_stale");
+  showToast(staleMessage);
+  await machtileStationReportRunCommand(code, core.refreshOutsourceReceiptPreview(finalArgs, crypto.randomUUID()), "preview");
+  // The fresh preview (and the receipt dialog it asked for) must end allowed for this exact preview;
+  // anything else (cancel, soft/hard guard, timeout) stays on screen for the operator to redo.
+  const card = core.resultCard(flow.preview);
+  if (flow.phase !== "previewed" || card.kind !== "previewed" || flow.preview?.command_uuid !== flow.args?.p_command_uuid) {
+    if (!flow.error) flow.error = `${staleMessage}（${card.message || card.title}）`;
+    return true;
+  }
+  let nextFinal;
+  try { nextFinal = core.finalAfterFreshPreview(finalArgs, flow.args, flow.preview, crypto.randomUUID()); }
+  catch (error) { flow.phase = "blocked"; flow.error = error.message || staleMessage; return true; }
+  await machtileStationReportRunCommand(code, nextFinal, "report");
   return true;
 }
 
@@ -24276,9 +24327,15 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
   } catch (error) { flow.error = machtileTranslate("report_total_unavailable"); machtileRenderStationReportSurfaces(); return; }
   let args;
   try {
+    // Reuse the receipt the operator already confirmed for this exact allowed preview (single and
+    // batch both arrive here), so the final carries it and the dialog is not shown a second time.
+    const receiptEnabled = machtileOutsourceReceiptDialogEnabled();
+    const receipt = receiptEnabled ? core.confirmedPreviewReceipt(flow.args, flow.preview) : null;
     args = core.buildSubmitArgs({ ...context, goodQty: row.good, failQty: row.bad, failReasonCode: row.failReasonCode || null,
       reportNote: flow.singleReport?.reportNote ?? row.reportNote ?? null, acks: [], clientGuardSnapshot: snapshot,
-      outsourceReceiptDialogEnabled: machtileOutsourceReceiptDialogEnabled(),
+      outsourceReceiptDialogEnabled: receiptEnabled,
+      previousOutsourceReceiptQty: receipt?.previousOutsourceReceiptQty ?? null,
+      expectedDoc4Fingerprint: receipt?.expectedDoc4Fingerprint ?? null,
       reportCounterMetaRpcEnabled: config.reportCounterMetaRpcEnabled === true,
       reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
@@ -24349,9 +24406,12 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
       : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
   }
   let followUpFailed = false;
+  // A receipt re-submit replaces the command (new uuid) inside the handler; App records and
+  // finish-close must reference the command that actually reached a final result.
+  const resultArgs = flow.args?.p_preview === false ? flow.args : args;
   try {
-    await machtileRecordSingleStationProductionReport(code, args, options.order);
-    await machtileFinishCloseAfterAppliedReport(code, args, args.p_command_uuid);
+    await machtileRecordSingleStationProductionReport(code, resultArgs, options.order);
+    await machtileFinishCloseAfterAppliedReport(code, resultArgs, resultArgs.p_command_uuid);
   } catch (error) {
     followUpFailed = true;
     flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
