@@ -74,6 +74,10 @@ window.MACHTILE_CONFIG = {
   assemblyStations: ["F01"],
   // 依客戶開（owner 2026-10-31）：登入者 tenant_id 在這個清單裡才開；租戶不明或不在清單＝關。
   assemblyReportTenants: [],
+  // 組裝站多人報工送雲端：true＝組裝站報工預覽／正式都帶 p_operator_app_user_ids（勾選的其他報工人 app_users id），
+  // 雲端把登入者排第一、去重、最多 10 人，工廠寫 SI_Slect_OPNOs。必須等雲端 migration 20261101090000 套上才可開；
+  // false＝送出內容跟今天一模一樣（CNC 機台永遠不帶）。
+  assemblyMultiOperatorCommandEnabled: false,
   // owner 2026-10-31：組裝不會發現不良、測試台才會 → 只有這些站顯示「有不良品」，其他組裝站一律送不良 0。
   assemblyDefectStations: ["G01"],
   // 測試不良原因（之後設）：空＝用工廠同步的原因清單。自訂原因工廠 ReportFailReasonCodes 也要有，否則 guard 會擋。

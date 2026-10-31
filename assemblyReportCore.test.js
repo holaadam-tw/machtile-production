@@ -169,3 +169,98 @@ test("isAssemblyEnabledForTenant: only flag on AND tenant in list (fail closed)"
   assert.equal(core.isAssemblyEnabledForTenant(on, ""), false, "empty tenant");
   assert.equal(core.isAssemblyEnabledForTenant(null, T), false);
 });
+
+// ---- 多人報工送雲端（assemblyMultiOperatorCommandEnabled，預設關）----
+const ME = "11111111-1111-4111-8111-111111111111";
+const U2 = "22222222-2222-4222-8222-222222222222";
+const U3 = "33333333-3333-4333-8333-333333333333";
+const multiCtx = () => core.legacyContext({ id: "WO-1" }, { legacy_index_sn: 4, manufacture_ii_id: "MII-1", simulation_id: "SIM-1", part_no: "PN-1" }, "F01").context;
+const multiValid = () => core.validateForm({ good: "3", operatorIds: [ME, U2] }, { choices: [{ id: ME }, { id: U2 }] });
+
+test("multi-operator flag: only strict true counts; config files ship it off", () => {
+  assert.equal(core.multiOperatorCommandEnabled({}), false);
+  assert.equal(core.multiOperatorCommandEnabled({ assemblyMultiOperatorCommandEnabled: "true" }), false);
+  assert.equal(core.multiOperatorCommandEnabled({ assemblyMultiOperatorCommandEnabled: true }), true);
+  const fs = require("node:fs");
+  for (const file of ["config.js", "config.example.js"]) {
+    const src = fs.readFileSync(require("node:path").join(__dirname, file), "utf8");
+    assert.match(src, /assemblyMultiOperatorCommandEnabled:\s*false,/, `${file} ships the flag off`);
+  }
+});
+
+test("flag off shape: buildReportArgs without operatorAppUserIds has NO p_operator_app_user_ids key and is byte-identical", () => {
+  const before = core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: true, failReasons: [] });
+  const explicitUndefined = core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: true, failReasons: [], operatorAppUserIds: undefined });
+  const explicitNull = core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: false, failReasons: [], operatorAppUserIds: null });
+  assert.equal("p_operator_app_user_ids" in before, false);
+  assert.equal("p_operator_app_user_ids" in explicitNull, false);
+  assert.equal(JSON.stringify(explicitUndefined), JSON.stringify(before));
+  assert.doesNotMatch(JSON.stringify(explicitNull), /operator_app_user_ids/);
+});
+
+test("flag on shape: co-operators exclude me, dedupe, keep order; list survives every derived retry", () => {
+  const stationCore = require("./stationReportCore.js");
+  const co = core.coOperatorAppUserIds([ME, U3, U2, U3.toUpperCase(), "", null], ME);
+  assert.deepEqual([...co], [U3, U2]);
+  assert.ok(Object.isFrozen(co));
+  assert.deepEqual([...core.coOperatorAppUserIds([ME], ME)], []);
+  const preview = core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: true, failReasons: [], operatorAppUserIds: co });
+  assert.deepEqual(preview.p_operator_app_user_ids, [U3, U2]);
+  const onlyMe = core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: true, failReasons: [], operatorAppUserIds: [] });
+  assert.deepEqual(onlyMe.p_operator_app_user_ids, []);
+  // 再次確認／代收貨重送都是 {...previousArgs} → 同一份名單
+  const u2 = "00000000-0000-4000-8000-000000000124";
+  const u3 = "00000000-0000-4000-8000-000000000125";
+  const final = core.buildReportArgs(multiCtx(), multiValid(), u2, { preview: false, failReasons: [], operatorAppUserIds: co });
+  const acked = stationCore.retryWithAck(final, "HIGH_FAIL_RATIO", u3);
+  assert.deepEqual(acked.p_operator_app_user_ids, [U3, U2]);
+  const noReceipt = stationCore.withoutOutsourceReceipt({ ...final, p_previous_outsource_receipt_qty: null, p_expected_doc4_fingerprint: null }, u3);
+  assert.deepEqual(noReceipt.p_operator_app_user_ids, [U3, U2]);
+  assert.throws(() => core.buildReportArgs(multiCtx(), multiValid(), uuid, { preview: true, failReasons: [], operatorAppUserIds: ["not-a-uuid"] }), /OPERATOR_LIST_INVALID/);
+});
+
+test("checkCoOperators mirrors the server: caller counts, legacy ids joined with ';' at most 50 chars", () => {
+  const choices = [{ id: ME, legacyUserId: "A001" }, { id: U2, legacyUserId: "A002" }, { id: U3, legacyUserId: "" }];
+  assert.equal(core.checkCoOperators([U2], { choices, actorId: ME }), null);
+  assert.equal(core.checkCoOperators([], { choices, actorId: ME }), null);
+  assert.equal(core.checkCoOperators([U3], { choices, actorId: ME }), "operator_list_member_legacy_missing");
+  assert.equal(core.checkCoOperators(["x"], { choices, actorId: ME }), "operator_list_invalid");
+  const many = Array.from({ length: 10 }, (_, i) => `00000000-0000-4000-8000-0000000002${String(i).padStart(2, "0")}`);
+  const manyChoices = [...choices, ...many.map((id, i) => ({ id, legacyUserId: `B${i}` }))];
+  assert.equal(core.checkCoOperators(many.slice(0, 9), { choices: manyChoices, actorId: ME }), null, "me + 9 = 10 ok");
+  assert.equal(core.checkCoOperators(many, { choices: manyChoices, actorId: ME }), "operator_list_too_long", "me + 10 = 11");
+  const longChoices = [{ id: ME, legacyUserId: "X".repeat(30) }, { id: U2, legacyUserId: "Y".repeat(20) }];
+  assert.equal(core.checkCoOperators([U2], { choices: longChoices, actorId: ME }), "operator_list_too_long", "30+1+20 = 51 > 50");
+  assert.equal(core.checkCoOperators([U2], { choices: [{ id: ME, legacyUserId: "X".repeat(29) }, longChoices[1]], actorId: ME }), null, "29+1+20 = 50");
+  assert.equal(core.checkCoOperators([U2], { choices: [{ id: ME, legacyUserId: "A001" }, { id: U2, legacyUserId: "A;2" }], actorId: ME }), "operator_list_member_legacy_invalid");
+});
+
+test("operatorListErrorKey maps every server code to plain zh-Hant / vi text", () => {
+  const i18n = require("./i18n.js");
+  const codes = ["OPERATOR_LIST_INVALID", "OPERATOR_LIST_TOO_LONG", "OPERATOR_LIST_MEMBER_NOT_FOUND", "OPERATOR_LIST_MEMBER_INACTIVE",
+    "OPERATOR_LIST_MEMBER_LEGACY_ID_MISSING", "OPERATOR_LIST_MEMBER_LEGACY_ID_INVALID", "OPERATOR_LEGACY_ID_INVALID"];
+  for (const code of codes) {
+    const key = core.operatorListErrorKey(new Error(`400 {"code":"P0001","message":"${code}"}`));
+    assert.equal(key, core.OPERATOR_LIST_ERROR_KEYS[code], code);
+    for (const lang of ["zh-Hant", "vi"]) {
+      assert.equal(typeof i18n.dictionaries[lang][key], "string", `${key} ${lang}`);
+      assert.doesNotMatch(i18n.dictionaries[lang][key], /OPERATOR_/);
+    }
+  }
+  assert.equal(core.operatorListErrorKey("400 OPERATOR_LIST_MEMBER_INACTIVE"), "asm_err_operator_list_member_inactive");
+  assert.equal(core.operatorListErrorKey(new Error("400 OPERATOR_LEGACY_ID_MISSING")), null, "single-operator codes keep the old text");
+  assert.equal(core.operatorListErrorKey(new Error("network down")), null);
+  for (const code of ["operator_list_invalid", "operator_list_too_long", "operator_list_member_legacy_missing", "operator_list_member_legacy_invalid"]) {
+    assert.equal(typeof i18n.dictionaries["zh-Hant"][`asm_err_${code}`], "string", code);
+  }
+});
+
+test("CNC paths never send p_operator_app_user_ids: only the assembly core builds it", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const files = fs.readdirSync(__dirname).filter((f) => /\.(js|mjs)$/.test(f) && !/\.test\.|browser\.test/.test(f));
+  const users = files.filter((f) => fs.readFileSync(path.join(__dirname, f), "utf8").includes("p_operator_app_user_ids"));
+  // assemblyReport.js／config*.js 只有註解；送出參數只在 assemblyReportCore.buildReportArgs 組
+  assert.deepEqual(users.sort(), ["assemblyReport.js", "assemblyReportCore.js", "config.example.js", "config.js"]);
+  for (const cnc of ["app.js", "stationReportCore.js", "batchReportCore.js", "stationCommandCore.js"]) assert.ok(!users.includes(cnc), cnc);
+});

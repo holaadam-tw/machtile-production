@@ -340,5 +340,12 @@
   "asm_err_operator_too_many": "報工人最多 10 位。",
   "asm_block_qty_exceeds": "這次數量比可以報的還多，請確認件數。",
   "asm_block_qty_invalid": "數量不對，請確認件數。",
-  "asm_block_not_started": "這張單還沒開工，請先按開工再報工。"
+  "asm_block_not_started": "這張單還沒開工，請先按開工再報工。",
+  "asm_err_operator_list_invalid": "報工人名單有問題，請重新勾選報工人再送。",
+  "asm_err_operator_list_too_long": "報工人太多：連登入的人最多 10 位，工號合起來也不能太長。請少勾幾位再送。",
+  "asm_err_operator_list_member_not_found": "勾選的報工人裡有人找不到帳號（可能不是這間工廠的人），請重新勾選或找主管。",
+  "asm_err_operator_list_member_inactive": "勾選的報工人裡有人帳號已停用，請拿掉他或找主管。",
+  "asm_err_operator_list_member_legacy_missing": "勾選的報工人裡有人沒有對照舊 MES 工號，請找主管設定。",
+  "asm_err_operator_list_member_legacy_invalid": "勾選的報工人裡有人的舊 MES 工號格式不對，請找主管修正。",
+  "asm_err_operator_legacy_invalid": "你自己的舊 MES 工號格式不對，不能多人報工，請找主管修正。"
 }

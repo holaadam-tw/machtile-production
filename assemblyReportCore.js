@@ -220,14 +220,90 @@
     } };
   }
 
+  // ---- 多人報工送雲端（旗標 assemblyMultiOperatorCommandEnabled，預設關）----
+  // 雲端 migration 20261101090000 給 machtile_submit_station_report 加了 p_operator_app_user_ids uuid[]：
+  // 伺服器一定把登入者排第一、去重、最多 10 人、舊 MES 工號用「;」接起來 ≤ 50 字。migration 沒套之前帶這個參數
+  // 會找不到函式 → 旗標關＝參數「不存在」（不是 null），送出內容跟今天一個 byte 都不差。只給組裝站用。
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const OPERATOR_LEGACY_JOINED_MAX = 50;
+
+  function multiOperatorCommandEnabled(config) {
+    return config?.assemblyMultiOperatorCommandEnabled === true;
+  }
+
+  // 勾選的人去掉登入者本人（伺服器自己會把登入者放第一）、去重、照勾選順序。回傳新陣列（凍結），
+  // 同一次報工的預覽、正式、再次確認、代收貨重送都用這同一份。
+  function coOperatorAppUserIds(operatorIds, actorId) {
+    const me = String(actorId || "").toLowerCase();
+    const seen = new Set();
+    const out = [];
+    for (const raw of Array.isArray(operatorIds) ? operatorIds : []) {
+      const id = String(raw || "").trim();
+      const key = id.toLowerCase();
+      if (!id || key === me || seen.has(key)) continue;
+      seen.add(key);
+      out.push(id);
+    }
+    return Object.freeze(out);
+  }
+
+  // 送出前先在平板上擋掉伺服器一定會拒絕的名單（回 i18n 錯誤代碼；null＝可以送）。
+  // 跟伺服器同一套算法：登入者＋其他人（依舊 MES 工號去重）≤ 10 人、工號用「;」接起來 ≤ 50 字。
+  // 登入者自己的工號不在名單裡（沒對照）時，只檢查人數，其餘交給伺服器。
+  function checkCoOperators(coIds, { choices = [], actorId = "", actorLegacyUserId = "" } = {}) {
+    const ids = Array.isArray(coIds) ? coIds : [];
+    if (ids.some((id) => !UUID_RE.test(String(id)))) return "operator_list_invalid";
+    const byId = new Map((Array.isArray(choices) ? choices : []).map((c) => [String(c.id), c]));
+    const meLegacy = text(actorLegacyUserId) || text(byId.get(String(actorId || ""))?.legacyUserId);
+    const nos = meLegacy ? [meLegacy] : [];
+    for (const id of ids) {
+      const no = text(byId.get(String(id))?.legacyUserId);
+      if (!no) return "operator_list_member_legacy_missing";
+      if (no.includes(";") || no.length > OPERATOR_LEGACY_JOINED_MAX) return "operator_list_member_legacy_invalid";
+      if (!nos.includes(no)) nos.push(no);
+    }
+    const count = (meLegacy ? 0 : 1) + nos.length;
+    if (count > MAX_OPERATORS) return "operator_list_too_long";
+    if (meLegacy && nos.join(";").length > OPERATOR_LEGACY_JOINED_MAX) return "operator_list_too_long";
+    return null;
+  }
+
+  // 伺服器回的錯誤（例外訊息裡帶代碼）→ i18n 鍵；不是多人名單的錯誤回 null（照原本方式顯示）。
+  const OPERATOR_LIST_ERROR_KEYS = Object.freeze({
+    OPERATOR_LIST_INVALID: "asm_err_operator_list_invalid",
+    OPERATOR_LIST_TOO_LONG: "asm_err_operator_list_too_long",
+    OPERATOR_LIST_MEMBER_NOT_FOUND: "asm_err_operator_list_member_not_found",
+    OPERATOR_LIST_MEMBER_INACTIVE: "asm_err_operator_list_member_inactive",
+    OPERATOR_LIST_MEMBER_LEGACY_ID_MISSING: "asm_err_operator_list_member_legacy_missing",
+    OPERATOR_LIST_MEMBER_LEGACY_ID_INVALID: "asm_err_operator_list_member_legacy_invalid",
+    OPERATOR_LEGACY_ID_INVALID: "asm_err_operator_legacy_invalid",
+  });
+  function operatorListErrorKey(errorOrMessage) {
+    const message = String(errorOrMessage?.message ?? errorOrMessage ?? "");
+    // 長的代碼先比（OPERATOR_LIST_MEMBER_* 含 OPERATOR_LIST_ 前綴）
+    const code = Object.keys(OPERATOR_LIST_ERROR_KEYS).sort((a, b) => b.length - a.length)
+      .find((c) => new RegExp(`(^|[^A-Z_])${c}([^A-Z_]|$)`).test(message));
+    return code ? OPERATOR_LIST_ERROR_KEYS[code] : null;
+  }
+
   // 報工預覽 args：組裝站沒有機台計數器 → 永遠不帶計數器欄位（reportCounterMetaRpcEnabled=false）。
+  // operatorAppUserIds：undefined／null＝不帶 p_operator_app_user_ids（旗標關＝今天的送出內容）；
+  // 陣列＝帶（可以是空陣列＝只有登入者一人）。
   function buildReportArgs(context, valid, commandUuid, { preview = true, failReasons = [], outsourceReceiptDialogEnabled = false, clientGuardSnapshot = null,
-    previousOutsourceReceiptQty = null, expectedDoc4Fingerprint = null } = {}) {
+    previousOutsourceReceiptQty = null, expectedDoc4Fingerprint = null, operatorAppUserIds = undefined } = {}) {
     const core = stationCore();
-    return core.buildSubmitArgs({ ...context, goodQty: valid.goodQty, failQty: valid.failQty, failReasonCode: valid.failReasonCode,
+    const args = core.buildSubmitArgs({ ...context, goodQty: valid.goodQty, failQty: valid.failQty, failReasonCode: valid.failReasonCode,
       reportNote: valid.note, acks: [], clientGuardSnapshot,
       outsourceReceiptDialogEnabled, previousOutsourceReceiptQty, expectedDoc4Fingerprint,
       reportCounterMetaRpcEnabled: false, reportCounterMeta: null }, commandUuid, preview, failReasons);
+    if (operatorAppUserIds != null) {
+      if (!Array.isArray(operatorAppUserIds) || operatorAppUserIds.length > MAX_OPERATORS
+        || operatorAppUserIds.some((id) => !UUID_RE.test(String(id)))) {
+        throw new Error("OPERATOR_LIST_INVALID");
+      }
+      args.p_operator_app_user_ids = operatorAppUserIds.map(String);
+    }
+    return args;
   }
 
   // start／close 共用的指令欄位（給 stationCommandCore.submitPayload）
@@ -281,6 +357,7 @@
     SHORT_REASONS, defectAllowed, defectReasons, shortfall, shortCompletionValue,
     isAssemblyEnabledForTenant, enabledStations, isAssemblyStation, stationLabel, machineCodeOf, ordersForStation, lineOf, stationHasLines,
     operatorChoices, defaultOperatorIds, toggleOperator, validateForm, legacyContext, buildReportArgs, commandFields,
+    multiOperatorCommandEnabled, coOperatorAppUserIds, checkCoOperators, operatorListErrorKey, OPERATOR_LIST_ERROR_KEYS,
     productionReportPayload, shiftStateByOrder, orderKey, displayState, resultSummary,
   });
 });

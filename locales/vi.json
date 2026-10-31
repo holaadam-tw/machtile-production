@@ -688,5 +688,12 @@
   "asm_err_operator_too_many": { "value": "Tối đa 10 người báo công.", "_draft": true },
   "asm_block_qty_exceeds": { "value": "Số lượng lần này nhiều hơn số được báo; hãy kiểm tra lại.", "_draft": true },
   "asm_block_qty_invalid": { "value": "Số lượng không đúng; hãy kiểm tra lại.", "_draft": true },
-  "asm_block_not_started": { "value": "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.", "_draft": true }
+  "asm_block_not_started": { "value": "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.", "_draft": true },
+  "asm_err_operator_list_invalid": { "value": "Danh sách người báo công có lỗi; hãy chọn lại người báo công rồi gửi.", "_draft": true },
+  "asm_err_operator_list_too_long": { "value": "Quá nhiều người báo công: tính cả người đăng nhập tối đa 10 người, mã nhân viên ghép lại cũng không được quá dài. Hãy bớt người rồi gửi.", "_draft": true },
+  "asm_err_operator_list_member_not_found": { "value": "Có người được chọn không tìm thấy tài khoản (có thể không thuộc nhà máy này); hãy chọn lại hoặc báo quản lý.", "_draft": true },
+  "asm_err_operator_list_member_inactive": { "value": "Có người được chọn đã bị khóa tài khoản; hãy bỏ chọn hoặc báo quản lý.", "_draft": true },
+  "asm_err_operator_list_member_legacy_missing": { "value": "Có người được chọn chưa có mã nhân viên MES cũ; hãy báo quản lý cài đặt.", "_draft": true },
+  "asm_err_operator_list_member_legacy_invalid": { "value": "Có người được chọn có mã nhân viên MES cũ sai định dạng; hãy báo quản lý sửa.", "_draft": true },
+  "asm_err_operator_legacy_invalid": { "value": "Mã nhân viên MES cũ của bạn sai định dạng nên không báo công nhiều người được; hãy báo quản lý sửa.", "_draft": true }
 }
