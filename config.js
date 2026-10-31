@@ -116,5 +116,6 @@ window.MACHTILE_CONFIG = {
   inspectionLinkBaseUrl: "https://holaadam-tw.github.io/I-Reporter/",
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
+  outsourceReceiptDialogEnabled: false,
   stationReportMachines: ["A01", "A02", "A03", "A04", "A05"],
 };

@@ -39,6 +39,11 @@ const config = `window.MACHTILE_CONFIG={authMode:"strict",supabaseUrl:"${FAKE}",
 const upserts = [];
 const stationSubmits = [];
 let stationScenario = "clean";
+let legacyOutputA04 = 140;
+let staleFinalsLeft = 0;
+let staleReceiptNeeded = false;
+let staleClearsReceipt = true;
+let staleDrift = 0;
 const blocked = [];
 const stationRows = [
   { machine_code: "A04", command_type: "start", status: "applied", requested_at: new Date(now - 120 * 60000).toISOString(), applied_at: new Date(now - 120 * 60000).toISOString() },
@@ -59,7 +64,7 @@ async function fake(route) {
   if (p.endsWith("/app_users")) return json(url.searchParams.has("auth_user_id") ? [{ id: user.id, name: user.name }] : [user]);
   if (p.endsWith("/rpc/batch_report_progress")) {
     const pendingOutput = upserts.reduce((sum, item) => sum + Number(item.p_payload?.completed_qty || 0), 0);
-    return json([{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: pendingOutput, pending_fail: 0,
+    return json([{ process_id: id(304), legacy_output: legacyOutputA04, legacy_fail: 0, pending_output: pendingOutput, pending_fail: 0,
       pending_count: upserts.length, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() },
     { process_id: id(305), legacy_output: 50, legacy_fail: 0, pending_output: 0, pending_fail: 0,
       pending_count: 0, last_report_at: new Date(now - 30 * 60000).toISOString(), actual_start_at: new Date(now - 180 * 60000).toISOString() }]);
@@ -77,6 +82,29 @@ async function fake(route) {
   if (p.endsWith("/rpc/machtile_submit_station_report")) {
     const body = JSON.parse(req.postData() || "{}"); stationSubmits.push(structuredClone(body));
     if (stationScenario === "error" && body.p_preview) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "preview exploded" }) });
+    // REAL Factory receipt preview shape: StationReportPreview.cs Preview() :61-79 + SerializePreviewResult :126-178
+    // (wt-deploy40) → status previewed, preview_result.allowed:false/hard:true/guard_code, written back by
+    // StationCommandSources.cs :155-176 with reject_code null.
+    if (body.p_preview && (stationScenario === "receipt-a04" || (stationScenario === "stale-a04" && staleReceiptNeeded)) && body.p_expected_order_no === "WO-A04" && body.p_previous_outsource_receipt_qty == null) {
+      const code = "PREV_OUTSOURCE_RECEIPT_REQUIRED";
+      return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+        preview_result: { status: "previewed", allowed: false, hard: true, guard_code: code, message: "請確認原料委外已收貨。", available: 0,
+          legacy_snapshot: { report: { guard: { code, hard: true, message: "請確認原料委外已收貨。", Details: { available: 0 } } } },
+          previous_outsource_step_name: "素材外包", previous_outsource_doc4_numbers: ["D4-B1"], outsource_unconfirmed_qty: 30,
+          expected_doc4_fingerprint: "9".repeat(64), receipt_mode: "material_confirm", receipt_required_qty: 30,
+          receipt_steps: [{ index_sn: 1, process_name: "素材外包", vendor_name: "批次甲廠", unconfirmed_qty: 30 }] } }]);
+    }
+    // REAL final STALE shape thrown inside the receipt transaction (StationReportApplier.cs :119-121 →
+    // WithSnapshot, no failure_detail; StationCommandSources.cs :159-161 {report, guard}, preview_result null).
+    if (!body.p_preview && stationScenario === "stale-a04" && body.p_expected_order_no === "WO-A04" && staleFinalsLeft > 0 && body.p_previous_outsource_receipt_qty != null) {
+      staleFinalsLeft -= 1;
+      staleReceiptNeeded = !staleClearsReceipt; // someone else received it (or the doc4 set just changed)
+      legacyOutputA04 += staleDrift;            // e.g. another report landed meanwhile
+      const code = "PREV_OUTSOURCE_RECEIPT_STALE";
+      return json([{ command_uuid: body.p_command_uuid, command_type: "report", status: "rejected", reject_code: code,
+        reject_message: "委外未收貨明細已改變，請重新預覽後再送。", preview_result: null,
+        legacy_snapshot: { report: { command_uuid: body.p_command_uuid, guard: { code, hard: true } }, guard: { code, hard: true } } }]);
+    }
     if (body.p_preview) {
       const soft = stationScenario === "ack" || (stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04");
       const code = soft ? "HIGH_FAIL_RATIO" : "";
@@ -214,6 +242,90 @@ await page.waitForFunction(() => document.querySelector('[data-batch-needs-confi
 ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-panel]').isVisible(), "preview needing acknowledgement expands the panel with a confirmation marker");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A04" && !x.p_preview).length === 0, "ack row is not submitted automatically");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A05" && !x.p_preview).length === 1, "other rows continue after an acknowledgement is required");
+
+// Receipt flag ON: the batch row stops for the dialog (explicit click), then the final carries the
+// confirmed receipt once — no second prompt mid-batch.
+// Let the previous scenario's background refresh (which reloads the identity map) settle first.
+await page.waitForTimeout(1500);
+await page.evaluate(() => {
+  window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = true;
+  for (const [code, processId] of [["A04", "00000000-0000-4000-8000-000000000304"], ["A05", "00000000-0000-4000-8000-000000000305"]]) {
+    const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.processId = processId; row.operatorId = machtileBatchState.users[0].id;
+  }
+  machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000304", { legacy_index_sn: 1, manufacture_ii_id: "MII-A04", simulation_id: "SIM-A04", part_no: "D-1" });
+  machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000305", { legacy_index_sn: 1, manufacture_ii_id: "MII-A05", simulation_id: "SIM-A05", part_no: "D-2" });
+  machtileRenderBatchReport();
+});
+stationScenario = "receipt-a04";
+const receiptStart = stationSubmits.length;
+await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("180");
+await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("");
+await rootView.locator("[data-batch-submit]").click();
+await page.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+ok(stationSubmits.slice(receiptStart).filter((x) => !x.p_preview).length === 0, "batch row waits for the receipt dialog; no final sent before the click");
+ok((await page.locator("#outsourceReceiptTitle").innerText()).includes("素材外包（批次甲廠）"), "batch receipt dialog names the route step and vendor");
+await page.locator("[data-outsource-receipt-confirm]").click();
+await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"] .batch-result')?.textContent.includes("✓"));
+const receiptSent = stationSubmits.slice(receiptStart).filter((x) => x.p_expected_order_no === "WO-A04");
+const receiptFinals = receiptSent.filter((x) => !x.p_preview);
+ok(receiptSent.length === 3 && receiptSent[1].p_previous_outsource_receipt_qty === 30, "batch: blocked preview → receipt preview → final");
+ok(receiptFinals.length === 1 && receiptFinals[0].p_previous_outsource_receipt_qty === 30 && receiptFinals[0].p_expected_doc4_fingerprint === "9".repeat(64), "batch final carries the confirmed receipt qty + fingerprint");
+ok(await page.locator("#machtileOutsourceReceiptDialog").count() === 0, "batch final does not prompt a second time");
+await page.evaluate(() => { window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = false; });
+stationScenario = "clean";
+
+// r4 M1/L1: a FINAL rejected STALE re-previews and may re-send unattended only after the same
+// pre-final checks as SubmitFinal; at most one automatic retry.
+async function resetStaleRows() {
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => {
+    window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = true;
+    for (const [code, processId] of [["A04", "00000000-0000-4000-8000-000000000304"], ["A05", "00000000-0000-4000-8000-000000000305"]]) {
+      const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.processId = processId; row.operatorId = machtileBatchState.users[0].id;
+    }
+    machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000304", { legacy_index_sn: 1, manufacture_ii_id: "MII-A04", simulation_id: "SIM-A04", part_no: "D-1" });
+    machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000305", { legacy_index_sn: 1, manufacture_ii_id: "MII-A05", simulation_id: "SIM-A05", part_no: "D-2" });
+    machtileRenderBatchReport();
+  });
+}
+async function runStaleCase({ finals, clears, drift, dialogs }) {
+  await resetStaleRows();
+  stationScenario = "stale-a04"; staleFinalsLeft = finals; staleReceiptNeeded = true; staleClearsReceipt = clears; staleDrift = drift;
+  const start = stationSubmits.length;
+  const current = 180 + (legacyOutputA04 - 140);
+  await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill(String(current));
+  await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("");
+  await rootView.locator("[data-batch-submit]").click();
+  for (let i = 0; i < dialogs; i += 1) {
+    await page.waitForSelector("#machtileOutsourceReceiptDialog", { timeout: 5000 });
+    await page.locator("[data-outsource-receipt-confirm]").click();
+  }
+  await page.waitForFunction(() => { const r = document.querySelector('[data-batch-row="A04"] .batch-result'); return r && r.textContent.trim().length > 0; }, null, { timeout: 10000 });
+  return { sent: stationSubmits.slice(start).filter((x) => x.p_expected_order_no === "WO-A04"),
+    result: (await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).trim() };
+}
+// (a) reported total changed between the operator's confirmation and the STALE re-preview → no re-send.
+const drifted = await runStaleCase({ finals: 1, clears: true, drift: 5, dialogs: 1 });
+ok(drifted.sent.length === 4 && drifted.sent[2].p_preview === false && drifted.sent[3].p_preview === true && drifted.sent[3].p_previous_outsource_receipt_qty === null,
+  `STALE final re-runs a fresh preview (no receipt needed now): ${JSON.stringify(drifted.sent.map((x) => [x.p_preview, x.p_previous_outsource_receipt_qty]))}`);
+ok(drifted.sent.filter((x) => !x.p_preview).length === 1, "reported total changed → the STALE final is NOT re-sent");
+ok(drifted.result.includes("已報數量已改變，請重新預覽後再送出"), `changed total shows the re-preview message: ${drifted.result}`);
+ok(await page.locator("#machtileOutsourceReceiptDialog").count() === 0, "no dialog left open after the drift stop");
+// (b) positive: totals unchanged, receipt resolved elsewhere → exactly one unattended re-send, applied.
+const resent = await runStaleCase({ finals: 1, clears: true, drift: 0, dialogs: 1 });
+const resentFinals = resent.sent.filter((x) => !x.p_preview);
+ok(resentFinals.length === 2 && resentFinals[1].p_command_uuid !== resentFinals[0].p_command_uuid && resentFinals[1].p_previous_outsource_receipt_qty === null,
+  "unchanged totals → one re-send with a new uuid (no receipt, it was resolved elsewhere)");
+ok(resentFinals[1].p_client_guard_snapshot?.preview_command_uuid === resent.sent[3].p_command_uuid, "re-sent final binds the fresh preview");
+ok(resent.result.includes("✓"), `re-sent final is applied: ${resent.result}`);
+// (c) L1: the re-sent final is STALE again → stop after one automatic retry with the stale message.
+const twice = await runStaleCase({ finals: 2, clears: false, drift: 0, dialogs: 2 });
+const twiceFinals = twice.sent.filter((x) => !x.p_preview);
+ok(twiceFinals.length === 2, `second STALE does not trigger another re-preview/re-send: ${JSON.stringify(twice.sent.map((x) => [x.p_preview, x.p_previous_outsource_receipt_qty]))}`);
+ok(twice.sent.length === 6 && twice.sent.at(-1).p_preview === false && twice.sent[4].p_expected_doc4_fingerprint === "9".repeat(64), "preview, receipt preview, STALE, fresh preview, receipt preview, STALE — and no preview after the second STALE");
+ok(twice.result.includes("委外單剛被別人改過，請重新預覽"), `second STALE stops with the stale message: ${twice.result}`);
+await page.evaluate(() => { window.MACHTILE_CONFIG.outsourceReceiptDialogEnabled = false; });
+stationScenario = "clean"; staleFinalsLeft = 0; staleReceiptNeeded = false; staleDrift = 0;
 
 // A preview transport error is attached to the card and does not submit.
 await page.evaluate(() => { const row = machtileBatchRow("A04"); row.stationReport = null; row.result = null; row.error = ""; machtileRenderBatchReport(); });

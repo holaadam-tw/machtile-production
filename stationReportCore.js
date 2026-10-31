@@ -38,6 +38,11 @@
   }
   const REPORT_SELECT = "command_uuid,command_type,status,good_qty,fail_qty,preview_result,reject_code,reject_message,legacy_snapshot,requested_at";
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const DOC4_FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
+  const OUTSOURCE_RECEIPT_CODES = Object.freeze([
+    "PREV_OUTSOURCE_RECEIPT_REQUIRED", "PREV_OUTSOURCE_RECEIPT_QTY_INVALID",
+    "PREV_OUTSOURCE_RECEIPT_STALE", "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED",
+  ]);
 
   class ContractError extends Error {
     constructor(code, message) { super(message); this.name = "StationReportContractError"; this.code = code; }
@@ -181,6 +186,19 @@
       p_acks: form.acks.length ? form.acks : null,
       p_client_guard_snapshot: form.clientGuardSnapshot,
     };
+    // The rollout flag deliberately owns the RPC shape. With the flag off these
+    // keys do not exist, preserving the old request byte-for-byte.
+    if (x.outsourceReceiptDialogEnabled === true) {
+      const qty = x.previousOutsourceReceiptQty ?? null;
+      const fingerprint = x.expectedDoc4Fingerprint ?? null;
+      const paired = (qty === null) === (fingerprint === null);
+      if (!paired || (qty !== null && (!Number.isInteger(qty) || qty < 1 || qty > 100000 ||
+          typeof fingerprint !== "string" || !DOC4_FINGERPRINT_RE.test(fingerprint)))) {
+        throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
+      }
+      args.p_previous_outsource_receipt_qty = qty;
+      args.p_expected_doc4_fingerprint = fingerprint;
+    }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
     if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
       const meta = x.reportCounterMeta;
@@ -197,6 +215,136 @@
       }
     }
     return args;
+  }
+
+  function findOutsourceReceiptSnapshot(value, depth = 0) {
+    if (!isPlainObject(value) || depth > 6) return null;
+    const hasNewContract = value.receipt_mode === "material_confirm" || value.receipt_mode === "count";
+    // Two Factory shapes carry the same receipt facts (worktree wt-deploy40, SoftNet/SoftNetWebII/Services/StationCommands):
+    // - preview_result, StationReportPreview.cs SerializePreviewResult :158-174
+    //   previous_outsource_step_name / previous_outsource_doc4_numbers / outsource_unconfirmed_qty
+    // - final reject legacy_snapshot.report.failure_detail, StationReportOutsourceReceipt.cs Validate :56-67
+    //   merged by StationReportApplier.cs WithSnapshot :284-292: previous_step_name / doc4_numbers / unconfirmed_qty
+    const qty = Number(hasNewContract ? value.receipt_required_qty : (value.unconfirmed_qty ?? value.outsource_unconfirmed_qty));
+    const fingerprint = value.expected_doc4_fingerprint;
+    if (Number.isInteger(qty) && qty > 0 && typeof fingerprint === "string" && DOC4_FINGERPRINT_RE.test(fingerprint)) {
+      const numbers = value.doc4_numbers ?? value.previous_outsource_doc4_numbers ?? value.doc4_nos ?? value.doc4_ids ?? [];
+      const steps = Array.isArray(value.receipt_steps) ? value.receipt_steps.filter(isPlainObject).map((step) => ({
+        indexSn: Number(step.index_sn),
+        processName: String(step.process_name || "").trim(),
+        vendorName: String(step.vendor_name || "").trim(),
+        unconfirmedQty: Number(step.unconfirmed_qty),
+      })) : [];
+      return {
+        previousStepName: String(value.previous_step_name ?? value.previous_outsource_step_name ?? value.previous_process_name ?? value.step_name ?? "").trim(),
+        doc4Numbers: Array.isArray(numbers) ? numbers.map(String) : (numbers == null ? [] : [String(numbers)]),
+        unconfirmedQty: qty,
+        receiptMode: hasNewContract ? value.receipt_mode : "legacy_count",
+        receiptRequiredQty: qty,
+        receiptSteps: steps,
+        expectedDoc4Fingerprint: fingerprint,
+      };
+    }
+    for (const child of Object.values(value)) {
+      const found = findOutsourceReceiptSnapshot(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Factory never turns a PREVIEW receipt failure into a reject: StationReportPreview.Preview()
+  // (StationReportPreview.cs :61-79) returns Status=previewed with preview_result.allowed=false,
+  // hard=true, guard_code=<receipt code>; StationCommandSources.cs :155-176 writes that back with
+  // p_reject_code=null and p_legacy_snapshot=null. Only the FINAL report (StationReportApplier.cs
+  // :90-121, StationCommandModels.cs Reject :193) is status=rejected with reject_code=<receipt code>.
+  function outsourceReceiptCode(command) {
+    if (!isPlainObject(command)) return null;
+    if (command.status === "previewed") {
+      const result = command.preview_result;
+      const code = isPlainObject(result) && result.allowed === false ? String(result.guard_code || "") : "";
+      return OUTSOURCE_RECEIPT_CODES.includes(code)
+        ? { code, message: typeof result.message === "string" ? result.message : "", source: "preview" } : null;
+    }
+    if (command.status === "rejected") {
+      const code = String(command.reject_code || "");
+      return OUTSOURCE_RECEIPT_CODES.includes(code)
+        ? { code, message: typeof command.reject_message === "string" ? command.reject_message : "", source: "reject" } : null;
+    }
+    return null;
+  }
+
+  function outsourceReceiptAction(command, enabled) {
+    if (enabled !== true) return { kind: "none" };
+    const found = outsourceReceiptCode(command);
+    if (!found) return { kind: "none" };
+    const { code, source } = found;
+    if (code === "PREV_OUTSOURCE_RECEIPT_NOT_EXPECTED") return { kind: "retry-without-receipt", code, source };
+    // STALE needs no snapshot: a fresh preview re-reads the current facts. The final-side STALE thrown
+    // inside the transaction (StationReportApplier.cs :119-121) carries no failure_detail at all.
+    if (code === "PREV_OUTSOURCE_RECEIPT_STALE") return { kind: "refresh-preview", code, source };
+    const snapshot = findOutsourceReceiptSnapshot(command);
+    if (!snapshot) return { kind: "blocked", code, source, message: "委外收貨資料不完整，請重新預覽。" };
+    return { kind: "ask", code, source, snapshot,
+      message: code === "PREV_OUTSOURCE_RECEIPT_QTY_INVALID" ? guardMessage(code, found.message, "收貨數量無效，請重新輸入。") : "" };
+  }
+
+  function withOutsourceReceipt(previousArgs, quantity, fingerprint, nextCommandUuid) {
+    if (!isPlainObject(previousArgs) || !("p_previous_outsource_receipt_qty" in previousArgs) ||
+        !UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs.p_command_uuid ||
+        !Number.isInteger(quantity) || quantity < 1 || quantity > 100000 ||
+        typeof fingerprint !== "string" || !DOC4_FINGERPRINT_RE.test(fingerprint)) {
+      throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
+    }
+    return { ...previousArgs, p_command_uuid: nextCommandUuid,
+      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint };
+  }
+
+  function withoutOutsourceReceipt(previousArgs, nextCommandUuid) {
+    if (!isPlainObject(previousArgs) || !("p_previous_outsource_receipt_qty" in previousArgs) ||
+        !UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs.p_command_uuid) {
+      throw new ContractError("COMMAND_UUID_REQUIRED", "重新送出必須使用新的報工識別碼。");
+    }
+    return { ...previousArgs, p_command_uuid: nextCommandUuid,
+      p_previous_outsource_receipt_qty: null, p_expected_doc4_fingerprint: null };
+  }
+
+  // A fresh read-only preview: no receipt, no client snapshot, no acks (same shape as buildSubmitArgs(..., true)).
+  function refreshOutsourceReceiptPreview(previousArgs, nextCommandUuid) {
+    return { ...withoutOutsourceReceipt(previousArgs, nextCommandUuid), p_preview: true, p_client_guard_snapshot: null, p_acks: null };
+  }
+
+  // The receipt the operator confirmed in the dialog for THIS allowed preview (args and command
+  // must match), so the final report reuses it instead of asking a second time.
+  function confirmedPreviewReceipt(previewArgs, previewCommand) {
+    if (!isPlainObject(previewArgs) || previewArgs.p_preview !== true || !isPlainObject(previewCommand) ||
+        previewCommand.command_type !== "report_preview" || previewCommand.status !== "previewed" ||
+        previewCommand.command_uuid !== previewArgs.p_command_uuid ||
+        previewCommand.preview_result?.allowed !== true) return null;
+    const qty = previewArgs.p_previous_outsource_receipt_qty ?? null;
+    const fingerprint = previewArgs.p_expected_doc4_fingerprint ?? null;
+    if (qty === null && fingerprint === null) return null;
+    if (!Number.isInteger(qty) || qty < 1 || qty > 100000 || typeof fingerprint !== "string" || !DOC4_FINGERPRINT_RE.test(fingerprint)) {
+      throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
+    }
+    return { previousOutsourceReceiptQty: qty, expectedDoc4Fingerprint: fingerprint };
+  }
+
+  // After a FINAL was rejected STALE: re-send the operator's original final with a new uuid, the
+  // fresh preview's guard snapshot and the receipt confirmed against that fresh preview (or none).
+  function finalAfterFreshPreview(finalArgs, previewArgs, previewCommand, nextCommandUuid) {
+    if (!isPlainObject(finalArgs) || finalArgs.p_preview !== false || !("p_previous_outsource_receipt_qty" in finalArgs) ||
+        !UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === finalArgs.p_command_uuid ||
+        nextCommandUuid === previewArgs?.p_command_uuid) {
+      throw new ContractError("COMMAND_UUID_REQUIRED", "重新送出必須使用新的報工識別碼。");
+    }
+    if (previewCommand?.preview_result?.allowed !== true) {
+      throw new ContractError("PREVIEW_NOT_ALLOWED", "重新預覽未允許報工；請重新開啟報工確認。");
+    }
+    const snapshot = buildClientGuardSnapshot(previewCommand);
+    const receipt = confirmedPreviewReceipt(previewArgs, previewCommand);
+    return { ...finalArgs, p_command_uuid: nextCommandUuid, p_preview: false, p_acks: null, p_client_guard_snapshot: snapshot,
+      p_previous_outsource_receipt_qty: receipt?.previousOutsourceReceiptQty ?? null,
+      p_expected_doc4_fingerprint: receipt?.expectedDoc4Fingerprint ?? null };
   }
 
   function commandReadPath(commandUuid) {
@@ -352,8 +500,10 @@
   }
 
   return Object.freeze({
-    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT,
+    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
-    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck, createClient,
+    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
+    findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
+    refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient,
   });
 });

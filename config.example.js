@@ -59,6 +59,7 @@ window.MACHTILE_CONFIG = {
   startBackfillEnabled: false,
   reportTotalSemanticsEnabled: false,
   reportCounterMetaRpcEnabled: false,
+  outsourceReceiptDialogEnabled: false,
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
   overtimeStartCardEnabled: false,
