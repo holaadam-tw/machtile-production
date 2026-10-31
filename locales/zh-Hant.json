@@ -15,6 +15,8 @@
   "outsource_receipt_not_expected": "現況已更新，不需要代收貨；系統會重新送出報工。",
   "simple_report_summary": "這次報：{{process}}（第 {{step}} 道）・已報 {{reported}}",
   "simple_report_summary_nostep": "這次報：{{process}}・已報 {{reported}}",
+  "simple_report_summary_fail": "這次報：{{process}}（第 {{step}} 道）・已報 {{reported}}（含不良 {{fail}}）",
+  "simple_report_summary_nostep_fail": "這次報：{{process}}・已報 {{reported}}（含不良 {{fail}}）",
   "simple_report_flow_open": "▸流程",
   "simple_report_flow_close": "▾流程",
   "simple_report_total_label": "機台目前總數（這張單）",

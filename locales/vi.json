@@ -15,6 +15,8 @@
   "outsource_receipt_not_expected": { "value": "Trạng thái đã cập nhật, không cần nhận hàng hộ; hệ thống sẽ gửi lại báo công.", "_draft": true },
   "simple_report_summary": { "value": "Lần này báo: {{process}} (công đoạn {{step}}) · Đã báo {{reported}}", "_draft": true },
   "simple_report_summary_nostep": { "value": "Lần này báo: {{process}} · Đã báo {{reported}}", "_draft": true },
+  "simple_report_summary_fail": { "value": "Lần này báo: {{process}} (công đoạn {{step}}) · Đã báo {{reported}} (gồm {{fail}} hàng lỗi)", "_draft": true },
+  "simple_report_summary_nostep_fail": { "value": "Lần này báo: {{process}} · Đã báo {{reported}} (gồm {{fail}} hàng lỗi)", "_draft": true },
   "simple_report_flow_open": { "value": "▸Quy trình", "_draft": true },
   "simple_report_flow_close": { "value": "▾Quy trình", "_draft": true },
   "simple_report_total_label": { "value": "Tổng số hiện tại trên máy (phiếu này)", "_draft": true },

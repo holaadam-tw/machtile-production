@@ -24135,10 +24135,17 @@ function machtileApplySimpleReportChrome() {
     const steps = route && window.MachTileProcessFlow?.steps ? window.MachTileProcessFlow.steps(route.processes, order.processId, route.quantity) : [];
     step = steps.findIndex((item) => item.current) + 1;
   }
-  const reported = machtileSimpleReportReported(order, counter);
+  const reportedGood = machtileSimpleReportReported(order, counter);
+  // owner 10/31「已報顯示含不良 照建議」：總數語意開著且已報不良讀得到 → 已報＝良品＋不良，不良 > 0 才加「（含不良 N）」。
+  const failDone = config.reportTotalSemanticsEnabled === true && reportTotalState.status === "ready"
+    && reportTotalState.processId === String(order.processId || "") && reportTotalState.failReported != null
+    && Number.isFinite(Number(reportTotalState.failReported)) ? Number(reportTotalState.failReported) : null;
+  const showFail = failDone !== null && failDone > 0 && reportedGood !== null && reportedGood !== undefined;
+  const reported = showFail ? Number(reportedGood) + failDone : reportedGood;
+  const summaryKey = (Number.isInteger(step) && step > 0 ? "simple_report_summary" : "simple_report_summary_nostep") + (showFail ? "_fail" : "");
   const marker = "\u0001";
-  const summaryText = escapeHtml(machtileTranslate(Number.isInteger(step) && step > 0 ? "simple_report_summary" : "simple_report_summary_nostep",
-    { process: marker, step, reported: reported ?? "—" })).replace(marker, `<b>${escapeHtml(order.process || order.process_name || "")}</b>`);
+  const summaryText = escapeHtml(machtileTranslate(summaryKey,
+    { process: marker, step, reported: reported ?? "—", fail: failDone })).replace(marker, `<b>${escapeHtml(order.process || order.process_name || "")}</b>`);
   const flowLevel = machtileFlowVisibilityLevel();
   const flowToggle = flowLevel === "hidden" ? "" : `<button type="button" class="simple-report-flow-toggle" data-simple-report-flow aria-expanded="${st.flowOpen ? "true" : "false"}">${escapeHtml(machtileTranslate(st.flowOpen ? "simple_report_flow_close" : "simple_report_flow_open"))}</button>`;
   const flowStrip = st.flowOpen && flowLevel !== "hidden" ? `<div class="simple-report-flow" data-simple-report-flow-strip>${machtileProcessFlowMarkup(order, { compact: true, level: flowLevel })}</div>` : "";
