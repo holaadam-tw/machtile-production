@@ -118,4 +118,7 @@ window.MACHTILE_CONFIG = {
   enableStationReport: true,
   outsourceReceiptDialogEnabled: true,
   stationReportMachines: ["A01", "A02", "A03", "A04", "A05"],
+  // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
+  assemblyReportEnabled: false,
+  assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"],
 };

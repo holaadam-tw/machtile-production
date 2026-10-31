@@ -337,6 +337,8 @@ function machtileSyncBatchEntryVisibility() {
   $$('[data-monitor-batch-entry]').forEach((button) => {
     button.hidden = !machtileCanAccessBatchView(button.dataset.view);
   });
+  // 組裝站報工入口：只看 assemblyReportEnabled（assemblyReport.js；旗標關＝一直藏著）
+  if (typeof machtileAsmSyncEntry === "function") machtileAsmSyncEntry();
 }
 
 function machtileClearDepartmentData() {
@@ -22383,6 +22385,8 @@ function switchView(view) {
   // 車床／銑床批次報工：每次進畫面都重讀進度（已報、待回寫、開工時間）
   const batchGroup = machtileBatchCore()?.groupForView(view);
   if (batchGroup) machtileLoadBatchReport(batchGroup.key);
+  // 組裝站報工（assemblyReport.js）：每次進畫面都重讀站上的單、報工人、開工狀態
+  if (view === "assembly" && typeof machtileAssemblyOnView === "function") machtileAssemblyOnView();
   // 營運分析：每次進畫面讀（2 分鐘內讀過就用上次的）
   if (view === "reports") machtileLoadAnalytics().catch(() => {});
 }
