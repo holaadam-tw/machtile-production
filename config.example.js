@@ -72,6 +72,14 @@ window.MACHTILE_CONFIG = {
   // 站別目錄 DispatchMulti 含這些站。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
   assemblyReportEnabled: false,
   assemblyStations: ["F01"],
+  // 依客戶開（owner 2026-10-31）：登入者 tenant_id 在這個清單裡才開；租戶不明或不在清單＝關。
+  assemblyReportTenants: [],
+  // owner 2026-10-31：組裝不會發現不良、測試台才會 → 只有這些站顯示「有不良品」，其他組裝站一律送不良 0。
+  assemblyDefectStations: ["G01"],
+  // 測試不良原因（之後設）：空＝用工廠同步的原因清單。自訂原因工廠 ReportFailReasonCodes 也要有，否則 guard 會擋。
+  assemblyDefectReasons: [],
+  // 完工時做的數量 < 工單數量 → 問「還差 N 個，確定短交？」＋原因；送出沿用 close 的 p_short_completion，
+  // 需要該站列在 enableShortCompletion／shortCompletionMachines（工廠 ShortCompletionEnabled 也要開）。
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.
   scheduleCalendar: {

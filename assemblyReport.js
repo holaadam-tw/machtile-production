@@ -34,7 +34,14 @@ const machtileAsm = {
   busy: null,
 };
 
-function machtileAsmStations() { return machtileAsmCore()?.enabledStations(window.MACHTILE_CONFIG || config) || []; }
+// 登入者的租戶：伺服器回的 machine_department_context.tenant_id 優先，其次是登入 JWT 簽過的 app_metadata.tenant_id。
+// 刻意不退回 config.tenantId（那是部署預設值，不是這個人的租戶）；都沒有＝不明＝關。
+function machtileAsmTenantId() {
+  const fromServer = typeof machtileDepartmentAccess !== "undefined" ? machtileDepartmentAccess?.tenant_id : "";
+  const fromJwt = typeof machtileAuthState !== "undefined" ? machtileAuthState?.hmcFixedSignedTenantId : "";
+  return String(fromServer || fromJwt || "");
+}
+function machtileAsmStations() { return machtileAsmCore()?.enabledStations(window.MACHTILE_CONFIG || config, machtileAsmTenantId()) || []; }
 function machtileAsmEnabled() { return machtileAsmStations().length > 0; }
 function machtileAsmPollMs() { const v = Number(config.assemblyPollIntervalMs); return Number.isFinite(v) && v >= 10 ? v : 2000; }
 const machtileAsmDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +50,9 @@ function machtileAsmRoot() { return document.querySelector("[data-assembly-root]
 
 function machtileAsmSyncEntry() {
   const stations = machtileAsmStations();
+  // 登入／換帳號後才知道租戶：開了就插入入口與畫面；關了（含登出、換到別的客戶）就整個拿掉。
+  if (stations.length) machtileAsmEnsureDom();
+  else machtileAsmRemoveDom();
   document.querySelectorAll("[data-assembly-entry]").forEach((button) => {
     button.hidden = stations.length === 0;
     if (stations.length) button.textContent = machtileAsmT("asm_entry", { stations: stations.join("・") });
@@ -61,6 +71,14 @@ function machtileAsmForm(processId) {
 // null＝還沒動過＝預設「我」（等人員清單讀到才算得出來，所以不能在建表單時就定下來）
 function machtileAsmFormOperators(form) {
   return form.operatorIds === null ? machtileAsmCore().defaultOperatorIds(machtileAsm.users, machtileAsm.actorId) : form.operatorIds;
+}
+
+function machtileAsmDefectAllowed() { return machtileAsmCore().defectAllowed(config, machtileAsm.station); }
+function machtileAsmDefectReasons() { return machtileAsmCore().defectReasons(config, machtileAsm.guard.failReasons); }
+function machtileAsmReportedGood(processId) {
+  const row = machtileAsm.progressByProcess.get(String(processId));
+  const shown = row && window.MachTileBatchReportCore?.displayProgress ? window.MachTileBatchReportCore.displayProgress(row) : null;
+  return shown && shown.available ? shown.totalOutput : null;
 }
 
 function machtileAsmOrders() {
@@ -194,8 +212,16 @@ function machtileAsmProgressHtml(order) {
 
 function machtileAsmFormHtml(order, form, disabledAll) {
   const pid = escapeHtml(order.processId);
-  const reasons = machtileAsm.guard.failReasons;
+  const reasons = machtileAsmDefectReasons();
   const finish = form.mode === "finish";
+  const defectOk = machtileAsmDefectAllowed();
+  const sp = finish ? form.shortPrompt : null;
+  const shortLabels = { MATERIAL_SHORT: "short_completion_material", SCRAP: "short_completion_scrap", OTHER: "short_completion_other" };
+  const shortHtml = sp ? `<div class="asm-short" role="alertdialog" data-asm-short="${pid}">
+      <p class="asm-short-question">${escapeHtml(machtileAsmT("asm_short_question", { short: sp.short, planned: sp.planned, done: sp.done }))}</p>
+      <div class="asm-short-reasons">${machtileAsmCore().SHORT_REASONS.map((code) => `<label class="asm-operator${form.shortReason === code ? " is-checked" : ""}"><input type="radio" name="asmShort-${pid}" data-asm-short-reason="${pid}" value="${code}"${form.shortReason === code ? " checked" : ""}${disabledAll}><span>${escapeHtml(machtileAsmT(shortLabels[code]))}</span></label>`).join("")}</div>
+      <label class="asm-note"${form.shortReason === "OTHER" ? "" : " hidden"}><span>${escapeHtml(machtileAsmT("short_completion_note"))}</span><textarea rows="2" maxlength="500" data-asm-short-note="${pid}"${disabledAll}>${escapeHtml(form.shortNote || "")}</textarea></label>
+    </div>` : "";
   const operators = machtileAsm.users.map((u) => {
     const checked = machtileAsmFormOperators(form).includes(u.id);
     return `<label class="asm-operator${checked ? " is-checked" : ""}"><input type="checkbox" data-asm-operator="${pid}" value="${escapeHtml(u.id)}"${checked ? " checked" : ""}${disabledAll}><span>${escapeHtml(u.name)}${u.isMe ? `（${escapeHtml(machtileAsmT("asm_me"))}）` : ""}</span></label>`;
@@ -206,16 +232,17 @@ function machtileAsmFormHtml(order, form, disabledAll) {
     ${finish ? `<p class="asm-finish-question">${escapeHtml(machtileAsmT("asm_finish_question", { order: order.id }))}</p>` : ""}
     <label class="asm-qty is-good"><span>${escapeHtml(machtileAsmT(finish ? "asm_finish_good_label" : "asm_good_label"))}</span>
       <input type="number" inputmode="numeric" min="0" step="1" data-asm-good="${pid}" value="${escapeHtml(form.good)}"${disabledAll}></label>
-    <label class="asm-defect-toggle"><input type="checkbox" data-asm-defect-toggle="${pid}"${form.defectOpen ? " checked" : ""}${disabledAll}><span>${escapeHtml(machtileAsmT("batch_defect_toggle"))}</span></label>
+    ${defectOk ? `<label class="asm-defect-toggle"><input type="checkbox" data-asm-defect-toggle="${pid}"${form.defectOpen ? " checked" : ""}${disabledAll}><span>${escapeHtml(machtileAsmT("batch_defect_toggle"))}</span></label>
     <div class="asm-defect"${form.defectOpen ? "" : " hidden"}>
       <label class="asm-qty is-bad"><span>${escapeHtml(machtileAsmT("asm_bad_label"))}</span><input type="number" inputmode="numeric" min="0" step="1" data-asm-bad="${pid}" value="${escapeHtml(form.bad)}"${disabledAll}></label>
       <label class="asm-reason"><span>${escapeHtml(machtileAsmT("report_fail_reason_label"))}</span><select data-asm-reason="${pid}"${disabledAll}>${reasonOptions}</select></label>
       <label class="asm-note"${form.failReasonCode === "其他" ? "" : " hidden"}><span>${escapeHtml(machtileAsmT("report_fail_reason_note_label"))}</span><textarea rows="2" data-asm-note="${pid}"${disabledAll}>${escapeHtml(form.note)}</textarea></label>
-    </div>
+    </div>` : ""}
     <fieldset class="asm-operators"><legend>${escapeHtml(machtileAsmT("asm_operators_label"))}</legend>${operators || `<p class="asm-muted">${escapeHtml(machtileAsmT("asm_no_operators"))}</p>`}</fieldset>
+    ${shortHtml}
     ${form.error ? `<p class="asm-error" role="alert" data-asm-form-error="${pid}">${escapeHtml(form.error)}</p>` : ""}
     <div class="asm-form-actions">
-      <button type="button" class="primary-action${finish ? " is-finish" : ""}" data-asm-submit="${pid}"${disabledAll}>${escapeHtml(machtileAsmT(finish ? "asm_finish_submit" : "asm_submit"))}</button>
+      <button type="button" class="primary-action${finish ? " is-finish" : ""}" data-asm-submit="${pid}"${disabledAll}>${escapeHtml(machtileAsmT(sp ? "asm_short_submit" : finish ? "asm_finish_submit" : "asm_submit"))}</button>
       <button type="button" class="secondary-action" data-asm-cancel="${pid}"${disabledAll}>${escapeHtml(machtileAsmT("cancel"))}</button>
     </div>
   </div>`;
@@ -307,12 +334,13 @@ async function machtileAsmWaitStationCommand(uuid, type, maxMs = 5 * 60 * 1000) 
   return { row: null, view: { terminal: false, tone: "warn", title: machtileAsmT("asm_result_unknown"), text: "" } };
 }
 
-async function machtileAsmSendStationCommand(order, type) {
+async function machtileAsmSendStationCommand(order, type, shortCompletion = null) {
   const cmdCore = window.MachTileStationCommandCore;
   const ctx = machtileAsmContext(order);
   if (!ctx.ok) throw new Error(machtileAsmT("asm_missing_identity", { fields: ctx.missing.join("、") }));
   const uuid = cmdCore.newUuid(window.crypto);
-  const payload = cmdCore.submitPayload({ commandUuid: uuid, commandType: type, machineCode: machtileAsm.station, ...machtileAsmCore().commandFields(ctx.context) });
+  const payload = cmdCore.submitPayload({ commandUuid: uuid, commandType: type, machineCode: machtileAsm.station, ...machtileAsmCore().commandFields(ctx.context),
+    ...(type === "close" && shortCompletion ? { shortCompletion } : {}) });
   let row;
   try {
     const result = await supabaseFetch(`rpc/${cmdCore.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(payload) });
@@ -435,7 +463,7 @@ async function machtileAsmRecordAndFinish(processId, finalArgs, finalRow, ctx) {
   void machtileAsmLoadProgress([processId]).then(machtileAsmRender);
   if (ctx.mode === "finish") {
     machtileAsmSetBusyText(machtileAsmT("asm_closing"));
-    const close = await machtileAsmSendStationCommand(order, "close");
+    const close = await machtileAsmSendStationCommand(order, "close", ctx.shortCompletion || null);
     if (close.ok) machtileAsm.closed.add(processId);
     return { tone: close.ok ? "ok" : close.tone, text: `${base} ${close.ok ? machtileAsmT("asm_closed") : `${machtileAsmT("asm_close_failed")}${close.text}`} ${recordNote}`.trim(), closed: close.ok };
   }
@@ -449,7 +477,7 @@ async function machtileAsmSubmit(processId) {
   if (!order || machtileAsm.busy) return;
   const form = machtileAsmForm(processId);
   const mode = form.mode;
-  const valid = core.validateForm({ ...form, operatorIds: machtileAsmFormOperators(form) }, { failReasons: machtileAsm.guard.failReasons, choices: machtileAsm.users, mode });
+  const valid = core.validateForm({ ...form, operatorIds: machtileAsmFormOperators(form) }, { failReasons: machtileAsmDefectReasons(), choices: machtileAsm.users, mode, defectAllowed: machtileAsmDefectAllowed() });
   if (!valid.ok) {
     const first = ["good", "bad", "failReasonCode", "note", "operators"].find((k) => valid.errors[k]);
     form.error = machtileAsmT(`asm_err_${valid.errors[first]}`);
@@ -458,6 +486,28 @@ async function machtileAsmSubmit(processId) {
   }
   const ctxRes = machtileAsmContext(order);
   if (!ctxRes.ok) { form.error = machtileAsmT("asm_missing_identity", { fields: ctxRes.missing.join("、") }); machtileAsmRender(); return; }
+  // 完工：做的數量（已報良品＋最後這次良品）少於工單數量 → 先問「還差 N 個，確定短交？」＋原因（車床同一份短交合約）。
+  // 預設＝做滿，不會跳這個問題。
+  let shortCompletion = null;
+  if (mode === "finish") {
+    if (form.shortPrompt) {
+      const sc = core.shortCompletionValue(form.shortReason, form.shortNote);
+      if (!sc.ok) { form.error = machtileAsmT(`asm_err_${sc.error}`); machtileAsmRender(); return; }
+      shortCompletion = sc.value;
+    } else {
+      await machtileAsmLoadProgress([processId]);
+      const sf = core.shortfall({ planned: order.total, reportedGood: machtileAsmReportedGood(processId), thisGood: valid.goodQty });
+      if (!sf.known) { form.error = machtileAsmT("asm_err_progress_unknown"); machtileAsmRender(); return; }
+      if (sf.short > 0) {
+        if (typeof machtileShortCompletionEnabled !== "function" || !machtileShortCompletionEnabled(machtileAsm.station)) {
+          form.error = machtileAsmT("asm_short_not_enabled", { short: sf.short }); machtileAsmRender(); return;
+        }
+        form.shortPrompt = sf; form.shortReason = ""; form.shortNote = ""; form.error = "";
+        machtileAsmRender();
+        return;
+      }
+    }
+  }
   form.error = "";
   machtileAsm.ack = null;
   machtileAsm.results.delete(processId);
@@ -467,19 +517,19 @@ async function machtileAsmSubmit(processId) {
   try {
     if (mode === "finish" && !valid.hasQty) {
       machtileAsmSetBusyText(machtileAsmT("asm_closing"));
-      const close = await machtileAsmSendStationCommand(order, "close");
-      if (close.ok) { machtileAsm.closed.add(processId); form.open = false; }
+      const close = await machtileAsmSendStationCommand(order, "close", shortCompletion);
+      if (close.ok) { machtileAsm.closed.add(processId); form.open = false; form.shortPrompt = null; }
       outcome = { tone: close.ok ? "ok" : close.tone, text: close.ok ? machtileAsmT("asm_closed") : `${machtileAsmT("asm_close_failed")}${close.text}` };
     } else {
       if (!machtileAsm.guard.enabled) throw new Error(machtileAsmT("asm_report_closed"));
       if (await machtileHasPendingReport(machtileAsm.station, order)) throw new Error(machtileAsmT("asm_pending_report"));
       const receiptEnabled = machtileOutsourceReceiptDialogEnabled();
-      const previewArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: true, failReasons: machtileAsm.guard.failReasons, outsourceReceiptDialogEnabled: receiptEnabled });
+      const previewArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: true, failReasons: machtileAsmDefectReasons(), outsourceReceiptDialogEnabled: receiptEnabled });
       machtileAsmSetBusyText(machtileAsmT("asm_previewing"));
       const followed = await machtileAsmFollow(previewArgs, await machtileAsmRunReportCommand(previewArgs));
       if (followed.error) throw new Error(followed.error);
       const card = reportCore.resultCard(followed.row);
-      const ctx = { order, valid, mode };
+      const ctx = { order, valid, mode, shortCompletion };
       if (card.kind === "preview-soft") {
         machtileAsm.ack = { processId, message: machtileAsmOperatorText(card.guardCode, true),
           next: () => reportCore.retryPreviewWithAck(followed.args, followed.row, card.guardCode, crypto.randomUUID(), valid.note), ctx };
@@ -489,7 +539,7 @@ async function machtileAsmSubmit(processId) {
       } else {
         const snapshot = reportCore.buildClientGuardSnapshot(followed.row);
         const receipt = receiptEnabled ? reportCore.confirmedPreviewReceipt(followed.args, followed.row) : null;
-        const finalArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: false, failReasons: machtileAsm.guard.failReasons,
+        const finalArgs = core.buildReportArgs(ctxRes.context, valid, crypto.randomUUID(), { preview: false, failReasons: machtileAsmDefectReasons(),
           outsourceReceiptDialogEnabled: receiptEnabled, clientGuardSnapshot: snapshot,
           previousOutsourceReceiptQty: receipt?.previousOutsourceReceiptQty ?? null, expectedDoc4Fingerprint: receipt?.expectedDoc4Fingerprint ?? null });
         machtileAsmSetBusyText(machtileAsmT("asm_writing"));
@@ -543,7 +593,7 @@ function machtileAsmHandleClick(event) {
   if (d.asmReport || d.asmFinish) {
     const pid = d.asmReport || d.asmFinish;
     const form = machtileAsmForm(pid);
-    form.open = true; form.mode = d.asmFinish ? "finish" : "report"; form.error = "";
+    form.open = true; form.mode = d.asmFinish ? "finish" : "report"; form.error = ""; form.shortPrompt = null;
     machtileAsm.results.delete(pid);
     machtileAsmRender();
     document.querySelector(`[data-asm-good="${CSS.escape(pid)}"]`)?.focus();
@@ -562,6 +612,14 @@ function machtileAsmHandleInput(event) {
   // 改了數字＝之前的「需要確認」不再對應畫面上的值 → 收掉，要重新送出（重新預覽）
   const pid = d.asmGood || d.asmBad || d.asmNote;
   if (pid && machtileAsm.ack?.processId === pid) { machtileAsm.ack = null; document.querySelector(`[data-asm-ack="${CSS.escape(pid)}"]`)?.remove(); }
+  if (d.asmShortNote) { machtileAsmForm(d.asmShortNote).shortNote = el.value; return; }
+  if (d.asmGood && machtileAsmForm(d.asmGood).shortPrompt) {
+    // 改了最後件數＝差幾個要重算：收掉短交問題，按鈕回到「確認完工關站」
+    machtileAsmForm(d.asmGood).shortPrompt = null;
+    document.querySelector(`[data-asm-short="${CSS.escape(d.asmGood)}"]`)?.remove();
+    const btn = document.querySelector(`[data-asm-submit="${CSS.escape(d.asmGood)}"]`);
+    if (btn) btn.textContent = machtileAsmT("asm_finish_submit");
+  }
   if (d.asmGood) machtileAsmForm(d.asmGood).good = el.value;
   else if (d.asmBad) machtileAsmForm(d.asmBad).bad = el.value;
   else if (d.asmNote) machtileAsmForm(d.asmNote).note = el.value;
@@ -572,6 +630,7 @@ function machtileAsmHandleChange(event) {
   if (!(el instanceof HTMLElement) || !el.closest("[data-assembly-root]")) return;
   const d = el.dataset;
   if (machtileAsm.ack && [d.asmDefectToggle, d.asmReason, d.asmOperator].includes(machtileAsm.ack.processId)) machtileAsm.ack = null;
+  if (d.asmShortReason) { const f = machtileAsmForm(d.asmShortReason); f.shortReason = el.value; f.error = ""; machtileAsmRender(); return; }
   if (d.asmDefectToggle) { const f = machtileAsmForm(d.asmDefectToggle); f.defectOpen = el.checked; if (!el.checked) { f.bad = ""; f.failReasonCode = ""; } machtileAsmRender(); return; }
   if (d.asmReason) { machtileAsmForm(d.asmReason).failReasonCode = el.value; machtileAsmRender(); return; }
   if (d.asmOperator) { const f = machtileAsmForm(d.asmOperator); f.operatorIds = machtileAsmCore().toggleOperator(machtileAsmFormOperators(f), el.value); machtileAsmRender(); }
@@ -601,6 +660,16 @@ function machtileAsmEnsureDom() {
       section.innerHTML = `<div class="view-heading"><div><p class="eyebrow">Assembly Report</p><h1 id="assemblyTitle">${escapeHtml(machtileAsmT("asm_title"))}</h1></div></div><div class="assembly-report" data-assembly-root></div>`;
       settings.before(section);
     }
+  }
+}
+
+function machtileAsmRemoveDom() {
+  document.querySelectorAll("[data-assembly-entry]").forEach((el) => el.remove());
+  const view = document.getElementById("assemblyView");
+  if (view) {
+    const wasActive = view.classList.contains("is-active");
+    view.remove();
+    if (wasActive && typeof switchView === "function") switchView("dashboard");
   }
 }
 

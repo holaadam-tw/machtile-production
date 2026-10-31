@@ -624,6 +624,12 @@
     "_draft": true
   },
   "asm_title": { "value": "Báo công trạm lắp ráp", "_draft": true },
+  "asm_short_question": { "value": "Phiếu này còn thiếu {{short}} cái chưa lắp (phiếu {{planned}}, đã làm {{done}}). Chắc chắn hoàn thành thiếu? Hãy chọn lý do.", "_draft": true },
+  "asm_short_submit": { "value": "Xác nhận hoàn thành thiếu", "_draft": true },
+  "asm_short_not_enabled": { "value": "Phiếu này còn thiếu {{short}} cái; trạm này chưa mở hoàn thành thiếu, hãy lắp đủ hoặc báo kế hoạch.", "_draft": true },
+  "asm_err_short_reason_required": { "value": "Hoàn thành thiếu phải chọn lý do.", "_draft": true },
+  "asm_err_short_note_required": { "value": "Chọn “Khác” phải ghi một câu giải thích.", "_draft": true },
+  "asm_err_progress_unknown": { "value": "Tạm thời không đọc được số đã báo nên chưa xác nhận đủ số; hãy tải lại rồi hoàn thành.", "_draft": true },
   "asm_entry": { "value": "Báo công lắp ráp ({{stations}})", "_draft": true },
   "asm_flag_off": { "value": "Báo công trạm lắp ráp bằng máy tính bảng chưa mở.", "_draft": true },
   "asm_hint": { "value": "Mỗi phiếu trên trạm bấm riêng: Bắt đầu → Báo công (lần này làm xong bao nhiêu) → Hoàn thành. Có thể chọn nhiều người báo công.", "_draft": true },

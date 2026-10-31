@@ -162,9 +162,25 @@ await mkdir(shotDir, { recursive: true });
   await context.close();
 }
 
+// ---------------------------------------------------------------- 1b. 旗標開但登入者租戶不在 assemblyReportTenants＝關（fail closed）
+{
+  const st0 = makeState();
+  const offCfg = `${baseConfig},disableServiceWorker:true`;
+  const wrongCfg = `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"],assemblyStations:["F01","G01"]`;
+  const off = await openApp(makeState(), offCfg);
+  const { context, page, errors } = await openApp(st0, wrongCfg);
+  await page.waitForTimeout(800); await off.page.waitForTimeout(800);
+  ok(await page.locator("[data-assembly-entry], #assemblyView").count() === 0, "租戶不在清單：沒有組裝入口與畫面");
+  const heading = (p) => p.locator("#dashboardView .monitor-heading-actions").evaluate((el) => el.outerHTML);
+  ok(await heading(page) === await heading(off.page), "租戶不在清單：Monitor 入口列跟旗標關完全相同");
+  ok(!st0.guardCalls.some((c) => ["F01", "G01"].includes(c)) && st0.assemblyReads.length === 0 && st0.commandSubmits.length === 0, "租戶不在清單：不讀組裝資料、沒有寫入");
+  ok(errors.length === 0, "租戶不在清單：沒有頁面錯誤");
+  await context.close(); await off.context.close();
+}
+
 // ---------------------------------------------------------------- 2. 旗標開（F01＋G01）
 const st = makeState();
-const cfgOn = `${baseConfig},assemblyReportEnabled:true,assemblyStations:["F01","G01"],assemblyPollIntervalMs:50`;
+const cfgOn = `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyStations:["F01","G01"],assemblyPollIntervalMs:50,enableShortCompletion:true,shortCompletionMachines:["F01","G01"]`;
 const { context, page, errors } = await openApp(st, cfgOn);
 const entry = page.locator("#dashboardView [data-assembly-entry]");
 await entry.waitFor({ state: "visible" });
@@ -216,27 +232,16 @@ ok(f1Upsert.p_payload.report_payload?.station_command_uuid === f1Reports[1].p_co
 ok((await f1.locator("[data-asm-result]").innerText()).includes("良品 12、不良 0（報工人：王小明、陳大華）"), "結果：良品 12、報工人兩位");
 await page.screenshot({ path: path.join(shotDir, "03-f01-report-applied.png"), fullPage: true });
 
-// ---- 報工 WO-F3：不良（先擋沒選原因，再軟性確認 HIGH_FAIL_RATIO）
+// ---- 報工 WO-F3：F01 組立不顯示「有不良品」，一律送不良 0（owner：組裝不會發現不良，測試台才會）
 const f3 = orderCard(page, "WO-F3");
 await f3.locator("[data-asm-report]").click();
+ok(await f3.locator("[data-asm-defect-toggle]").count() === 0 && await f3.locator("[data-asm-bad]").count() === 0, "F01：沒有「有不良品」也沒有不良數欄位");
 await f3.locator("[data-asm-good]").fill("5");
-await f3.locator("[data-asm-defect-toggle]").check();
-await f3.locator("[data-asm-bad]").fill("2");
 await f3.locator("[data-asm-submit]").click();
-ok((await f3.locator("[data-asm-form-error]").innerText()).includes("不良原因"), "有不良沒選原因 → 擋下（沒送出）");
-ok(!st.reportSubmits.some((r) => r.p_expected_order_no === "WO-F3"), "擋下時沒有任何報工指令");
-await f3.locator("[data-asm-reason]").selectOption("尺寸不良");
-await f3.locator("[data-asm-submit]").click();
-await f3.locator("[data-asm-ack]").waitFor();
-ok((await f3.locator("[data-asm-ack]").innerText()).includes("不良比較多"), "預覽軟性提醒（不良比例高）→ 要人確認");
-await page.screenshot({ path: path.join(shotDir, "04-f03-defect-soft-confirm.png"), fullPage: true });
-await f3.locator("[data-asm-ack-confirm]").click();
 await f3.locator("[data-asm-result].is-ok").waitFor();
-const f3Final = st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F3" && r.p_preview === false).at(-1);
-ok(f3Final.p_good_qty === 5 && f3Final.p_fail_qty === 2 && f3Final.p_fail_reason_code === "尺寸不良", "不良 2 件＋原因 尺寸不良 送出");
-ok(JSON.stringify(f3Final.p_acks) === JSON.stringify(["HIGH_FAIL_RATIO"]) && f3Final.p_manufacture_ii_id === "MII-F3", "確認後正式報工帶 p_acks＝HIGH_FAIL_RATIO");
-const f3Upsert = st.upserts.find((u) => u.p_payload?.process_id === id(303));
-ok(f3Upsert?.p_payload.defect_qty === 2 && f3Upsert.p_payload.report_payload.fail_reason_code === "尺寸不良", "App 紀錄不良 2＋原因");
+const f3Calls = st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F3");
+ok(f3Calls.length === 2 && f3Calls.every((r) => r.p_fail_qty === 0 && r.p_fail_reason_code === null), "F01：預覽與正式都送不良 0、不帶原因");
+ok(st.upserts.find((u) => u.p_payload?.process_id === id(303))?.p_payload.defect_qty === 0, "F01：App 紀錄不良 0");
 
 // ---- 報工 WO-F2：上一道委外未收貨 → 既有代收貨對話框
 const f2 = orderCard(page, "WO-F2");
@@ -253,31 +258,45 @@ const f2Calls = st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F2"
 ok(f2Calls.length === 3 && f2Calls[1].p_preview === true && f2Calls[1].p_previous_outsource_receipt_qty === 20, "收貨後用新 uuid 重新預覽並帶收貨數 20");
 ok(f2Calls[2].p_preview === false && f2Calls[2].p_previous_outsource_receipt_qty === 20 && f2Calls[2].p_expected_doc4_fingerprint === "7".repeat(64), "正式報工沿用同一份收貨確認（不再問第二次）");
 
-// ---- 完工 WO-F3：帶最後件數 → 報工(finish) → 關站
+// ---- 完工 WO-F3（工單 30；已報 舊 MES 10＋App 5＝15）：最後 15 件＝做滿 → 不問短交，報工(finish)＋關站
 await f3.locator("[data-asm-finish]").click();
 ok((await f3.locator(".asm-finish-question").innerText()).includes("全部做完"), "完工先問「全部做完了？」");
-await f3.locator("[data-asm-good]").fill("3");
+await f3.locator("[data-asm-good]").fill("15");
 await page.screenshot({ path: path.join(shotDir, "06-f03-finish-confirm.png"), fullPage: true });
 await f3.locator("[data-asm-submit]").click();
 await page.waitForFunction(() => !document.querySelector('[data-asm-order-no="WO-F3"]'));
 const f3Close = st.commandSubmits.filter((c) => c.p_expected_order_no === "WO-F3").at(-1);
 const f3FinishReport = st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F3" && r.p_preview === false).at(-1);
-ok(f3FinishReport.p_good_qty === 3, "完工最後 3 件先報工");
+ok(f3FinishReport.p_good_qty === 15 && f3FinishReport.p_fail_qty === 0, "完工最後 15 件先報工");
 ok(st.upserts.filter((u) => u.p_payload?.process_id === id(303)).at(-1).p_payload.report_type === "finish", "最後那筆 App 紀錄 report_type＝finish");
 ok(f3Close?.p_command_type === "close" && f3Close.p_manufacture_ii_id === "MII-F3" && f3Close.p_expected_simulation_id === "SIM-F3" && f3Close.p_expected_index_sn === 4, "再送 close（帶 ManufactureII Id＋SimulationId）");
-ok(!("p_short_completion" in f3Close), "不自行帶短交（照既有 close 合約）");
+ok(!("p_short_completion" in f3Close), "做滿：沒有短交提問、close 不帶 p_short_completion");
 
-// ---- 完工 WO-F1：不帶件數 → 直接關站
+// ---- 完工 WO-F1（工單 50；已報 10＋12＝22）：不帶件數 → 差 28 → 短交確認＋原因
 const beforeReports = st.reportSubmits.length;
+const beforeCommands = st.commandSubmits.length;
 await f1.locator("[data-asm-finish]").click();
 await f1.locator("[data-asm-submit]").click();
+await f1.locator("[data-asm-short]").waitFor();
+ok((await f1.locator("[data-asm-short]").innerText()).includes("這張單還差 28 個沒組"), "短交確認：「這張單還差 28 個沒組…確定要短交完工？」");
+ok(st.commandSubmits.length === beforeCommands, "還沒確認短交前不送 close");
+ok((await f1.locator("[data-asm-submit]").innerText()).includes("確定短交完工"), "按鈕改成「確定短交完工」");
+await f1.locator("[data-asm-submit]").click();
+ok((await f1.locator("[data-asm-form-error]").innerText()).includes("要選原因"), "沒選原因 → 擋下");
+ok(st.commandSubmits.length === beforeCommands, "擋下時仍沒送 close");
+await f1.locator('[data-asm-short-reason][value="OTHER"]').check();
+await f1.locator("[data-asm-submit]").click();
+ok((await f1.locator("[data-asm-form-error]").innerText()).includes("寫一句說明"), "選「其他」沒寫說明 → 擋下");
+await f1.locator("[data-asm-short-note]").fill("客戶改單");
+await page.screenshot({ path: path.join(shotDir, "07-f01-short-close-confirm.png"), fullPage: true });
+await f1.locator("[data-asm-submit]").click();
 await page.waitForFunction(() => !document.querySelector('[data-asm-order-no="WO-F1"]'));
+const f1Close = st.commandSubmits.filter((c) => c.p_expected_order_no === "WO-F1").at(-1);
 ok(st.reportSubmits.length === beforeReports, "沒填件數的完工不送報工");
-ok(st.commandSubmits.filter((c) => c.p_expected_order_no === "WO-F1").at(-1).p_command_type === "close", "直接送 close");
+ok(f1Close.p_command_type === "close" && JSON.stringify(f1Close.p_short_completion) === JSON.stringify({ reason_code: "OTHER", note: "客戶改單" }), "close 帶既有短交合約 p_short_completion＝{OTHER, 客戶改單}");
 ok((await rootEl.locator("[data-asm-count]").innerText()).includes("1"), "關站後站上剩 1 張單");
-await page.screenshot({ path: path.join(shotDir, "07-f01-after-close.png"), fullPage: true });
 
-// ---- G01：閥件測試／幫浦測試分線
+// ---- G01：閥件測試／幫浦測試分線；測試站可以報不良
 await rootEl.locator('[data-asm-station="G01"]').click();
 await orderCard(page, "WO-G1").waitFor();
 ok(await rootEl.locator("[data-asm-line]").count() === 4, "G01 有 全部／閥件測試／幫浦測試／未分類 分線鈕");
@@ -291,10 +310,26 @@ ok(JSON.stringify(gNos) === JSON.stringify(["WO-G2"]), "幫浦測試只看 PV2R 
 await rootEl.locator('[data-asm-line="all"]').click();
 const g1 = orderCard(page, "WO-G1");
 await g1.locator("[data-asm-report]").click();
+ok(await g1.locator("[data-asm-defect-toggle]").count() === 1, "G01 測試站有「有不良品」");
 await g1.locator("[data-asm-good]").fill("20");
+await g1.locator("[data-asm-defect-toggle]").check();
+await g1.locator("[data-asm-bad]").fill("2");
 await g1.locator("[data-asm-submit]").click();
+ok((await g1.locator("[data-asm-form-error]").innerText()).includes("不良原因"), "G01 有不良沒選原因 → 擋下（沒送出）");
+ok(!st.reportSubmits.some((r) => r.p_expected_order_no === "WO-G1"), "擋下時沒有任何報工指令");
+await g1.locator("[data-asm-reason]").selectOption("尺寸不良");
+await g1.locator("[data-asm-submit]").click();
+await g1.locator("[data-asm-ack]").waitFor();
+ok((await g1.locator("[data-asm-ack]").innerText()).includes("不良比較多"), "預覽軟性提醒（不良比例高）→ 要人確認");
+await page.screenshot({ path: path.join(shotDir, "04-g01-defect-soft-confirm.png"), fullPage: true });
+await g1.locator("[data-asm-ack-confirm]").click();
 await g1.locator("[data-asm-result].is-ok").waitFor();
-ok(st.upserts.find((u) => u.p_payload?.process_id === id(304))?.p_payload.report_payload.assembly_line === "valve", "G01 App 紀錄帶 assembly_line＝valve");
+const g1Final = st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-G1" && r.p_preview === false).at(-1);
+ok(g1Final.p_good_qty === 20 && g1Final.p_fail_qty === 2 && g1Final.p_fail_reason_code === "尺寸不良", "G01 不良 2 件＋原因 送出");
+ok(JSON.stringify(g1Final.p_acks) === JSON.stringify(["HIGH_FAIL_RATIO"]) && g1Final.p_manufacture_ii_id === "MII-G1", "確認後正式報工帶 p_acks＝HIGH_FAIL_RATIO");
+const g1Upsert = st.upserts.find((u) => u.p_payload?.process_id === id(304));
+ok(g1Upsert?.p_payload.defect_qty === 2 && g1Upsert.p_payload.report_payload.fail_reason_code === "尺寸不良", "App 紀錄不良 2＋原因");
+ok(g1Upsert.p_payload.report_payload.assembly_line === "valve", "G01 App 紀錄帶 assembly_line＝valve");
 
 ok(errors.length === 0, "flag on: 沒有頁面錯誤");
 ok(st.blocked.length === 0, "沒有連到任何外部網址（正式 Supabase 不會被碰到）");
@@ -303,7 +338,7 @@ await context.close();
 // ---------------------------------------------------------------- 3. 越南文＋平板直式
 {
   const st2 = makeState();
-  const { context: c2, page: p2, errors: e2 } = await openApp(st2, `${baseConfig},assemblyReportEnabled:true,assemblyPollIntervalMs:50`, { viewport: { width: 800, height: 1280 }, lang: "vi" });
+  const { context: c2, page: p2, errors: e2 } = await openApp(st2, `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyPollIntervalMs:50`, { viewport: { width: 800, height: 1280 }, lang: "vi" });
   const entry2 = p2.locator("#dashboardView [data-assembly-entry]");
   await entry2.waitFor({ state: "visible" });
   ok((await entry2.innerText()).includes("Báo công lắp ráp (F01)"), "vi：入口越南文");

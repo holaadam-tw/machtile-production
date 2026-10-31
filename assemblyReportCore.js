@@ -27,16 +27,27 @@
   function normCode(value) { return String(value ?? "").trim().toUpperCase(); }
   function text(value) { return value == null ? "" : String(value).trim(); }
 
-  // 旗標關＝空陣列（呼叫端什麼都不做：不讀資料、不出入口）。
-  function enabledStations(config) {
+  // 依客戶（租戶）開（owner 2026-10-31）：assemblyReportEnabled===true 且登入者的 tenant_id 在
+  // assemblyReportTenants 裡才算開。租戶不明（null／空）、清單空或沒設、不在清單 → 一律關（fail closed）。
+  function isAssemblyEnabledForTenant(config, tenantId) {
     const c = config || {};
-    if (c.assemblyReportEnabled !== true) return [];
+    if (c.assemblyReportEnabled !== true) return false;
+    const tenant = text(tenantId).toLowerCase();
+    if (!tenant) return false;
+    const list = Array.isArray(c.assemblyReportTenants) ? c.assemblyReportTenants.map((t) => text(t).toLowerCase()).filter(Boolean) : [];
+    return list.includes(tenant);
+  }
+
+  // 關＝空陣列（呼叫端什麼都不做：不讀資料、不出入口）。
+  function enabledStations(config, tenantId) {
+    const c = config || {};
+    if (!isAssemblyEnabledForTenant(c, tenantId)) return [];
     const list = Array.isArray(c.assemblyStations) ? c.assemblyStations : DEFAULT_STATIONS;
     return [...new Set(list.map(normCode).filter((code) => ALL_ASSEMBLY_STATIONS.includes(code)))];
   }
 
-  function isAssemblyStation(config, code) {
-    return enabledStations(config).includes(normCode(code));
+  function isAssemblyStation(config, code, tenantId) {
+    return enabledStations(config, tenantId).includes(normCode(code));
   }
 
   function stationLabel(code) {
@@ -100,6 +111,41 @@
     return list.map(normCode).includes(normCode(stationCode));
   }
 
+  // ---- 不良（owner 2026-10-31：組裝不會發現不良，測試台才會）----
+  // assemblyDefectStations（預設 ["G01"]）以外的站：不顯示「有不良品」、一律送不良 0。
+  function defectAllowed(config, stationCode) {
+    const list = Array.isArray(config?.assemblyDefectStations) ? config.assemblyDefectStations : ["G01"];
+    return list.map(normCode).includes(normCode(stationCode));
+  }
+  // 不良原因：assemblyDefectReasons 有設（非空陣列）就用它，否則用工廠同步的清單。
+  // 注意：工廠 guard 會檢查原因在不在它的 ReportFailReasonCodes 裡，自訂原因要兩邊一起改。
+  function defectReasons(config, factoryReasons) {
+    const custom = Array.isArray(config?.assemblyDefectReasons) ? config.assemblyDefectReasons.map(text).filter(Boolean) : [];
+    return custom.length ? custom : (Array.isArray(factoryReasons) ? factoryReasons.slice() : []);
+  }
+
+  // ---- 短交（owner 2026-10-31：允許短交，但一般訂單數量多少就組多少）----
+  // 沿用車床短交合約：close 指令的 p_short_completion = { reason_code: MATERIAL_SHORT|SCRAP|OTHER, note }。
+  const SHORT_REASONS = Object.freeze(["MATERIAL_SHORT", "SCRAP", "OTHER"]);
+  // planned＝工單數量；reportedGood＝已報良品（舊 MES＋待回寫）；thisGood＝完工時最後這次的良品。
+  // 讀不到已報數 → known=false（呼叫端不可當作做滿）。
+  function shortfall({ planned, reportedGood, thisGood = 0 }) {
+    const plan = Number(planned);
+    const done = Number(reportedGood);
+    if (!Number.isFinite(plan) || plan <= 0) return { known: true, short: 0, done: null, planned: null };
+    if (reportedGood == null || !Number.isFinite(done)) return { known: false, short: null, done: null, planned: plan };
+    const total = done + (Number(thisGood) || 0);
+    return { known: true, short: Math.max(0, plan - total), done: total, planned: plan };
+  }
+  function shortCompletionValue(reasonCode, note) {
+    const reason = text(reasonCode);
+    const n = text(note);
+    if (!SHORT_REASONS.includes(reason)) return { ok: false, error: "short_reason_required" };
+    if (n.length > 500) return { ok: false, error: "note_too_long" };
+    if (reason === "OTHER" && !n) return { ok: false, error: "short_note_required" };
+    return { ok: true, value: { reason_code: reason, note: n } };
+  }
+
   // ---- 報工人 ----
   // 只列有對照舊 MES 工號的人（產值要歸得到人）。預設＝「我」（登入的人，若有對照）。
   function operatorChoices(users, actorId) {
@@ -123,8 +169,8 @@
 
   // ---- 表單驗證 ----
   // mode: "report"（一般報工，合計至少 1 件）／"finish"（完工：可以都填 0＝只關站）
-  function validateForm(form, { failReasons = [], choices = [], mode = "report" } = {}) {
-    const f = form || {};
+  function validateForm(form, { failReasons = [], choices = [], mode = "report", defectAllowed: allowDefect = true } = {}) {
+    const f = allowDefect ? (form || {}) : { ...(form || {}), defectOpen: false, bad: "", failReasonCode: "" };
     const errors = {};
     const parse = (raw) => {
       const s = text(raw);
@@ -232,7 +278,8 @@
 
   return Object.freeze({
     ALL_ASSEMBLY_STATIONS, DEFAULT_STATIONS, STATION_LABELS, LINE_LABELS, MAX_OPERATORS,
-    enabledStations, isAssemblyStation, stationLabel, machineCodeOf, ordersForStation, lineOf, stationHasLines,
+    SHORT_REASONS, defectAllowed, defectReasons, shortfall, shortCompletionValue,
+    isAssemblyEnabledForTenant, enabledStations, isAssemblyStation, stationLabel, machineCodeOf, ordersForStation, lineOf, stationHasLines,
     operatorChoices, defaultOperatorIds, toggleOperator, validateForm, legacyContext, buildReportArgs, commandFields,
     productionReportPayload, shiftStateByOrder, orderKey, displayState, resultSummary,
   });

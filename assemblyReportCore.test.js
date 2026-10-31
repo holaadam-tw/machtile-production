@@ -8,10 +8,11 @@ const uuid = "00000000-0000-4000-8000-000000000123";
 test("flag off returns no stations; flag on defaults to F01 and ignores non-assembly codes", () => {
   assert.deepEqual(core.enabledStations({}), []);
   assert.deepEqual(core.enabledStations({ assemblyReportEnabled: "true", assemblyStations: ["F01"] }), []);
-  assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true }), ["F01"]);
-  assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true, assemblyStations: ["f01", "G01", "A04", "F01"] }), ["F01", "G01"]);
-  assert.equal(core.isAssemblyStation({ assemblyReportEnabled: true }, "F01"), true);
-  assert.equal(core.isAssemblyStation({ assemblyReportEnabled: true }, "A04"), false);
+  assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true, assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"] }, "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"), ["F01"]);
+  assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true, assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"], assemblyStations: ["f01", "G01", "A04", "F01"] }, "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"), ["F01", "G01"]);
+  assert.equal(core.isAssemblyStation({ assemblyReportEnabled: true, assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"] }, "F01", "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"), true);
+  assert.equal(core.isAssemblyStation({ assemblyReportEnabled: true, assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"] }, "A04", "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"), false);
+  assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true }), [], "flag on but no tenant gate = off");
 });
 
 test("ordersForStation lists every open order on the station, running first then due date", () => {
@@ -122,4 +123,49 @@ test("shiftStateByOrder keeps the latest applied start/stop per order+step", () 
   assert.equal(core.displayState({ processStatus: "pending" }, map.get(core.orderKey("WO-3", 2))), "running");
   assert.equal(core.displayState({ processStatus: "running" }, null), "running");
   assert.equal(core.displayState({ processStatus: "pending" }, null), "notStarted");
+});
+
+test("defect only on test stations (default G01); assemblyDefectReasons hook overrides factory list", () => {
+  assert.equal(core.defectAllowed({}, "G01"), true);
+  for (const code of ["D01", "D03", "E01", "F01", "H01"]) assert.equal(core.defectAllowed({}, code), false);
+  assert.equal(core.defectAllowed({ assemblyDefectStations: ["F01"] }, "F01"), true);
+  assert.deepEqual(core.defectReasons({}, ["尺寸不良", "其他"]), ["尺寸不良", "其他"]);
+  assert.deepEqual(core.defectReasons({ assemblyDefectReasons: [] }, ["尺寸不良"]), ["尺寸不良"]);
+  assert.deepEqual(core.defectReasons({ assemblyDefectReasons: ["漏油", " 壓力不足 "] }, ["尺寸不良"]), ["漏油", "壓力不足"]);
+  // defect not allowed: anything typed in bad is ignored → fail 0
+  const v = core.validateForm({ good: "4", bad: "3", defectOpen: true, failReasonCode: "外觀", operatorIds: ["u1"] },
+    { failReasons: ["外觀"], choices: [{ id: "u1" }], defectAllowed: false });
+  assert.equal(v.ok, true); assert.equal(v.failQty, 0); assert.equal(v.failReasonCode, null);
+});
+
+test("shortfall: planned vs reported good + last good; unknown progress is not treated as full", () => {
+  assert.deepEqual(core.shortfall({ planned: 50, reportedGood: 22, thisGood: 0 }), { known: true, short: 28, done: 22, planned: 50 });
+  assert.equal(core.shortfall({ planned: 30, reportedGood: 15, thisGood: 15 }).short, 0);
+  assert.equal(core.shortfall({ planned: 30, reportedGood: 40, thisGood: 0 }).short, 0);
+  assert.equal(core.shortfall({ planned: 30, reportedGood: null }).known, false);
+  assert.equal(core.shortfall({ planned: 0, reportedGood: null }).short, 0);
+});
+
+test("shortCompletionValue reuses the lathe close contract reasons", () => {
+  assert.deepEqual(core.SHORT_REASONS, ["MATERIAL_SHORT", "SCRAP", "OTHER"]);
+  assert.equal(core.shortCompletionValue("", "").error, "short_reason_required");
+  assert.equal(core.shortCompletionValue("LOST", "").error, "short_reason_required");
+  assert.equal(core.shortCompletionValue("OTHER", " ").error, "short_note_required");
+  assert.deepEqual(core.shortCompletionValue("SCRAP", "").value, { reason_code: "SCRAP", note: "" });
+  assert.deepEqual(core.shortCompletionValue("OTHER", " 客戶改單 ").value, { reason_code: "OTHER", note: "客戶改單" });
+});
+
+test("isAssemblyEnabledForTenant: only flag on AND tenant in list (fail closed)", () => {
+  const T = "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f";
+  const on = { assemblyReportEnabled: true, assemblyReportTenants: [T] };
+  assert.equal(core.isAssemblyEnabledForTenant(on, T), true);
+  assert.equal(core.isAssemblyEnabledForTenant(on, T.toUpperCase()), true);
+  assert.equal(core.isAssemblyEnabledForTenant(on, "11111111-1111-4111-8111-111111111111"), false, "not in list");
+  assert.equal(core.isAssemblyEnabledForTenant({ assemblyReportEnabled: true, assemblyReportTenants: [] }, T), false, "empty list");
+  assert.equal(core.isAssemblyEnabledForTenant({ assemblyReportEnabled: true }, T), false, "list missing");
+  assert.equal(core.isAssemblyEnabledForTenant({ ...on, assemblyReportEnabled: false }, T), false, "flag off");
+  assert.equal(core.isAssemblyEnabledForTenant({ ...on, assemblyReportEnabled: "true" }, T), false, "flag must be boolean true");
+  assert.equal(core.isAssemblyEnabledForTenant(on, null), false, "null tenant");
+  assert.equal(core.isAssemblyEnabledForTenant(on, ""), false, "empty tenant");
+  assert.equal(core.isAssemblyEnabledForTenant(null, T), false);
 });
