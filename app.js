@@ -23722,6 +23722,12 @@ async function machtileStationReportRefreshAfterStaleFinal(code) {
   const finalArgs = flow.args;
   const staleMessage = machtileTranslate("outsource_receipt_stale");
   showToast(staleMessage);
+  // At most one automatic STALE → re-preview → re-send per operator confirmation; a second STALE stops.
+  if ((flow.staleAutoRetries || 0) >= MACHTILE_STALE_AUTO_RETRY_LIMIT) {
+    flow.phase = "blocked"; flow.error = staleMessage; flow.preview = null;
+    return true;
+  }
+  flow.staleAutoRetries = (flow.staleAutoRetries || 0) + 1;
   await machtileStationReportRunCommand(code, core.refreshOutsourceReceiptPreview(finalArgs, crypto.randomUUID()), "preview");
   // The fresh preview (and the receipt dialog it asked for) must end allowed for this exact preview;
   // anything else (cancel, soft/hard guard, timeout) stays on screen for the operator to redo.
@@ -23730,11 +23736,36 @@ async function machtileStationReportRefreshAfterStaleFinal(code) {
     if (!flow.error) flow.error = `${staleMessage}（${card.message || card.title}）`;
     return true;
   }
+  // The operator confirmed the quantity against the reported total of the ORIGINAL preview; re-run
+  // SubmitFinal's pre-submit checks before re-sending it unattended.
+  const preFinalBlock = await machtileStationReportPreFinalBlock(code, flow.finalOrder || machtileStationReportOrderForCode(code), flow);
+  if (preFinalBlock) {
+    flow.phase = "blocked"; flow.error = preFinalBlock; flow.preview = null;
+    return true;
+  }
   let nextFinal;
   try { nextFinal = core.finalAfterFreshPreview(finalArgs, flow.args, flow.preview, crypto.randomUUID()); }
   catch (error) { flow.phase = "blocked"; flow.error = error.message || staleMessage; return true; }
   await machtileStationReportRunCommand(code, nextFinal, "report");
   return true;
+}
+
+const MACHTILE_STALE_AUTO_RETRY_LIMIT = 1;
+
+// Same pre-submit checks as machtileStationReportSubmitFinal (report in flight; when total semantics
+// are on, the freshly read reported total must still equal the one the operator's delta was based on).
+// Returns "" when the final may be sent, otherwise the message to show.
+async function machtileStationReportPreFinalBlock(code, order, flow) {
+  if (!order) return "工序識別資料不完整；已阻擋正式送出。";
+  try {
+    if (await machtileHasPendingReport(code, order)) return "這台還有報工在送出中，請等它送完再報";
+    if (config.reportTotalSemanticsEnabled === true) {
+      const totals = await machtileFreshReportedTotals(order);
+      const previewReported = Number(flow.singleReport?.previewReported ?? machtileBatchState.freshReportedByProcess.get(String(order.processId)));
+      if (Number(totals.goodDone) !== previewReported) return "已報數量已改變，請重新預覽後再送出";
+    }
+  } catch (error) { return machtileTranslate("report_total_unavailable"); }
+  return "";
 }
 
 function machtileSingleStationReportAllowlisted(machineCode = selectedOrder?.machine) {
@@ -24391,6 +24422,9 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   flow.args = args;
   flow.phase = "submitting-report";
   flow.error = "";
+  // Context for an unattended STALE re-send (pre-final checks need the submitted order).
+  flow.finalOrder = options.order || null;
+  flow.staleAutoRetries = 0;
   machtileRenderStationReportSurfaces();
   try {
     const client = machtileStationReportCreateClient();
