@@ -67,6 +67,11 @@ window.MACHTILE_CONFIG = {
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,
   shortCompletionMachines: [],
+  // 組裝站平板報工（owner 2026-10-31 三週計畫）：false＝入口與畫面都不出現、不讀任何組裝資料。
+  // 開之前要先有：派工橋同步這些站的工序（含 manufacture_ii_id）、雲端 machines 有這些站、Factory ReportPilotStations／
+  // 站別目錄 DispatchMulti 含這些站。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
+  assemblyReportEnabled: false,
+  assemblyStations: ["F01"],
   // Formal capacity calendar. Overtime and Saturday work must be appended as
   // approved `exceptions` entries; do not add a daily overtime shift.
   scheduleCalendar: {
