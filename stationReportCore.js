@@ -200,6 +200,9 @@
       args.p_expected_doc4_fingerprint = fingerprint;
     }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
+    // reported_before = machine-counter baseline (reported good + reported defect, owner 2026-10-31: the counter
+    // includes defects), i.e. the value backfill_qty was measured from; equals reported good when no defects.
+    // Consumers: only this RPC (gated by reportCounterMetaRpcEnabled, false in production today) and report_payload.
     if (x.reportCounterMetaRpcEnabled === true && x.reportCounterMeta) {
       const meta = x.reportCounterMeta;
       const fields = ["backfill_qty", "counter_today_qty", "start_counter", "reported_before"];

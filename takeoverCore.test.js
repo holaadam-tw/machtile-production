@@ -216,3 +216,28 @@ test("local start/stop is dropped when a newer cloud read contradicts it", () =>
   assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "paused", localRun: "start", localAt: 100 }), false);
   assert.equal(core.pickStartLocalStale({ hasOrder: true, processStatus: "paused", localRun: "", localAt: 100, cloudReadAt: 200 }), false);
 });
+
+test("machine-total stop (owner 2026-10-31): good = total - (goodDone + failDone) - this-time fail", () => {
+  const policy = core.DEFAULT_POLICIES.find((row) => row.code === "RUSH_ORDER");
+  const base = { ...core.initialStopForm(policy), allow_takeover_touched: true, fail_reason_code: "尺寸不良" };
+  const mt = (failDone) => ({ goodDone: 750, failDone, machineTotal: true });
+  let form = { ...base, good_qty: "761", fail_qty: "1" };
+  assert.equal(core.validateStop(form, undefined, mt(0)).ok, true);
+  assert.deepEqual(core.stopDeltas(form, mt(0)), { good: 10, fail: 1 });
+  assert.deepEqual(core.stopDeltas(form, mt(5)), { good: 5, fail: 1 });
+  const payload = core.stopReportPayload({ commandUuid: "u", machineCode: "A04", orderNo: "WO", indexSn: 1, form, totals: mt(5) });
+  assert.equal(payload.p_good_qty, 5, "server still receives this-time deltas");
+  assert.equal(payload.p_fail_qty, 1);
+  assert.equal(payload.p_fail_reason_code, "尺寸不良");
+  form = { ...base, good_qty: "761", fail_qty: "12" };
+  assert.equal(core.validateStop(form, undefined, mt(0)).errors.fail_qty, "fail_exceeds_added");
+  form = { ...base, good_qty: "752", fail_qty: "0" };
+  assert.equal(core.validateStop(form, undefined, mt(5)).errors.good_qty, "total_below_baseline");
+  form = { ...base, good_qty: "761", fail_qty: "0" };
+  assert.equal(core.validateStop(form, undefined, mt(null)).ok, true, "unknown failDone + fail 0 keeps the goodDone baseline");
+  assert.deepEqual(core.stopDeltas(form, mt(null)), { good: 11, fail: 0 });
+  form = { ...base, good_qty: "761", fail_qty: "1" };
+  assert.equal(core.validateStop(form, undefined, mt(null)).errors.fail_qty, "fail_done_unknown");
+  form = { ...base, good_qty: "750", fail_qty: "0" };
+  assert.equal(core.validateStop(form, undefined, mt(0)).ok, true, "zero this time is still allowed (stop without new parts)");
+});

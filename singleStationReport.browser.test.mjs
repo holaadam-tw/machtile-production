@@ -47,6 +47,7 @@ let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
+let reportedFail = 0; let noStartCounter = false;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
@@ -73,8 +74,8 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select")?.includes("operator_ids") && url.searchParams.get("report_type") === "eq.dailyStart") {
       return json(starterUserId ? [{ process_id: processId, report_type: "dailyStart", created_at: "2026-10-31T00:05:00Z", user_id: starterUserId, operator_ids: [starterUserId] }] : []);
     }
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
-    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(noStartCounter ? [] : [{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
       // REAL Factory preview shape for a receipt failure (wt-deploy40 SoftNet/SoftNetWebII/Services/StationCommands):
@@ -722,7 +723,7 @@ console.log("PASS material/count outsource receipt dialogs → preview success")
 
 
 // ---- 單台報工簡化（owner 2026-10-31「單台報工簡化 照圖做」）：作業員畫面 ----
-const implShots = "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl";
+const implShots = "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl-final";
 await mkdir(implShots, { recursive: true });
 currentMachine = "A04"; guardFails = false; guardEnabled = true; outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
 finalStaleOnce = false; finalRequiredOnce = false; finalSubmitFails = false; reconciledCommand = null; starterUserId = id(902);
@@ -795,7 +796,6 @@ assert.equal(await op.locator(".station-report-reason:visible").count(), 1, "exa
 await op.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("其他");
 assert.equal(await op.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "其他 asks for a one-line note");
 await op.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
-await sheetShot(op, "02-operator-defect.png");
 await op.locator("[data-simple-report-defect]").uncheck();
 assert.equal(await op.locator("#defectQty").inputValue(), "0", "unchecking 有不良品 clears the defect quantity");
 assert.equal(await op.evaluate(() => machtileBatchRow("A04").failReasonCode), "", "and its reason");
@@ -852,6 +852,43 @@ assert.equal(await rc.locator("#machtileOutsourceReceiptDialog").count(), 0, "di
 await rc.close();
 outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
 
+// ② 有不良品（正式環境總數語意）：機台 761、已報 750、這次不良 1 → 良品 10、不良 1；一顆鈕送出照新公式。
+// F1：按下後預覽前重讀已報不良變 5 → 一顆鈕流程送出的是重算後的良品 5，不是畫面上的舊 10。
+reportedOutput = 750; reportedFail = 0; freshReadEnabled = true; noStartCounter = true;
+const dt = await openOperatorPage();
+await dt.evaluate(async () => { config.reportTotalSemanticsEnabled = true; await machtileRefreshReportTotalState(selectedOrder); });
+await dt.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.reported === 750 && reportTotalState.failReported === 0);
+await dt.locator("#completedQty").fill("761");
+await dt.locator("[data-simple-report-defect]").check();
+await dt.locator("#defectQty").fill("1");
+await dt.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+assert.equal(await dt.locator("#completedQtyLabel").innerText(), "機台目前總數（這張單，含不良）");
+assert.equal(await dt.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件", "761 − 750 − 1 = 10 good");
+assert.match(await dt.locator("[data-simple-report-summary]").innerText(), /已報 750$/);
+await sheetShot(dt, "02-operator-defect.png");
+const dtBefore = calls.commands.length;
+await dt.locator("#reportForm .submit-report").click();
+await dt.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const dtSent = calls.commands.slice(dtBefore);
+assert.deepEqual(dtSent.map(c => [c.p_preview, c.p_good_qty, c.p_fail_qty, c.p_fail_reason_code]), [[true, 10, 1, "尺寸不良"], [false, 10, 1, "尺寸不良"]], "one button sends good 10 / fail 1 (defect-aware)");
+await dt.close();
+const dt2 = await openOperatorPage();
+await dt2.evaluate(async () => { config.reportTotalSemanticsEnabled = true; await machtileRefreshReportTotalState(selectedOrder); });
+await dt2.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.failReported === 0);
+await dt2.locator("#completedQty").fill("761");
+await dt2.locator("[data-simple-report-defect]").check();
+await dt2.locator("#defectQty").fill("1");
+await dt2.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+assert.equal(await dt2.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件");
+reportedFail = 5;   // someone else's defects landed after the screen was drawn
+const dt2Before = calls.commands.length;
+await dt2.locator("#reportForm .submit-report").click();
+await dt2.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const dt2Sent = calls.commands.slice(dt2Before);
+assert.deepEqual(dt2Sent.map(c => [c.p_preview, c.p_good_qty, c.p_fail_qty]), [[true, 5, 1], [false, 5, 1]], "F1 in the one-button flow: fresh reread → good 5 (761 − 750 − 5 − 1), never the stale 10");
+await dt2.close();
+reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+
 // ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
 previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";
 const bl = await openOperatorPage();
@@ -878,6 +915,91 @@ await bl.locator("[data-station-report-tech]").screenshot({ path: path.join(impl
 await bl.close();
 previewBlockedCode = ""; starterUserId = null;
 console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
+
+// Owner 2026-10-31: the machine counter includes defects. Total semantics on:
+// good = machine total - (goodDone + failDone) - this-time defects.
+currentMachine = "A04"; reportedOutput = 750; reportedFail = 0; freshReadEnabled = true; noStartCounter = true;
+const defectTotal = await context.newPage();
+defectTotal.on("pageerror", error => errors.push(error.message));
+await defectTotal.goto(base, { waitUntil: "domcontentloaded" });
+await defectTotal.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await defectTotal.evaluate(() => { config.reportTotalSemanticsEnabled = true; machtileAuthState.role = "admin"; });
+await defectTotal.locator("[data-open-report]:visible").first().click();
+await defectTotal.locator('#reportForm [data-report-type="noon"]').click();
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.reported === 750 && reportTotalState.failReported === 0);
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.waitForFunction(() => document.querySelector("[data-simple-report-defect]"));
+await defectTotal.locator("[data-simple-report-defect]").check();
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#simpleReportHint").innerText(), "這次良品 10 件、不良 1 件", "simplified operator hint uses the defect-aware result (761 − 750 − 1)");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 750 → 送出後 = 761；這次良品 10 件、不良 1 件", "live hint shows the good/defect split");
+assert.deepEqual(await defectTotal.evaluate(() => { const r = reportCounterCalculation(); return { valid: r.valid, good: r.delta, fail: r.fail }; }), { valid: true, good: 10, fail: 1 }, "761 - 750 - 1 defect = 10 good");
+const defectCommandsBefore = calls.commands.length;
+await defectTotal.locator("[data-station-report-tech] > summary").click();
+await defectTotal.locator('#simpleReportReason [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await defectTotal.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
+const defectPreview = calls.commands.slice(defectCommandsBefore).find(command => command.p_preview);
+assert.equal(defectPreview.p_good_qty, 10, "smart-report preview sends good 10, not 11");
+assert.equal(defectPreview.p_fail_qty, 1);
+// F1: the preview reread sees failDone 5 → good is recomputed from the fresh baseline, never the stale 10.
+reportedFail = 5;
+const staleCommandsBefore = calls.commands.length;
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+const waitPreviewCommand = async (after) => {
+  for (let i = 0; i < 100; i++) {
+    const hit = calls.commands.slice(after).find(command => command.p_preview);
+    if (hit) return hit;
+    await defectTotal.waitForTimeout(50);
+  }
+  return null;
+};
+const freshPreview = await waitPreviewCommand(staleCommandsBefore);
+assert.equal(freshPreview?.p_good_qty, 5, "preview after a fresh reread sends the fresh good 5 (761 - 750 - 5 - 1)");
+assert.equal(await defectTotal.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).singleReport.previewGood), 5);
+reportedFail = 0;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.failReported === 0);
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
+reportedFail = 5;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 755 → 送出後 = 761；這次良品 5 件、不良 1 件", "already-reported defects move the baseline");
+assert.equal(await defectTotal.evaluate(() => reportCounterCalculation().delta), 5, "failDone 5 → good 5");
+// The preview was taken with failDone 0; a final after failDone changed is blocked with zero writes.
+const defectFinalsBefore = calls.commands.filter(command => !command.p_preview).length;
+await defectTotal.evaluate(() => machtileStationReportSubmitFinal("A04"));
+await defectTotal.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("已報數量已改變，請重新預覽"));
+assert.equal(calls.commands.filter(command => !command.p_preview).length, defectFinalsBefore, "changed reported defects after preview blocks the final");
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.error = ""; flow.preview = null; machtileRenderStationReportSurfaces(); });
+await defectTotal.locator("#defectQty").fill("7");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "不良數比這次多出來的件數還多，請確認", "this-time defects above the added parts are blocked");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "不良數比這次多出來的件數還多，請確認");
+await defectTotal.locator("#defectQty").fill("6");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "", "fail-only (good 0, defect 6) is not blocked by the zero-report rule; factory FAIL_ONLY ack decides");
+// failDone unknown (legacy progress has no reliable fail total)
+await defectTotal.evaluate(() => { reportTotalState = { ...reportTotalState, failReported: null }; updateReportCounterPreview(); });
+await defectTotal.locator("#defectQty").fill("0");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "系統已報 750 → 送出後 = 761；這次良品 11 件、不良 0 件", "failDone unknown + fail 0 behaves as before");
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "暫時無法核對已報不良數，請稍後再按", "failDone unknown + fail > 0 fails closed");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
+// F5 + F3: finish prefill = reported good + reported defect; short completion compares planned vs GOOD.
+reportedFail = 5;
+await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder); });
+assert.equal(await defectTotal.locator("#completedQty").inputValue(), "755", "finish prefill = 750 good + 5 defect (machine total so far)");
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.locator("#defectQty").fill("1");
+const shortGap = await defectTotal.evaluate(() => ({ hidden: document.getElementById("shortCompletionSection")?.hidden, text: document.querySelector("[data-short-completion-gap]")?.textContent || "" }));
+assert.equal(shortGap.hidden, false, "short completion shows when good total 755 < planned 1000");
+assert.match(shortGap.text, /245/, `差幾件 = 1000 - (761 - 5 - 1) = 245: ${shortGap.text}`);
+await defectTotal.evaluate(() => { activeReportType = "noon"; });
+await defectTotal.close();
+reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+console.log("PASS total semantics subtract reported and this-time defects from the machine total");
 
 currentMachine = "A04"; guardFails = true;
 const failedGuard = await context.newPage();

@@ -61,6 +61,7 @@
   "simple_soft_generic": { "value": "Hãy kiểm tra số đúng rồi bấm gửi lại.", "_draft": true },
   "batch_total_label": { "value": "Tổng số hiện tại trên máy", "_draft": true },
   "batch_added_qty": { "value": "Lần này tăng +{{quantity}} sản phẩm", "_draft": true },
+  "batch_added_split": { "value": "Lần này {{good}} hàng tốt, {{fail}} hàng lỗi", "_draft": true },
   "batch_added_waiting": { "value": "Nhập số để xem lượng tăng lần này", "_draft": true },
   "batch_total_below_reported": { "value": "Tổng số không được nhỏ hơn {{reported}} sản phẩm đã báo", "_draft": true },
   "batch_defect_toggle": { "value": "Có hàng lỗi", "_draft": true },
@@ -454,8 +455,8 @@
     "_draft": true
   },
   "machine_order_total": { "value": "Tổng số hiện đang hiển thị trên máy (đơn này)", "_draft": true },
-  "report_total_preview_plain": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm", "_draft": true },
-  "report_total_preview": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này thêm {{add}} sản phẩm (trong đó {{backfill}} sản phẩm ca trước chưa báo)", "_draft": true },
+  "report_total_preview_plain": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này {{good}} hàng tốt, {{fail}} hàng lỗi", "_draft": true },
+  "report_total_preview": { "value": "Hệ thống đã báo {{reported}} → sau khi gửi = {{total}}; lần này {{good}} hàng tốt, {{fail}} hàng lỗi (trong số hàng tốt có {{backfill}} sản phẩm ca trước chưa báo)", "_draft": true },
   "report_total_unavailable": { "value": "Tạm thời không thể đối chiếu số lượng đã báo, vui lòng bấm lại sau", "_draft": true },
   "counter_zero_report": { "value": "Lần này tăng 0 sản phẩm, không cần báo.", "_draft": true },
   "good_quantity": {
@@ -596,7 +597,7 @@
   },
   "takeover_stop_title": { "value": "Xác nhận dừng máy", "_draft": true },
   "takeover_stop_qty_question_total": { "value": "Tổng số hàng tốt hiện tại của công đoạn này (bao gồm {{done}} cái đã báo)", "_draft": true },
-  "takeover_good_qty_total": { "value": "Hàng tốt (tổng hiện tại của công đoạn)", "_draft": true }, "takeover_fail_qty_total": { "value": "Hàng lỗi (tổng hiện tại của công đoạn)", "_draft": true }, "takeover_fail_qty_unreported": { "value": "Hàng lỗi (số chưa báo)", "_draft": true },
+  "takeover_good_qty_total": { "value": "Hàng tốt (tổng hiện tại của công đoạn)", "_draft": true }, "takeover_machine_total": { "value": "Tổng số hiện trên máy (đơn này, gồm hàng lỗi)", "_draft": true }, "takeover_this_fail_qty": { "value": "Lần này bao nhiêu hàng lỗi", "_draft": true }, "takeover_stop_qty_question_machine": { "value": "Nhập tổng số hiện trên máy của đơn này (hệ thống đã báo {{done}} cái, gồm hàng lỗi)", "_draft": true }, "takeover_fail_qty_total": { "value": "Hàng lỗi (tổng hiện tại của công đoạn)", "_draft": true }, "takeover_fail_qty_unreported": { "value": "Hàng lỗi (số chưa báo)", "_draft": true },
   "takeover_stop_add_qty": { "value": "Lần này sẽ thêm: {{good}} hàng tốt, {{fail}} hàng lỗi", "_draft": true }, "takeover_stop_add_qty_waiting": { "value": "Sau khi nhập số lượng sẽ hiển thị số được thêm lần này", "_draft": true },
   "takeover_stop_total_less_than_done": { "value": "Tổng số không được nhỏ hơn {{done}} cái đã báo", "_draft": true }, "takeover_stop_fail_total_less_than_done": { "value": "Tổng hàng lỗi không được nhỏ hơn {{done}} cái đã báo", "_draft": true },
   "takeover_stop_progress_unavailable": { "value": "Không đọc được tiến độ mới nhất của công đoạn này. Vui lòng tải lại rồi thử lại", "_draft": true }, "takeover_stop_report_pending": { "value": "Báo cáo vừa gửi vẫn đang được xử lý. Vui lòng chờ rồi mới dừng máy", "_draft": true },
