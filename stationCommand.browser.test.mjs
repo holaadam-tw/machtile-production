@@ -783,11 +783,11 @@ console.log("\n== 390px：空機台沒有候選時顯示明確訊息 ==");
 // 停工對話框＝報工＋停工一次（owner 10/25）：數量＝上次報工之後、停工前還沒報的件數；已報累計顯示在題目上。
 // r3d 串接測試：先報工 4 已 applied，停工又填 4 → 工廠 DUPLICATE_SUSPECTED → 以前自動退一般停工、停工單沒建立。
 const STOP_WO = "XX01202502050012";
-async function stopDialogPage(be, { qtyCompleted = 4 } = {}) {
+async function stopDialogPage(be, { qtyCompleted = 4, extraConfig = "" } = {}) {
   be.procExtra[STOP_WO] = { simulation_id: "Y011EBNTBCW4", qty_completed: qtyCompleted };
   if (!be.progressRows.length) be.progressRows = [{ process_id: id(304), legacy_output: qtyCompleted, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
   const { context, page, errors } = await newPage(browser, "phone", { backend: be,
-    configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A04"],', contextTimeout: 60000 });
+    configExtra: 'stationCommandMachines: ["A04"], enableTakeover: true, takeoverMachines: ["A04"],' + extraConfig, contextTimeout: 60000 });
   await page.waitForFunction(() => machtileTakeover.availability === "ready", null, { timeout: 10000 });
   await page.evaluate(() => {
     window.__toasts = [];
@@ -843,26 +843,55 @@ console.log("\n== 390px：停工對話框——總數 140／已報 94 → 送出
   await context.close();
 }
 
-// owner 2026-10-31：機台計數含不良。停工對話框本來就分開問「良品總數」與「不良總數」，
-// 差額＝良品總數－已報良品、不良總數－已報不良，不會把不良算進良品（與報工的「機台總數」公式一致）。
-for (const [failDone, failTotal, goodTotal, expectGood, expectFail] of [[0, 1, 760, 10, 1], [5, 6, 755, 5, 1]]) {
-  console.log(`\n== 390px：停工對話框——已報良品 750／已報不良 ${failDone} → 良品總數 ${goodTotal}、不良總數 ${failTotal} ==`);
+// owner 2026-10-31「停工也填機台總數」：總數語意開著時停工對話框＝機台目前總數（含不良）＋這次不良幾件；
+// 送給 machtile_submit_stop_report 的仍是這次差額 p_good_qty／p_fail_qty（伺服器合約不變）。旗標關的舊語意由上面 140／94 案例固定。
+for (const [failDone, expectGood] of [[0, 10], [5, 5]]) {
+  console.log(`\n== 390px：停工對話框（機台總數）——已報良品 750／已報不良 ${failDone}，機台 761、這次不良 1 → good ${expectGood} ==`);
   const be = makeBackend();
   be.mode = "applied";
   be.progressRows = [{ process_id: id(304), legacy_output: 750, legacy_fail: failDone, pending_output: 0, pending_fail: 0, pending_count: 0 }];
-  const { context, page, errors } = await stopDialogPage(be, { qtyCompleted: 750 });
+  const { context, page, errors } = await stopDialogPage(be, { qtyCompleted: 750, extraConfig: " reportTotalSemanticsEnabled: true," });
   await openStopDialog(page);
   const ts = takeoverSheet(page);
-  ok((await ts.locator('[data-takeover-field="fail_qty"]').innerText()).includes("不良（這一道目前總數）"), "已報不良可靠 → 不良欄也問總數");
-  await fillStopDialog(page, goodTotal, failTotal);
+  ok((await ts.locator('[data-takeover-field="good_qty"]').innerText()).includes("機台目前總數（這張單，含不良）"), "總數欄＝機台目前總數（含不良）");
+  ok((await ts.locator('[data-takeover-field="fail_qty"]').innerText()).includes("這次不良幾件"), "不良欄＝這次不良幾件");
+  const question = (await ts.locator("[data-takeover-qty-question]").innerText()).trim();
+  ok(question.includes(`系統已報 ${750 + failDone} 件，含不良`), "題目顯示已報（良品＋不良）", question);
+  if (failDone === 0) {
+    await fillStopDialog(page, 761, 12);
+    ok((await ts.locator("[data-takeover-error]").innerText()).trim() === "不良數比這次多出來的件數還多，請確認", "不良多於新增件數 → 擋下");
+    ok(await ts.locator("[data-takeover-stop-confirm]").getAttribute("aria-disabled") === "true", "擋下時確認停工不能按");
+    await ts.locator("[data-takeover-good]").fill("749");
+    await ts.locator("[data-takeover-fail]").fill("0");
+    ok((await ts.locator("[data-takeover-error]").innerText()).trim() === "機台數字比系統少，請確認是這張單的數字", "總數少於已報 → 擋下");
+    await ts.locator("[data-takeover-good]").fill("761");
+    await ts.locator("[data-takeover-fail]").fill("1");
+  } else {
+    await fillStopDialog(page, 761, 1);
+  }
   await ts.locator("[data-takeover-fail-reason]").selectOption({ index: 1 });
   const addText = (await ts.locator("[data-takeover-add-qty]").innerText()).trim();
-  ok(addText === `這次會新增：良品 ${expectGood} 件、不良 ${expectFail} 件`, `停工差額分開算良品 ${expectGood}／不良 ${expectFail}`, addText);
+  ok(addText === `這次會新增：良品 ${expectGood} 件、不良 1 件`, `停工差額＝761－${750 + failDone}－1＝良品 ${expectGood}`, addText);
   await ts.locator("[data-takeover-stop-confirm]").click();
   await page.waitForFunction(() => !document.getElementById("machtileTakeoverSheet") && !machtileStationCmd.pending.A04, null, { timeout: 15000 }).catch(() => {});
   const sent = be.stopReportSubmits[0] || {};
-  ok(be.stopReportSubmits.length === 1 && sent.p_good_qty === expectGood && sent.p_fail_qty === expectFail, `停工回報送出 good ${expectGood}、fail ${expectFail}`, JSON.stringify(be.stopReportSubmits));
-  ok(realErrors(errors).length === 0, "停工含不良沒有 JS 錯誤", realErrors(errors).join(" | "));
+  ok(be.stopReportSubmits.length === 1 && sent.p_good_qty === expectGood && sent.p_fail_qty === 1 && sent.p_fail_reason_code, `停工回報送出差額 good ${expectGood}、fail 1`, JSON.stringify(be.stopReportSubmits));
+  ok(realErrors(errors).length === 0, "停工機台總數沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：停工對話框（機台總數）——已報不良讀不到：這次不良 0 照舊、>0 擋下 ==");
+{
+  const be = makeBackend();
+  be.mode = "applied";
+  const { context, page } = await stopDialogPage(be, { qtyCompleted: 750, extraConfig: " reportTotalSemanticsEnabled: true," });
+  await openStopDialog(page);
+  await page.evaluate(() => { const h = document.getElementById("machtileTakeoverSheet"); h._state.totals = { ...h._state.totals, failDone: null }; machtileTakeoverStopRender(h, h._state); });
+  const ts = takeoverSheet(page);
+  await fillStopDialog(page, 761, 1);
+  ok((await ts.locator("[data-takeover-error]").innerText()).trim() === "暫時無法核對已報不良數，請稍後再按", "已報不良未知＋這次不良 1 → 擋下");
+  await ts.locator("[data-takeover-fail]").fill("0");
+  ok((await ts.locator("[data-takeover-add-qty]").innerText()).trim() === "這次會新增：良品 11 件、不良 0 件", "已報不良未知＋這次不良 0 → 照舊 11");
   await context.close();
 }
 

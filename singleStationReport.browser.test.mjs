@@ -705,6 +705,7 @@ await defectTotal.evaluate(() => { config.reportTotalSemanticsEnabled = true; })
 await defectTotal.locator("[data-open-report]:visible").first().click();
 await defectTotal.locator('#reportForm [data-report-type="noon"]').click();
 await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.status === "ready" && reportTotalState.reported === 750 && reportTotalState.failReported === 0);
 await defectTotal.locator("#completedQty").fill("761");
 await defectTotal.locator("#defectQty").fill("1");
 assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "系統已報 750 → 送出後 = 761；這次良品 10 件、不良 1 件", "live hint shows the good/defect split");
@@ -718,6 +719,28 @@ await defectTotal.waitForFunction(() => document.querySelector('#singleStationRe
 const defectPreview = calls.commands.slice(defectCommandsBefore).find(command => command.p_preview);
 assert.equal(defectPreview.p_good_qty, 10, "smart-report preview sends good 10, not 11");
 assert.equal(defectPreview.p_fail_qty, 1);
+// F1: the preview reread sees failDone 5 → good is recomputed from the fresh baseline, never the stale 10.
+reportedFail = 5;
+const staleCommandsBefore = calls.commands.length;
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+const waitPreviewCommand = async (after) => {
+  for (let i = 0; i < 100; i++) {
+    const hit = calls.commands.slice(after).find(command => command.p_preview);
+    if (hit) return hit;
+    await defectTotal.waitForTimeout(50);
+  }
+  return null;
+};
+const freshPreview = await waitPreviewCommand(staleCommandsBefore);
+assert.equal(freshPreview?.p_good_qty, 5, "preview after a fresh reread sends the fresh good 5 (761 - 750 - 5 - 1)");
+assert.equal(await defectTotal.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).singleReport.previewGood), 5);
+reportedFail = 0;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.waitForFunction(() => reportTotalState.failReported === 0);
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.preview = null; flow.result = null; flow.error = ""; });
+await defectTotal.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
 reportedFail = 5;
 await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
 assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "系統已報 755 → 送出後 = 761；這次良品 5 件、不良 1 件", "already-reported defects move the baseline");
@@ -740,6 +763,16 @@ assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "�
 await defectTotal.locator("#defectQty").fill("1");
 assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "暫時無法核對已報不良數，請稍後再按", "failDone unknown + fail > 0 fails closed");
 assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
+// F5 + F3: finish prefill = reported good + reported defect; short completion compares planned vs GOOD.
+reportedFail = 5;
+await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder); });
+assert.equal(await defectTotal.locator("#completedQty").inputValue(), "755", "finish prefill = 750 good + 5 defect (machine total so far)");
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.locator("#defectQty").fill("1");
+const shortGap = await defectTotal.evaluate(() => ({ hidden: document.getElementById("shortCompletionSection")?.hidden, text: document.querySelector("[data-short-completion-gap]")?.textContent || "" }));
+assert.equal(shortGap.hidden, false, "short completion shows when good total 755 < planned 1000");
+assert.match(shortGap.text, /245/, `差幾件 = 1000 - (761 - 5 - 1) = 245: ${shortGap.text}`);
+await defectTotal.evaluate(() => { activeReportType = "noon"; });
 await defectTotal.close();
 reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
 console.log("PASS total semantics subtract reported and this-time defects from the machine total");

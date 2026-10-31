@@ -8322,6 +8322,11 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     const start = window.MachTileReportCounterCore.latestBaseline(Array.isArray(rows) ? rows : []);
     reportTotalState = { status: "ready", reported: Number(totals.goodDone), failReported: machtileReportedFailOrNull(totals), start: start?.qty ?? null, processId };
     finishReportedState = { status: "ready", quantity: Number(totals.goodDone), processId };
+    const completedInput = $("#completedQty");
+    if (activeReportType === "finish" && completedInput && completedInput.value === "") {
+      completedInput.value = String(machtileReportedCounterBaseline(totals));
+      machtileRenderShortCompletion(order);
+    }
     updateReportCounterPreview();
     machtileRenderFinishReportedState();
     return reportTotalState;
@@ -8578,7 +8583,8 @@ function setReportDefaults(order) {
   if (machineQtyInput) machineQtyInput.value = doneQty || 0;
   // 2026-10-01：「這次良品」預設 0。舊版預設帶「已完成數」，欄位又寫「累計」，照預設送出時
   // 回寫橋會把整個累計當成這次的量再加一次。
-  if (completedInput) completedInput.value = activeReportType === "finish" ? machtileFinishReportedQty(order) : 0;
+  // 總數語意開著：完工預帶「機台目前總數」＝已報良品＋已報不良（機台計數含不良）；等重讀完成再由 machtileRefreshReportTotalState 填
+  if (completedInput) completedInput.value = activeReportType === "finish" ? (config.reportTotalSemanticsEnabled === true ? "" : machtileFinishReportedQty(order)) : 0;
   if (defectInput) defectInput.value = 0;
   if ($("#reportFailReason")) $("#reportFailReason").value = "";
   machtileUpdateReportFailReason();
@@ -14241,13 +14247,24 @@ function machtileTakeoverStopDoneQty(order) {
   const done = Number(order?.done);
   return Number.isFinite(done) && done >= 0 ? done : 0;
 }
+// owner 2026-10-31「停工也填機台總數」：總數語意開著時停工對話框跟報工同一套——機台目前總數（含不良）＋這次不良幾件
+function machtileTakeoverStopTotals(totals) {
+  return { ...(totals || {}), machineTotal: config.reportTotalSemanticsEnabled === true };
+}
 function machtileTakeoverStopQuestion(viewState) {
+  if (viewState.totals?.machineTotal === true) {
+    const failDone = viewState.totals.failDone;
+    return machtileTranslate("takeover_stop_qty_question_machine", { done: Number(viewState.totals.goodDone || 0) + Number(failDone || 0) });
+  }
   return machtileTranslate("takeover_stop_qty_question_total", { done: viewState.totals.goodDone });
 }
 function machtileTakeoverStopValidation(viewState) {
   return machtileTakeoverCore.validateStop(viewState.form, viewState.policies, viewState.totals);
 }
 function machtileTakeoverStopQuantityError(viewState, validation) {
+  if (validation.errors.good_qty === "total_below_baseline") return "機台數字比系統少，請確認是這張單的數字";
+  if (validation.errors.fail_qty === "fail_done_unknown") return "暫時無法核對已報不良數，請稍後再按";
+  if (validation.errors.fail_qty === "fail_exceeds_added") return "不良數比這次多出來的件數還多，請確認";
   if (validation.errors.good_qty === "total_less_than_done") return machtileTranslate("takeover_stop_total_less_than_done", { done: viewState.totals.goodDone });
   if (validation.errors.fail_qty === "total_less_than_done") return machtileTranslate("takeover_stop_fail_total_less_than_done", { done: viewState.totals.failDone });
   return "";
@@ -14263,7 +14280,7 @@ function machtileTakeoverStopRender(holder, viewState) {
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
     <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTakeoverStopQuestion(viewState))}</p>
     ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
-    <div class="takeover-qty"><label data-takeover-field="good_qty">${escapeHtml(machtileTranslate("takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label data-takeover-field="fail_qty">${escapeHtml(machtileTranslate(viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
+    <div class="takeover-qty"><label data-takeover-field="good_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_machine_total" : "takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label data-takeover-field="fail_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_this_fail_qty" : viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
     <p class="takeover-question" data-takeover-add-qty>${escapeHtml(delta ? machtileTranslate("takeover_stop_add_qty", { good: delta.good, fail: delta.fail }) : machtileTranslate("takeover_stop_add_qty_waiting"))}</p>
     <label data-takeover-fail-reason-field data-takeover-field="fail_reason_code"${delta?.fail > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
     <fieldset data-takeover-field="reason_code"><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
@@ -14366,7 +14383,7 @@ async function machtileTakeoverOpenStop(code, returnFocus) {
   let totals;
   try { totals = await machtileTakeoverStopFreshTotals(code, order); }
   catch (error) { machtileTakeoverClose(); showToast(error?.message || machtileTranslate("takeover_stop_progress_unavailable"), "error"); return; }
-  holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), totals, sending: false,
+  holder._state = { policies, form: machtileTakeoverCore.initialStopForm(policies[0]), totals: machtileTakeoverStopTotals(totals), sending: false,
     error: order.simulationId ? "" : "缺少 simulationId，請改用一般停工。", offerLegacyStop: !order.simulationId, machine, order };
   machtileTakeoverStopRender(holder, holder._state);
 }
@@ -14413,7 +14430,7 @@ function machtileTakeoverReopenStopDuplicate(code, draft) {
   if (!order) { showToast(machtileTranslate("takeover_stop_dup_question")); return; }
   const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
   const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
-  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), totals: draft?.totals || { goodDone: machtileTakeoverStopDoneQty(order), failDone: null }, sending: false,
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), totals: draft?.totals || machtileTakeoverStopTotals({ goodDone: machtileTakeoverStopDoneQty(order), failDone: null }), sending: false,
     error: draft ? "" : machtileTranslate("takeover_stop_dup_question"), offerLegacyStop: false, machine, order, dupConfirm: Boolean(draft) };
   machtileTakeoverStopRender(holder, holder._state);
 }
@@ -14437,7 +14454,7 @@ function machtileTakeoverReopenStopRejected(code, draft, view, message) {
   if (!order) return;
   const policies = draft?.policies?.length ? draft.policies : machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
   const holder = machtileTakeoverOverlay(code, "stop", draft?.returnFocus || null);
-  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), totals: draft?.totals || { goodDone: machtileTakeoverStopDoneQty(order), failDone: null }, sending: false,
+  holder._state = { policies, form: draft ? { ...draft.form } : machtileTakeoverCore.initialStopForm(policies[0]), totals: draft?.totals || machtileTakeoverStopTotals({ goodDone: machtileTakeoverStopDoneQty(order), failDone: null }), sending: false,
     error: machtileTakeoverStopRejectedText(view, message), offerLegacyStop: false, machine, order, rejectedCode: String(view?.code || "") };
   holder.dataset.takeoverRejected = String(view?.code || "");
   machtileTakeoverStopRender(holder, holder._state);
@@ -14647,11 +14664,18 @@ function machtileRenderShortCompletion(order = selectedOrder) {
       <textarea id="shortCompletionNote" maxlength="500" hidden placeholder="${escapeHtml(machtileTranslate("short_completion_note"))}"></textarea>`;
   }
   const planned = Number(order?.total || order?.quantity || 0);
-  const finish = window.MachTileReportCounterCore?.finishTotal(
-    document.getElementById("completedQty")?.value,
-    machtileFinishReportedQty(order),
-  );
-  const total = finish?.total;
+  let total;
+  if (config.reportTotalSemanticsEnabled === true) {
+    // 機台總數含不良（owner 2026-10-31）：短交比的是良品＝已報良品＋這次良品（機台總數－已報不良－這次不良）
+    const counter = activeReportType === "finish" && String(order?.processId || "") === String(selectedOrder?.processId || "") ? reportCounterCalculation() : null;
+    total = counter?.valid ? Number(counter.reported) + Number(counter.delta) : undefined;
+  } else {
+    const finish = window.MachTileReportCounterCore?.finishTotal(
+      document.getElementById("completedQty")?.value,
+      machtileFinishReportedQty(order),
+    );
+    total = finish?.total;
+  }
   const visible = activeReportType === "finish" && machtileShortCompletionEnabled(order?.machine)
     && Number.isFinite(total) && planned > 0 && total < planned;
   section.hidden = !visible;
@@ -24243,6 +24267,16 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     try { if (reportType === "finish") shortCompletion = machtileShortCompletionValue(order); }
     catch (error) { block(error.message); return; }
     const counterResult = config.reportTotalSemanticsEnabled === true ? reportCounterCalculation() : null;
+    if (counterResult) {
+      // 剛重讀的已報良品／不良可能跟上次畫面不同：照最新值重算一次，送出的良品必須就是這次算出的 delta
+      if (!counterResult.valid) { block(counterResult.message); return; }
+      const freshValidation = validateReportForm(activeReportType);
+      if (freshValidation) { block(freshValidation); return; }
+      machtileSyncSingleStationReportRow();
+      if (Number(row.good) !== Number(counterResult.delta) || Number(row.bad) !== Number(counterResult.fail)) {
+        block("已報數量已改變，請重新預覽後再送出"); return;
+      }
+    }
     flow.singleReport = {
       reportType,
       reportPayload: {
@@ -24255,6 +24289,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
       previewFailReported: counterResult ? (counterResult.failReported ?? null) : undefined,
+      previewGood: counterResult ? counterResult.delta : undefined,
       reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
       overlayTotal: counterResult?.total ?? null,
     };
@@ -24387,6 +24422,12 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
       }
     }
   } catch (error) { flow.error = machtileTranslate("report_total_unavailable"); machtileRenderStationReportSurfaces(); return; }
+  // 正式送出的良品一定要等於預覽時用最新已報數算出的良品（不能用畫面上次同步的舊值）
+  if (flow.singleReport?.previewGood !== undefined && Number(row.good) !== Number(flow.singleReport.previewGood)) {
+    flow.phase = "blocked"; flow.error = "已報數量已改變，請重新預覽後再送出"; flow.preview = null;
+    machtileRenderStationReportSurfaces();
+    return;
+  }
   let args;
   try {
     // Reuse the receipt the operator already confirmed for this exact allowed preview (single and
@@ -26363,7 +26404,7 @@ function bindEvents() {
       updateReportEstimate();
       updateNoonAdvice();
       updateReportCounterPreview();
-      if (id === "completedQty") machtileRenderShortCompletion(selectedOrder);
+      if (id === "completedQty" || id === "defectQty") machtileRenderShortCompletion(selectedOrder);
       if (id === "defectQty") machtileUpdateReportFailReason();
     });
   });

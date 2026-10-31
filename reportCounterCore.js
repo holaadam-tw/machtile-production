@@ -87,18 +87,22 @@
     if (good < 0) return blocked("FAIL_EXCEEDS_ADDED", "不良數比這次多出來的件數還多，請確認", { baseline, added });
     const backfill = start === null ? 0 : Math.min(good, Math.max(0, Math.min(total, start) - baseline));
     const today = good - backfill;
-    const payload = { start_counter: start, reported_before: reported, backfill_qty: backfill, counter_today_qty: today };
+    // reported_before = the counter baseline the backfill was measured from (goodDone + failDone).
+    // Same value as before whenever no defects were reported; consumers recompute
+    // backfill as min(total, start) - reported_before.
+    const payload = { start_counter: start, reported_before: baseline, backfill_qty: backfill, counter_today_qty: today };
     const reports = [{ kind: "total_delta", good, fail, payload }];
     return { valid: true, code: "OK", message: "", ...base, baseline, delta: good, added, good, backfill, today, reports };
   }
 
   function efficiencyPayload(result) {
     const good = Number(result?.delta);
-    const reported = Number(result?.reported);
+    // Counter baseline (goodDone + failDone) when present; legacy results only carry `reported`.
+    const reported = Number(Number.isInteger(result?.baseline) ? result.baseline : result?.reported);
     const start = Number.isInteger(result?.start) ? result.start : null;
     if (!result?.valid || !Number.isInteger(good) || !Number.isInteger(reported)) return null;
     const backfillQty = Number.isInteger(result?.backfill) ? result.backfill
-      : start === null ? 0 : Math.max(0, Math.min(result.total, start) - reported);
+      : start === null ? 0 : Math.min(good, Math.max(0, Math.min(result.total, start) - reported));
     return {
       start_counter: start,
       reported_before: reported,

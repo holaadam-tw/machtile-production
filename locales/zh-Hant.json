@@ -210,7 +210,7 @@
   "report_fail_reason_note_label": "其他原因說明",
   "takeover_stop_title": "確認停工",
   "takeover_stop_qty_question_total": "這一道目前良品總數（含已報 {{done}} 件）",
-  "takeover_good_qty_total": "良品（這一道目前總數）", "takeover_fail_qty_total": "不良（這一道目前總數）", "takeover_fail_qty_unreported": "不良（還沒報的件數）",
+  "takeover_good_qty_total": "良品（這一道目前總數）", "takeover_machine_total": "機台目前總數（這張單，含不良）", "takeover_this_fail_qty": "這次不良幾件", "takeover_stop_qty_question_machine": "填機台上這張單目前的總數（系統已報 {{done}} 件，含不良）", "takeover_fail_qty_total": "不良（這一道目前總數）", "takeover_fail_qty_unreported": "不良（還沒報的件數）",
   "takeover_stop_add_qty": "這次會新增：良品 {{good}} 件、不良 {{fail}} 件", "takeover_stop_add_qty_waiting": "填完數量後會顯示這次新增件數",
   "takeover_stop_total_less_than_done": "總數不能少於已報 {{done}} 件", "takeover_stop_fail_total_less_than_done": "不良總數不能少於已報 {{done}} 件",
   "takeover_stop_progress_unavailable": "讀不到這一道的最新進度，請重新整理後再試", "takeover_stop_report_pending": "剛報的還在處理，請稍後再停工",

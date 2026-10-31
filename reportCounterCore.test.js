@@ -73,4 +73,11 @@ assert.deepEqual(efficiencyPayload(totalSemantics(761, 750, 755, { failDone: 0, 
 assert.deepEqual(efficiencyPayload(totalSemantics(752, 750, 760, { failDone: 0, fail: 1 })), {
   start_counter: 760, reported_before: 750, backfill_qty: 1, counter_today_qty: 0,
 }, "backfill never exceeds the good quantity (RPC contract backfill_qty <= good)");
-console.log("PASS: cumulative report counter and finish-total rules (46 assertions)");
+assert.deepEqual(efficiencyPayload(totalSemantics(761, 750, 758, { failDone: 5, fail: 1 })), {
+  start_counter: 758, reported_before: 755, backfill_qty: 3, counter_today_qty: 2,
+}, "reported_before is the counter baseline (good + defect) the backfill was measured from");
+assert.equal(totalSemantics(761, 750, null, { failDone: 5, fail: 1 }).reports[0].payload.reported_before, 755, "report payload carries the same baseline");
+assert.deepEqual(efficiencyPayload({ valid: true, delta: 5, reported: 750, baseline: 755, total: 761, start: 758 }), {
+  start_counter: 758, reported_before: 755, backfill_qty: 3, counter_today_qty: 2,
+}, "fallback (no precomputed backfill) uses the same baseline");
+console.log("PASS: cumulative report counter and finish-total rules (49 assertions)");
