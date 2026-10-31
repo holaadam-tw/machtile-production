@@ -60,19 +60,36 @@
   // Owner 2026-10-29: every counter entry is the machine's current total for
   // this order.  The reported total is authoritative and must be freshly read
   // from the same source as the card before this function is used.
-  function totalSemantics(totalValue, reportedValue, startValue = null) {
+  // Owner 2026-10-31: the machine counter INCLUDES defective parts.  The
+  // counter position already reported is therefore goodDone + failDone, and the
+  // good quantity of this report is total - (goodDone + failDone) - thisFail.
+  // `delta` keeps meaning "good quantity to send" for every caller; `added` is
+  // the parts made since the last report (good + this-time defects).
+  // failDone unknown (null): fail = 0 keeps the goodDone-only baseline; fail > 0
+  // fails closed instead of guessing.
+  function totalSemantics(totalValue, reportedValue, startValue = null, options = {}) {
     const total = finiteCounter(totalValue);
     const reported = finiteCounter(reportedValue);
     const start = finiteCounter(startValue);
-    if (total === null) return { valid: false, code: "TOTAL_REQUIRED", message: "請填寫機台目前顯示總數（這張單）。", total, current: total, reported, baseline: reported, start, delta: null, backfill: 0, today: 0, reports: [] };
-    if (reported === null) return { valid: false, code: "REPORTED_REQUIRED", message: "暫時無法核對已報數量，請稍後再按", total, current: total, reported, baseline: reported, start, delta: null, backfill: 0, today: 0, reports: [] };
-    if (total < reported) return { valid: false, code: "TOTAL_BELOW_REPORTED", message: "機台數字比系統少，請確認是這張單的數字", total, current: total, reported, baseline: reported, start, delta: total - reported, backfill: 0, today: 0, reports: [] };
-    const delta = total - reported;
-    const backfill = start === null ? 0 : Math.max(0, Math.min(total, start) - reported);
-    const today = delta - backfill;
+    const failReported = finiteCounter(options?.failDone);
+    const failRaw = options?.fail;
+    const fail = failRaw === null || failRaw === undefined || failRaw === "" ? 0 : Number(failRaw);
+    const base = { total, current: total, reported, failReported, start, fail };
+    const blocked = (code, message, extra = {}) => ({ valid: false, code, message, ...base, baseline: extra.baseline ?? reported, delta: extra.delta ?? null, added: extra.added ?? null, good: null, backfill: 0, today: 0, reports: [] });
+    if (total === null) return blocked("TOTAL_REQUIRED", "請填寫機台目前顯示總數（這張單）。");
+    if (reported === null) return blocked("REPORTED_REQUIRED", "暫時無法核對已報數量，請稍後再按");
+    if (!Number.isInteger(fail) || fail < 0) return blocked("FAIL_INVALID", "良品與這次不良數不可小於 0。");
+    if (failReported === null && fail > 0) return blocked("FAIL_REPORTED_REQUIRED", "暫時無法核對已報不良數，請稍後再按");
+    const baseline = reported + (failReported ?? 0);
+    if (total < baseline) return blocked("TOTAL_BELOW_REPORTED", "機台數字比系統少，請確認是這張單的數字", { baseline, delta: total - baseline, added: total - baseline });
+    const added = total - baseline;
+    const good = added - fail;
+    if (good < 0) return blocked("FAIL_EXCEEDS_ADDED", "不良數比這次多出來的件數還多，請確認", { baseline, added });
+    const backfill = start === null ? 0 : Math.min(good, Math.max(0, Math.min(total, start) - baseline));
+    const today = good - backfill;
     const payload = { start_counter: start, reported_before: reported, backfill_qty: backfill, counter_today_qty: today };
-    const reports = [{ kind: "total_delta", good: delta, payload }];
-    return { valid: true, code: "OK", message: "", total, current: total, reported, baseline: reported, start, delta, backfill, today, reports };
+    const reports = [{ kind: "total_delta", good, fail, payload }];
+    return { valid: true, code: "OK", message: "", ...base, baseline, delta: good, added, good, backfill, today, reports };
   }
 
   function efficiencyPayload(result) {
@@ -80,7 +97,8 @@
     const reported = Number(result?.reported);
     const start = Number.isInteger(result?.start) ? result.start : null;
     if (!result?.valid || !Number.isInteger(good) || !Number.isInteger(reported)) return null;
-    const backfillQty = start === null ? 0 : Math.max(0, Math.min(result.total, start) - reported);
+    const backfillQty = Number.isInteger(result?.backfill) ? result.backfill
+      : start === null ? 0 : Math.max(0, Math.min(result.total, start) - reported);
     return {
       start_counter: start,
       reported_before: reported,

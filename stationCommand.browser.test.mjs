@@ -843,6 +843,29 @@ console.log("\n== 390px：停工對話框——總數 140／已報 94 → 送出
   await context.close();
 }
 
+// owner 2026-10-31：機台計數含不良。停工對話框本來就分開問「良品總數」與「不良總數」，
+// 差額＝良品總數－已報良品、不良總數－已報不良，不會把不良算進良品（與報工的「機台總數」公式一致）。
+for (const [failDone, failTotal, goodTotal, expectGood, expectFail] of [[0, 1, 760, 10, 1], [5, 6, 755, 5, 1]]) {
+  console.log(`\n== 390px：停工對話框——已報良品 750／已報不良 ${failDone} → 良品總數 ${goodTotal}、不良總數 ${failTotal} ==`);
+  const be = makeBackend();
+  be.mode = "applied";
+  be.progressRows = [{ process_id: id(304), legacy_output: 750, legacy_fail: failDone, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const { context, page, errors } = await stopDialogPage(be, { qtyCompleted: 750 });
+  await openStopDialog(page);
+  const ts = takeoverSheet(page);
+  ok((await ts.locator('[data-takeover-field="fail_qty"]').innerText()).includes("不良（這一道目前總數）"), "已報不良可靠 → 不良欄也問總數");
+  await fillStopDialog(page, goodTotal, failTotal);
+  await ts.locator("[data-takeover-fail-reason]").selectOption({ index: 1 });
+  const addText = (await ts.locator("[data-takeover-add-qty]").innerText()).trim();
+  ok(addText === `這次會新增：良品 ${expectGood} 件、不良 ${expectFail} 件`, `停工差額分開算良品 ${expectGood}／不良 ${expectFail}`, addText);
+  await ts.locator("[data-takeover-stop-confirm]").click();
+  await page.waitForFunction(() => !document.getElementById("machtileTakeoverSheet") && !machtileStationCmd.pending.A04, null, { timeout: 15000 }).catch(() => {});
+  const sent = be.stopReportSubmits[0] || {};
+  ok(be.stopReportSubmits.length === 1 && sent.p_good_qty === expectGood && sent.p_fail_qty === expectFail, `停工回報送出 good ${expectGood}、fail ${expectFail}`, JSON.stringify(be.stopReportSubmits));
+  ok(realErrors(errors).length === 0, "停工含不良沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
 console.log("\n== 390px：停工回報被拒 DUPLICATE_SUSPECTED → 停工對話框再次確認（不退一般停工）；改數量／確定送出帶 ack ==");
 {
   const be = makeBackend();
@@ -1871,6 +1894,26 @@ console.log("\n== 390px：B03 卡片已報 156，開工 159 → 顯示並只補�
   await page.waitForTimeout(1200);
   const backfill = be.reportUpserts.map((x) => x.p_payload).find((x) => x?.report_payload?.start_backfill === true);
   ok(backfill?.completed_qty === 3, "B03 送出的補報 good 也是 3", JSON.stringify(backfill));
+  await context.close();
+}
+
+console.log("\n== 390px：總數語意開著、B03 已報良品 156＋不良 2，開工 159 → 機台計數含不良，只補報 1 ==");
+{
+  const be = makeBackend({ dailyStartDone: false });
+  be.procExtra["XX01202606300001"] = { qty_completed: 0 };
+  be.progressRows = [{ process_id: id(333), legacy_output: 156, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  const cfg = 'stationCommandMachines: ["B03"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["B03"], reportTotalSemanticsEnabled: true,';
+  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: cfg });
+  await cardOf(page, "B03").locator('[data-station-cmd="start"]').click();
+  await dailyField(page).fill("159");
+  await sheet(page).getByText("機台顯示 159 件、系統只記 158 件。按確認開工會同時補報 1 件（算前一班未報）").waitFor();
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).trim() === "確認開工並補報 1 件", "B03 補報差額扣掉已報不良");
+  be.mode = "applied";
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="applied"]').waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1200);
+  const backfill = be.reportUpserts.map((x) => x.p_payload).find((x) => x?.report_payload?.start_backfill === true);
+  ok(backfill?.completed_qty === 1 && backfill?.defect_qty === 0, "B03 補報 good 1（159－156－2）", JSON.stringify(backfill));
   await context.close();
 }
 

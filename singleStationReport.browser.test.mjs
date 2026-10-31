@@ -47,6 +47,7 @@ let finalSubmitDelayMs = 0;
 let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
+let reportedFail = 0; let noStartCounter = false;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
@@ -67,8 +68,8 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("legacy_index_sn")) return json([{ id: processId, legacy_index_sn: 2, manufacture_ii_id: "MII-42", simulation_id: "Y011BG35APT0", work_orders: { part_no: "GQ7Q" } }]);
     if (freshReadEnabled && url.pathname.endsWith("/work_order_processes") && url.searchParams.get("select")?.includes("qty_completed") && !url.searchParams.get("select")?.includes("machines!")) return json([{ id: processId, qty_completed: 920, qty_defect: 0 }]);
     if (url.pathname.endsWith("/app_users")) return json([{ id: id(901), name: "試點員", legacy_user_id: "TEST-001" }]);
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
-    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json([{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(noStartCounter ? [] : [{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
       // REAL Factory preview shape for a receipt failure (wt-deploy40 SoftNet/SoftNetWebII/Services/StationCommands):
@@ -692,6 +693,56 @@ assert.match(await countDialog.locator(".outsource-receipt-note").innerText(), /
 await countDialog.locator("[data-outsource-receipt-cancel]").click();
 await countDialog.close();
 console.log("PASS material/count outsource receipt dialogs → preview success");
+
+// Owner 2026-10-31: the machine counter includes defects. Total semantics on:
+// good = machine total - (goodDone + failDone) - this-time defects.
+currentMachine = "A04"; reportedOutput = 750; reportedFail = 0; freshReadEnabled = true; noStartCounter = true;
+const defectTotal = await context.newPage();
+defectTotal.on("pageerror", error => errors.push(error.message));
+await defectTotal.goto(base, { waitUntil: "domcontentloaded" });
+await defectTotal.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await defectTotal.evaluate(() => { config.reportTotalSemanticsEnabled = true; });
+await defectTotal.locator("[data-open-report]:visible").first().click();
+await defectTotal.locator('#reportForm [data-report-type="noon"]').click();
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+await defectTotal.locator("#completedQty").fill("761");
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "系統已報 750 → 送出後 = 761；這次良品 10 件、不良 1 件", "live hint shows the good/defect split");
+assert.deepEqual(await defectTotal.evaluate(() => { const r = reportCounterCalculation(); return { valid: r.valid, good: r.delta, fail: r.fail }; }), { valid: true, good: 10, fail: 1 }, "761 - 750 - 1 defect = 10 good");
+const defectCommandsBefore = calls.commands.length;
+await defectTotal.locator("#reportForm .submit-report").click();
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-reason="A04"]'));
+await defectTotal.locator('#singleStationReportPanel [data-station-report-reason="A04"]').selectOption("尺寸不良");
+await defectTotal.locator("#reportForm .submit-report").click();
+await defectTotal.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-station-report-confirm="A04"]'));
+const defectPreview = calls.commands.slice(defectCommandsBefore).find(command => command.p_preview);
+assert.equal(defectPreview.p_good_qty, 10, "smart-report preview sends good 10, not 11");
+assert.equal(defectPreview.p_fail_qty, 1);
+reportedFail = 5;
+await defectTotal.evaluate(() => machtileRefreshReportTotalState(selectedOrder));
+assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "系統已報 755 → 送出後 = 761；這次良品 5 件、不良 1 件", "already-reported defects move the baseline");
+assert.equal(await defectTotal.evaluate(() => reportCounterCalculation().delta), 5, "failDone 5 → good 5");
+// The preview was taken with failDone 0; a final after failDone changed is blocked with zero writes.
+const defectFinalsBefore = calls.commands.filter(command => !command.p_preview).length;
+await defectTotal.evaluate(() => machtileStationReportSubmitFinal("A04"));
+await defectTotal.waitForFunction(() => document.querySelector("#singleStationReportPanel")?.textContent.includes("已報數量已改變，請重新預覽"));
+assert.equal(calls.commands.filter(command => !command.p_preview).length, defectFinalsBefore, "changed reported defects after preview blocks the final");
+await defectTotal.evaluate(() => { const flow = machtileStationReportState(machtileBatchRow("A04")); flow.phase = "idle"; flow.error = ""; flow.preview = null; machtileRenderStationReportSurfaces(); });
+await defectTotal.locator("#defectQty").fill("7");
+assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "不良數比這次多出來的件數還多，請確認", "this-time defects above the added parts are blocked");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "不良數比這次多出來的件數還多，請確認");
+await defectTotal.locator("#defectQty").fill("6");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "", "fail-only (good 0, defect 6) is not blocked by the zero-report rule; factory FAIL_ONLY ack decides");
+// failDone unknown (legacy progress has no reliable fail total)
+await defectTotal.evaluate(() => { reportTotalState = { ...reportTotalState, failReported: null }; updateReportCounterPreview(); });
+await defectTotal.locator("#defectQty").fill("0");
+assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "系統已報 750 → 送出後 = 761；這次良品 11 件、不良 0 件", "failDone unknown + fail 0 behaves as before");
+await defectTotal.locator("#defectQty").fill("1");
+assert.equal(await defectTotal.locator("#reportCounterPreview").innerText(), "暫時無法核對已報不良數，請稍後再按", "failDone unknown + fail > 0 fails closed");
+assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
+await defectTotal.close();
+reportedOutput = 920; reportedFail = 0; freshReadEnabled = false; noStartCounter = false;
+console.log("PASS total semantics subtract reported and this-time defects from the machine total");
 
 currentMachine = "A04"; guardFails = true;
 const failedGuard = await context.newPage();

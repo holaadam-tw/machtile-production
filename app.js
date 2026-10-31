@@ -8275,7 +8275,7 @@ let reportCycleTouched = false;
 let reportCyclePrefilledSeconds = null;
 let reportCounterBaselineState = { status: "idle", baseline: null, processId: "" };
 let finishReportedState = { status: "idle", quantity: null, processId: "" };
-let reportTotalState = { status: "idle", reported: null, start: null, processId: "" };
+let reportTotalState = { status: "idle", reported: null, failReported: null, start: null, processId: "" };
 
 function reportCounterApplies(type = activeReportType) {
   return type === "noon" || type === "finish";
@@ -8296,6 +8296,11 @@ function reportCounterCalculation() {
       $("#completedQty")?.value,
       reportTotalState.status === "ready" && reportTotalState.processId === String(selectedOrder?.processId || "") ? reportTotalState.reported : null,
       reportTotalState.start,
+      // owner 2026-10-31：機台計數含不良 → 基準＝已報良品＋已報不良，良品＝總數－基準－這次不良
+      {
+        failDone: reportTotalState.status === "ready" && reportTotalState.processId === String(selectedOrder?.processId || "") ? reportTotalState.failReported : null,
+        fail: $("#defectQty")?.value,
+      },
     );
   }
   if (activeReportType === "finish") {
@@ -8306,7 +8311,7 @@ function reportCounterCalculation() {
 
 async function machtileRefreshReportTotalState(order = selectedOrder) {
   const processId = String(order?.processId || "");
-  reportTotalState = { status: "loading", reported: null, start: null, processId };
+  reportTotalState = { status: "loading", reported: null, failReported: null, start: null, processId };
   updateReportCounterPreview();
   try {
     const [totals, rows] = await Promise.all([
@@ -8315,14 +8320,14 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     ]);
     if (String(selectedOrder?.processId || "") !== processId) return null;
     const start = window.MachTileReportCounterCore.latestBaseline(Array.isArray(rows) ? rows : []);
-    reportTotalState = { status: "ready", reported: Number(totals.goodDone), start: start?.qty ?? null, processId };
+    reportTotalState = { status: "ready", reported: Number(totals.goodDone), failReported: machtileReportedFailOrNull(totals), start: start?.qty ?? null, processId };
     finishReportedState = { status: "ready", quantity: Number(totals.goodDone), processId };
     updateReportCounterPreview();
     machtileRenderFinishReportedState();
     return reportTotalState;
   } catch (error) {
     console.warn("report total verification unavailable", error);
-    if (String(selectedOrder?.processId || "") === processId) reportTotalState = { status: "error", reported: null, start: null, processId };
+    if (String(selectedOrder?.processId || "") === processId) reportTotalState = { status: "error", reported: null, failReported: null, start: null, processId };
     updateReportCounterPreview();
     return null;
   }
@@ -8446,7 +8451,7 @@ function updateReportCounterPreview() {
     const result = reportCounterCalculation();
     if (reportTotalState.status !== "ready") { preview.textContent = machtileTranslate("report_total_unavailable"); preview.classList.add("is-error"); return; }
     preview.textContent = result.valid
-      ? machtileTranslate(Number(result.backfill) > 0 ? "report_total_preview" : "report_total_preview_plain", { reported: result.reported, total: result.total, add: result.delta, backfill: result.backfill })
+      ? machtileTranslate(Number(result.backfill) > 0 ? "report_total_preview" : "report_total_preview_plain", { reported: result.baseline, total: result.total, add: result.added, good: result.delta, fail: result.fail, backfill: result.backfill })
       : result.message;
     preview.classList.toggle("is-error", !result.valid);
     machtileRenderSingleStationReport();
@@ -8587,7 +8592,7 @@ function setReportDefaults(order) {
   const manualBaseline = $("#reportCounterManualBaseline");
   if (manualBaseline) manualBaseline.value = "";
   reportCounterBaselineState = { status: "idle", baseline: null, processId: order?.processId || "" };
-  reportTotalState = { status: "idle", reported: null, start: null, processId: order?.processId || "" };
+  reportTotalState = { status: "idle", reported: null, failReported: null, start: null, processId: order?.processId || "" };
   updateReportCounterPreview();
 }
 
@@ -8715,7 +8720,7 @@ function validateReportForm(type) {
     if (type !== "finish" && reportCounterBaselineState.status === "error") return "讀不到今天的機台計數基準，請確認連線後重開報工。";
     const result = reportCounterCalculation();
     if (!result.valid) return result.message;
-    if (config.reportTotalSemanticsEnabled === true && type === "noon" && result.delta === 0) return machtileTranslate("counter_zero_report");
+    if (config.reportTotalSemanticsEnabled === true && type === "noon" && result.delta === 0 && !(Number(result.fail) > 0)) return machtileTranslate("counter_zero_report");
   }
   if (type === "afternoonCheck" && machtileUsesLegacyAfternoonCheck(selectedOrder)) {
     if (!checkedAll(["pmToolCheck", "pmDimensionCheck", "pmScheduleCheck"])) return "請完成下午檢查表。";
@@ -14334,6 +14339,25 @@ async function machtileFreshReportedTotals(order) {
   if (shown?.source && shown.source !== progress.source) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
   return { goodDone: Math.max(0, Number(progress.done)), failDone: progress.legacyKnown && Number.isFinite(Number(progress.totalFail)) ? Math.max(0, Number(progress.totalFail)) : null };
 }
+// 開工補報比的是機台計數：總數語意開著時基準＝已報良品＋已報不良（機台計數含不良，owner 2026-10-31）；關著維持只看良品
+function machtileStartBackfillBaseline(totals) {
+  return config.reportTotalSemanticsEnabled === true ? machtileReportedCounterBaseline(totals) : totals.goodDone;
+}
+// 已報不良：batch_report_progress 沒有可靠舊 MES 累計時是 null（不要當 0 猜）
+function machtileReportedFailOrNull(totals) {
+  const fail = totals?.failDone;
+  return fail === null || fail === undefined || !Number.isFinite(Number(fail)) ? null : Math.max(0, Number(fail));
+}
+// 機台計數含不良（owner 2026-10-31）：計數器已報到的位置＝已報良品＋已報不良（不良未知＝只算良品，跟以前一樣）
+function machtileReportedCounterBaseline(totals) {
+  return Math.max(0, Number(totals?.goodDone) || 0) + (machtileReportedFailOrNull(totals) ?? 0);
+}
+// 送出前重讀的已報不良要跟預覽時一樣，否則良品差額已經不對（預覽沒記錄＝undefined → 不比）
+function machtileReportedFailChanged(totals, previewFail) {
+  if (previewFail === undefined) return false;
+  const before = previewFail === null || !Number.isFinite(Number(previewFail)) ? null : Number(previewFail);
+  return machtileReportedFailOrNull(totals) !== before;
+}
 async function machtileTakeoverOpenStop(code, returnFocus) {
   const machine = machtileStationCmdMachineByCode(code), order = machine?.order; if (!order) return;
   const policies = machtileTakeover.policies.length ? machtileTakeover.policies : machtileTakeoverCore.normalizePolicies([]);
@@ -15154,7 +15178,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
     isAdmin ? machtileResolveAppUserId().catch(() => "") : Promise.resolve(""),
     // 要問今日開工數量時，重讀一次今天的紀錄（卡片的那份最多 2 分鐘前）：別台平板剛記過 → 不再問；讀不到 → 照卡片那份
     sheet.dailyStart ? machtileStationCmdRecheckDailyStart(order) : Promise.resolve(true),
-    sheet.dailyStart ? machtileFreshReportedTotals(order).then((totals) => { freshReportedQty = totals.goodDone; }).catch((error) => {
+    sheet.dailyStart ? machtileFreshReportedTotals(order).then((totals) => { freshReportedQty = machtileStartBackfillBaseline(totals); }).catch((error) => {
       console.warn("station command: reported total unavailable", error);
     }) : Promise.resolve(),
   ]).then((results) => {
@@ -15566,10 +15590,11 @@ async function machtileStartBackfillResolve(commandUuid) {
       machtileHasPendingReport(item.machineCode, target, { ignoreStartBackfillUuid: commandUuid }),
     ]);
     if (pending) throw new Error(machtileTranslate("takeover_stop_report_pending"));
-    if (totals.goodDone >= item.snap.qty) { machtileStartBackfillQueueRemove(commandUuid); return; }
-    const good = item.good || machtileStationCmdCore.startBackfillDelta(item.snap.qty, totals.goodDone);
+    const reportedBaseline = machtileStartBackfillBaseline(totals);
+    if (reportedBaseline >= item.snap.qty) { machtileStartBackfillQueueRemove(commandUuid); return; }
+    const good = item.good || machtileStationCmdCore.startBackfillDelta(item.snap.qty, reportedBaseline);
     // 第一次算好的 good 之後有人又報了：照舊數量送會超過機台數 → 不補，請作業員改按報工（寧可不補也不多補）
-    if (item.good && item.good > item.snap.qty - totals.goodDone) { machtileStartBackfillQueueRemove(commandUuid); showToast(machtileTranslate("start_backfill_unavailable"), "warn"); return; }
+    if (item.good && item.good > item.snap.qty - reportedBaseline) { machtileStartBackfillQueueRemove(commandUuid); showToast(machtileTranslate("start_backfill_unavailable"), "warn"); return; }
     if (good <= 0) { machtileStartBackfillQueueRemove(commandUuid); return; }
     if (!item.good) {
       const queue = machtileStartBackfillQueueRead();
@@ -15583,7 +15608,7 @@ async function machtileStartBackfillResolve(commandUuid) {
     const core = machtileStationReportCore();
     const client = machtileStationReportCreateClient();
     if (!context || !core || !client) throw new Error("智慧報工資料尚未就緒");
-    const remark = `開工補報（前一班未報） ${item.snap.qty} - ${totals.goodDone} = ${good}`;
+    const remark = `開工補報（前一班未報） ${item.snap.qty} - ${reportedBaseline} = ${good}`;
     const previewUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid, phase: "preview" });
     const reportUuid = machtileStationCmdCore.startBackfillReportUuid({ tenantId: item.snap.tenantId, machineCode: item.machineCode, processId: item.snap.processId, commandUuid });
     const form = { ...context, goodQty: good, failQty: 0, failReasonCode: null, reportNote: remark, acks: [], clientGuardSnapshot: null };
@@ -23574,6 +23599,7 @@ const machtileBatchState = {
   counterBaselineByProcess: new Map(),
   starterByProcess: new Map(),
   freshReportedByProcess: new Map(),
+  freshFailReportedByProcess: new Map(),
   stationShiftByMachine: new Map(),
   // 單卡與 Monitor 既有 cycle-time 快取；批次頁只讀 station_commands，不提供寫入欄位。
   machineTimeByProcess: new Map(),
@@ -23762,7 +23788,8 @@ async function machtileStationReportPreFinalBlock(code, order, flow) {
     if (config.reportTotalSemanticsEnabled === true) {
       const totals = await machtileFreshReportedTotals(order);
       const previewReported = Number(flow.singleReport?.previewReported ?? machtileBatchState.freshReportedByProcess.get(String(order.processId)));
-      if (Number(totals.goodDone) !== previewReported) return "已報數量已改變，請重新預覽後再送出";
+      const previewFail = flow.singleReport ? flow.singleReport.previewFailReported : machtileBatchState.freshFailReportedByProcess.get(String(order.processId));
+      if (Number(totals.goodDone) !== previewReported || machtileReportedFailChanged(totals, previewFail)) return "已報數量已改變，請重新預覽後再送出";
     }
   } catch (error) { return machtileTranslate("report_total_unavailable"); }
   return "";
@@ -24199,9 +24226,11 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     if (config.reportTotalSemanticsEnabled === true) {
       const totals = await machtileFreshReportedTotals(order);
       const reported = Number(totals.goodDone);
+      const failReported = machtileReportedFailOrNull(totals);
       machtileBatchState.freshReportedByProcess.set(String(order.processId), reported);
+      machtileBatchState.freshFailReportedByProcess.set(String(order.processId), failReported);
       if (singleOrder) {
-        reportTotalState = { ...reportTotalState, status: "ready", reported, processId: String(order.processId) };
+        reportTotalState = { ...reportTotalState, status: "ready", reported, failReported, processId: String(order.processId) };
       } else {
         // 只有批次列需要重算 row.good；單站表單的良品來自 #completedQty，重算會把它清成空值
         machtileBatchRowModel(code, new Date().toISOString());
@@ -24225,6 +24254,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
       operators: machtileSelectedOperators(machtileBatchState.actorId),
       shortCompletion,
       previewReported: counterResult?.reported ?? null,
+      previewFailReported: counterResult ? (counterResult.failReported ?? null) : undefined,
       reportCounterMeta: window.MachTileReportCounterCore.efficiencyPayload(counterResult),
       overlayTotal: counterResult?.total ?? null,
     };
@@ -24347,7 +24377,8 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
     if (config.reportTotalSemanticsEnabled === true) {
       const totals = await machtileFreshReportedTotals(order);
       const previewReported = Number(flow.singleReport?.previewReported ?? machtileBatchState.freshReportedByProcess.get(String(order.processId)));
-      if (Number(totals.goodDone) !== previewReported) {
+      const previewFail = flow.singleReport ? flow.singleReport.previewFailReported : machtileBatchState.freshFailReportedByProcess.get(String(order.processId));
+      if (Number(totals.goodDone) !== previewReported || machtileReportedFailChanged(totals, previewFail)) {
         flow.phase = "blocked";
         flow.error = "已報數量已改變，請重新預覽後再送出";
         flow.preview = null;
@@ -24772,9 +24803,13 @@ async function machtileLoadBatchReport(groupKey) {
     machtileBatchState.progressByProcess = progress.map;
     machtileBatchState.counterBaselineByProcess = counters;
     machtileBatchState.freshReportedByProcess = new Map();
+    machtileBatchState.freshFailReportedByProcess = new Map();
     uniq.forEach((processId) => {
       const shown = core.displayProgress(progress.map.get(String(processId)) || null);
-      if (shown.available && shown.legacyKnown) machtileBatchState.freshReportedByProcess.set(String(processId), shown.totalOutput);
+      if (shown.available && shown.legacyKnown) {
+        machtileBatchState.freshReportedByProcess.set(String(processId), shown.totalOutput);
+        machtileBatchState.freshFailReportedByProcess.set(String(processId), Number.isFinite(Number(shown.totalFail)) ? Math.max(0, Number(shown.totalFail)) : null);
+      }
     });
     machtileBatchState.stationShiftByMachine = stationShifts;
     machtileBatchResetCommandSelection();
@@ -24936,7 +24971,8 @@ function machtileBatchRowModel(code, endedAtIso) {
   const counter = mode === "dailyStart"
     ? { valid: true, current: Number(order?.done || 0) || 0, baseline: null, delta: 0, message: "" }
     : config.reportTotalSemanticsEnabled === true
-      ? window.MachTileReportCounterCore.totalSemantics(row.current, machtileBatchState.freshReportedByProcess.get(String(order?.processId)), baseline?.qty ?? null)
+      ? window.MachTileReportCounterCore.totalSemantics(row.current, machtileBatchState.freshReportedByProcess.get(String(order?.processId)), baseline?.qty ?? null,
+        { failDone: machtileBatchState.freshFailReportedByProcess.get(String(order?.processId)) ?? null, fail: row.bad })
       : core.counterCalculation({ current: row.current, baseline: baseline?.qty ?? null });
   row.good = counter.valid ? counter.delta : "";
   return {
@@ -24960,6 +24996,26 @@ function machtileBatchRowModel(code, endedAtIso) {
     startedAtSource: start.source,
     startedAtReason: start.reason,
   };
+}
+
+// 批次列「本次增加」：總數語意開著時已報＝已報良品＋已報不良（機台計數含不良），並把這次拆成良品／不良
+function machtileBatchPreviewReported(order) {
+  const processId = String(order?.processId || "");
+  const good = machtileBatchState.freshReportedByProcess.get(processId);
+  if (config.reportTotalSemanticsEnabled !== true || good === undefined) return good;
+  return Number(good) + (Number(machtileBatchState.freshFailReportedByProcess.get(processId)) || 0);
+}
+function machtileBatchPreviewSplitError(simple, model) {
+  return config.reportTotalSemanticsEnabled === true && !simple.empty && !simple.belowReported && model?.counter?.valid === false;
+}
+function machtileBatchPreviewText(simple, model, translated) {
+  if (simple.empty) return translated ? machtileTranslate("batch_added_waiting") : "輸入後顯示本次增加";
+  if (simple.belowReported) return translated ? machtileTranslate("batch_total_below_reported", { reported: simple.reported }) : `總數不能少於已報 ${simple.reported} 件`;
+  if (config.reportTotalSemanticsEnabled === true && model?.counter) {
+    if (!model.counter.valid) return model.counter.message;
+    return machtileTranslate("batch_added_split", { good: model.counter.delta, fail: model.counter.fail });
+  }
+  return translated ? machtileTranslate("batch_added_qty", { quantity: simple.added ?? "—" }) : `本次增加 +${simple.added ?? "—"} 件`;
 }
 
 const MACHTILE_BATCH_START_SOURCE_LABEL = { lastReport: "上次報工", deviceLedger: "本機上次報工", processStart: "開工" };
@@ -25039,7 +25095,7 @@ function machtileRenderBatchReport() {
     const statusText = { running: "運轉中", stopped: "停工", notStarted: "未開工" }[shift.status] || "未開工";
     const preview = model.counter;
     const simple = core.simplifiedRowModel({ current: row.current,
-      reported: machtileBatchState.freshReportedByProcess.get(String(order?.processId || "")),
+      reported: machtileBatchPreviewReported(order),
       defectOpen: row.defectOpen, selectedOperatorId: model.operatorId,
       starterOperatorId: machtileBatchState.starterByProcess.get(String(order?.processId || "")) });
     const failReasonOptions = [`<option value="">${escapeHtml(machtileTranslate("report_fail_reason_placeholder"))}</option>`, ...machtileReportFailReasons().map((reason) =>
@@ -25054,7 +25110,7 @@ function machtileRenderBatchReport() {
         <div class="batch-inputs">
           <input class="batch-compat-entry" type="number" data-batch-good="${code}" value="${escapeHtml(row.legacyGood ?? "")}" aria-label="${code} 舊版本次良品相容入口"${disabled}>
           <label class="batch-qty is-good batch-total-input"><span>${escapeHtml(machtileTranslate("batch_total_label"))} <small>${escapeHtml(machtileTranslate("required"))}</small></span><input type="number" inputmode="numeric" min="0" step="1" data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
-          <p class="batch-add-preview${simple.belowReported ? " is-error" : ""}" data-batch-counter-preview="${code}">${simple.empty ? escapeHtml(machtileTranslate("batch_added_waiting")) : simple.belowReported ? escapeHtml(machtileTranslate("batch_total_below_reported", { reported: simple.reported })) : escapeHtml(machtileTranslate("batch_added_qty", { quantity: simple.added ?? "—" }))}</p>
+          <p class="batch-add-preview${simple.belowReported || machtileBatchPreviewSplitError(simple, model) ? " is-error" : ""}" data-batch-counter-preview="${code}">${escapeHtml(machtileBatchPreviewText(simple, model, true))}</p>
           <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
           <label class="batch-defect-toggle"><input type="checkbox" data-batch-defect-toggle="${code}"${hasBatchDefect ? " checked" : ""}${disabled}><span>${escapeHtml(machtileTranslate("batch_defect_toggle"))}</span></label>
           <label class="batch-qty is-bad" data-batch-defect-qty-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
@@ -25203,7 +25259,10 @@ async function machtileSubmitBatchReport() {
     try {
       const orders = group.machines.map((code) => machtileBatchSelectedOrder(code)).filter(Boolean);
       const totals = await Promise.all(orders.map((order) => machtileFreshReportedTotals(order)));
-      orders.forEach((order, index) => machtileBatchState.freshReportedByProcess.set(String(order.processId), Number(totals[index].goodDone)));
+      orders.forEach((order, index) => {
+        machtileBatchState.freshReportedByProcess.set(String(order.processId), Number(totals[index].goodDone));
+        machtileBatchState.freshFailReportedByProcess.set(String(order.processId), machtileReportedFailOrNull(totals[index]));
+      });
     } catch (error) {
       machtileBatchState.formError = machtileTranslate("report_total_unavailable");
       machtileRenderBatchReport();
@@ -25518,14 +25577,13 @@ function machtileHandleBatchInput(event) {
     article?.querySelector(`[data-batch-reason-field="${code}"]`)?.toggleAttribute("hidden", !visible);
     article?.querySelector(`[data-batch-note-field="${code}"]`)?.toggleAttribute("hidden", !(visible && row.failReasonCode === "其他"));
   }
-  if (t.dataset.batchCurrent) {
+  if (t.dataset.batchCurrent || (t.dataset.batchBad && config.reportTotalSemanticsEnabled === true)) {
     const model = machtileBatchRowModel(code, new Date().toISOString());
     const simple = machtileBatchCore().simplifiedRowModel({ current: row.current,
-      reported: machtileBatchState.freshReportedByProcess.get(String(model.order?.processId || "")) });
+      reported: machtileBatchPreviewReported(model.order) });
     const preview = article?.querySelector("[data-batch-counter-preview]");
     if (preview) {
-      preview.textContent = simple.empty ? "輸入後顯示本次增加" : simple.belowReported
-        ? `總數不能少於已報 ${simple.reported} 件` : `本次增加 +${simple.added ?? "—"} 件`;
+      preview.textContent = machtileBatchPreviewText(simple, model, false);
       preview.classList.toggle("is-error", simple.belowReported || !model.counter.valid);
     }
   }
