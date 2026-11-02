@@ -86,13 +86,13 @@ window.MACHTILE_CONFIG = {
   enableFinishButton: true,
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
-  finishCloseMachines: ["A01", "A02", "A03", "A04", "A05"],
+  finishCloseMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
   enableShortCompletion: true,
-  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05"],
+  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
-  standardFinishFlowMachines: ["A01", "A02", "A03", "A04", "A05"],
+  standardFinishFlowMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 完工後「接並開工」一顆鈕：owner 2026-10-26 拍板拿掉（選工單≠開工），改兩下：先接、再按開工。
   enableFinishClaimStartCombo: false,
   finishClaimStartComboMachines: [],
@@ -117,7 +117,7 @@ window.MACHTILE_CONFIG = {
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
   outsourceReceiptDialogEnabled: true,
-  stationReportMachines: ["A01", "A02", "A03", "A04", "A05"],
+  stationReportMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
   assemblyReportEnabled: false,
   assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"],
