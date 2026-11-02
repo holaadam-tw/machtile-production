@@ -34,6 +34,11 @@ const machtileAsm = {
   busy: null,
 };
 
+window.MachTileAssemblyBusy = () => machtileAsm.loading === true || Boolean(machtileAsm.busy)
+  || Array.from(document.querySelectorAll('[data-assembly-root] input[type="number"]')).some((input) => (
+    !input.closest("[hidden]") && input.getClientRects().length > 0 && String(input.value || "").trim() !== ""
+  ));
+
 // 登入者的租戶：伺服器回的 machine_department_context.tenant_id 優先，其次是登入 JWT 簽過的 app_metadata.tenant_id。
 // 刻意不退回 config.tenantId（那是部署預設值，不是這個人的租戶）；都沒有＝不明＝關。
 function machtileAsmTenantId() {

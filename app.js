@@ -176,7 +176,9 @@ document.getElementById("machtileLanguageSelect")?.addEventListener("change", (e
 });
 
 const MACHTILE_PAGE_VERSION = document.querySelector('meta[name="machtile-version"]')?.content?.trim() || "";
+const MACHTILE_APP_RELOAD_KEY = "machtile.app-update.reload.v1";
 let machtilePendingAppVersion = "";
+let machtileRpcInFlight = 0;
 
 function machtileVisibleDialogOpen() {
   return Array.from(document.querySelectorAll('[role="dialog"]')).some((dialog) => (
@@ -184,21 +186,39 @@ function machtileVisibleDialogOpen() {
   ));
 }
 
-function machtileHasUnsentDialogNumber() {
-  return Array.from(document.querySelectorAll('[role="dialog"] input[type="number"]')).some((input) => (
+function machtileHasUnsentReportNumber() {
+  return Array.from(document.querySelectorAll('[role="dialog"] input[type="number"], [data-batch-root] input[type="number"], #reportForm input[type="number"], [data-assembly-root] input[type="number"]')).some((input) => (
     !input.closest("[hidden]") && input.getClientRects().length > 0 && String(input.value || "").trim() !== ""
   ));
 }
 
-function machtileAppUpdateBusy() {
+function machtileAppIsBusy() {
   const reportFlowBusy = Array.from(machtileBatchState?.rows?.values?.() || []).some((row) => (
     machtileStationReportFlowBusy(row?.stationReport)
   ));
   return reportFlowBusy
+    || machtileRpcInFlight > 0
     || machtileBatchState?.submitting === true
     || machtileBatchState?.commandSubmitting === true
+    || window.MachTileAssemblyBusy?.() === true
     || machtileVisibleDialogOpen()
-    || machtileHasUnsentDialogNumber();
+    || machtileHasUnsentReportNumber();
+}
+
+function machtileAppReloadRecord() {
+  try { return { available: true, value: JSON.parse(window.sessionStorage.getItem(MACHTILE_APP_RELOAD_KEY) || "null") }; }
+  catch (_) { return { available: false, value: null }; }
+}
+
+function machtileReloadForAppVersion(version) {
+  const core = window.MachTileAppUpdateCore;
+  const stored = machtileAppReloadRecord();
+  if (!stored.available || !core?.reloadAllowed(stored.value, version)) return false;
+  try { window.sessionStorage.setItem(MACHTILE_APP_RELOAD_KEY, JSON.stringify({ version, reloadedAt: Date.now() })); }
+  catch (_) { return false; }
+  machtilePendingAppVersion = "";
+  window.location.reload();
+  return true;
 }
 
 function machtileHideAppUpdateCard() {
@@ -207,7 +227,7 @@ function machtileHideAppUpdateCard() {
 }
 
 function machtilePresentPendingAppUpdate() {
-  if (!machtilePendingAppVersion || machtileAppUpdateBusy()) return false;
+  if (!machtilePendingAppVersion || machtileAppIsBusy()) return false;
   const card = document.getElementById("appUpdateCard");
   if (!card) return false;
   window.MachTileI18n?.applyDocument(document);
@@ -224,14 +244,14 @@ async function machtileCheckAppVersion() {
     const decision = window.MachTileAppUpdateCore?.decide({
       pageVersion: MACHTILE_PAGE_VERSION,
       latestVersion: payload?.version,
-      busy: machtileAppUpdateBusy(),
+      busy: machtileAppIsBusy(),
       tv,
     });
     if (decision === "none") {
       machtilePendingAppVersion = "";
       machtileHideAppUpdateCard();
     } else if (decision === "reload") {
-      window.location.reload();
+      machtileReloadForAppVersion(String(payload.version).trim());
     } else {
       machtilePendingAppVersion = String(payload.version).trim();
       if (decision === "prompt") machtilePresentPendingAppUpdate();
@@ -245,11 +265,11 @@ function machtileStartAppUpdateChecks() {
   const interval = window.MachTileAppUpdateCore?.CHECK_INTERVAL_MS || 5 * 60 * 1000;
   document.getElementById("appUpdateButton")?.addEventListener("click", () => {
     if (!machtilePendingAppVersion) return;
-    if (machtileAppUpdateBusy()) {
+    if (machtileAppIsBusy()) {
       machtileHideAppUpdateCard();
       return;
     }
-    window.location.reload();
+    machtileReloadForAppVersion(machtilePendingAppVersion);
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") machtileCheckAppVersion();
@@ -261,7 +281,7 @@ function machtileStartAppUpdateChecks() {
 
 window.MachTileAppUpdate = {
   check: machtileCheckAppVersion,
-  isBusy: machtileAppUpdateBusy,
+  isBusy: machtileAppIsBusy,
   present: machtilePresentPendingAppUpdate,
 };
 
@@ -3187,7 +3207,7 @@ function hmcWorklistSetupPalletEditor() {
 // variants). In strict mode supabaseHeaders() swaps the Bearer to the signed-in
 // session, so the same call sites hit the strict production bodies with a real
 // actor — no per-surface fetcher needed (Gate P / P2 GlobalLoginGate).
-async function hmcDevAnonRpcFetch(functionName, body) {
+async function machtileHmcDevAnonRpcRequest(functionName, body) {
   if (!canReadHmcWorklistFromSupabase()) {
     throw new Error("尚未完成連線設定，無法儲存。");
   }
@@ -3227,6 +3247,15 @@ async function hmcDevAnonRpcFetch(functionName, body) {
   }
 
   return payload;
+}
+
+async function hmcDevAnonRpcFetch(functionName, body) {
+  machtileRpcInFlight += 1;
+  try {
+    return await machtileHmcDevAnonRpcRequest(functionName, body);
+  } finally {
+    machtileRpcInFlight = Math.max(0, machtileRpcInFlight - 1);
+  }
 }
 
 const MACHTILE_FACTORY_TIME_ZONE = "Asia/Taipei";
@@ -10452,7 +10481,7 @@ function supabaseHeaders() {
   return headers;
 }
 
-async function supabaseFetch(path, options = {}) {
+async function machtileSupabaseFetchRequest(path, options = {}) {
   const readOnlyRpc = new Set(["batch_report_progress", "attention_case_snapshot", "cnc_calibration_snapshot",
     "hmc_runtime_snapshot", "schedule_calendar_snapshot", "schedule_preview", "unified_event_list",
     "manufacturing_quote_tracking_snapshot"]);
@@ -10486,6 +10515,16 @@ async function supabaseFetch(path, options = {}) {
   const data = await response.json();
   if (machtileStrictMode() && departmentGeneration !== machtileDepartmentGeneration) throw new Error("STALE_DEPARTMENT_RESPONSE");
   return data;
+}
+
+async function supabaseFetch(path, options = {}) {
+  const isRpc = String(path || "").split("?")[0].startsWith("rpc/");
+  if (isRpc) machtileRpcInFlight += 1;
+  try {
+    return await machtileSupabaseFetchRequest(path, options);
+  } finally {
+    if (isRpc) machtileRpcInFlight = Math.max(0, machtileRpcInFlight - 1);
+  }
 }
 
 function normalizeOrder(row) {
