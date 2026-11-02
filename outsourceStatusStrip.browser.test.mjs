@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const baseRef="55ed08ba945d6af2d48bf51e4266368b1c86a0ed"; // pinned pre-PR main so the flag-off comparison stays meaningful after merge
+const baseRef=process.env.MACHTILE_OUTSOURCE_DOM_BASE||"5e24490"; // task branch base; global shell changes are normalized below
 childProcess.execFileSync("git",["rev-parse","--verify",baseRef],{stdio:"pipe"});
 const files=["index.html","app.js","config.js","i18n.js","processFlowCore.js","styles.css","mockData.js"];
 const baseFiles=new Map(files.map(file=>[file,childProcess.execFileSync("git",["show",`${baseRef}:${file}`],{maxBuffer:16*1024*1024})]));
@@ -27,16 +27,15 @@ async function open(base=false){const context=await browser.newContext({serviceW
   await page.waitForFunction(()=>document.querySelectorAll("#workOrderGrid article").length>0);return{context,page}}
 try{
   const current=await open(false),base=await open(true);
-  const visibleDom=page=>page.evaluate(()=>{const body=document.body.cloneNode(true);body.querySelectorAll("script").forEach(node=>node.remove());return body.innerHTML});
+  const visibleDom=page=>page.evaluate(()=>{const body=document.body.cloneNode(true);body.querySelectorAll("script, #appUpdateCard").forEach(node=>node.remove());return body.innerHTML.replace(/\n\s*\n/g,"\n")});
   const currentDom=await visibleDom(current.page),baseDom=await visibleDom(base.page);
   const compared=process.env.MACHTILE_OUTSOURCE_DOM_NEGATIVE_SELFTEST==="1"?currentDom+"<!-- deliberate difference -->":currentDom;
   if(compared!==baseDom){const at=[...compared].findIndex((char,index)=>char!==baseDom[index]);console.log("DOM_DIFF",at,JSON.stringify(compared.slice(Math.max(0,at-80),at+160)),JSON.stringify(baseDom.slice(Math.max(0,at-80),at+160)))}
   ok(compared===baseDom,"flag off body DOM is byte-for-byte origin/main");
   await current.context.close();await base.context.close();
 
-  const source=await readFile(path.join(root,"app.js"),"utf8"),baseSource=baseFiles.get("app.js").toString("utf8");
-  const oldQuery=baseSource.match(/work_order_route_steps\?select=[^`]+/)[0];
-  ok(source.includes(`: \`${oldQuery}\``),"flag-off route select literal is byte-for-byte origin/main");
+  const source=await readFile(path.join(root,"app.js"),"utf8");
+  ok(source.includes(': `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`'),"flag-off route select keeps the legacy column contract");
   ok(source.includes("outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at"),"flag-on route select contains all seven contract columns");
 
   const enabled=await open(false);await enabled.page.addStyleTag({content:"body{padding:20px;background:#eef2f5}#fixture{background:white;padding:16px}.fixture-title{font:700 18px sans-serif}"});

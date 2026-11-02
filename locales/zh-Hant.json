@@ -1,4 +1,6 @@
 {
+  "app_update_available": "有新版本",
+  "app_update_button": "更新",
   "outsource_receipt_question": "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
   "outsource_receipt_material_question": "上一道『{{step}}（{{vendor}}）』的素材收到了嗎？",
   "outsource_receipt_count_question": "上一道『{{step}}（{{vendor}}）』委外回來幾件？",

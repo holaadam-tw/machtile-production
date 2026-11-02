@@ -1,4 +1,6 @@
 {
+  "app_update_available": { "value": "Có phiên bản mới", "_draft": true },
+  "app_update_button": { "value": "Cập nhật", "_draft": true },
   "outsource_receipt_question": { "value": "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?", "_draft": true },
   "outsource_receipt_material_question": { "value": "Đã nhận vật liệu từ công đoạn trước “{{step}}（{{vendor}}）” chưa?", "_draft": true },
   "outsource_receipt_count_question": { "value": "Công đoạn trước “{{step}}（{{vendor}}）” thuê ngoài đã về bao nhiêu sản phẩm?", "_draft": true },

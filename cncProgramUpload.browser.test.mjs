@@ -44,7 +44,7 @@ ok(result.overLimit.code === "FILE_TOO_LARGE", ">20MB is rejected before network
 ok(result.path.includes("/cnc-programs/WO-9/ffffffffffffffff-O9.NC"), "browser builds tenant/work-order/hash storage path");
 ok(appSource.includes('data-cnc-work-order-drop') && appSource.includes('rpc/cnc_program_work_order_version_register'), "actual app wires drop zone to work-order upload RPC");
 const appAsset = indexSource.match(/<script src="\.\/app\.js\?v=([^"\s]+)"><\/script>/)?.[1] || "";
-ok(indexSource.includes('cncProgramUploadCore.js?v=20261013-card-program-metadata-r1') && appAsset.length > 0, "HTML preserves card metadata core and reads the current app cache-bust from index.html");
+ok(indexSource.includes(`cncProgramUploadCore.js?v=${appAsset}`) && appAsset.length > 0, "HTML keeps the card metadata core on the single current app cache-bust");
 ok(/stationReportCore\.js\?v=[^"\s]+/.test(indexSource), "HTML cache-busts the integrated station-report core");
 
 await browser.close();

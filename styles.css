@@ -3845,6 +3845,35 @@ textarea {
   opacity: 1;
 }
 
+.app-update-card {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.app-update-card[hidden] { display: none; }
+
+.app-update-card button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--primary);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 body.station-select-route-mode {
   background: var(--surface-warm);
 }
