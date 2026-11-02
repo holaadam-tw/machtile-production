@@ -8,6 +8,8 @@
 
   const dictionaries = {
     "zh-Hant": {
+      app_update_available: "有新版本",
+      app_update_button: "更新",
       outsource_receipt_question: "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
       outsource_receipt_material_question: "上一道『{{step}}（{{vendor}}）』的素材收到了嗎？",
       outsource_receipt_count_question: "上一道『{{step}}（{{vendor}}）』委外回來幾件？",
@@ -337,6 +339,8 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      app_update_available: "Có phiên bản mới",
+      app_update_button: "Cập nhật",
       outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",
       outsource_receipt_material_question: "Đã nhận vật liệu từ công đoạn trước “{{step}}（{{vendor}}）” chưa?",
       outsource_receipt_count_question: "Công đoạn trước “{{step}}（{{vendor}}）” thuê ngoài đã về bao nhiêu sản phẩm?",

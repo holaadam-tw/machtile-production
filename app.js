@@ -175,6 +175,96 @@ document.getElementById("machtileLanguageSelect")?.addEventListener("change", (e
   window.MachTileI18n?.setLanguage(event.currentTarget.value, { reload: true });
 });
 
+const MACHTILE_PAGE_VERSION = document.querySelector('meta[name="machtile-version"]')?.content?.trim() || "";
+let machtilePendingAppVersion = "";
+
+function machtileVisibleDialogOpen() {
+  return Array.from(document.querySelectorAll('[role="dialog"]')).some((dialog) => (
+    !dialog.closest("[hidden]") && dialog.getClientRects().length > 0
+  ));
+}
+
+function machtileHasUnsentDialogNumber() {
+  return Array.from(document.querySelectorAll('[role="dialog"] input[type="number"]')).some((input) => (
+    !input.closest("[hidden]") && input.getClientRects().length > 0 && String(input.value || "").trim() !== ""
+  ));
+}
+
+function machtileAppUpdateBusy() {
+  const reportFlowBusy = Array.from(machtileBatchState?.rows?.values?.() || []).some((row) => (
+    machtileStationReportFlowBusy(row?.stationReport)
+  ));
+  return reportFlowBusy
+    || machtileBatchState?.submitting === true
+    || machtileBatchState?.commandSubmitting === true
+    || machtileVisibleDialogOpen()
+    || machtileHasUnsentDialogNumber();
+}
+
+function machtileHideAppUpdateCard() {
+  const card = document.getElementById("appUpdateCard");
+  if (card) card.hidden = true;
+}
+
+function machtilePresentPendingAppUpdate() {
+  if (!machtilePendingAppVersion || machtileAppUpdateBusy()) return false;
+  const card = document.getElementById("appUpdateCard");
+  if (!card) return false;
+  window.MachTileI18n?.applyDocument(document);
+  card.hidden = false;
+  return true;
+}
+
+async function machtileCheckAppVersion() {
+  try {
+    const response = await fetch('./version.json?ts='+Date.now(), {cache:'no-store'});
+    if (!response.ok) return;
+    const payload = await response.json();
+    const tv = new URLSearchParams(window.location.search).get("view") === "tv";
+    const decision = window.MachTileAppUpdateCore?.decide({
+      pageVersion: MACHTILE_PAGE_VERSION,
+      latestVersion: payload?.version,
+      busy: machtileAppUpdateBusy(),
+      tv,
+    });
+    if (decision === "none") {
+      machtilePendingAppVersion = "";
+      machtileHideAppUpdateCard();
+    } else if (decision === "reload") {
+      window.location.reload();
+    } else {
+      machtilePendingAppVersion = String(payload.version).trim();
+      if (decision === "prompt") machtilePresentPendingAppUpdate();
+    }
+  } catch (_) {
+    // Version checks are advisory; offline and transient failures stay silent.
+  }
+}
+
+function machtileStartAppUpdateChecks() {
+  const interval = window.MachTileAppUpdateCore?.CHECK_INTERVAL_MS || 5 * 60 * 1000;
+  document.getElementById("appUpdateButton")?.addEventListener("click", () => {
+    if (!machtilePendingAppVersion) return;
+    if (machtileAppUpdateBusy()) {
+      machtileHideAppUpdateCard();
+      return;
+    }
+    window.location.reload();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") machtileCheckAppVersion();
+  });
+  window.setInterval(() => { machtileCheckAppVersion(); }, interval);
+  window.setInterval(() => { machtilePresentPendingAppUpdate(); }, 1000);
+  machtileCheckAppVersion();
+}
+
+window.MachTileAppUpdate = {
+  check: machtileCheckAppVersion,
+  isBusy: machtileAppUpdateBusy,
+  present: machtilePresentPendingAppUpdate,
+};
+
 let machtileHmcFixedHost = null;
 let machtileHmcPartCatalog = null;
 function machtileGetHmcFixedHost() {
@@ -28127,5 +28217,7 @@ window.addEventListener("popstate", () => {
 });
 
 machtileStartTodayTick();
+
+machtileStartAppUpdateChecks();
 
 init();

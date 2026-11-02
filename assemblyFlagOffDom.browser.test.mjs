@@ -46,7 +46,7 @@ async function open(config, base = false) {
   await page.waitForTimeout(300);
   return { context, page, errors };
 }
-const bodyDom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script").forEach((n) => n.remove()); return body.innerHTML.trimEnd(); }); // 多兩個 script 標籤拿掉後只在 body 尾端留下空白，不算畫面差異
+const bodyDom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard").forEach((n) => n.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); }); // 全域更新提示不屬於組裝旗標 DOM；忽略移除全域節點留下的空行
 const diffAt = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i += 1; if (i === a.length && a.length === b.length) i = -1; return i < 0 ? "" : `${JSON.stringify(a.slice(Math.max(0, i - 80), i + 120))} vs ${JSON.stringify(b.slice(Math.max(0, i - 80), i + 120))}`; };
 
 try {
