@@ -489,6 +489,25 @@ check("operator message keys map guard codes to plain-language sentences", () =>
   assert.equal(core.operatorMessageKey("UNKNOWN_SOFT", true), "simple_soft_generic");
 });
 
+check("missing DOC4 defer ack is inert flag-off and retries with the exact Factory ack flag-on", () => {
+  const code = core.MISSING_DOC4_DEFER_ACK;
+  const guard = { code, hard: false, message: "缺委外單", Details: { ...COMPLETE_PREVIEW.legacy_snapshot.report.guard.Details } };
+  const preview = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: {
+    ...COMPLETE_PREVIEW, allowed: false, hard: false, guard_code: code, message: guard.message,
+    previous_step_name: "熱處理", legacy_snapshot: { report: { guard } },
+  } };
+  assert.equal(core.resultCard(preview).kind, "preview-blocked", "flag off preserves the existing blocked result");
+  assert.throws(() => core.retryPreviewWithAck(validInput(), preview, code, UUID_RETRY), { code: "INVALID_ACK" });
+  const options = { enableMissingDoc4DeferAck: true };
+  const card = core.resultCard(preview, options);
+  assert.equal(card.kind, "preview-soft");
+  assert.equal(card.missingDoc4Defer, true);
+  const retry = core.retryPreviewWithAck(core.buildSubmitArgs(validInput(), UUID_REPORT, true), preview, code, UUID_RETRY, null, options);
+  assert.equal(retry.p_preview, false);
+  assert.deepEqual(retry.p_acks, [code]);
+  assert.notEqual(retry.p_command_uuid, UUID_REPORT);
+});
+
 check("report limit hint requires the complete additive field set and distinguishes station/outsource", () => {
   assert.deepEqual(core.reportLimitHint({ available: 12, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 38 }),
     { key: "report_limit_available_station", params: { available: 12, station: "A01", reported: 38 } });

@@ -23,6 +23,9 @@
       outsource_receipt_confirm: "確認收貨並報工",
       outsource_receipt_range: "請輸入 1 到 {{max}} 件。",
       outsource_receipt_cancelled: "已取消；本次沒有代收貨或報工。",
+      missing_doc4_defer_message: "上一道{{step}}（廠商）沒有委外單。按「先報工、通知生管補單」會照常報工，但不會自動扣料；生管會在 Factory 收到待補清單。",
+      missing_doc4_defer_confirm: "先報工、通知生管補單",
+      missing_doc4_defer_cancel: "取消",
       report_limit_available_station: "目前最多可報 {{available}} 件（上一道 {{station}} 已報 {{reported}} 件）",
       report_limit_wait_station: "等 {{station}} 報工後才能報",
       report_limit_available_outsource: "目前最多可報 {{available}} 件（上一道委外 {{step}} 已收貨 {{reported}} 件）",
@@ -343,6 +346,9 @@
       login_timeout: "登入流程已逾時，請重新登入。"
     },
     vi: {
+      missing_doc4_defer_message: "Công đoạn trước {{step}} (nhà cung cấp) chưa có phiếu thuê ngoài. Bấm “Báo công trước, báo kế hoạch bổ sung phiếu” để báo công như bình thường nhưng không tự động trừ vật liệu; bộ phận kế hoạch sẽ nhận danh sách cần bổ sung trong Factory.",
+      missing_doc4_defer_confirm: "Báo công trước, báo kế hoạch bổ sung phiếu",
+      missing_doc4_defer_cancel: "Hủy",
       app_update_available: "Có phiên bản mới",
       app_update_button: "Cập nhật",
       outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",

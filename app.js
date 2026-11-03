@@ -23830,6 +23830,11 @@ const MACHTILE_STATION_REPORT_HOLD_MS = 800;
 let machtileStationReportPreviewTicker = null;
 
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
+const machtileMissingDoc4DeferOptions = () => ({ enableMissingDoc4DeferAck: config.enableMissingDoc4DeferAck === true });
+const machtileStationReportResultCard = (row) => machtileStationReportCore()?.resultCard(row, machtileMissingDoc4DeferOptions());
+const machtileMissingDoc4Step = (card) => String(card?.values?.previous_step_name ||
+  card?.snapshot?.report?.previous_step_name || card?.snapshot?.report?.guard?.Details?.previous_step_name ||
+  "委外加工").trim() || "委外加工";
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
@@ -23961,7 +23966,7 @@ async function machtileStationReportRefreshAfterStaleFinal(code) {
   await machtileStationReportRunCommand(code, core.refreshOutsourceReceiptPreview(finalArgs, crypto.randomUUID()), "preview");
   // The fresh preview (and the receipt dialog it asked for) must end allowed for this exact preview;
   // anything else (cancel, soft/hard guard, timeout) stays on screen for the operator to redo.
-  const card = core.resultCard(flow.preview);
+  const card = core.resultCard(flow.preview, machtileMissingDoc4DeferOptions());
   if (flow.phase !== "previewed" || card.kind !== "previewed" || flow.preview?.command_uuid !== flow.args?.p_command_uuid) {
     if (!flow.error) flow.error = `${staleMessage}（${card.message || card.title}）`;
     return true;
@@ -24138,7 +24143,7 @@ function machtileRenderSingleStationReportBase() {
     return;
   }
   submit.hidden = ["previewed", "submitting-report", "waiting-report"].includes(flow?.phase)
-    || ["previewed", "preview-soft"].includes(machtileStationReportCore()?.resultCard(flow?.result)?.kind);
+    || ["previewed", "preview-soft"].includes(machtileStationReportResultCard(flow?.result)?.kind);
   holder.innerHTML = row && order ? machtileRenderStationReportPanel(code, order, row, false) : '<p class="batch-notice is-error" role="alert">工單資料不完整；已阻擋智慧報工。</p>';
 }
 
@@ -24199,7 +24204,12 @@ function machtileSimpleReportStatus(flow, card) {
   if (!card) return null;
   if (card.kind === "applied" || card.kind === "applied-late") return { tone: "success", text: machtileTranslate("simple_report_done") };
   const core = machtileStationReportCore();
-  if (card.kind === "preview-soft" || card.kind === "soft") return { tone: "warning", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code, true)) };
+  if (card.kind === "preview-soft" || card.kind === "soft") {
+    if (card.missingDoc4Defer) {
+      return { tone: "warning", text: machtileTranslate("missing_doc4_defer_message", { step: machtileMissingDoc4Step(card) }) };
+    }
+    return { tone: "warning", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code, true)) };
+  }
   if (["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card.kind)) {
     return { tone: "error", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code)) };
   }
@@ -24214,7 +24224,7 @@ function machtileSimpleReportNeedsNote(row, card) {
 function machtileRenderSimpleStationReportPanel(code, order, row) {
   const core = machtileStationReportCore();
   const flow = machtileStationReportState(row);
-  const card = flow.result ? core.resultCard(flow.result) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
   const parts = [];
   if (["submitting-preview", "waiting-preview"].includes(flow.phase)) {
     parts.push(`<p class="batch-notice station-report-preview-wait" role="status">${escapeHtml(machtileTranslate("simple_report_waiting", { seconds: machtileStationReportPreviewElapsed(flow) }))}</p>`);
@@ -24223,6 +24233,9 @@ function machtileRenderSimpleStationReportPanel(code, order, row) {
   }
   const status = machtileSimpleReportStatus(flow, card);
   if (status) parts.push(`<p class="station-report-simple-status is-${status.tone}" role="${status.tone === "error" ? "alert" : "status"}" data-simple-report-status="${status.tone}">${escapeHtml(status.text)}</p>`);
+  if (card?.kind === "preview-soft" && card.missingDoc4Defer && flow.phase === "previewed") {
+    parts.push(`<button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">${escapeHtml(machtileTranslate("missing_doc4_defer_cancel"))}</button>`);
+  }
   const admin = machtileSingleReportAdminView();
   if (admin) {
     const counterText = document.getElementById("reportCounterPreview")?.textContent || "";
@@ -24294,7 +24307,7 @@ function machtileApplySimpleReportChrome() {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
-  const card = flow.result ? core.resultCard(flow.result) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
   const reportLimitHtml = card?.reportLimitHint
     ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "";
   const busy = machtileStationReportFlowBusy(flow);
@@ -24371,7 +24384,7 @@ function machtileApplySimpleReportChrome() {
     const retry = flow.receiptCancelled || flow.phase === "blocked" || flow.phase === "preview-timeout"
       || ["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card?.kind) || Boolean(flow.error);
     const ack = card?.kind === "preview-soft" && flow.phase === "previewed" && !flow.error;
-    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
+    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack && card?.missingDoc4Defer ? "missing_doc4_defer_confirm" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
   }
 }
 
@@ -24393,7 +24406,7 @@ async function machtileSimpleReportPrimaryRun(code) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow)) return;
-  const card = flow.result ? core.resultCard(flow.result) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
   if (machtileSimpleReportFinalUncertain(flow, card)) {
     machtileShowReportSubmitError(machtileTranslate("simple_report_unconfirmed"));
     machtileRenderStationReportSurfaces();
@@ -24418,7 +24431,7 @@ async function machtileSimpleReportPrimaryRun(code) {
   }
   await machtileStationReportSubmitPreview(code);
   const after = machtileStationReportState(machtileBatchRow(code));
-  const afterCard = after.result ? core.resultCard(after.result) : null;
+  const afterCard = after.result ? core.resultCard(after.result, machtileMissingDoc4DeferOptions()) : null;
   if (after.phase === "previewed" && afterCard?.kind === "previewed" && !after.error
     && after.preview?.command_uuid === after.args?.p_command_uuid) {
     await machtileStationReportSubmitFinal(code);
@@ -24617,7 +24630,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasons = settings.failReasonCodesByMachine[code] || [];
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
-  const result = flow.result ? core.resultCard(flow.result) : null;
+  const result = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
   const reportLimitHtml = result?.reportLimitHint
     ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "";
   const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
@@ -24645,7 +24658,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     const previewValues = result.values && Number.isInteger(result.values.available)
       ? `<div class="station-report-preview-values"><span>目前可報 <strong>${result.values.available}</strong> 件</span>${Number.isInteger(result.values.predicted_ac03_qty) ? `<span>預估先領 <strong>${result.values.predicted_ac03_qty}</strong> 件</span>` : ""}${rateCheck ? `<span>工時上限約 <strong>${rateCheck.maxQty}</strong> 件（${escapeHtml(rateCheck.source)}${rateCheck.estimated ? "，估計" : ""}）</span>` : ""}</div>${rateCheck?.warn ? `<p class="station-report-rate-warning" role="note">${escapeHtml(rateCheck.message)}</p>` : ""}`
       : "";
-    const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview); return true; } catch { return false; } })();
+    const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview, machtileMissingDoc4DeferOptions()); return true; } catch { return false; } })();
     const prevIndex = Number(result.previousIndex);
     const previousStep = ["hard", "preview-blocked"].includes(result.kind) && (result.code || result.guardCode) === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
       ? `<a class="station-report-previous-step" href="${escapeHtml(workOrderDetailUrl(order?.id))}">查看製程路線，先報第 ${prevIndex} 道</a>` : "";
@@ -24655,13 +24668,18 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
         ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認報工</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
         : `<p class="batch-notice is-error" role="alert">預覽回傳 guard 欄位不完整；已阻擋正式送出。</p>`;
     } else if (result.kind === "preview-soft") {
+      const missingDoc4Step = result.missingDoc4Defer ? machtileMissingDoc4Step(result) : "";
+      const missingDoc4Copy = result.missingDoc4Defer
+        ? `<p class="batch-notice" data-missing-doc4-defer-message>${escapeHtml(machtileTranslate("missing_doc4_defer_message", { step: missingDoc4Step }))}</p>` : "";
       resultHtml += snapshotReady
-        ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認照送（${escapeHtml(result.guardLabel)}）</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
+        ? `${missingDoc4Copy}${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-preview-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>${escapeHtml(result.missingDoc4Defer ? machtileTranslate("missing_doc4_defer_confirm") : `長按 0.8 秒確認照送（${result.guardLabel}）`)}</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">${escapeHtml(result.missingDoc4Defer ? machtileTranslate("missing_doc4_defer_cancel") : "修改數量並重新預覽")}</button></div>`
         : `<p class="batch-notice is-error" role="alert">軟性 guard 預覽資料不完整；已阻擋送出。</p>`;
     } else if (result.kind === "preview-blocked" || result.kind === "preview-invalid") {
       resultHtml += `<p class="batch-notice is-error" role="alert">${escapeHtml(result.guardCode ? `${result.guardLabel}：` : "")}${escapeHtml(result.kind === "preview-invalid" ? "預覽資料不完整；已阻擋正式送出。" : "已阻擋確認送出；可修改數量後重新預覽。")}</p><div class="station-report-actions"><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`;
     } else if (result.kind === "soft") {
-      resultHtml += `<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>照送（使用新識別碼）</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel="${escapeHtml(code)}">取消</button></div>`;
+      const missingDoc4Copy = result.missingDoc4Defer
+        ? `<p class="batch-notice" data-missing-doc4-defer-message>${escapeHtml(machtileTranslate("missing_doc4_defer_message", { step: machtileMissingDoc4Step(result) }))}</p>` : "";
+      resultHtml += `${missingDoc4Copy}<div class="station-report-actions"><button type="button" class="primary-action station-report-action" data-station-report-ack="${escapeHtml(code)}"${busy ? " disabled" : ""}>${escapeHtml(result.missingDoc4Defer ? machtileTranslate("missing_doc4_defer_confirm") : "照送（使用新識別碼）")}</button><button type="button" class="secondary-action station-report-action" data-station-report-cancel="${escapeHtml(code)}">${escapeHtml(result.missingDoc4Defer ? machtileTranslate("missing_doc4_defer_cancel") : "取消")}</button></div>`;
     }
     if (flow.phase === "blocked" && flow.args) resultHtml += `<button type="button" class="secondary-action station-report-action" data-station-report-reconcile="${escapeHtml(code)}">查詢原報工狀態</button>`;
     if (result.kind === "applied" || result.kind === "applied-late") resultHtml += `<button type="button" class="secondary-action station-report-action" data-station-report-new="${escapeHtml(code)}">下一筆（清空數量）</button>`;
@@ -24937,7 +24955,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow) || !flow.preview) return;
   let snapshot;
-  try { snapshot = core.buildClientGuardSnapshot(flow.preview); }
+  try { snapshot = core.buildClientGuardSnapshot(flow.preview, machtileMissingDoc4DeferOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   const order = options.batch ? (flow.batchOrder || machtileBatchSelectedOrder(code)) : machtileStationReportOrderForCode(code);
   const context = options.batch && flow.args ? {
@@ -25002,7 +25020,7 @@ async function machtileRecordSingleStationProductionReport(code, args, submitted
   const row = machtileBatchRow(code);
   const order = submittedOrder || machtileSingleStationReportOrder(code);
   const flow = machtileStationReportState(row);
-  const resultKind = machtileStationReportCore()?.resultCard(row.stationReport?.result)?.kind;
+  const resultKind = machtileStationReportResultCard(row.stationReport?.result)?.kind;
   const commandUuid = args.p_command_uuid;
   if (!order || !["applied", "applied-late"].includes(resultKind)
     || row.stationProductionReportUuid === commandUuid || row.stationProductionReportPendingUuid === commandUuid) return;
@@ -25066,14 +25084,14 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     followUpFailed = true;
     flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
   }
-  if (["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind)) {
+  if (["applied", "applied-late"].includes(core.resultCard(flow.result, machtileMissingDoc4DeferOptions())?.kind)) {
     const submittedOrder = options.order || machtileStationReportOrderForCode(code);
     const total = flow.singleReport?.overlayTotal;
     if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
   }
   if (options.background) {
     const background = document.getElementById("stationReportBackgroundStatus");
-    const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
+    const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result, machtileMissingDoc4DeferOptions())?.kind);
     if (applied && !followUpFailed) {
       machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
       showToast("工廠已完成寫入");
@@ -25092,9 +25110,10 @@ async function machtileStationReportRetryAck(code) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const result = flow.result;
-  if (!core || !flow.args || !result || !core.SOFT_REJECTS.includes(result.reject_code)) return;
+  const card = result ? core?.resultCard(result, machtileMissingDoc4DeferOptions()) : null;
+  if (!core || !flow.args || card?.kind !== "soft") return;
   let args;
-  try { args = core.retryWithAck({ ...flow.args, p_report_note: row.reportNote || null }, result.reject_code, crypto.randomUUID()); }
+  try { args = core.retryWithAck({ ...flow.args, p_report_note: row.reportNote || null }, result.reject_code, crypto.randomUUID(), machtileMissingDoc4DeferOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
@@ -25103,10 +25122,10 @@ async function machtileStationReportRetryPreviewAck(code) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
-  const result = flow.result ? core?.resultCard(flow.result) : null;
+  const result = flow.result ? core?.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
   if (!core || !flow.args || !flow.preview || result?.kind !== "preview-soft") return;
   let args;
-  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), row.reportNote); }
+  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), row.reportNote, machtileMissingDoc4DeferOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
@@ -25157,7 +25176,7 @@ function machtileStationReportFlowBusy(flow) {
 }
 
 function coreResultWasNotApplied(row) {
-  const kind = machtileStationReportCore()?.resultCard(row)?.kind;
+  const kind = machtileStationReportResultCard(row)?.kind;
   return kind !== "applied" && kind !== "applied-late";
 }
 
@@ -25192,7 +25211,7 @@ function machtileStationReportCancel(code) {
 
 function machtileStationReportNew(code) {
   const row = machtileBatchRow(code);
-  const kind = machtileStationReportCore()?.resultCard(row.stationReport?.result)?.kind;
+  const kind = machtileStationReportResultCard(row.stationReport?.result)?.kind;
   if (kind !== "applied" && kind !== "applied-late") return;
   row.good = ""; row.bad = ""; row.failReasonCode = ""; row.reportNote = "";
   row.stationReport = { phase: "idle", result: null, args: null, preview: null, error: "" };
@@ -25673,7 +25692,7 @@ function machtileRenderBatchReport() {
     const stationEnabled = machtileStationReportCore()?.reportMachineEnabled(machtileBatchState.stationReportSettings.machines, code);
     const reportGuardAllows = isDailyStart || demo || !machtileStationReportEnabled() ||
       (machtileBatchState.stationReportSettings.status === "loaded" && stationEnabled);
-    const stationResultKind = stationFlow.result ? machtileStationReportCore()?.resultCard(stationFlow.result)?.kind : "";
+    const stationResultKind = stationFlow.result ? machtileStationReportResultCard(stationFlow.result)?.kind : "";
     const stationLocked = stationEnabled && (machtileStationReportFlowBusy(stationFlow) || stationFlow.phase === "previewed" || stationFlow.phase === "blocked" || stationResultKind === "applied" || stationResultKind === "applied-late");
     const disabled = !order || busy || stationLocked ? " disabled" : "";
     const shift = machtileBatchState.stationShiftByMachine.get(code) || { status: "notStarted", minutes: null };
@@ -25798,10 +25817,10 @@ async function machtileBatchSendSmartReport(item) {
   row.result = null;
 
   await machtileStationReportSubmitPreview(code, { batch: true });
-  const previewKind = machtileStationReportCore()?.resultCard(flow.result)?.kind;
+  const previewKind = machtileStationReportResultCard(flow.result)?.kind;
   if (!flow.error && previewKind === "previewed") {
     await machtileStationReportSubmitFinal(code, { batch: true });
-    const finalKind = machtileStationReportCore()?.resultCard(flow.result)?.kind;
+    const finalKind = machtileStationReportResultCard(flow.result)?.kind;
     if (!flow.error && ["applied", "applied-late"].includes(finalKind)) {
       row.result = { status: "sent", message: "✓ 已送出" };
       row.current = "";
@@ -25817,7 +25836,7 @@ async function machtileBatchSendSmartReport(item) {
   }
 
   flow.expanded = true;
-  const card = machtileStationReportCore()?.resultCard(flow.result);
+  const card = machtileStationReportResultCard(flow.result);
   row.error = flow.error || (card?.kind === "preview-soft"
     ? `需要確認：${card.message || card.guardLabel || "預覽要求確認"}`
     : card?.message || "智慧報工預覽失敗，請在下方確認。 ");
@@ -26143,7 +26162,7 @@ function machtileHandleBatchInput(event) {
   row.error = "";
   row.result = null;
   const flow = machtileStationReportState(row);
-  const guardResult = t.dataset.stationReportNote ? machtileStationReportCore()?.resultCard(flow.result) : null;
+  const guardResult = t.dataset.stationReportNote ? machtileStationReportResultCard(flow.result) : null;
   const oldOrderNoteEdit = t.dataset.stationReportNote &&
     (guardResult?.guardCode || guardResult?.code) === "OLD_ORDER_NEWER_OPEN";
   if ((t.dataset.batchCurrent || t.dataset.batchGood || t.dataset.batchBad || t.dataset.stationReportReason || t.dataset.stationReportNote && !oldOrderNoteEdit) &&

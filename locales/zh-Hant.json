@@ -1,4 +1,5 @@
 {
+  "missing_doc4_defer_confirm": "先報工、通知生管補單",
   "app_update_available": "有新版本",
   "app_update_button": "更新",
   "outsource_receipt_question": "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
@@ -39,6 +40,9 @@
   "simple_report_sending_button": "送出中…",
   "simple_report_resubmit": "重新送出",
   "simple_report_ack_submit": "確認沒錯，送出",
+  "missing_doc4_defer_message": "上一道{{step}}（廠商）沒有委外單。按「先報工、通知生管補單」會照常報工，但不會自動扣料；生管會在 Factory 收到待補清單。",
+  "missing_doc4_defer_confirm": "先報工、通知生管補單",
+  "missing_doc4_defer_cancel": "取消",
   "simple_report_cancelled": "已取消，沒有收貨也沒有報工。",
   "simple_report_timeout": "工廠沒有回應，請再按一次送出。",
   "simple_report_unconfirmed": "上一筆還沒確認有沒有報進去，請先不要重送，請通知主管。",
