@@ -24,6 +24,7 @@
   const SOFT_REJECTS = Object.freeze([
     "PREV_OUTSOURCE_UNCONFIRMED", "AUTO_PULL_ACK", "OLD_ORDER_NEWER_OPEN", "HIGH_FAIL_RATIO",
     "FAIL_ONLY", "EXCEEDS_ORDER_QTY", "DUPLICATE_SUSPECTED", "GUARD_STATE_CHANGED",
+    "QTY_OVER_PREVIOUS_WITH_REASON",
   ]);
   const GUARD_LABELS = Object.freeze({
     PREV_OUTSOURCE_UNCONFIRMED: "上一道委外尚未確認收貨",
@@ -31,7 +32,19 @@
     OLD_ORDER_NEWER_OPEN: "同料號已有較新工單",
     HIGH_FAIL_RATIO: "本次不良比例較高",
     QTY_EXCEEDS_AVAILABLE: "本次數量超過可報數",
+    QTY_OVER_PREVIOUS_WITH_REASON: "本次數量比上一站多",
   });
+  const OVER_PREVIOUS_ACK = "QTY_OVER_PREVIOUS_WITH_REASON";
+  const OVER_PREVIOUS_FIXED_REASONS = Object.freeze(["F01 漏報／晚報", "同一台重測"]);
+  function softRejectEnabled(code, options = {}) {
+    return SOFT_REJECTS.includes(code) && (code !== OVER_PREVIOUS_ACK || options.enableOverPreviousReasonPrompt === true);
+  }
+  function overPreviousReportNote(value) {
+    const note = String(value || "").trim();
+    if (OVER_PREVIOUS_FIXED_REASONS.includes(note)) return note;
+    if (note.startsWith("其他：") && [...note.slice(3).trim()].length >= 4) return `其他：${note.slice(3).trim()}`;
+    throw new ContractError("QTY_OVER_PREVIOUS_REASON_REQUIRED", "請選擇多報原因；其他原因至少填 4 個字。");
+  }
   function guardMessage(code, message, fallback = "請聯絡管理員。") {
     const text = typeof message === "string" ? message.trim() : "";
     return text && text !== code ? text : GUARD_LABELS[code] || fallback;
@@ -355,7 +368,7 @@
     return `station_commands?select=${REPORT_SELECT}&command_uuid=eq.${encodeURIComponent(commandUuid)}&limit=1`;
   }
 
-  function buildClientGuardSnapshot(previewCommand) {
+  function buildClientGuardSnapshot(previewCommand, options = {}) {
     const id = previewCommand?.command_uuid;
     const result = previewCommand?.preview_result;
     const legacy = result?.legacy_snapshot;
@@ -374,7 +387,7 @@
       throw new ContractError("PREVIEW_RESULT_INCOMPLETE", "預覽 guard 判定不一致；已阻擋確認送出。");
     }
     const guardCode = result.guard_code || guard.code || "";
-    if (!result.allowed && (result.hard || !SOFT_REJECTS.includes(guardCode))) {
+    if (!result.allowed && (result.hard || !softRejectEnabled(guardCode, options))) {
       throw new ContractError(result.guard_code || guard.code || "PREVIEW_NOT_ALLOWED",
         result.message || guard.message || "舊 MES guard 未允許此筆報工；已阻擋確認送出。");
     }
@@ -405,7 +418,7 @@
     return row.status === "applied" || row.status === "rejected" || row.status === "expired";
   }
 
-  function resultCard(row) {
+  function resultCard(row, options = {}) {
     if (!row || typeof row !== "object") return { kind: "blocked", title: "讀取報工結果失敗", message: "請重新整理確認狀態；先不要重送。" };
     if (row.command_type === "report_preview") {
       if (row.status === "previewed") {
@@ -415,7 +428,7 @@
           return { kind: "preview-invalid", title: "預覽資料不完整", message: "缺少舊 MES guard verdict；已阻擋正式送出。" };
         }
         const code = result.guard_code || guard?.code || "";
-        const isPreviewSoft = result.allowed === false && result.hard === false && SOFT_REJECTS.includes(code);
+        const isPreviewSoft = result.allowed === false && result.hard === false && softRejectEnabled(code, options);
         const verdict = result.allowed ? "舊 MES guard 允許目前數量繼續；尚未寫入舊 MES。" : "舊 MES guard 未允許目前數量；尚未寫入舊 MES。";
         return {
           kind: result.allowed ? "previewed" : isPreviewSoft ? "preview-soft" : "preview-blocked",
@@ -434,32 +447,33 @@
       return { kind: "pending", title: "正在預覽", message: "等待套用端計算；舊 MES 尚未寫入。" };
     }
     if (row.status === "applied") return { kind: "applied", title: "報工完成", message: `已報工 ${Number(row.good_qty || 0)} 件（舊 MES 已更新）`, snapshot: row.legacy_snapshot || null };
-    if (row.status === "rejected" && SOFT_REJECTS.includes(row.reject_code)) return { kind: "soft", title: "需要再次確認", message: guardMessage(row.reject_code, row.reject_message, "此筆報工遇到軟性提醒。"), code: row.reject_code, guardLabel: GUARD_LABELS[row.reject_code] || "報工條件需確認", snapshot: row.legacy_snapshot || null };
+    if (row.status === "rejected" && softRejectEnabled(row.reject_code, options)) return { kind: "soft", title: "需要再次確認", message: guardMessage(row.reject_code, row.reject_message, "此筆報工遇到軟性提醒。"), code: row.reject_code, guardLabel: GUARD_LABELS[row.reject_code] || "報工條件需確認", snapshot: row.legacy_snapshot || null };
     if (row.status === "rejected" && row.reject_code === "LEGACY_APPLIED_LATE") return { kind: "applied-late", title: "舊 MES 已記錄，請勿重送", message: "舊 MES 已記這筆報工（回報太晚），不要再按；請到電子紙或 Factory 確認。", snapshot: row.legacy_snapshot || null };
     if (row.status === "rejected") return { kind: HARD_REJECTS.includes(row.reject_code) ? "hard" : "rejected", title: "報工未送入舊 MES", message: guardMessage(row.reject_code, row.reject_message), code: row.reject_code || "", previousIndex: Number(row.legacy_snapshot?.report?.guard?.prev_index_sn) || null };
     if (row.status === "expired") return { kind: "hard", title: "報工已過期，未套用", message: "這筆未寫入舊 MES。請重新確認現況後再送。", code: "EXPIRED" };
     return { kind: "pending", title: "等待套用端處理", message: "結果尚未確認；請勿重複建立報工。" };
   }
 
-  function retryWithAck(previousArgs, ack, nextCommandUuid) {
+  function retryWithAck(previousArgs, ack, nextCommandUuid, reportNote = previousArgs?.p_report_note, options = {}) {
     if (!UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs?.p_command_uuid) {
       throw new ContractError("COMMAND_UUID_REQUIRED", "再次確認必須使用新的報工識別碼。");
     }
-    if (!SOFT_REJECTS.includes(ack)) throw new ContractError("INVALID_ACK", "此項目不能以再次確認略過。");
+    if (!softRejectEnabled(ack, options)) throw new ContractError("INVALID_ACK", "此項目不能以再次確認略過。");
+    if (ack === OVER_PREVIOUS_ACK) reportNote = overPreviousReportNote(reportNote);
     if (ack === "OLD_ORDER_NEWER_OPEN" && !String(previousArgs?.p_report_note || "").trim()) throw new ContractError("REPORT_NOTE_REQUIRED", "報在舊工單須填原因。");
-    if (String(previousArgs?.p_report_note || "").length > 500) throw new ContractError("INVALID_REPORT_NOTE", "備註不可超過 500 字。");
+    if (String(reportNote || "").length > 500) throw new ContractError("INVALID_REPORT_NOTE", "備註不可超過 500 字。");
     const acks = [...new Set([...(previousArgs.p_acks || []), ack])];
-    return { ...previousArgs, p_command_uuid: nextCommandUuid, p_preview: false, p_acks: acks };
+    return { ...previousArgs, p_command_uuid: nextCommandUuid, p_preview: false, p_report_note: reportNote || null, p_acks: acks };
   }
 
-  function retryPreviewWithAck(previousArgs, previewCommand, ack, nextCommandUuid, reportNote = previousArgs?.p_report_note) {
+  function retryPreviewWithAck(previousArgs, previewCommand, ack, nextCommandUuid, reportNote = previousArgs?.p_report_note, options = {}) {
     const result = previewCommand?.preview_result;
     if (!isPlainObject(result) || result.allowed !== false || result.hard !== false ||
-        (result.guard_code || result.legacy_snapshot?.report?.guard?.code) !== ack || !SOFT_REJECTS.includes(ack)) {
+        (result.guard_code || result.legacy_snapshot?.report?.guard?.code) !== ack || !softRejectEnabled(ack, options)) {
       throw new ContractError("INVALID_ACK", "只有預覽明確指出的軟性 guard 才能由使用者確認略過。");
     }
-    const snapshot = buildClientGuardSnapshot(previewCommand);
-    const retry = retryWithAck({ ...previousArgs, p_report_note: reportNote || null, p_client_guard_snapshot: snapshot }, ack, nextCommandUuid);
+    const snapshot = buildClientGuardSnapshot(previewCommand, options);
+    const retry = retryWithAck({ ...previousArgs, p_report_note: reportNote || null, p_client_guard_snapshot: snapshot }, ack, nextCommandUuid, reportNote, options);
     return retry;
   }
 
@@ -543,6 +557,7 @@
 
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
+    OVER_PREVIOUS_ACK, OVER_PREVIOUS_FIXED_REASONS, softRejectEnabled, overPreviousReportNote,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,

@@ -1,4 +1,12 @@
 {
+  "over_previous_title": { "value": "Lần này báo nhiều hơn công đoạn trước {{count}} sản phẩm, vui lòng chọn lý do", "_draft": true },
+  "over_previous_choose": { "value": "Lý do báo nhiều hơn", "_draft": true },
+  "over_previous_f01": { "value": "F01 báo thiếu / báo trễ", "_draft": true },
+  "over_previous_retest": { "value": "Kiểm tra lại trên cùng máy", "_draft": true },
+  "over_previous_other": { "value": "Khác", "_draft": true },
+  "over_previous_other_label": { "value": "Nhập lý do khác (ít nhất 4 ký tự)", "_draft": true },
+  "over_previous_other_short": { "value": "Vui lòng chọn lý do; lý do khác phải có ít nhất 4 ký tự.", "_draft": true },
+  "over_previous_submit": { "value": "Xác nhận và gửi", "_draft": true },
   "app_update_available": { "value": "Có phiên bản mới", "_draft": true },
   "app_update_button": { "value": "Cập nhật", "_draft": true },
   "outsource_receipt_question": { "value": "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?", "_draft": true },

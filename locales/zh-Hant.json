@@ -1,4 +1,12 @@
 {
+  "over_previous_title": "這次比上一站多報 {{count}} 件，請選原因",
+  "over_previous_choose": "多報原因",
+  "over_previous_f01": "F01 漏報／晚報",
+  "over_previous_retest": "同一台重測",
+  "over_previous_other": "其他",
+  "over_previous_other_label": "請填其他原因（至少 4 字）",
+  "over_previous_other_short": "請選原因；其他原因至少填 4 個字。",
+  "over_previous_submit": "確認並送出",
   "app_update_available": "有新版本",
   "app_update_button": "更新",
   "outsource_receipt_question": "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
