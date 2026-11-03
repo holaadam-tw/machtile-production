@@ -59,7 +59,10 @@ let finalRequiredOnce = false;
 let starterUserId = null;
 let previewBlockedCode = "";
 let previewSoftCode = "";
-const browser = await chromium.launch();
+let missingDoc4AckEnabled = false;
+const browser = await chromium.launch(process.env.MACHTILE_CHROMIUM_EXECUTABLE
+  ? { executablePath: process.env.MACHTILE_CHROMIUM_EXECUTABLE }
+  : {});
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
   const req = route.request(); const url = new URL(req.url());
@@ -121,9 +124,11 @@ await context.route("**/*", async route => {
               expected_doc4_fingerprint: "f".repeat(64), doc4_line_ids: ["L-1"] } }, guard: { code: guardCode, hard: true } } });
       }
       if (body.p_preview && previewSoftCode) {
-        const guard = { code: previewSoftCode, hard: false, message: "同料號已有較新工單", Details: { ...previewResult.legacy_snapshot.report.guard.Details } };
+        const missingDoc4 = previewSoftCode === "PREV_OUTSOURCE_DOC_MISSING_DEFER";
+        const guard = { code: previewSoftCode, hard: false, message: missingDoc4 ? "上一道委外完全沒有委外單" : "同料號已有較新工單", Details: { ...previewResult.legacy_snapshot.report.guard.Details, previous_step_name: missingDoc4 ? "協力研磨" : "車床", previous_vendor_name: missingDoc4 ? "大同研磨" : "" } };
         return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
           preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: false, guard_code: previewSoftCode, message: guard.message,
+            previous_step_name: missingDoc4 ? "協力研磨" : previewResult.previous_step_name, previous_outsource_vendor_name: missingDoc4 ? "大同研磨" : null,
             legacy_snapshot: { report: { guard } } } });
       }
       if (body.p_preview && previewBlockedCode) {
@@ -161,7 +166,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableMissingDoc4DeferAck:${missingDoc4AckEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -938,6 +943,50 @@ await bad.evaluate(() => machtileStationReportSubmitFinal("A04"));
 assert.equal(calls.commands.filter(c => !c.p_preview).length, badFinals, "changed defects after preview → no final");
 assert.match(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).error), /已報數量已改變/);
 await bad.close();
+
+// Missing DOC4 defer ack: flag off is the old blocked behavior with no dialog or final request.
+previewSoftCode = "PREV_OUTSOURCE_DOC_MISSING_DEFER";
+missingDoc4AckEnabled = false;
+const doc4Off = await openOperatorPage();
+const doc4OffBefore = calls.commands.length;
+await doc4Off.locator("#reportForm .submit-report").click();
+await doc4Off.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(await doc4Off.locator("#machtileMissingDoc4DeferDialog").count(), 0, "flag off creates no confirmation DOM");
+assert.deepEqual(calls.commands.slice(doc4OffBefore).map(c => c.p_preview), [true], "flag off sends preview only");
+await doc4Off.close();
+
+// Flag on: preview shows the plain-language confirmation; cancel sends nothing, confirm retries with the Factory ack.
+missingDoc4AckEnabled = true;
+const doc4On = await openOperatorPage();
+const doc4OnBefore = calls.commands.length;
+await doc4On.locator("#reportForm .submit-report").click();
+await doc4On.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
+assert.equal(await doc4On.evaluate(() => machtileStationReportResultCard(machtileBatchRow("A04").stationReport.result).missingDoc4Defer), true);
+assert.match(await doc4On.locator('[data-simple-report-status="warning"]').innerText(), /上一道協力研磨（廠商）沒有委外單/);
+assert.match(await doc4On.locator('[data-simple-report-status="warning"]').innerText(), /不會自動扣料/);
+assert.equal(await doc4On.locator("#reportForm .submit-report").innerText(), "先報工、通知生管補單");
+assert.equal(await doc4On.locator('[data-station-report-cancel-preview="A04"]:visible').first().innerText(), "取消");
+await doc4On.screenshot({ path: path.join(shots, "20261104-missing-doc4-defer-confirm.png"), fullPage: true });
+await doc4On.locator('[data-station-report-cancel-preview="A04"]:visible').first().click();
+assert.equal(calls.commands.length, doc4OnBefore + 1, "cancel sends no final request");
+await doc4On.locator("#reportForm .submit-report").click();
+await doc4On.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
+await doc4On.waitForFunction(() => !machtileSimpleReportPrimaryInFlight);
+await doc4On.locator("#reportForm .submit-report").click();
+await doc4On.waitForFunction(() => machtileBatchRow("A04").stationReport.result?.status === "applied", null, { timeout: 8000 });
+const doc4Sent = calls.commands.slice(doc4OnBefore);
+assert.deepEqual(doc4Sent.map(c => c.p_preview), [true, true, false], "cancelled preview is discarded; confirm sends one final request after a fresh preview");
+assert.deepEqual(doc4Sent[2].p_acks, ["PREV_OUTSOURCE_DOC_MISSING_DEFER"], "confirm carries the exact Factory ack code");
+assert.equal(doc4Sent[2].p_client_guard_snapshot.preview_command_uuid, doc4Sent[1].p_command_uuid, "ack retry is pinned to the fresh preview snapshot");
+const terminalKinds = await doc4On.evaluate(() => ({
+  rejected: MachTileStationReportCore.resultCard({ command_type: "report", status: "rejected", reject_code: "STATION_NOT_STARTED", reject_message: "尚未開工" }, { enableMissingDoc4DeferAck: true }).kind,
+  expired: MachTileStationReportCore.resultCard({ command_type: "report", status: "expired" }, { enableMissingDoc4DeferAck: true }).kind,
+}));
+assert.deepEqual(terminalKinds, { rejected: "hard", expired: "hard" }, "flag on does not change existing rejected/expired handling");
+await doc4On.close();
+previewSoftCode = "";
+missingDoc4AckEnabled = false;
+console.log("PASS missing DOC4 defer: flag off DOM, flag on dialog, cancel, ack retry, terminal handling");
 
 // L3 #3：舊單確認（OLD_ORDER_NEWER_OPEN）沒寫原因 → 留在確認狀態、提示寫原因，不重新預覽；寫了才送出。
 previewSoftCode = "OLD_ORDER_NEWER_OPEN";

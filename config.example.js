@@ -60,6 +60,7 @@ window.MACHTILE_CONFIG = {
   reportTotalSemanticsEnabled: false,
   reportCounterMetaRpcEnabled: false,
   outsourceReceiptDialogEnabled: false,
+  enableMissingDoc4DeferAck: false,
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
   overtimeStartCardEnabled: false,

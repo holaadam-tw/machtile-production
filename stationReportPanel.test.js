@@ -14,6 +14,8 @@ const route = { quantity: 10, processes: [{ id: "process-1" }, { id: "process-2"
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const context = {
   machtileStationReportCore: () => ({ ...core, buildClientGuardSnapshot: () => ({}) }),
+  machtileMissingDoc4DeferOptions: () => ({ enableMissingDoc4DeferAck: false }),
+  machtileTranslate: (key, params = {}) => key.replace(/\{\{(\w+)\}\}/g, (_, name) => params[name] ?? ""),
   machtileBatchState: { stationReportSettings: { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] } }, users: [{ id: "u1", name: "操作員" }] },
   machtileStationReportState: (row) => row.stationReport,
   machtileStationReportContext: () => ({ expectedIndexSn: 2, expectedPartNo: "P-1" }),

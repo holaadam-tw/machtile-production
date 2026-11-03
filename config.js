@@ -117,6 +117,8 @@ window.MACHTILE_CONFIG = {
   // Stage-2 智慧報工獨立開關；預設關，關時批次報工沿用既有流程且不讀雲端防呆設定。
   enableStationReport: true,
   outsourceReceiptDialogEnabled: true,
+  // 缺委外單先報工確認：APP/Factory 兩端皆驗證後才開；關閉時不增加任何確認 UI。
+  enableMissingDoc4DeferAck: false,
   stationReportMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
   assemblyReportEnabled: false,
