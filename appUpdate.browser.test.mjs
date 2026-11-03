@@ -12,7 +12,7 @@ const imported = await import(moduleUrl);
 const { chromium } = imported.default || imported;
 
 test("version update stays silent when current, defers while busy, then reloads on click", async (t) => {
-  let deployedVersion = "20261103-update-toast-r2";
+  let deployedVersion = JSON.parse(await readFile(new URL("./version.json", import.meta.url), "utf8")).version;
   let indexRequests = 0;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
