@@ -236,10 +236,10 @@ function machtileAsmFormHtml(order, form, disabledAll) {
   return `<div class="asm-form${finish ? " is-finish" : ""}" data-asm-form="${pid}">
     ${finish ? `<p class="asm-finish-question">${escapeHtml(machtileAsmT("asm_finish_question", { order: order.id }))}</p>` : ""}
     <label class="asm-qty is-good"><span>${escapeHtml(machtileAsmT(finish ? "asm_finish_good_label" : "asm_good_label"))}</span>
-      <input type="number" inputmode="numeric" min="0" step="1" data-asm-good="${pid}" value="${escapeHtml(form.good)}"${disabledAll}></label>
+      <input type="number" inputmode="numeric" min="0" step="1" data-report-quantity data-asm-good="${pid}" value="${escapeHtml(form.good)}"${disabledAll}></label>
     ${defectOk ? `<label class="asm-defect-toggle"><input type="checkbox" data-asm-defect-toggle="${pid}"${form.defectOpen ? " checked" : ""}${disabledAll}><span>${escapeHtml(machtileAsmT("batch_defect_toggle"))}</span></label>
     <div class="asm-defect"${form.defectOpen ? "" : " hidden"}>
-      <label class="asm-qty is-bad"><span>${escapeHtml(machtileAsmT("asm_bad_label"))}</span><input type="number" inputmode="numeric" min="0" step="1" data-asm-bad="${pid}" value="${escapeHtml(form.bad)}"${disabledAll}></label>
+      <label class="asm-qty is-bad"><span>${escapeHtml(machtileAsmT("asm_bad_label"))}</span><input type="number" inputmode="numeric" min="0" step="1" data-report-quantity data-asm-bad="${pid}" value="${escapeHtml(form.bad)}"${disabledAll}></label>
       <label class="asm-reason"><span>${escapeHtml(machtileAsmT("report_fail_reason_label"))}</span><select data-asm-reason="${pid}"${disabledAll}>${reasonOptions}</select></label>
       <label class="asm-note"${form.failReasonCode === "其他" ? "" : " hidden"}><span>${escapeHtml(machtileAsmT("report_fail_reason_note_label"))}</span><textarea rows="2" data-asm-note="${pid}"${disabledAll}>${escapeHtml(form.note)}</textarea></label>
     </div>` : ""}

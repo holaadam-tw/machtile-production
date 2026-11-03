@@ -2050,12 +2050,12 @@ function renderReportWorkFormContent(context) {
         <div class="report-work-quantity-row">
           <label for="reportWorkGoodQty">
             <span>本次良品數</span>
-            <input id="reportWorkGoodQty" name="goodQty" type="number" min="0" inputmode="numeric" placeholder="例如 33" autocomplete="off">
+            <input id="reportWorkGoodQty" name="goodQty" type="number" min="0" inputmode="numeric" placeholder="例如 33" autocomplete="off" data-report-quantity>
             <small class="report-work-field-hint">這次實際完成的良品件數。</small>
           </label>
           <label for="reportWorkDefectQty">
             <span>本次不良數</span>
-            <input id="reportWorkDefectQty" name="defectQty" type="number" min="0" inputmode="numeric" placeholder="沒有不良填 0" autocomplete="off">
+            <input id="reportWorkDefectQty" name="defectQty" type="number" min="0" inputmode="numeric" placeholder="沒有不良填 0" autocomplete="off" data-report-quantity>
             <small class="report-work-field-hint">這次發現的不良件數；沒有就填 0。</small>
           </label>
         </div>
@@ -14411,7 +14411,7 @@ function machtileTakeoverStopRender(holder, viewState) {
   holder.innerHTML = `<section class="station-cmd-panel takeover-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(machtileTranslate("takeover_stop_title"))}">
     <header><h2>${escapeHtml(machtileTranslate("takeover_stop_title"))}</h2></header><p class="takeover-question" data-takeover-qty-question>${escapeHtml(machtileTakeoverStopQuestion(viewState))}</p>
     ${dupConfirm ? `<p class="station-cmd-notice is-warn" role="alert" data-takeover-dup>${escapeHtml(machtileTranslate("takeover_stop_dup_question"))}</p>` : ""}
-    <div class="takeover-qty"><label data-takeover-field="good_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_machine_total" : "takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label data-takeover-field="fail_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_this_fail_qty" : viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
+    <div class="takeover-qty"><label data-takeover-field="good_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_machine_total" : "takeover_good_qty_total"))}<input inputmode="numeric" min="0" step="1" data-report-quantity data-takeover-good value="${escapeHtml(viewState.form.good_qty)}" required${dupConfirm ? " readonly" : ""}></label><label data-takeover-field="fail_qty">${escapeHtml(machtileTranslate(viewState.totals?.machineTotal === true ? "takeover_this_fail_qty" : viewState.totals.failDone == null ? "takeover_fail_qty_unreported" : "takeover_fail_qty_total"))}<input inputmode="numeric" min="0" step="1" data-report-quantity data-takeover-fail value="${escapeHtml(viewState.form.fail_qty)}" required${dupConfirm ? " readonly" : ""}></label></div>
     <p class="takeover-question" data-takeover-add-qty>${escapeHtml(delta ? machtileTranslate("takeover_stop_add_qty", { good: delta.good, fail: delta.fail }) : machtileTranslate("takeover_stop_add_qty_waiting"))}</p>
     <label data-takeover-fail-reason-field data-takeover-field="fail_reason_code"${delta?.fail > 0 ? "" : " hidden"}>${escapeHtml(machtileTranslate("report_fail_reason_label"))}<select data-takeover-fail-reason>${failReasonOptions}</select></label>
     <fieldset data-takeover-field="reason_code"><legend>${escapeHtml(machtileTranslate("takeover_reason"))}</legend><div class="takeover-choice-grid">${viewState.policies.map((p) => `<button type="button" data-takeover-reason="${escapeHtml(p.code)}" class="${p.code === viewState.form.reason_code ? "is-selected" : ""}">${escapeHtml(machtileTakeoverLabel(p))}</button>`).join("")}</div></fieldset>
@@ -15451,7 +15451,7 @@ function machtileStationCmdDailyStartHtml(sheet) {
     if (!["confirm", "sendError"].includes(sheet.phase)) return "";
     return `<section class="station-cmd-daily" data-station-cmd-daily>
         <label for="stationCmdDailyQty">${escapeHtml(core.DAILY_START_FIELD_LABEL)} <small>必填</small></label>
-        <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
+        <input id="stationCmdDailyQty" type="number" inputmode="numeric" min="0" step="1" required aria-required="true"${ds.error ? ' aria-invalid="true" aria-describedby="stationCmdDailyErr"' : ""} data-report-quantity data-station-cmd-daily-qty value="${escapeHtml(ds.value)}" autocomplete="off">
         ${machtileStationCmdDailyStartReportHidden(sheet.code) ? "" : "<p>今天這台還沒記今日開工：照機台計數器填，按確認會一起記下來（只記錄，不改舊 MES）。</p>"}
         ${ds.gap ? `<div class="station-cmd-notice is-warn${config.startBackfillEnabled === true ? " station-cmd-start-backfill" : ""}" role="status" data-station-cmd-start-gap>${escapeHtml(machtileTranslate(config.startBackfillEnabled === true ? "start_backfill_confirm" : "start_qty_gap_warning", ds.gap))}</div>` : ""}
         ${config.startBackfillEnabled === true && ds.less ? `<p class="station-cmd-notice is-warn" role="status" data-station-cmd-start-less>${escapeHtml(machtileTranslate("start_qty_less_warning"))}</p>` : ""}
@@ -15900,6 +15900,31 @@ async function machtileStationCmdRefreshToday() {
 }
 
 window.addEventListener("online", () => { if (machtileStationCmd.availability === "ready") { machtileDailyStartResumeAll(); machtileStartBackfillResumeAll(); } });
+
+// 報工數量欄集中處理：聚焦後全選，讓下一次輸入直接取代原值。
+// 延到下一個 task，避免觸控瀏覽器完成 focus 預設行為時取消選取。
+function machtileSelectReportQuantity(input) {
+  if (!input?.matches?.("[data-report-quantity]") || input.disabled || input.readOnly) return;
+  setTimeout(() => {
+    if (document.activeElement !== input) return;
+    try { input.select(); } catch { /* number input selection is browser-dependent */ }
+  }, 0);
+}
+
+document.addEventListener("focusin", (event) => {
+  machtileSelectReportQuantity(event.target);
+});
+document.addEventListener("mouseup", (event) => {
+  if (!event.target?.matches?.("[data-report-quantity]") || document.activeElement !== event.target) return;
+  event.preventDefault();
+  try { event.target.select(); } catch { /* number input selection is browser-dependent */ }
+  machtileSelectReportQuantity(event.target);
+});
+document.addEventListener("touchend", (event) => {
+  if (!event.target?.matches?.("[data-report-quantity]")) return;
+  try { event.target.select(); } catch { /* number input selection is browser-dependent */ }
+  machtileSelectReportQuantity(event.target);
+}, { passive: true });
 
 document.addEventListener("input", (event) => {
   const input = event.target;
@@ -25652,11 +25677,11 @@ function machtileRenderBatchReport() {
       : reportGuardAllows ? `
         <div class="batch-inputs">
           <input class="batch-compat-entry" type="number" data-batch-good="${code}" value="${escapeHtml(row.legacyGood ?? "")}" aria-label="${code} 舊版本次良品相容入口"${disabled}>
-          <label class="batch-qty is-good batch-total-input"><span>${escapeHtml(machtileTranslate("batch_total_label"))} <small>${escapeHtml(machtileTranslate("required"))}</small></span><input type="number" inputmode="numeric" min="0" step="1" data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
+          <label class="batch-qty is-good batch-total-input"><span>${escapeHtml(machtileTranslate("batch_total_label"))} <small>${escapeHtml(machtileTranslate("required"))}</small></span><input type="number" inputmode="numeric" min="0" step="1" data-report-quantity data-batch-current="${code}" value="${escapeHtml(row.current)}"${disabled}></label>
           <p class="batch-add-preview${simple.belowReported || machtileBatchPreviewSplitError(simple, model) ? " is-error" : ""}" data-batch-counter-preview="${code}">${escapeHtml(machtileBatchPreviewText(simple, model, true))}</p>
           <label class="batch-operator"><span>報工人</span><select data-batch-operator="${code}"${disabled}>${userOptions(model.operatorId)}</select></label>
           <label class="batch-defect-toggle"><input type="checkbox" data-batch-defect-toggle="${code}"${hasBatchDefect ? " checked" : ""}${disabled}><span>${escapeHtml(machtileTranslate("batch_defect_toggle"))}</span></label>
-          <label class="batch-qty is-bad" data-batch-defect-qty-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
+          <label class="batch-qty is-bad" data-batch-defect-qty-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>這次不良</span><input type="number" inputmode="numeric" min="0" step="1" data-report-quantity data-batch-bad="${code}" value="${escapeHtml(row.bad)}"${disabled}></label>
           <label class="batch-reason" data-batch-reason-field="${code}"${hasBatchDefect ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_label"))}</span><select data-batch-reason="${code}"${disabled}>${failReasonOptions}</select></label>
           <label class="batch-note" data-batch-note-field="${code}"${hasBatchDefect && row.failReasonCode === "其他" ? "" : " hidden"}><span>${escapeHtml(machtileTranslate("report_fail_reason_note_label"))}</span><textarea rows="2" data-batch-note="${code}" placeholder="${escapeHtml(machtileTranslate("report_fail_reason_other_note_required"))}"${disabled}>${escapeHtml(row.reportNote)}</textarea></label>
         </div>
