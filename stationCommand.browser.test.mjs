@@ -226,7 +226,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       let row = be.stationReportCommands.get(body.p_command_uuid);
       if (!row) {
         row = body.p_preview ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", requested_at: new Date().toISOString(), preview_result: {
-          status: "previewed", allowed: true, hard: false, available: 9999, shown_at: new Date().toISOString(),
+          status: "previewed", allowed: be.previewBlocked ? false : true, hard: be.previewBlocked ? true : false, guard_code: be.previewBlocked || "", available: 9999, shown_at: new Date().toISOString(),
           legacy_snapshot: { report: { guard: { code: "", hard: false, message: "", Details: { available: 9999 } } } },
         } } : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", requested_at: new Date().toISOString(), applied_at: new Date().toISOString() };
         be.stationReportCommands.set(body.p_command_uuid, row);
@@ -2065,6 +2065,26 @@ console.log("\n== 390px：applied 後斷線／關頁，恢復後補送一次 =="
   await opened.page.reload({ waitUntil: "domcontentloaded" }); await opened.page.waitForTimeout(1000);
   ok(be.stationReportSubmits.length === 2 && be.reportUpserts.filter((x) => x.p_payload?.report_payload?.start_backfill).length === 1, "再次恢復不會重複補報");
   await opened.context.close();
+}
+
+console.log("\n== 390px：補報預覽被擋（例如上一道委外未收貨）→ 取消自動補報，報工不再卡「送出中」（11/3 現場） ==");
+{
+  const commandUuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const queued = { [commandUuid]: { machineCode: "A04", snap: { qty: 208, processId: id(304), workOrderId: id(104), orderNo: "XX01202502050012", tenantId: T, processStatus: "running" } } };
+  const be = makeBackend({ dailyStartDone: true });
+  be.procExtra["XX01202502050012"] = { qty_completed: 140 };
+  be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  be.previewBlocked = "PREV_OUTSOURCE_NOT_RECEIVED";
+  const cfg = 'stationCommandMachines: ["A04"], startBackfillEnabled: true, enableStationReport: true, stationReportMachines: ["A04"],';
+  const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: cfg, preload: { "machtile.stationCmdStartBackfill.v1": JSON.stringify(queued) } });
+  await page.waitForFunction((uuid) => JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}")[uuid] == null, commandUuid, { timeout: 15000 });
+  ok(!be.reportUpserts.some((x) => x.p_payload?.report_payload?.start_backfill), "預覽被擋：不送正式補報");
+  ok(be.stationReportSubmits.filter((x) => x.p_preview === false).length === 0, "預覽被擋：沒有正式智慧報工");
+  const previewsAtRemoval = be.stationReportSubmits.length;
+  await page.waitForTimeout(6000);
+  ok(be.stationReportSubmits.length === previewsAtRemoval, "取消後不再每 5 秒重試", String(be.stationReportSubmits.length));
+  ok(await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("machtile.stationCmdStartBackfill.v1") || "{}")).length) === 0, "補報佇列已清空，報工不會再被擋成「送出中」");
+  await context.close();
 }
 
 console.log("\n== 390px：補報第一次算出的 good 固定，重試不因最新已報較小而改量 ==");

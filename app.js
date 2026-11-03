@@ -15770,12 +15770,12 @@ async function machtileStartBackfillResolve(commandUuid) {
     const previewArgs = core.buildSubmitArgs(form, previewUuid, true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
     let preview = await machtileStationReportSubmitCommand(previewArgs); preview = Array.isArray(preview) ? preview[0] : preview;
     if (!core.isTerminal(preview)) preview = await client.waitForTerminal(previewUuid, { intervalMs: 2000, maxAttempts: 90 });
-    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw new Error("開工補報預覽未通過");
+    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw Object.assign(new Error("開工補報預覽未通過"), { backfillPermanent: true, guardCode: preview?.preview_result?.guard_code || preview?.reject_code || preview?.status || "" });
     const finalArgs = core.buildSubmitArgs({ ...form, clientGuardSnapshot: core.buildClientGuardSnapshot(preview) }, reportUuid, false,
       machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
     let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
     if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
-    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw new Error("開工補報未套用");
+    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw Object.assign(new Error("開工補報未套用"), { backfillPermanent: true, guardCode: result?.reject_code || result?.status || "" });
     machtileCardQtyOverlayRecord(target, item.machineCode, item.snap.qty, "applied");
     const actorId = await machtileResolveAppUserId();
     const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
@@ -15785,6 +15785,13 @@ async function machtileStartBackfillResolve(commandUuid) {
     showToast(`${item.machineCode} 已補報 ${good} 件`);
   } catch (error) {
     console.warn("start backfill pending", error);
+    // 預覽被擋／正式送出被拒＝不是網路問題，重試也不會過；一直留在佇列會讓「報工」永遠顯示「還有報工在送出中」（11/3 現場卡死）。
+    // 這種情況直接取消自動補報，讓作業員改按「報工」照畫面指示處理（收貨確認、填原因等）。
+    if (error?.backfillPermanent) {
+      machtileStartBackfillQueueRemove(commandUuid);
+      showToast(machtileTranslate("start_backfill_blocked"), "warn");
+      return;
+    }
     showToast(machtileTranslate("start_backfill_failed"), "error");
     window.setTimeout(() => void machtileStartBackfillResolve(commandUuid), 5000);
   } finally {
