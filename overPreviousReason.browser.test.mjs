@@ -1,6 +1,7 @@
 import { readFile, mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import os from "node:os";
 
 const mod = await import(process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright");
 const { chromium } = mod.default || mod;
@@ -11,13 +12,17 @@ const start = app.indexOf("const machtileOverPreviousOptions");
 const end = app.indexOf("const machtileStationReportEnabled", start);
 if (start < 0 || end < 0) throw new Error("over-previous dialog source not found");
 const dialogSource = app.slice(start, end);
+const retryNoteStart = app.indexOf("function machtileStationReportRetryNote");
+const retryNoteEnd = app.indexOf("async function machtileStationReportRetryAck", retryNoteStart);
+if (retryNoteStart < 0 || retryNoteEnd < 0) throw new Error("station report retry-note source not found");
+const retryNoteSource = app.slice(retryNoteStart, retryNoteEnd);
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 800, height: 700 } });
 await page.setContent("<!doctype html><html lang='zh-Hant'><body></body></html>");
 await page.addStyleTag({ path: path.join(root, "styles.css") });
 await page.addScriptTag({ content: `window.config={enableOverPreviousReasonPrompt:false}; window.escapeHtml=(v)=>String(v); window.machtileTranslate=(key,p)=>({over_previous_title:'這次比上一站多報 '+p?.count+' 件，請選原因',over_previous_choose:'多報原因',over_previous_f01:'F01 漏報／晚報',over_previous_retest:'同一台重測',over_previous_other:'其他',over_previous_other_label:'請填其他原因（至少 4 字）',over_previous_other_short:'請選原因；其他原因至少填 4 個字。',over_previous_submit:'確認並送出',cancel:'取消'})[key]||key;` });
 await page.addScriptTag({ content: core });
-await page.addScriptTag({ content: `${dialogSource}\nwindow.testAsk=machtileAskOverPreviousReason; window.testOptions=machtileOverPreviousOptions;` });
+await page.addScriptTag({ content: `${dialogSource}\n${retryNoteSource}\nwindow.testAsk=machtileAskOverPreviousReason; window.testOptions=machtileOverPreviousOptions; window.testRetryNote=machtileStationReportRetryNote;` });
 
 const preview = await page.evaluate(() => {
   const result = { allowed: false, hard: false, guard_code: "QTY_OVER_PREVIOUS_WITH_REASON", available: 8,
@@ -41,7 +46,17 @@ const payload = await page.evaluate(({ row, reason }) => {
 }, { row: preview.row, reason });
 if (payload.p_command_uuid === preview.row.command_uuid) throw new Error("retry UUID was not renewed");
 if (payload.p_acks?.[0] !== "QTY_OVER_PREVIOUS_WITH_REASON" || payload.p_report_note !== "其他：治具定位偏移") throw new Error("retry payload missing ack or note");
-const shotDir = process.env.OVER_PREVIOUS_SHOT_DIR || path.join(root, "outbox");
+const finalPayload = await page.evaluate((overPayload) => {
+  const c = MachTileStationReportCore;
+  const note = testRetryNote(overPayload, "", c);
+  return c.retryWithAck(overPayload, "AUTO_PULL_ACK", "33333333-3333-4333-8333-333333333333", note, testOptions());
+}, payload);
+if (finalPayload.p_command_uuid === payload.p_command_uuid) throw new Error("AUTO_PULL_ACK retry UUID was not renewed");
+if (finalPayload.p_report_note !== "其他：治具定位偏移") throw new Error("AUTO_PULL_ACK retry lost over-previous reason");
+if (finalPayload.p_acks?.join(",") !== "QTY_OVER_PREVIOUS_WITH_REASON,AUTO_PULL_ACK") throw new Error("AUTO_PULL_ACK retry did not preserve both acknowledgements");
+const ordinaryNote = await page.evaluate(() => testRetryNote({ p_acks: ["OLD_ORDER_NEWER_OPEN"], p_report_note: "stored" }, "row note", MachTileStationReportCore));
+if (ordinaryNote !== "row note") throw new Error("non-over-previous retry behavior changed");
+const shotDir = process.env.OVER_PREVIOUS_SHOT_DIR || path.join(os.tmpdir(), "machtile-shots");
 await mkdir(shotDir, { recursive: true });
 await page.evaluate(() => { window.reasonPromise = testAsk(3); });
 await page.locator('input[value="F01 漏報／晚報"]').check();

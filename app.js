@@ -25094,13 +25094,19 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   machtileRenderStationReportSurfaces();
 }
 
+function machtileStationReportRetryNote(flowArgs, rowReportNote, core) {
+  return flowArgs?.p_acks?.includes(core?.OVER_PREVIOUS_ACK)
+    ? flowArgs.p_report_note
+    : (rowReportNote || null);
+}
+
 async function machtileStationReportRetryAck(code) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const result = flow.result;
   if (!core || !flow.args || !result || !core.softRejectEnabled(result.reject_code, machtileOverPreviousOptions())) return;
-  let reportNote = row.reportNote || null;
+  let reportNote = machtileStationReportRetryNote(flow.args, row.reportNote, core);
   if (result.reject_code === core.OVER_PREVIOUS_ACK) {
     reportNote = await machtileAskOverPreviousReason(machtileOverPreviousExcess(flow));
     if (!reportNote) return;
@@ -25117,7 +25123,7 @@ async function machtileStationReportRetryPreviewAck(code) {
   const flow = machtileStationReportState(row);
   const result = flow.result ? core?.resultCard(flow.result, machtileOverPreviousOptions()) : null;
   if (!core || !flow.args || !flow.preview || result?.kind !== "preview-soft") return;
-  let reportNote = row.reportNote || null;
+  let reportNote = machtileStationReportRetryNote(flow.args, row.reportNote, core);
   if (result.guardCode === core.OVER_PREVIOUS_ACK) {
     reportNote = await machtileAskOverPreviousReason(machtileOverPreviousExcess(flow));
     if (!reportNote) return;

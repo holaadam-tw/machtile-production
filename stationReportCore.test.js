@@ -231,6 +231,21 @@ check("over-previous reason guard is flag-gated and validates all three reason c
   assert.throws(() => core.retryWithAck(previous, ack, UUID_PREVIEW, "同一台重測", on), { code: "COMMAND_UUID_REQUIRED" });
 });
 
+check("over-previous reason survives a following auto-pull acknowledgement", () => {
+  const previous = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  const on = { enableOverPreviousReasonPrompt: true };
+  const reason = "F01 漏報／晚報";
+  const overRetry = core.retryWithAck(previous, core.OVER_PREVIOUS_ACK, UUID_RETRY, reason, on);
+  const autoPullUuid = "44444444-4444-4444-8444-444444444444";
+  const autoPullRetry = core.retryWithAck(overRetry, "AUTO_PULL_ACK", autoPullUuid, undefined, on);
+  assert.equal(overRetry.p_command_uuid, UUID_RETRY);
+  assert.equal(autoPullRetry.p_command_uuid, autoPullUuid);
+  assert.notEqual(previous.p_command_uuid, overRetry.p_command_uuid);
+  assert.notEqual(overRetry.p_command_uuid, autoPullRetry.p_command_uuid);
+  assert.deepEqual(autoPullRetry.p_acks, [core.OVER_PREVIOUS_ACK, "AUTO_PULL_ACK"]);
+  assert.equal(autoPullRetry.p_report_note, reason);
+});
+
 check("over-previous preview is blocked with flag off and retryable with flag on", () => {
   const result = structuredClone(COMPLETE_PREVIEW);
   result.allowed = false; result.hard = false; result.guard_code = "QTY_OVER_PREVIOUS_WITH_REASON";
