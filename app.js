@@ -15770,12 +15770,18 @@ async function machtileStartBackfillResolve(commandUuid) {
     const previewArgs = core.buildSubmitArgs(form, previewUuid, true, machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
     let preview = await machtileStationReportSubmitCommand(previewArgs); preview = Array.isArray(preview) ? preview[0] : preview;
     if (!core.isTerminal(preview)) preview = await client.waitForTerminal(previewUuid, { intervalMs: 2000, maxAttempts: 90 });
-    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw Object.assign(new Error("開工補報預覽未通過"), { backfillPermanent: true, guardCode: preview?.preview_result?.guard_code || preview?.reject_code || preview?.status || "" });
+    if (preview?.command_type !== "report_preview" || preview?.status !== "previewed" || preview?.preview_result?.allowed !== true) throw Object.assign(new Error("開工補報預覽未通過"), {
+      // 只有「確定被擋」才取消：預覽已完成但不允許，或預覽被拒／過期；還在跑或讀不到＝暫時問題，照舊重試
+      backfillPermanent: (preview?.status === "previewed" && preview?.preview_result?.allowed === false) || ["rejected", "expired"].includes(String(preview?.status || "")),
+      guardCode: preview?.preview_result?.guard_code || preview?.reject_code || preview?.status || "" });
     const finalArgs = core.buildSubmitArgs({ ...form, clientGuardSnapshot: core.buildClientGuardSnapshot(preview) }, reportUuid, false,
       machtileBatchState.stationReportSettings.failReasonCodesByMachine[item.machineCode] || []);
     let result = await machtileStationReportSubmitCommand(finalArgs); result = Array.isArray(result) ? result[0] : result;
     if (!core.isTerminal(result)) result = await client.waitForTerminal(reportUuid, { intervalMs: 2000, maxAttempts: 90 });
-    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw Object.assign(new Error("開工補報未套用"), { backfillPermanent: true, guardCode: result?.reject_code || result?.status || "" });
+    if (!["applied", "applied-late"].includes(core.resultCard(result).kind)) throw Object.assign(new Error("開工補報未套用"), {
+      // 正式送出只在「確定被拒／過期」才取消；pending／讀不到可能稍後套用，取消會讓作業員再報一次＝重複計數，所以照舊用同一 reportUuid 重試（冪等）
+      backfillPermanent: ["rejected", "expired"].includes(String(result?.status || "")),
+      guardCode: result?.reject_code || result?.status || "" });
     machtileCardQtyOverlayRecord(target, item.machineCode, item.snap.qty, "applied");
     const actorId = await machtileResolveAppUserId();
     const payload = machtileStationCmdCore.startBackfillPayload({ ...buildReportPayload("noon"), completed_qty: good, defect_qty: 0 }, commandUuid);
