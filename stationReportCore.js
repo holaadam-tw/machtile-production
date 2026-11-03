@@ -427,6 +427,7 @@
           allowed: result.allowed,
           values: result,
           preview: result,
+          reportLimitHint: reportLimitHint(result),
         };
       }
       if (row.status === "rejected") return { kind: "hard", title: "預覽未通過", message: guardMessage(row.reject_code, row.reject_message, "預覽遭拒。"), code: row.reject_code || "" };
@@ -439,6 +440,27 @@
     if (row.status === "rejected") return { kind: HARD_REJECTS.includes(row.reject_code) ? "hard" : "rejected", title: "報工未送入舊 MES", message: guardMessage(row.reject_code, row.reject_message), code: row.reject_code || "", previousIndex: Number(row.legacy_snapshot?.report?.guard?.prev_index_sn) || null };
     if (row.status === "expired") return { kind: "hard", title: "報工已過期，未套用", message: "這筆未寫入舊 MES。請重新確認現況後再送。", code: "EXPIRED" };
     return { kind: "pending", title: "等待套用端處理", message: "結果尚未確認；請勿重複建立報工。" };
+  }
+
+  function reportLimitHint(result) {
+    if (!isPlainObject(result)) return null;
+    const required = ["available", "previous_station_code", "previous_step_name", "previous_reported_good"];
+    if (!required.every((key) => Object.prototype.hasOwnProperty.call(result, key))) return null;
+    if (!Number.isInteger(result.available) || result.available < 0 ||
+        !Number.isInteger(result.previous_reported_good) || result.previous_reported_good < 0) return null;
+    const station = String(result.previous_station_code || "").trim();
+    const step = String(result.previous_step_name || "").trim();
+    if (station) {
+      return result.available === 0
+        ? { key: "report_limit_wait_station", params: { station } }
+        : { key: "report_limit_available_station", params: { available: result.available, station, reported: result.previous_reported_good } };
+    }
+    if (step) {
+      return result.available === 0
+        ? { key: "report_limit_wait_outsource", params: { step } }
+        : { key: "report_limit_available_outsource", params: { available: result.available, step, reported: result.previous_reported_good } };
+    }
+    return null;
   }
 
   function retryWithAck(previousArgs, ack, nextCommandUuid) {
@@ -544,7 +566,7 @@
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
-    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, retryWithAck, retryPreviewWithAck,
+    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, retryWithAck, retryPreviewWithAck,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
     refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient, operatorMessageKey,
   });

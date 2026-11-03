@@ -110,6 +110,9 @@ async function fake(route) {
       const soft = stationScenario === "ack" || (stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04");
       const code = soft ? "HIGH_FAIL_RATIO" : "";
       const preview = { status: "previewed", allowed: !soft, hard: false, guard_code: code, available: 999,
+        ...(stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04" ? {
+          available: 40, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 140,
+        } : {}),
         legacy_snapshot: { report: { guard: { code, hard: false, message: soft ? "needs ack" : "", Details: { available: 999 } } } } };
       return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: preview }]);
     }
@@ -242,6 +245,20 @@ await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("60")
 await rootView.locator("[data-batch-submit]").click();
 await page.waitForFunction(() => document.querySelector('[data-batch-needs-confirmation="A04"]') && document.querySelector('[data-batch-row="A05"] .batch-result')?.textContent.includes("✓"));
 ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-panel]').isVisible(), "preview needing acknowledgement expands the panel with a confirmation marker");
+const positiveLimitHint = await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').innerText();
+ok(positiveLimitHint === "目前最多可報 40 件（上一道 A01 已報 140 件）", `batch card shows N>0 from structured preview fields: ${positiveLimitHint}`);
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  Object.assign(flow.result.preview_result, { available: 0, previous_station_code: null, previous_step_name: "熱處理", previous_reported_good: 140 });
+  machtileRenderStationReportSurfaces();
+});
+ok((await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').innerText()) === "等委外收貨後才能報", "batch card shows the outsource N=0 wait hint");
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  delete flow.result.preview_result.previous_reported_good;
+  machtileRenderStationReportSurfaces();
+});
+ok(await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').count() === 0, "old Factory payload without additive fields shows no new hint");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A04" && !x.p_preview).length === 0, "ack row is not submitted automatically");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A05" && !x.p_preview).length === 1, "other rows continue after an acknowledgement is required");
 

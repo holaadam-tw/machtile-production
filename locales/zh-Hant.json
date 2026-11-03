@@ -343,5 +343,9 @@
   "asm_err_operator_too_many": "報工人最多 10 位。",
   "asm_block_qty_exceeds": "這次數量比可以報的還多，請確認件數。",
   "asm_block_qty_invalid": "數量不對，請確認件數。",
-  "asm_block_not_started": "這張單還沒開工，請先按開工再報工。"
+  "asm_block_not_started": "這張單還沒開工，請先按開工再報工。",
+  "report_limit_available_station": "目前最多可報 {{available}} 件（上一道 {{station}} 已報 {{reported}} 件）",
+  "report_limit_wait_station": "等 {{station}} 報工後才能報",
+  "report_limit_available_outsource": "目前最多可報 {{available}} 件（上一道委外 {{step}} 已收貨 {{reported}} 件）",
+  "report_limit_wait_outsource": "等委外收貨後才能報"
 }
