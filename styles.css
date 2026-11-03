@@ -13404,6 +13404,18 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .asm-ack p { margin: 0; font-weight: 700; color: #93370d; }
 .asm-muted { color: var(--muted); }
 .asm-form-actions .is-finish { background: #b42318; border-color: #b42318; }
+.over-previous-dialog-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 16px; background: rgba(15, 23, 42, .58); }
+.over-previous-dialog { width: min(100%, 520px); display: grid; gap: 16px; padding: 22px; border-radius: 18px; background: var(--surface, #fff); box-shadow: 0 24px 60px rgba(0, 0, 0, .28); }
+.over-previous-dialog h2 { margin: 0; font-size: 22px; }
+.over-previous-dialog fieldset { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.over-previous-dialog legend { margin-bottom: 8px; font-weight: 800; }
+.over-previous-dialog fieldset label { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; font-weight: 700; }
+.over-previous-dialog input { width: 22px; height: 22px; }
+.over-previous-other { display: grid; gap: 6px; font-weight: 700; }
+.over-previous-other[hidden] { display: none; }
+.over-previous-other textarea { min-height: 72px; font: inherit; }
+.over-previous-error { margin: 0; color: #b42318; font-weight: 700; }
+.over-previous-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .asm-short { display: grid; gap: 8px; padding: 10px; border: 2px solid #f79009; border-radius: var(--radius); background: var(--amber-soft); }
 .asm-short-question { margin: 0; font-weight: 800; color: #93370d; }
 .asm-short-reasons { display: flex; flex-wrap: wrap; gap: 6px; }

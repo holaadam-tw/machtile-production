@@ -212,6 +212,38 @@ check("soft-guard retry uses a new UUID and adds only a contract ack", () => {
   assert.throws(() => core.retryWithAck(previous, "QTY_EXCEEDS_AVAILABLE", UUID_RETRY), { code: "INVALID_ACK" });
 });
 
+check("over-previous reason guard is flag-gated and validates all three reason choices", () => {
+  const previous = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  const ack = "QTY_OVER_PREVIOUS_WITH_REASON";
+  const on = { enableOverPreviousReasonPrompt: true };
+  assert.equal(core.softRejectEnabled(ack), false);
+  assert.equal(core.softRejectEnabled(ack, on), true);
+  assert.throws(() => core.retryWithAck(previous, ack, UUID_RETRY, "F01 漏報／晚報"), { code: "INVALID_ACK" });
+  for (const reason of ["F01 漏報／晚報", "同一台重測", "其他：治具定位偏移"]) {
+    const retried = core.retryWithAck(previous, ack, UUID_RETRY, reason, on);
+    assert.equal(retried.p_command_uuid, UUID_RETRY);
+    assert.deepEqual(retried.p_acks, [ack]);
+    assert.equal(retried.p_report_note, reason);
+  }
+  for (const reason of [null, "其他：", "其他：三字喔"]) {
+    assert.throws(() => core.retryWithAck(previous, ack, UUID_RETRY, reason, on), { code: "QTY_OVER_PREVIOUS_REASON_REQUIRED" });
+  }
+  assert.throws(() => core.retryWithAck(previous, ack, UUID_PREVIEW, "同一台重測", on), { code: "COMMAND_UUID_REQUIRED" });
+});
+
+check("over-previous preview is blocked with flag off and retryable with flag on", () => {
+  const result = structuredClone(COMPLETE_PREVIEW);
+  result.allowed = false; result.hard = false; result.guard_code = "QTY_OVER_PREVIOUS_WITH_REASON";
+  result.legacy_snapshot.report.guard.code = result.guard_code;
+  const command = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: result };
+  assert.equal(core.resultCard(command).kind, "preview-blocked");
+  assert.equal(core.resultCard(command, { enableOverPreviousReasonPrompt: true }).kind, "preview-soft");
+  const retry = core.retryPreviewWithAck(core.buildSubmitArgs(validInput(), UUID_PREVIEW, true), command, result.guard_code, UUID_RETRY, "F01 漏報／晚報", { enableOverPreviousReasonPrompt: true });
+  assert.equal(retry.p_command_uuid, UUID_RETRY);
+  assert.deepEqual(retry.p_acks, [result.guard_code]);
+  assert.equal(retry.p_report_note, "F01 漏報／晚報");
+});
+
 check("previewed is terminal only for report_preview and never displays applied", () => {
   const row = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: COMPLETE_PREVIEW };
   assert.equal(core.isTerminal(row), true);
