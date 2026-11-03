@@ -489,4 +489,15 @@ check("operator message keys map guard codes to plain-language sentences", () =>
   assert.equal(core.operatorMessageKey("UNKNOWN_SOFT", true), "simple_soft_generic");
 });
 
+check("report limit hint requires the complete additive field set and distinguishes station/outsource", () => {
+  assert.deepEqual(core.reportLimitHint({ available: 12, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 38 }),
+    { key: "report_limit_available_station", params: { available: 12, station: "A01", reported: 38 } });
+  assert.deepEqual(core.reportLimitHint({ available: 0, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 38 }),
+    { key: "report_limit_wait_station", params: { station: "A01" } });
+  assert.deepEqual(core.reportLimitHint({ available: 0, previous_station_code: null, previous_step_name: "熱處理", previous_reported_good: 38 }),
+    { key: "report_limit_wait_outsource", params: { step: "熱處理" } });
+  assert.equal(core.reportLimitHint({ available: 12, previous_station_code: "A01", previous_step_name: "車床" }), null,
+    "old Factory payload without the additive field set stays unchanged");
+});
+
 console.log("STATION_REPORT_CONTRACT PASS");

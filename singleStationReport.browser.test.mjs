@@ -27,6 +27,7 @@ const tenantId = id(1), workOrderId = id(101), processId = id(301);
 const previewResult = {
   command_uuid: id(701), status: "previewed", allowed: true, guard_code: null, hard: false, message: "可送出",
   available: 80, supply: 100, done_c: 20, prev_index_sn: 1, prev_kind: "INHOUSE", predicted_ac03_qty: 38,
+  previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 100,
   order_qty: 1000, order_start: "2026-10-01", shown_at: "2026-10-13T04:00:00.000Z",
   legacy_snapshot: { report: { guard: { code: "", hard: false, message: "可送出", Details: {
     available: 80, supply: 100, done_c: 20, prev_index_sn: 1, prev_kind: "INHOUSE", predicted_ac03_qty: 38,
@@ -970,6 +971,7 @@ await bl.locator("#reportForm .submit-report").click();
 await bl.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
 assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0, "blocked preview never sends a final");
 assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。");
+assert.equal(await bl.locator("[data-report-limit-hint]:visible").innerText(), "目前最多可報 30 件（上一道 A01 已報 100 件）", "single-station card shows one visible structured preview limit");
 const blText = await bl.locator("#singleStationReportPanel").innerText();
 assert.doesNotMatch(blText, /可報|先領|guard|QTY_EXCEEDS|30/, `no technical numbers for operators: ${blText}`);
 assert.equal(await bl.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 1, "exactly one red sentence");

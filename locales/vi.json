@@ -691,5 +691,9 @@
   "asm_err_operator_too_many": { "value": "Tối đa 10 người báo công.", "_draft": true },
   "asm_block_qty_exceeds": { "value": "Số lượng lần này nhiều hơn số được báo; hãy kiểm tra lại.", "_draft": true },
   "asm_block_qty_invalid": { "value": "Số lượng không đúng; hãy kiểm tra lại.", "_draft": true },
-  "asm_block_not_started": { "value": "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.", "_draft": true }
+  "asm_block_not_started": { "value": "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.", "_draft": true },
+  "report_limit_available_station": { "value": "Hiện có thể báo tối đa {{available}} sản phẩm (công đoạn trước {{station}} đã báo {{reported}} sản phẩm)", "_draft": true },
+  "report_limit_wait_station": { "value": "Chỉ có thể báo sau khi {{station}} báo công", "_draft": true },
+  "report_limit_available_outsource": { "value": "Hiện có thể báo tối đa {{available}} sản phẩm (công đoạn gia công ngoài {{step}} đã nhận {{reported}} sản phẩm)", "_draft": true },
+  "report_limit_wait_outsource": { "value": "Chỉ có thể báo sau khi đã nhận hàng gia công ngoài", "_draft": true }
 }

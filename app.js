@@ -24295,6 +24295,8 @@ function machtileApplySimpleReportChrome() {
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
   const card = flow.result ? core.resultCard(flow.result) : null;
+  const reportLimitHtml = card?.reportLimitHint
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "";
   const busy = machtileStationReportFlowBusy(flow);
   const defectQty = Number(document.getElementById("defectQty")?.value || 0);
   const defectOpen = st.defectOpen || defectQty > 0;
@@ -24320,7 +24322,7 @@ function machtileApplySimpleReportChrome() {
   const flowLevel = machtileFlowVisibilityLevel();
   const flowToggle = flowLevel === "hidden" ? "" : `<button type="button" class="simple-report-flow-toggle" data-simple-report-flow aria-expanded="${st.flowOpen ? "true" : "false"}">${escapeHtml(machtileTranslate(st.flowOpen ? "simple_report_flow_close" : "simple_report_flow_open"))}</button>`;
   const flowStrip = st.flowOpen && flowLevel !== "hidden" ? `<div class="simple-report-flow" data-simple-report-flow-strip>${machtileProcessFlowMarkup(order, { compact: true, level: flowLevel })}</div>` : "";
-  machtileSimpleReportSetHtml("simpleReportSummary", `<div class="simple-report-summary"><span data-simple-report-summary>${summaryText}</span>${flowToggle}</div>${flowStrip}`);
+  machtileSimpleReportSetHtml("simpleReportSummary", `<div class="simple-report-summary"><span data-simple-report-summary>${summaryText}</span>${flowToggle}</div>${flowStrip}${reportLimitHtml}`);
   // 2. 機台目前總數（這張單[，含不良]）
   const label = document.getElementById("completedQtyLabel");
   if (label) label.textContent = machtileTranslate(defectOpen ? "simple_report_total_label_defect" : "simple_report_total_label");
@@ -24616,6 +24618,8 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
+  const reportLimitHtml = result?.reportLimitHint
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "";
   const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
   const rateCheck = result && ["previewed", "preview-soft"].includes(result.kind)
     ? core.rateReasonableness({
@@ -24645,7 +24649,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     const prevIndex = Number(result.previousIndex);
     const previousStep = ["hard", "preview-blocked"].includes(result.kind) && (result.code || result.guardCode) === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
       ? `<a class="station-report-previous-step" href="${escapeHtml(workOrderDetailUrl(order?.id))}">查看製程路線，先報第 ${prevIndex} 道</a>` : "";
-    resultHtml = `<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
+    resultHtml = `${reportLimitHtml}<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
     if (result.kind === "previewed") {
       resultHtml += snapshotReady
         ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認報工</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
