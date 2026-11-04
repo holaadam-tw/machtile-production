@@ -197,7 +197,7 @@
         throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
       }
       args.p_previous_outsource_receipt_qty = qty;
-      args.p_expected_doc4_fingerprint = fingerprint;
+      args.p_expected_doc4_fingerprint = fingerprint === null ? null : fingerprint.toLowerCase();
     }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
     // reported_before = machine-counter baseline (reported good + reported defect, owner 2026-10-31: the counter
@@ -245,7 +245,7 @@
         receiptMode: hasNewContract ? value.receipt_mode : "legacy_count",
         receiptRequiredQty: qty,
         receiptSteps: steps,
-        expectedDoc4Fingerprint: fingerprint,
+        expectedDoc4Fingerprint: fingerprint.toLowerCase(),
       };
     }
     for (const child of Object.values(value)) {
@@ -299,7 +299,7 @@
       throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
     }
     return { ...previousArgs, p_command_uuid: nextCommandUuid,
-      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint };
+      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint.toLowerCase() };
   }
 
   function withoutOutsourceReceipt(previousArgs, nextCommandUuid) {
