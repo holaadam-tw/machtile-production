@@ -4,93 +4,80 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync("app.js", "utf8");
-const start = source.indexOf("async function machtileRecoverUncertainReport");
+const start = source.indexOf("async function machtileRecoverUncertainReportRun");
 const end = source.indexOf("\nwindow.addEventListener(\"online\"", start);
-assert.ok(start > 0 && end > start, "recovery implementation is present");
+assert.ok(start > 0 && end > start, "minimal recovery implementation is present");
 
 const UUID = "11111111-1111-4111-8111-111111111111";
-const baseArgs = Object.freeze({ p_command_uuid: UUID, p_preview: false, p_good_qty: 3, p_fail_qty: 0, p_acks: null });
+const baseArgs = Object.freeze({ p_command_uuid: UUID, p_preview: false, p_good_qty: 3, p_fail_qty: 1,
+  p_previous_outsource_receipt_qty: 2, p_expected_doc4_fingerprint: "doc4-fp",
+  p_acks: ["OLD_ORDER_NEWER_OPEN"], p_operator_ids: ["op-1"], p_client_guard_snapshot: { index: 7 } });
 
-function harness({ rows = [], submits = [], online = true, enabled = true, waitResult = null } = {}) {
-  const flow = { args: { ...baseArgs }, phase: "blocked", error: "uncertain" };
-  const calls = { reads: [], submits: [], recorded: 0, waits: 0, rendered: 0, handled: 0 };
-  let submitIndex = 0;
-  const core = {
-    commandReadPath: (uuid) => `station_commands?command_uuid=eq.${uuid}`,
-    isTerminal: (row) => ["applied", "rejected", "expired"].includes(row?.status),
-  };
-  const context = {
-    console, navigator: { onLine: online }, setTimeout: (fn) => { fn(); return 1; },
-    MACHTILE_REPORT_RECOVERY_MAX_ATTEMPTS: 3,
-    machtileReportRecoveryQueue: new Set(),
-    machtileReportRecoveryInFlight: new Map(),
-    machtileReportUncertainRecoverEnabled: () => enabled,
-    machtileStationReportCore: () => core,
-    machtileBatchRow: () => ({}),
-    machtileStationReportState: () => flow,
+function harness({ rows = [], readError = null, enabled = true, waitResult = null } = {}) {
+  const flow = { args: structuredClone(baseArgs), finalOrder: { id: "MO-1" }, phase: "submitting-report", error: "" };
+  const calls = { reads: [], submits: [], waits: 0, handled: 0, finalized: 0, rendered: 0 };
+  const core = { commandReadPath: (uuid) => `station_commands?command_uuid=eq.${uuid}`,
+    isTerminal: (row) => ["applied", "rejected", "expired"].includes(row?.status) };
+  const context = { console, structuredClone, machtileReportRecoveryInFlight: new Map(),
+    machtileReportUncertainRecoverEnabled: () => enabled, machtileStationReportCore: () => core,
+    machtileBatchRow: () => ({ stationReport: flow }), machtileStationReportState: (row) => row.stationReport,
     machtileRenderStationReportSurfaces: () => { calls.rendered += 1; },
-    supabaseFetch: async (path) => { calls.reads.push(path); if (rows instanceof Error) throw rows; return rows; },
-    machtileStationReportSubmitCommand: async (args) => {
-      calls.submits.push(structuredClone(args));
-      const answer = submits[submitIndex++];
-      if (answer instanceof Error) throw answer;
-      return answer;
-    },
-    machtileStationReportWait: async () => { calls.waits += 1; if (waitResult) { flow.result = waitResult; flow.report = waitResult; flow.phase = "finished"; } },
+    supabaseFetch: async (path) => { calls.reads.push(path); if (readError) throw readError; return rows; },
+    machtileStationReportWait: async () => { calls.waits += 1; if (waitResult) { flow.result = waitResult; flow.phase = "finished"; } },
     machtileHandleOutsourceReceiptResult: async () => { calls.handled += 1; },
-    machtileRecordSingleStationProductionReport: async () => { calls.recorded += 1; },
-    machtileStationReportFinalizeApplied: async () => { calls.recorded += 1; },
-    machtileStationReportBlockAfterUncertainFailure: (target, error) => { target.phase = "blocked"; target.error = String(error?.message || error); },
-    machtileRecordReportRecoveryDiagnostic: (target, stage, error) => { target.recoveryDiagnostic = { stage, detail: error.message }; },
-  };
+    machtileStationReportFinalizeApplied: async () => { calls.finalized += 1; },
+    machtileRecordReportRecoveryDiagnostic: () => {},
+    machtileStationReportBlockAfterUncertainFailure: (target, error) => { target.phase = "blocked"; target.error = String(error); },
+    machtileStationReportOrderForCode: () => ({ id: "fallback" }),
+    machtileStationReportSendFinal: async (_code, args, options) => { calls.submits.push({ args: structuredClone(args), options }); } };
   vm.createContext(context);
-  vm.runInContext(`${source.slice(start, end)}\nthis.recover = machtileRecoverUncertainReport;`, context);
-  return { flow, calls, context, recover: context.recover };
+  vm.runInContext(`${source.slice(start, end)}\nthis.recover = machtileRecoverUncertainReport; this.resend = machtileResendUncertainReport;`, context);
+  return { flow, calls, recover: context.recover, resend: context.resend };
 }
 
-test("network error, absent row: resends the exact same UUID and parameters", async () => {
-  const applied = { command_uuid: UUID, command_type: "report", status: "applied" };
-  const h = harness({ rows: [], submits: [applied] });
-  const original = structuredClone(h.flow.args);
-  await h.recover("A01");
-  assert.deepEqual(h.calls.submits, [original]);
-  assert.equal(h.flow.phase, "finished");
+test("absent UUID enters recovery-ready without any automatic resend", async () => {
+  const h = harness();
+  await h.recover("A01", { deferFollowUp: true });
+  assert.equal(h.flow.phase, "recovery-ready");
+  assert.match(h.flow.recoveryMessage, /上一筆沒有送到工廠/);
+  assert.equal(h.calls.submits.length, 0);
 });
 
-test("existing applied row completes without resend", async () => {
+test("manual resend preserves every arg and the stored final order", async () => {
+  const h = harness();
+  await h.recover("A01");
+  const original = structuredClone(h.flow.args);
+  assert.equal(await h.resend("A01"), true);
+  assert.deepEqual(h.calls.submits[0].args, original);
+  assert.equal(h.calls.submits[0].options.order.id, "MO-1");
+  assert.equal(h.calls.submits.length, 1);
+});
+
+test("existing applied row follows ordinary result handling without resend", async () => {
   const h = harness({ rows: [{ command_uuid: UUID, command_type: "report", status: "applied" }] });
   await h.recover("A01");
-  assert.equal(h.calls.submits.length, 0);
   assert.equal(h.flow.phase, "finished");
+  assert.equal(h.calls.handled, 1);
+  assert.equal(h.calls.submits.length, 0);
+  assert.equal(h.calls.finalized, 1);
 });
 
-test("existing pending row enters automatic polling", async () => {
-  const h = harness({ rows: [{ command_uuid: UUID, command_type: "report", status: "pending" }], waitResult: { command_uuid: UUID, status: "applied" } });
+test("existing pending row follows ordinary wait", async () => {
+  const h = harness({ rows: [{ command_uuid: UUID, status: "pending" }], waitResult: { command_uuid: UUID, status: "applied" } });
   await h.recover("A01");
-  assert.equal(h.calls.submits.length, 0);
   assert.equal(h.calls.waits, 1);
   assert.equal(h.flow.phase, "finished");
 });
 
-test("offline queues recovery; a later online retry sends it", async () => {
-  const applied = { command_uuid: UUID, command_type: "report", status: "applied" };
-  const h = harness({ online: false, rows: [], submits: [applied] });
+test("status-read network failure remains manual recovery-ready", async () => {
+  const h = harness({ readError: new TypeError("Failed to fetch") });
   await h.recover("A01");
-  assert.equal(h.flow.phase, "recovery-offline");
-  assert.equal(h.context.machtileReportRecoveryQueue.has("A01"), true);
-  h.context.navigator.onLine = true;
-  await h.recover("A01");
-  assert.equal(h.flow.phase, "finished");
+  assert.equal(h.flow.phase, "recovery-ready");
+  assert.match(h.flow.recoveryMessage, /網路不通/);
+  assert.equal(h.calls.submits.length, 0);
 });
 
-test("resend is capped at three attempts and then asks for supervisor", async () => {
-  const h = harness({ rows: new Error("HTTP 503"), submits: [new Error("down"), new Error("down"), new Error("down")] });
-  await h.recover("A01");
-  assert.equal(h.calls.submits.length, 3);
-  assert.match(h.flow.error, /請通知主管/);
-});
-
-test("flag off makes no read, write, or state change", async () => {
+test("flag off performs no read, write, or state change", async () => {
   const h = harness({ enabled: false });
   const before = structuredClone(h.flow);
   assert.equal(await h.recover("A01"), false);

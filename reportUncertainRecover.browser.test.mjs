@@ -51,54 +51,50 @@ test("uncertain report recovery runs through the real APP", async (t) => {
       commandReadPath: (id) => `station_commands?command_uuid=eq.${id}`,
       isTerminal: (item) => ["applied", "rejected", "expired"].includes(item?.status),
       resultCard: (item) => ({ kind: item?.status === "applied" ? "applied" : "rejected" }),
+      createClient: () => ({ submit: async (sent) => {
+        calls.submits.push(structuredClone(sent));
+        if (fixture.submitGate) await new Promise((resolve) => setTimeout(resolve, 25));
+        const answer = (fixture.submits || [])[submitIndex++];
+        if (answer?.error) throw new Error(answer.error);
+        return answer;
+      } }),
     };
     machtileBatchRow = () => row;
     machtileRenderStationReportSurfaces = () => {};
     supabaseFetch = async (requestPath) => { calls.reads.push(requestPath); if (fixture.readError) throw new Error(fixture.readError); return fixture.rows || []; };
-    machtileStationReportSubmitCommand = async (sent) => {
-      calls.submits.push(structuredClone(sent));
-      if (fixture.submitGate) await new Promise((resolve) => setTimeout(resolve, 25));
-      const answer = (fixture.submits || [])[submitIndex++];
-      if (answer?.error) throw new Error(answer.error);
-      return answer;
-    };
     machtileStationReportWait = async () => { calls.waits += 1; if (fixture.waitError) throw new Error(fixture.waitError); };
     machtileHandleOutsourceReceiptResult = async () => {};
     machtileRecordSingleStationProductionReport = async () => { calls.recorded += 1; };
     machtileFinishCloseAfterAppliedReport = async () => { calls.closed += 1; };
     machtileCardQtyOverlayRecord = () => { calls.overlay += 1; };
-    if (fixture.offlineThenOnline) Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     const beforeHtml = document.body.innerHTML;
     const beforeStorage = localStorage.getItem("machtile.reportRecoveryDiagnostics.v1");
     const promises = Array.from({ length: fixture.concurrent || 1 }, () => machtileRecoverUncertainReport(fixture.code || "A01"));
     const results = await Promise.all(promises);
-    if (fixture.offlineThenOnline) {
-      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
-      window.dispatchEvent(new Event("online"));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    const manualResult = fixture.manualResend ? await machtileResendUncertainReport(fixture.code || "A01") : null;
     const background = document.querySelector("[data-station-report-background-message]");
-    return { results, flow, calls, args, beforeHtml, afterHtml: document.body.innerHTML,
+    return { results, manualResult, flow, calls, args, beforeHtml, afterHtml: document.body.innerHTML,
       beforeStorage, afterStorage: localStorage.getItem("machtile.reportRecoveryDiagnostics.v1"),
       background: background?.textContent || "" };
   }, { fixture, uuid: UUID });
 
   const applied = { command_uuid: UUID, command_type: "report", status: "applied" };
-  const resend = await run({ rows: [], submits: [applied] });
+  const resend = await run({ rows: [], submits: [applied], manualResend: true });
+  assert.equal(resend.manualResult, true, JSON.stringify(resend.flow));
   assert.deepEqual(resend.calls.submits, [resend.args], "receipt/doc4/acks/operators/snapshot and all other final args are preserved");
   assert.equal(resend.calls.recorded, 1);
   assert.equal(resend.calls.closed, 1, "recovery performs finish-close exactly once");
   assert.equal(resend.calls.overlay, 1);
   assert.match(resend.background, /工廠已完成寫入/, "a previous background failure is replaced by success");
 
-  const online = await run({ code: "A06", rows: [], submits: [applied], offlineThenOnline: true });
-  assert.equal(online.flow.phase, "finished");
-  assert.equal(online.calls.submits.length, 1);
-  assert.equal(online.calls.closed, 1, "offline-to-online recovery performs finish-close once");
+  const noAutomatic = await run({ code: "A06", rows: [], submits: [applied] });
+  assert.equal(noAutomatic.flow.phase, "recovery-ready");
+  assert.equal(noAutomatic.calls.submits.length, 0, "absent UUID never auto-resends");
+  assert.equal(noAutomatic.calls.closed, 0);
 
-  const concurrent = await run({ code: "A02", rows: [], submits: [applied], concurrent: 2, submitGate: true });
-  assert.equal(concurrent.calls.submits.length, 1, "two simultaneous recoveries share one resend");
-  assert.equal(concurrent.calls.closed, 1);
+  const concurrent = await run({ code: "A02", rows: [], concurrent: 2 });
+  assert.equal(concurrent.calls.reads.length, 1, "two simultaneous checks share one read");
+  assert.equal(concurrent.calls.submits.length, 0);
 
   const pendingFailure = await run({ code: "A03", rows: [{ command_uuid: UUID, status: "pending" }], waitError: "poll failed" });
   assert.equal(pendingFailure.flow.phase, "blocked");
@@ -113,7 +109,7 @@ test("uncertain report recovery runs through the real APP", async (t) => {
   assert.equal(flagOff.beforeStorage, flagOff.afterStorage, "flag off writes no recovery diagnostics");
   assert.equal(flagOff.beforeHtml, flagOff.afterHtml, "flag off leaves the real APP DOM unchanged");
 
-  const busy = await page.evaluate(() => ["recovering-report", "recovery-offline"].every((phase) => machtileStationReportFlowBusy({ phase })));
+  const busy = await page.evaluate(() => ["recovering-report", "recovery-ready"].every((phase) => machtileStationReportFlowBusy({ phase })));
   assert.equal(busy, true, "both recovery phases lock the station");
   const classifications = await page.evaluate(() => ({
     backend: machtileReportErrorMayBeUncertain({ code: "STATION_REPORT_BACKEND_UNAVAILABLE" }),
@@ -123,6 +119,39 @@ test("uncertain report recovery runs through the real APP", async (t) => {
     reject: machtileReportErrorMayBeUncertain({ code: "ITEM_CLOSED" }),
     network: machtileReportErrorMayBeUncertain(new TypeError("Failed to fetch")),
     timeout: machtileReportErrorMayBeUncertain({ code: "ETIMEDOUT" }),
+    server: machtileReportErrorMayBeUncertain({ status: 503, code: "ETIMEDOUT" }),
   }));
-  assert.deepEqual(classifications, { backend: false, operator: false, invalid: false, conflict: false, reject: false, network: true, timeout: true });
+  assert.deepEqual(classifications, { backend: false, operator: false, invalid: false, conflict: false, reject: false, network: true, timeout: true, server: false });
+
+  const sendCase = (mode) => page.evaluate(async ({ mode, uuid }) => {
+    window.MACHTILE_CONFIG.enableReportUncertainRecover = true;
+    const args = { p_command_uuid: uuid, p_preview: false, p_machine_code: "A01", p_good_qty: 3, p_fail_qty: 0 };
+    const flow = { args: structuredClone(args), phase: "previewed", finalOrder: { id: "MO-1" } };
+    const row = { stationReport: flow };
+    const receiptUuid = "22222222-2222-4222-8222-222222222222";
+    window.MachTileStationReportCore = {
+      commandReadPath: (id) => `station_commands?command_uuid=eq.${id}`,
+      isTerminal: () => false,
+      resultCard: () => ({ kind: "blocked" }),
+      createClient: () => ({ submit: async () => {
+        if (mode === "receipt-network") flow.args = { ...args, p_command_uuid: receiptUuid };
+        if (mode === "http-400") { const error = new Error("OPERATOR_REQUIRED"); error.status = 400; error.code = "OPERATOR_REQUIRED"; throw error; }
+        throw new TypeError("Failed to fetch");
+      } }),
+    };
+    machtileBatchRow = () => row;
+    supabaseFetch = async () => [];
+    machtileRenderStationReportSurfaces = () => {};
+    await machtileStationReportSendFinal("A01", args, { order: flow.finalOrder });
+    return { phase: flow.phase, error: flow.error || "", recoveryMessage: flow.recoveryMessage || "", argsUuid: flow.args.p_command_uuid };
+  }, { mode, uuid: UUID });
+
+  const network = await sendCase("network");
+  assert.equal(network.phase, "recovery-ready", "real TypeError with no HTTP response enters manual recovery");
+  const http400 = await sendCase("http-400");
+  assert.equal(http400.phase, "blocked", "HTTP 400 keeps legacy blocked behavior");
+  assert.match(http400.error, /OPERATOR_REQUIRED/);
+  const receiptNetwork = await sendCase("receipt-network");
+  assert.equal(receiptNetwork.phase, "blocked", "a receipt-generated UUID is excluded from recovery");
+  assert.equal(receiptNetwork.argsUuid, "22222222-2222-4222-8222-222222222222");
 });
