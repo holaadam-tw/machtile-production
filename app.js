@@ -23,6 +23,8 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // Final smart-report uncertainty recovery. Default off: legacy blocking behavior is unchanged.
+  enableReportUncertainRecover: false,
   // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
@@ -23832,7 +23834,30 @@ let machtileStationReportPreviewTicker = null;
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
+const machtileReportUncertainRecoverEnabled = () => window.MACHTILE_CONFIG?.enableReportUncertainRecover === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
+const MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY = "machtile.reportRecoveryDiagnostics.v1";
+const MACHTILE_REPORT_RECOVERY_MAX_ATTEMPTS = 3;
+const machtileReportRecoveryQueue = new Set();
+
+function machtileReportRecoveryErrorDetail(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status);
+  let message = String(error?.message || error || "unknown error");
+  message = message.replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [redacted]")
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted-token]").slice(0, 500);
+  return `${Number.isInteger(status) ? `HTTP ${status} ` : ""}${message}`.trim();
+}
+
+function machtileRecordReportRecoveryDiagnostic(flow, stage, error) {
+  const entry = { at: new Date().toISOString(), stage: String(stage || "unknown"), detail: machtileReportRecoveryErrorDetail(error) };
+  flow.recoveryDiagnostic = entry;
+  try {
+    const previous = JSON.parse(localStorage.getItem(MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY) || "[]");
+    const safe = Array.isArray(previous) ? previous.slice(-19) : [];
+    safe.push(entry);
+    localStorage.setItem(MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY, JSON.stringify(safe));
+  } catch { /* diagnostics must never block reporting */ }
+}
 
 // Resolved when a newer dialog replaces an open one, so the older flow ends instead of hanging.
 const MACHTILE_OUTSOURCE_RECEIPT_SUPERSEDED = Object.freeze({ superseded: true });
@@ -24178,6 +24203,13 @@ function machtileSimpleReportFinalUncertain(flow, card) {
   return flow.args.p_preview === false && !["applied", "applied-late", "hard", "rejected", "soft"].includes(card?.kind);
 }
 
+function machtileReportRecoveryMessage(flow) {
+  if (!machtileReportUncertainRecoverEnabled()) return "";
+  if (flow?.phase === "recovery-offline") return "網路不通，恢復後會自動補送";
+  if (flow?.phase === "recovering-report") return flow.recoveryMessage || "正在查證上一筆報工…";
+  return "";
+}
+
 function machtileSimpleReportPlainError(message) {
   const text = String(message || "");
   if (/已報數量已改變|委外單剛被別人改過/.test(text)) return machtileTranslate("simple_block_changed");
@@ -24188,6 +24220,8 @@ function machtileSimpleReportPlainError(message) {
 
 // 一句白話：取消（灰）／被擋或要確認（紅／黃）／完成（綠）。同一句已顯示在 #reportSubmitError 就不重複。
 function machtileSimpleReportStatus(flow, card) {
+  const recovery = machtileReportRecoveryMessage(flow);
+  if (recovery) return { tone: flow.phase === "recovery-offline" ? "warning" : "pending", text: recovery };
   if (flow.receiptCancelled && flow.phase === "blocked") return { tone: "muted", text: machtileTranslate("simple_report_cancelled") };
   if (flow.phase === "preview-timeout") return { tone: "error", text: machtileTranslate("simple_report_timeout") };
   if (machtileSimpleReportFinalUncertain(flow, card)) return { tone: "error", text: machtileTranslate("simple_report_unconfirmed") };
@@ -24226,8 +24260,9 @@ function machtileRenderSimpleStationReportPanel(code, order, row) {
   const admin = machtileSingleReportAdminView();
   if (admin) {
     const counterText = document.getElementById("reportCounterPreview")?.textContent || "";
+    const diagnostic = flow.recoveryDiagnostic?.detail ? `<p class="station-report-tech-raw">送出診斷：${escapeHtml(flow.recoveryDiagnostic.detail)}</p>` : "";
     const raw = flow.error ? `<p class="station-report-tech-raw">原始訊息：${escapeHtml(flow.error)}</p>` : "";
-    parts.push(`<details class="station-report-tech" data-station-report-tech${machtileSingleStationReportState.techOpen ? " open" : ""}><summary>${escapeHtml(machtileTranslate("simple_report_tech"))}</summary>${counterText ? `<p class="station-report-tech-counter">${escapeHtml(counterText)}</p>` : ""}${raw}${machtileRenderStationReportPanel(code, order, row, false, { simple: true, includeNote: !machtileSimpleReportNeedsNote(row, card) })}</details>`);
+    parts.push(`<details class="station-report-tech" data-station-report-tech${machtileSingleStationReportState.techOpen ? " open" : ""}><summary>${escapeHtml(machtileTranslate("simple_report_tech"))}</summary>${counterText ? `<p class="station-report-tech-counter">${escapeHtml(counterText)}</p>` : ""}${diagnostic}${raw}${machtileRenderStationReportPanel(code, order, row, false, { simple: true, includeNote: !machtileSimpleReportNeedsNote(row, card) })}</details>`);
   }
   return parts.length ? `<div class="station-report-simple">${parts.join("")}</div>` : "";
 }
@@ -24395,6 +24430,10 @@ async function machtileSimpleReportPrimaryRun(code) {
   if (!core || machtileStationReportFlowBusy(flow)) return;
   const card = flow.result ? core.resultCard(flow.result) : null;
   if (machtileSimpleReportFinalUncertain(flow, card)) {
+    if (machtileReportUncertainRecoverEnabled()) {
+      await machtileRecoverUncertainReport(code, { order: flow.finalOrder || machtileStationReportOrderForCode(code) });
+      return;
+    }
     machtileShowReportSubmitError(machtileTranslate("simple_report_unconfirmed"));
     machtileRenderStationReportSurfaces();
     return;
@@ -24911,6 +24950,62 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
   machtileRenderStationReportSurfaces();
 }
 
+async function machtileRecoverUncertainReport(code, options = {}) {
+  const core = machtileStationReportCore();
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const args = flow.args;
+  if (!machtileReportUncertainRecoverEnabled() || !core || args?.p_preview !== false || !args.p_command_uuid) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    flow.phase = "recovery-offline"; flow.recoveryMessage = "網路不通，恢復後會自動補送";
+    machtileReportRecoveryQueue.add(code); machtileRenderStationReportSurfaces(); return true;
+  }
+  flow.phase = "recovering-report"; flow.error = ""; flow.recoveryMessage = "正在查證上一筆報工…";
+  machtileRenderStationReportSurfaces();
+  let result = null;
+  try {
+    const rows = await supabaseFetch(core.commandReadPath(args.p_command_uuid), { method: "GET" });
+    if (Array.isArray(rows) && rows.length > 1) throw new Error("command_uuid returned multiple rows");
+    result = Array.isArray(rows) ? rows[0] || null : null;
+  } catch (error) { machtileRecordReportRecoveryDiagnostic(flow, "status-read", error); }
+  if (result) {
+    flow.result = result; flow.report = result;
+    flow.phase = core.isTerminal(result) ? "finished" : "waiting-report";
+    flow.recoveryMessage = core.isTerminal(result) ? "" : "上一筆仍在處理，正在自動查詢";
+    if (!core.isTerminal(result)) await machtileStationReportWait(code, args.p_command_uuid, "report");
+    else await machtileHandleOutsourceReceiptResult(code, result, "report");
+    if (!options.deferFollowUp) await machtileRecordSingleStationProductionReport(code, args, options.order);
+    machtileReportRecoveryQueue.delete(code); machtileRenderStationReportSurfaces(); return true;
+  }
+  flow.recoveryMessage = "上一筆沒有送到，已自動重送";
+  for (let attempt = 1; attempt <= MACHTILE_REPORT_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    flow.recoveryAttempts = attempt; machtileRenderStationReportSurfaces();
+    try {
+      const submitted = await machtileStationReportSubmitCommand(args);
+      const item = Array.isArray(submitted) ? submitted[0] : submitted;
+      if (item?.command_uuid && String(item.command_uuid).toLowerCase() !== String(args.p_command_uuid).toLowerCase()) throw new Error("resend returned a different command_uuid");
+      flow.phase = "waiting-report";
+      if (item && core.isTerminal(item)) { flow.result = item; flow.report = item; flow.phase = "finished"; await machtileHandleOutsourceReceiptResult(code, item, "report"); }
+      else await machtileStationReportWait(code, args.p_command_uuid, "report");
+      if (!options.deferFollowUp) await machtileRecordSingleStationProductionReport(code, args, options.order);
+      machtileReportRecoveryQueue.delete(code); machtileRenderStationReportSurfaces(); return true;
+    } catch (error) {
+      machtileRecordReportRecoveryDiagnostic(flow, `resend-${attempt}`, error);
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        flow.phase = "recovery-offline"; flow.recoveryMessage = "網路不通，恢復後會自動補送";
+        machtileReportRecoveryQueue.add(code); machtileRenderStationReportSurfaces(); return true;
+      }
+      if (attempt < MACHTILE_REPORT_RECOVERY_MAX_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
+  }
+  flow.phase = "blocked"; flow.error = "連續查證後仍無法判斷上一筆報工，請通知主管。";
+  machtileRenderStationReportSurfaces(); return true;
+}
+
+window.addEventListener("online", () => {
+  if (!machtileReportUncertainRecoverEnabled()) return;
+  [...machtileReportRecoveryQueue].forEach((code) => { void machtileRecoverUncertainReport(code); });
+});
+
 let machtileStationReportBackgroundTimer = null;
 function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0 } = {}) {
   const notice = document.getElementById("stationReportBackgroundStatus");
@@ -25050,10 +25145,14 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; await machtileHandleOutsourceReceiptResult(code, item, "report"); }
     else await machtileStationReportWait(code, args.p_command_uuid, "report");
   } catch (error) {
-    flow.phase = "blocked";
-    flow.error = error.code === "STATION_REPORT_BACKEND_UNAVAILABLE"
-      ? "智慧報工後端尚未同步；未建立正式報工。"
-      : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
+    machtileRecordReportRecoveryDiagnostic(flow, "final-submit", error);
+    if (machtileReportUncertainRecoverEnabled()) await machtileRecoverUncertainReport(code, { ...options, deferFollowUp: true });
+    else {
+      flow.phase = "blocked";
+      flow.error = error.code === "STATION_REPORT_BACKEND_UNAVAILABLE"
+        ? "智慧報工後端尚未同步；未建立正式報工。"
+        : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
+    }
   }
   let followUpFailed = false;
   // A receipt re-submit replaces the command (new uuid) inside the handler; App records and
