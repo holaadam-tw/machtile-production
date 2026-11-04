@@ -39,13 +39,14 @@ test("uncertain report recovery runs through the real APP", async (t) => {
     window.MACHTILE_CONFIG.enableReportUncertainRecover = fixture.enabled !== false;
     const args = fixture.args || {
       p_command_uuid: uuid, p_preview: false, p_machine_code: "A01", p_good_qty: 3,
+      p_expected_order_no: "MO-1",
       p_fail_qty: 1, p_fail_reason_code: "刮傷", p_report_note: "note", p_acks: ["OLD_ORDER_NEWER_OPEN"],
       p_previous_outsource_receipt_qty: 2, p_expected_doc4_fingerprint: "doc4-fp",
       p_operator_ids: ["op-1", "op-2"], p_client_guard_snapshot: { index: 7 },
     };
-    const flow = { args: structuredClone(args), phase: "blocked", error: "uncertain", singleReport: { overlayTotal: 9 } };
+    const flow = { args: structuredClone(args), finalOrder: { id: fixture.finalOrderId || "MO-1" }, phase: "blocked", error: "uncertain", singleReport: { overlayTotal: 9 } };
     const row = { stationReport: flow };
-    const calls = { reads: [], submits: [], recorded: 0, closed: 0, waits: 0, overlay: 0 };
+    const calls = { reads: [], submits: [], recorded: 0, recordedUuids: [], closed: 0, closedUuids: [], waits: 0, overlay: 0 };
     let submitIndex = 0;
     window.MachTileStationReportCore = {
       commandReadPath: (id) => `station_commands?command_uuid=eq.${id}`,
@@ -63,9 +64,11 @@ test("uncertain report recovery runs through the real APP", async (t) => {
     machtileRenderStationReportSurfaces = () => {};
     supabaseFetch = async (requestPath) => { calls.reads.push(requestPath); if (fixture.readError) throw new Error(fixture.readError); return fixture.rows || []; };
     machtileStationReportWait = async () => { calls.waits += 1; if (fixture.waitError) throw new Error(fixture.waitError); };
-    machtileHandleOutsourceReceiptResult = async () => {};
-    machtileRecordSingleStationProductionReport = async () => { calls.recorded += 1; };
-    machtileFinishCloseAfterAppliedReport = async () => { calls.closed += 1; };
+    machtileHandleOutsourceReceiptResult = async () => {
+      if (fixture.receiptUuid) flow.args = { ...flow.args, p_command_uuid: fixture.receiptUuid };
+    };
+    machtileRecordSingleStationProductionReport = async (_code, finalArgs) => { calls.recorded += 1; calls.recordedUuids.push(finalArgs.p_command_uuid); };
+    machtileFinishCloseAfterAppliedReport = async (_code, finalArgs) => { calls.closed += 1; calls.closedUuids.push(finalArgs.p_command_uuid); };
     machtileCardQtyOverlayRecord = () => { calls.overlay += 1; };
     const beforeHtml = document.body.innerHTML;
     const beforeStorage = localStorage.getItem("machtile.reportRecoveryDiagnostics.v1");
@@ -86,6 +89,17 @@ test("uncertain report recovery runs through the real APP", async (t) => {
   assert.equal(resend.calls.closed, 1, "recovery performs finish-close exactly once");
   assert.equal(resend.calls.overlay, 1);
   assert.match(resend.background, /工廠已完成寫入/, "a previous background failure is replaced by success");
+
+  const switchedOrder = await run({ rows: [], submits: [applied], manualResend: true, finalOrderId: "MO-2" });
+  assert.equal(switchedOrder.manualResult, false, "switching to another order blocks resend of the uncertain final");
+  assert.equal(switchedOrder.flow.phase, "blocked");
+  assert.match(switchedOrder.flow.error, /工單已切換/);
+  assert.equal(switchedOrder.calls.submits.length, 0, "order mismatch performs no report write");
+
+  const receiptUuid = "22222222-2222-4222-8222-222222222222";
+  const recoveredReceipt = await run({ rows: [applied], receiptUuid });
+  assert.deepEqual(recoveredReceipt.calls.recordedUuids, [receiptUuid], "recovery records the receipt replacement UUID");
+  assert.deepEqual(recoveredReceipt.calls.closedUuids, [receiptUuid], "recovery finish-close uses the receipt replacement UUID");
 
   const noAutomatic = await run({ code: "A06", rows: [], submits: [applied] });
   assert.equal(noAutomatic.flow.phase, "recovery-ready");
@@ -154,4 +168,33 @@ test("uncertain report recovery runs through the real APP", async (t) => {
   const receiptNetwork = await sendCase("receipt-network");
   assert.equal(receiptNetwork.phase, "blocked", "a receipt-generated UUID is excluded from recovery");
   assert.equal(receiptNetwork.argsUuid, "22222222-2222-4222-8222-222222222222");
+
+  const ackOrders = await page.evaluate(async ({ uuid }) => {
+    const outcomes = {};
+    for (const mode of ["retry", "preview"]) {
+      const args = { p_command_uuid: uuid, p_preview: false, p_machine_code: "A01", p_expected_order_no: "MO-1", p_good_qty: 3, p_fail_qty: 0 };
+      const result = mode === "retry" ? { reject_code: "OLD_ORDER_NEWER_OPEN" } : { reject_code: "OLD_ORDER_NEWER_OPEN", status: "previewed" };
+      const flow = { args: structuredClone(args), result, preview: result, phase: "previewed" };
+      const row = { stationReport: flow, reportNote: "confirmed" };
+      window.MachTileStationReportCore = {
+        SOFT_REJECTS: ["OLD_ORDER_NEWER_OPEN"],
+        retryWithAck: (oldArgs) => ({ ...oldArgs, p_command_uuid: crypto.randomUUID(), p_preview: false }),
+        retryPreviewWithAck: (oldArgs) => ({ ...oldArgs, p_command_uuid: crypto.randomUUID(), p_preview: false }),
+        resultCard: (item) => mode === "preview" && item === result ? { kind: "preview-soft", guardCode: "OLD_ORDER_NEWER_OPEN" } : { kind: "applied" },
+        isTerminal: () => true,
+        createClient: () => ({ submit: async (sent) => ({ ...sent, status: "applied" }) }),
+      };
+      machtileBatchRow = () => row;
+      machtileStationReportOrderForCode = () => ({ id: "MO-1" });
+      machtileRenderStationReportSurfaces = () => {};
+      machtileHandleOutsourceReceiptResult = async () => {};
+      machtileRecordSingleStationProductionReport = async () => {};
+      machtileFinishCloseAfterAppliedReport = async () => {};
+      if (mode === "retry") await machtileStationReportRetryAck("A01");
+      else await machtileStationReportRetryPreviewAck("A01");
+      outcomes[mode] = flow.finalOrder?.id || null;
+    }
+    return outcomes;
+  }, { uuid: UUID });
+  assert.deepEqual(ackOrders, { retry: "MO-1", preview: "MO-1" }, "both ACK final-send paths retain a non-null submitted order");
 });

@@ -10,12 +10,13 @@ assert.ok(start > 0 && end > start, "minimal recovery implementation is present"
 
 const UUID = "11111111-1111-4111-8111-111111111111";
 const baseArgs = Object.freeze({ p_command_uuid: UUID, p_preview: false, p_good_qty: 3, p_fail_qty: 1,
+  p_expected_order_no: "MO-1",
   p_previous_outsource_receipt_qty: 2, p_expected_doc4_fingerprint: "doc4-fp",
   p_acks: ["OLD_ORDER_NEWER_OPEN"], p_operator_ids: ["op-1"], p_client_guard_snapshot: { index: 7 } });
 
-function harness({ rows = [], readError = null, enabled = true, waitResult = null } = {}) {
+function harness({ rows = [], readError = null, enabled = true, waitResult = null, replacementArgs = null } = {}) {
   const flow = { args: structuredClone(baseArgs), finalOrder: { id: "MO-1" }, phase: "submitting-report", error: "" };
-  const calls = { reads: [], submits: [], waits: 0, handled: 0, finalized: 0, rendered: 0 };
+  const calls = { reads: [], submits: [], waits: 0, handled: 0, finalized: 0, finalizedArgs: null, rendered: 0 };
   const core = { commandReadPath: (uuid) => `station_commands?command_uuid=eq.${uuid}`,
     isTerminal: (row) => ["applied", "rejected", "expired"].includes(row?.status) };
   const context = { console, structuredClone, machtileReportRecoveryInFlight: new Map(),
@@ -24,8 +25,8 @@ function harness({ rows = [], readError = null, enabled = true, waitResult = nul
     machtileRenderStationReportSurfaces: () => { calls.rendered += 1; },
     supabaseFetch: async (path) => { calls.reads.push(path); if (readError) throw readError; return rows; },
     machtileStationReportWait: async () => { calls.waits += 1; if (waitResult) { flow.result = waitResult; flow.phase = "finished"; } },
-    machtileHandleOutsourceReceiptResult: async () => { calls.handled += 1; },
-    machtileStationReportFinalizeApplied: async () => { calls.finalized += 1; },
+    machtileHandleOutsourceReceiptResult: async () => { calls.handled += 1; if (replacementArgs) flow.args = structuredClone(replacementArgs); },
+    machtileStationReportFinalizeApplied: async (_code, args) => { calls.finalized += 1; calls.finalizedArgs = structuredClone(args); },
     machtileRecordReportRecoveryDiagnostic: () => {},
     machtileStationReportBlockAfterUncertainFailure: (target, error) => { target.phase = "blocked"; target.error = String(error); },
     machtileStationReportOrderForCode: () => ({ id: "fallback" }),
@@ -53,6 +54,16 @@ test("manual resend preserves every arg and the stored final order", async () =>
   assert.equal(h.calls.submits.length, 1);
 });
 
+test("manual resend blocks when the selected order no longer matches the final args", async () => {
+  const h = harness();
+  await h.recover("A01");
+  h.flow.finalOrder = { id: "MO-2" };
+  assert.equal(await h.resend("A01"), false);
+  assert.equal(h.flow.phase, "blocked");
+  assert.match(h.flow.error, /工單已切換/);
+  assert.equal(h.calls.submits.length, 0);
+});
+
 test("existing applied row follows ordinary result handling without resend", async () => {
   const h = harness({ rows: [{ command_uuid: UUID, command_type: "report", status: "applied" }] });
   await h.recover("A01");
@@ -60,6 +71,13 @@ test("existing applied row follows ordinary result handling without resend", asy
   assert.equal(h.calls.handled, 1);
   assert.equal(h.calls.submits.length, 0);
   assert.equal(h.calls.finalized, 1);
+});
+
+test("existing applied row finalizes the receipt replacement UUID", async () => {
+  const replacementArgs = { ...baseArgs, p_command_uuid: "22222222-2222-4222-8222-222222222222" };
+  const h = harness({ rows: [{ command_uuid: UUID, command_type: "report", status: "applied" }], replacementArgs });
+  await h.recover("A01");
+  assert.equal(h.calls.finalizedArgs.p_command_uuid, replacementArgs.p_command_uuid);
 });
 
 test("existing pending row follows ordinary wait", async () => {

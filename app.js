@@ -24433,6 +24433,11 @@ async function machtileSimpleReportPrimaryRun(code) {
   const card = flow.result ? core.resultCard(flow.result) : null;
   if (machtileSimpleReportFinalUncertain(flow, card)) {
     if (machtileReportUncertainRecoverEnabled()) {
+      if (String(flow.finalOrder?.id || "") !== String(flow.args?.p_expected_order_no || "")) {
+        machtileStationReportBlockAfterUncertainFailure(flow, new Error("工單已切換；請勿重送上一筆報工。"));
+        machtileRenderStationReportSurfaces();
+        return;
+      }
       await machtileRecoverUncertainReport(code, { order: flow.finalOrder || machtileStationReportOrderForCode(code) });
       return;
     }
@@ -25003,7 +25008,8 @@ async function machtileRecoverUncertainReportRun(code, options = {}) {
       machtileStationReportBlockAfterUncertainFailure(flow, error);
       machtileRenderStationReportSurfaces(); return true;
     }
-    if (!options.deferFollowUp) await machtileStationReportFinalizeApplied(code, args, options);
+    const resultArgs = flow.args?.p_preview === false ? flow.args : args;
+    if (!options.deferFollowUp) await machtileStationReportFinalizeApplied(code, resultArgs, options);
     machtileRenderStationReportSurfaces(); return true;
   }
   flow.phase = "recovery-ready";
@@ -25016,6 +25022,11 @@ async function machtileResendUncertainReport(code) {
   if (!machtileReportUncertainRecoverEnabled() || flow.phase !== "recovery-ready"
     || flow.args?.p_preview !== false || !flow.args.p_command_uuid) return false;
   const args = flow.args;
+  if (String(flow.finalOrder?.id || "") !== String(args.p_expected_order_no || "")) {
+    machtileStationReportBlockAfterUncertainFailure(flow, new Error("工單已切換；請勿重送上一筆報工。"));
+    machtileRenderStationReportSurfaces();
+    return false;
+  }
   const order = flow.finalOrder || machtileStationReportOrderForCode(code);
   await machtileStationReportSendFinal(code, args, { order });
   return true;
@@ -25210,7 +25221,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   flow.phase = "submitting-report";
   flow.error = "";
   // Context for an unattended STALE re-send (pre-final checks need the submitted order).
-  flow.finalOrder = options.order || null;
+  flow.finalOrder = options.order || machtileStationReportOrderForCode(code);
   flow.staleAutoRetries = 0;
   machtileRenderStationReportSurfaces();
   try {
