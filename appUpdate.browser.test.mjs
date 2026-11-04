@@ -135,7 +135,7 @@ test("TV ignores an older cache and limits the same newer mismatch to one reload
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname.startsWith("/__version/")) { deployedVersion = decodeURIComponent(url.pathname.slice(11)); res.writeHead(204).end(); return; }
-    if (url.pathname === "/version.json") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ version: deployedVersion })); return; }
+    if (url.pathname === "/version.json") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ version: deployedVersion, deploymentSequence: 20261103003 })); return; }
     if (url.pathname === "/config.js") { res.writeHead(200, { "content-type": "text/javascript" }); res.end('window.MACHTILE_CONFIG={authMode:"dev",useSupabase:false,disableServiceWorker:true,oauthEnabled:false,hmcFixedStagingEnabled:false};'); return; }
     const relative = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
     if (relative === "/index.html") indexRequests += 1;

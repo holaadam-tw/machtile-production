@@ -870,7 +870,7 @@ for (const [failDone, expectGood] of [[0, 10], [5, 5]]) {
     await fillStopDialog(page, 761, 1);
   }
   await ts.locator("[data-takeover-fail-reason]").selectOption({ index: 1 });
-  if (failDone === 0) await page.screenshot({ path: "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl-final/08-stop-sheet-machine-total.png" });
+  if (failDone === 0) await page.screenshot({ path: path.join(outDir, "08-stop-sheet-machine-total.png") });
   const addText = (await ts.locator("[data-takeover-add-qty]").innerText()).trim();
   ok(addText === `這次會新增：良品 ${expectGood} 件、不良 1 件`, `停工差額＝761－${750 + failDone}－1＝良品 ${expectGood}`, addText);
   await ts.locator("[data-takeover-stop-confirm]").click();

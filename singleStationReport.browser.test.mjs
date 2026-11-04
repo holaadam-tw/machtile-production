@@ -7,7 +7,8 @@ import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.env.MACHTILE_SCREENSHOT_DIR || "D:/04_SoftNet/ops/codex-inbox/shots";
 await mkdir(shots, { recursive: true });
-await mkdir("D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots", { recursive: true });
+const finishDialogShots = path.join(shots, "finish-dialog");
+await mkdir(finishDialogShots, { recursive: true });
 const moduleSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const imported = await import(moduleSpec);
 const { chromium } = imported.default || imported;
@@ -367,7 +368,7 @@ assert.equal(await outsider.evaluate(() => buildReportPayload("noon").fail_reaso
 await outsider.setViewportSize({ width: 390, height: 844 });
 await outsider.evaluate(() => { document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0; const layout = document.querySelector("#reportSheet .report-layout"); layout.scrollLeft = 0; layout.scrollTop = 0; });
 await outsider.locator("#reportFailReasonField").scrollIntoViewIfNeeded();
-await outsider.screenshot({ path: "D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots/defect-reason-mobile.png" });
+await outsider.screenshot({ path: path.join(finishDialogShots, "defect-reason-mobile.png") });
 await outsider.close();
 
 currentMachine = "A04";
@@ -731,7 +732,7 @@ console.log("PASS material/count outsource receipt dialogs → preview success")
 
 
 // ---- 單台報工簡化（owner 2026-10-31「單台報工簡化 照圖做」）：作業員畫面 ----
-const implShots = "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl-final";
+const implShots = path.join(shots, "impl-final");
 await mkdir(implShots, { recursive: true });
 currentMachine = "A04"; guardFails = false; guardEnabled = true; outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
 finalStaleOnce = false; finalRequiredOnce = false; finalSubmitFails = false; reconciledCommand = null; starterUserId = id(902);

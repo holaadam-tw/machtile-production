@@ -23,6 +23,7 @@ function harness({ rows = [], submits = [], online = true, enabled = true, waitR
     console, navigator: { onLine: online }, setTimeout: (fn) => { fn(); return 1; },
     MACHTILE_REPORT_RECOVERY_MAX_ATTEMPTS: 3,
     machtileReportRecoveryQueue: new Set(),
+    machtileReportRecoveryInFlight: new Map(),
     machtileReportUncertainRecoverEnabled: () => enabled,
     machtileStationReportCore: () => core,
     machtileBatchRow: () => ({}),
@@ -38,6 +39,8 @@ function harness({ rows = [], submits = [], online = true, enabled = true, waitR
     machtileStationReportWait: async () => { calls.waits += 1; if (waitResult) { flow.result = waitResult; flow.report = waitResult; flow.phase = "finished"; } },
     machtileHandleOutsourceReceiptResult: async () => { calls.handled += 1; },
     machtileRecordSingleStationProductionReport: async () => { calls.recorded += 1; },
+    machtileStationReportFinalizeApplied: async () => { calls.recorded += 1; },
+    machtileStationReportBlockAfterUncertainFailure: (target, error) => { target.phase = "blocked"; target.error = String(error?.message || error); },
     machtileRecordReportRecoveryDiagnostic: (target, stage, error) => { target.recoveryDiagnostic = { stage, detail: error.message }; },
   };
   vm.createContext(context);
