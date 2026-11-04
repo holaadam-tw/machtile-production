@@ -381,7 +381,7 @@ check("outsource receipt state machine asks, refreshes stale, and clears not-exp
   assert.equal(required.kind, "ask");
   assert.equal(required.message, "");
   assert.deepEqual(required.snapshot, { previousStepName: "外包研磨", doc4Numbers: ["D4-101", "D4-102"], unconfirmedQty: 23,
-    receiptMode: "legacy_count", receiptRequiredQty: 23, receiptSteps: [], expectedDoc4Fingerprint: "B".repeat(64) });
+    receiptMode: "legacy_count", receiptRequiredQty: 23, receiptSteps: [], expectedDoc4Fingerprint: "b".repeat(64) });
   assert.equal(core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_QTY_INVALID"), true).kind, "ask");
   const stale = core.outsourceReceiptAction(rejected("PREV_OUTSOURCE_RECEIPT_STALE"), true);
   assert.equal(stale.kind, "refresh-preview");
@@ -498,6 +498,15 @@ check("report limit hint requires the complete additive field set and distinguis
     { key: "report_limit_wait_outsource", params: { step: "熱處理" } });
   assert.equal(core.reportLimitHint({ available: 12, previous_station_code: "A01", previous_step_name: "車床" }), null,
     "old Factory payload without the additive field set stays unchanged");
+});
+
+check("Factory uppercase DOC4 fingerprint is sent lowercase: cloud RPC only accepts ^[0-9a-f]{64}$", () => {
+  const upper = "96157502FE7B0374C0811BA38272BE11CD6368DE3631B0FE58FFFC5F11390B3B";
+  const lower = upper.toLowerCase();
+  const prev = { p_command_uuid: "11111111-1111-4111-8111-111111111111", p_previous_outsource_receipt_qty: null, p_expected_doc4_fingerprint: null };
+  const next = core.withOutsourceReceipt(prev, 3400, upper, "22222222-2222-4222-8222-222222222222");
+  assert.equal(next.p_expected_doc4_fingerprint, lower);
+  assert.match(next.p_expected_doc4_fingerprint, /^[0-9a-f]{64}$/);
 });
 
 console.log("STATION_REPORT_CONTRACT PASS");
