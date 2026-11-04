@@ -32,6 +32,8 @@ window.MACHTILE_CONFIG = {
   // through the offline-first idempotent outbox seam (DB side = migrations
   // 202607110001–0003, applied). Rollback = set false (direct POST path).
   enableOutboxSubmit: true,
+  // 查證並以同一 command_uuid 安全補送不確定報工；驗證後再由 owner 開啟。
+  enableReportUncertainRecover: false,
   // Schedule foundation and capacity calendar are present and verified in Production.
   enableScheduleContracts: true,
   // 202607160005 is present and passed the Production rollback smoke.

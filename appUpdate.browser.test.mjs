@@ -13,6 +13,7 @@ const { chromium } = imported.default || imported;
 
 test("version update stays silent when current, defers while busy, then reloads on click", async (t) => {
   let deployedVersion = JSON.parse(await readFile(new URL("./version.json", import.meta.url), "utf8")).version;
+  const newerVersion = deployedVersion.replace(/-r(\d+)$/i, (_, revision) => `-r${Number(revision) + 1}`);
   let indexRequests = 0;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -59,7 +60,7 @@ test("version update stays silent when current, defers while busy, then reloads 
   await page.evaluate(() => window.MachTileAppUpdate.check());
   assert.equal(await page.locator("#appUpdateCard").isHidden(), true, "same version must stay hidden");
 
-  await page.request.get(`${origin}/__version/20261103-update-toast-r3`);
+  await page.request.get(`${origin}/__version/${encodeURIComponent(newerVersion)}`);
   await page.evaluate(() => {
     const sheet = document.getElementById("reportSheet");
     sheet.classList.add("is-open");
@@ -125,7 +126,11 @@ test("version update stays silent when current, defers while busy, then reloads 
 });
 
 test("TV ignores an older cache and limits the same newer mismatch to one reload", async (t) => {
-  let deployedVersion = "20261103-update-toast-r1";
+  const current = JSON.parse(await readFile(new URL("./version.json", import.meta.url), "utf8"));
+  const date = current.version.match(/^(\d{8})/)?.[1];
+  const revision = Number(current.version.match(/-r(\d+)$/i)?.[1]);
+  const newerVersion = current.version.replace(/-r(\d+)$/i, `-r${revision + 1}`);
+  let deployedVersion = `${Number(date) - 1}-cached-r999`;
   let indexRequests = 0;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -148,7 +153,7 @@ test("TV ignores an older cache and limits the same newer mismatch to one reload
   await page.evaluate(() => window.MachTileAppUpdate.check());
   assert.equal(indexRequests, 1, "older cached version must not reload TV");
 
-  await page.request.get(`${origin}/__version/20261103-update-toast-r3`);
+  await page.request.get(`${origin}/__version/${encodeURIComponent(newerVersion)}`);
   await page.evaluate(() => { const d = document.createElement("div"); d.id = "tv-busy"; d.setAttribute("role", "dialog"); d.textContent = "busy"; document.body.appendChild(d); });
   await page.evaluate(() => window.MachTileAppUpdate.check());
   assert.equal(indexRequests, 1, "busy TV must defer reload");

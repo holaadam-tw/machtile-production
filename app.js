@@ -23,6 +23,8 @@ const config = {
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
   enableOutboxSubmit: false,
+  // Final smart-report uncertainty recovery. Default off: legacy blocking behavior is unchanged.
+  enableReportUncertainRecover: false,
   // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
@@ -23832,7 +23834,30 @@ let machtileStationReportPreviewTicker = null;
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
+const machtileReportUncertainRecoverEnabled = () => window.MACHTILE_CONFIG?.enableReportUncertainRecover === true;
 const MACHTILE_STATION_REPORT_RESULT = "智慧報工結果仍待確認；不要重送相同數量。";
+const MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY = "machtile.reportRecoveryDiagnostics.v1";
+const machtileReportRecoveryInFlight = new Map();
+
+function machtileReportRecoveryErrorDetail(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status);
+  let message = String(error?.message || error || "unknown error");
+  message = message.replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [redacted]")
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted-token]").slice(0, 500);
+  return `${Number.isInteger(status) ? `HTTP ${status} ` : ""}${message}`.trim();
+}
+
+function machtileRecordReportRecoveryDiagnostic(flow, stage, error) {
+  if (!machtileReportUncertainRecoverEnabled()) return;
+  const entry = { at: new Date().toISOString(), stage: String(stage || "unknown"), detail: machtileReportRecoveryErrorDetail(error) };
+  flow.recoveryDiagnostic = entry;
+  try {
+    const previous = JSON.parse(localStorage.getItem(MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY) || "[]");
+    const safe = Array.isArray(previous) ? previous.slice(-19) : [];
+    safe.push(entry);
+    localStorage.setItem(MACHTILE_REPORT_RECOVERY_DIAGNOSTICS_KEY, JSON.stringify(safe));
+  } catch { /* diagnostics must never block reporting */ }
+}
 
 // Resolved when a newer dialog replaces an open one, so the older flow ends instead of hanging.
 const MACHTILE_OUTSOURCE_RECEIPT_SUPERSEDED = Object.freeze({ superseded: true });
@@ -24178,6 +24203,13 @@ function machtileSimpleReportFinalUncertain(flow, card) {
   return flow.args.p_preview === false && !["applied", "applied-late", "hard", "rejected", "soft"].includes(card?.kind);
 }
 
+function machtileReportRecoveryMessage(flow) {
+  if (!machtileReportUncertainRecoverEnabled()) return "";
+  if (flow?.phase === "recovery-ready") return flow.recoveryMessage || "上一筆沒有送到工廠，按『重送同一筆』";
+  if (flow?.phase === "recovering-report") return flow.recoveryMessage || "正在查證上一筆報工…";
+  return "";
+}
+
 function machtileSimpleReportPlainError(message) {
   const text = String(message || "");
   if (/已報數量已改變|委外單剛被別人改過/.test(text)) return machtileTranslate("simple_block_changed");
@@ -24188,6 +24220,8 @@ function machtileSimpleReportPlainError(message) {
 
 // 一句白話：取消（灰）／被擋或要確認（紅／黃）／完成（綠）。同一句已顯示在 #reportSubmitError 就不重複。
 function machtileSimpleReportStatus(flow, card) {
+  const recovery = machtileReportRecoveryMessage(flow);
+  if (recovery) return { tone: flow.phase === "recovery-ready" ? "warning" : "pending", text: recovery };
   if (flow.receiptCancelled && flow.phase === "blocked") return { tone: "muted", text: machtileTranslate("simple_report_cancelled") };
   if (flow.phase === "preview-timeout") return { tone: "error", text: machtileTranslate("simple_report_timeout") };
   if (machtileSimpleReportFinalUncertain(flow, card)) return { tone: "error", text: machtileTranslate("simple_report_unconfirmed") };
@@ -24226,8 +24260,9 @@ function machtileRenderSimpleStationReportPanel(code, order, row) {
   const admin = machtileSingleReportAdminView();
   if (admin) {
     const counterText = document.getElementById("reportCounterPreview")?.textContent || "";
+    const diagnostic = machtileReportUncertainRecoverEnabled() && flow.recoveryDiagnostic?.detail ? `<p class="station-report-tech-raw">送出診斷：${escapeHtml(flow.recoveryDiagnostic.detail)}</p>` : "";
     const raw = flow.error ? `<p class="station-report-tech-raw">原始訊息：${escapeHtml(flow.error)}</p>` : "";
-    parts.push(`<details class="station-report-tech" data-station-report-tech${machtileSingleStationReportState.techOpen ? " open" : ""}><summary>${escapeHtml(machtileTranslate("simple_report_tech"))}</summary>${counterText ? `<p class="station-report-tech-counter">${escapeHtml(counterText)}</p>` : ""}${raw}${machtileRenderStationReportPanel(code, order, row, false, { simple: true, includeNote: !machtileSimpleReportNeedsNote(row, card) })}</details>`);
+    parts.push(`<details class="station-report-tech" data-station-report-tech${machtileSingleStationReportState.techOpen ? " open" : ""}><summary>${escapeHtml(machtileTranslate("simple_report_tech"))}</summary>${counterText ? `<p class="station-report-tech-counter">${escapeHtml(counterText)}</p>` : ""}${diagnostic}${raw}${machtileRenderStationReportPanel(code, order, row, false, { simple: true, includeNote: !machtileSimpleReportNeedsNote(row, card) })}</details>`);
   }
   return parts.length ? `<div class="station-report-simple">${parts.join("")}</div>` : "";
 }
@@ -24350,7 +24385,9 @@ function machtileApplySimpleReportChrome() {
     hintHtml = escapeHtml(machtileTranslate("simple_report_hint", { good: marker1, bad: marker2 }))
       .replace(marker1, `<b>${escapeHtml(good ?? "—")}</b>`).replace(marker2, `<b>${escapeHtml(bad ?? 0)}</b>`);
   }
-  const hintNode = machtileSimpleReportSetHtml("simpleReportHint", hintHtml);
+  const recoveryAction = flow.phase === "recovery-ready"
+    ? `<div class="station-report-recovery" role="status"><span>${escapeHtml(machtileReportRecoveryMessage(flow))}</span><button type="button" class="primary-action station-report-action" data-station-report-recovery-resend="${escapeHtml(code)}">重送同一筆</button></div>` : "";
+  const hintNode = machtileSimpleReportSetHtml("simpleReportHint", hintHtml + recoveryAction);
   hintNode?.classList.toggle("is-error", Boolean(counter && !counter.valid && String(rawTotal).trim() !== "" && counter.code !== "CURRENT_REQUIRED"));
   // 5. 報工人：開工的人（沒有→登入本人）＋小「換人」
   machtileSimpleReportApplyOperatorDefault(String(order.processId || ""));
@@ -24395,6 +24432,15 @@ async function machtileSimpleReportPrimaryRun(code) {
   if (!core || machtileStationReportFlowBusy(flow)) return;
   const card = flow.result ? core.resultCard(flow.result) : null;
   if (machtileSimpleReportFinalUncertain(flow, card)) {
+    if (machtileReportUncertainRecoverEnabled()) {
+      if (String(flow.finalOrder?.id || "") !== String(flow.args?.p_expected_order_no || "")) {
+        machtileStationReportBlockAfterUncertainFailure(flow, new Error("工單已切換；請勿重送上一筆報工。"));
+        machtileRenderStationReportSurfaces();
+        return;
+      }
+      await machtileRecoverUncertainReport(code, { order: flow.finalOrder || machtileStationReportOrderForCode(code) });
+      return;
+    }
     machtileShowReportSubmitError(machtileTranslate("simple_report_unconfirmed"));
     machtileRenderStationReportSurfaces();
     return;
@@ -24700,6 +24746,8 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     : flow.phase === "preview-timeout"
       ? `<p class="batch-notice is-error" role="alert">工廠沒有回應，可再按一次</p><button type="button" class="primary-action station-report-action" data-station-report-preview-retry="${escapeHtml(code)}">再按一次</button>`
       : "";
+  const recoveryHtml = flow.phase === "recovery-ready"
+    ? `<div class="station-report-recovery" role="status"><p class="batch-notice is-error">${escapeHtml(machtileReportRecoveryMessage(flow))}</p><button type="button" class="primary-action station-report-action" data-station-report-recovery-resend="${escapeHtml(code)}">重送同一筆</button></div>` : "";
   return `<section class="station-report-panel"${batch ? ` data-station-report-panel="${escapeHtml(code)}"${flow.expanded ? "" : " hidden"}` : ""} aria-label="${escapeHtml(code)} 智慧報工">
     <div class="station-report-heading"><strong>智慧報工</strong><span>套用端預覽 → 確認</span></div>
     <p class="station-report-hint">${escapeHtml(contextMessage)}</p>
@@ -24708,6 +24756,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     ${simple ? "" : `<label class="station-report-reason"${Number(row.bad || 0) > 0 ? "" : " hidden"}><span>不良原因（有不良時必選）</span><select data-station-report-reason="${escapeHtml(code)}"${!formAllowed ? " disabled" : ""}>${reasonOptions}</select></label>`}
     ${includeNote ? `<label class="station-report-note"><span>備註（舊單確認時必填）</span><textarea rows="2" maxlength="500" data-station-report-note="${escapeHtml(code)}"${!formAllowed && !oldOrderNoteAllowed ? " disabled" : ""}>${escapeHtml(row.reportNote || "")}</textarea></label>` : ""}
     ${simple ? "" : previewWaitHtml}
+    ${recoveryHtml}
     <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || previewWaiting || flow.phase === "preview-timeout" ? " disabled" : ""}>先預覽，不寫入舊 MES</button>
     ${resultHtml}
   </section>`;
@@ -24911,6 +24960,102 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
   machtileRenderStationReportSurfaces();
 }
 
+function machtileReportErrorMayBeUncertain(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status);
+  if (Number.isInteger(status) && status >= 100) return false;
+  const name = String(error?.name || "").trim();
+  const code = String(error?.code || "").trim().toUpperCase();
+  return error instanceof TypeError || name === "AbortError" || name === "TimeoutError"
+    || /^(ETIMEDOUT|ECONN|ENET|EAI_|NETWORK|TIMEOUT)/.test(code);
+}
+
+function machtileStationReportBlockAfterUncertainFailure(flow, error) {
+  flow.phase = "blocked";
+  flow.recoveryMessage = "";
+  flow.error = error?.code === "STATION_REPORT_BACKEND_UNAVAILABLE"
+    ? "智慧報工後端尚未同步；未建立正式報工。"
+    : `${MACHTILE_STATION_REPORT_RESULT} ${error?.message || error || ""}`;
+}
+
+async function machtileRecoverUncertainReportRun(code, options = {}) {
+  const core = machtileStationReportCore();
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const args = flow.args;
+  if (!machtileReportUncertainRecoverEnabled() || !core || args?.p_preview !== false || !args.p_command_uuid) return false;
+  flow.phase = "recovering-report"; flow.error = ""; flow.recoveryMessage = "正在查證上一筆報工…";
+  machtileRenderStationReportSurfaces();
+  let result = null;
+  try {
+    const rows = await supabaseFetch(core.commandReadPath(args.p_command_uuid), { method: "GET" });
+    if (Array.isArray(rows) && rows.length > 1) throw new Error("command_uuid returned multiple rows");
+    result = Array.isArray(rows) ? rows[0] || null : null;
+  } catch (error) {
+    machtileRecordReportRecoveryDiagnostic(flow, "status-read", error);
+    flow.phase = "recovery-ready";
+    flow.recoveryMessage = "網路不通，恢復後按重送同一筆";
+    machtileRenderStationReportSurfaces();
+    return true;
+  }
+  if (result) {
+    flow.result = result; flow.report = result;
+    flow.phase = core.isTerminal(result) ? "finished" : "waiting-report";
+    flow.recoveryMessage = core.isTerminal(result) ? "" : "上一筆仍在處理，正在自動查詢";
+    try {
+      if (!core.isTerminal(result)) await machtileStationReportWait(code, args.p_command_uuid, "report");
+      else await machtileHandleOutsourceReceiptResult(code, result, "report");
+    } catch (error) {
+      machtileRecordReportRecoveryDiagnostic(flow, "status-wait", error);
+      machtileStationReportBlockAfterUncertainFailure(flow, error);
+      machtileRenderStationReportSurfaces(); return true;
+    }
+    const resultArgs = flow.args?.p_preview === false ? flow.args : args;
+    if (!options.deferFollowUp) await machtileStationReportFinalizeApplied(code, resultArgs, options);
+    machtileRenderStationReportSurfaces(); return true;
+  }
+  flow.phase = "recovery-ready";
+  flow.recoveryMessage = "上一筆沒有送到工廠，按『重送同一筆』";
+  machtileRenderStationReportSurfaces(); return true;
+}
+
+async function machtileResendUncertainReport(code) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  if (!machtileReportUncertainRecoverEnabled() || flow.phase !== "recovery-ready"
+    || flow.args?.p_preview !== false || !flow.args.p_command_uuid) return false;
+  const args = flow.args;
+  if (String(flow.finalOrder?.id || "") !== String(args.p_expected_order_no || "")) {
+    machtileStationReportBlockAfterUncertainFailure(flow, new Error("工單已切換；請勿重送上一筆報工。"));
+    machtileRenderStationReportSurfaces();
+    return false;
+  }
+  const order = flow.finalOrder || machtileStationReportOrderForCode(code);
+  await machtileStationReportSendFinal(code, args, { order });
+  return true;
+}
+
+function machtileRecoverUncertainReport(code, options = {}) {
+  if (machtileReportRecoveryInFlight.has(code)) return machtileReportRecoveryInFlight.get(code);
+  const running = machtileRecoverUncertainReportRun(code, options)
+    .catch((error) => {
+      const flow = machtileStationReportState(machtileBatchRow(code));
+      machtileRecordReportRecoveryDiagnostic(flow, "recover-unhandled", error);
+      machtileStationReportBlockAfterUncertainFailure(flow, error);
+      machtileRenderStationReportSurfaces();
+      return true;
+    })
+    .finally(() => machtileReportRecoveryInFlight.delete(code));
+  machtileReportRecoveryInFlight.set(code, running);
+  return running;
+}
+
+window.addEventListener("online", () => {
+  if (!machtileReportUncertainRecoverEnabled()) return;
+  machtileBatchState.rows.forEach((row) => {
+    const flow = row?.stationReport;
+    if (flow?.phase === "recovery-ready") flow.recoveryMessage = "網路已恢復，請按重送同一筆";
+  });
+  machtileRenderStationReportSurfaces();
+});
+
 let machtileStationReportBackgroundTimer = null;
 function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0 } = {}) {
   const notice = document.getElementById("stationReportBackgroundStatus");
@@ -25031,6 +25176,43 @@ async function machtileRecordSingleStationProductionReport(code, args, submitted
   }
 }
 
+async function machtileStationReportFinalizeApplied(code, args, options = {}) {
+  const row = machtileBatchRow(code);
+  const flow = machtileStationReportState(row);
+  const core = machtileStationReportCore();
+  const commandUuid = args?.p_command_uuid;
+  if (!commandUuid || !["applied", "applied-late"].includes(core?.resultCard(flow.result)?.kind)) return false;
+  if (flow.appliedFollowUpUuid === commandUuid) return true;
+  if (flow.appliedFollowUpPendingUuid === commandUuid) return flow.appliedFollowUpPromise;
+  flow.appliedFollowUpPendingUuid = commandUuid;
+  flow.appliedFollowUpPromise = (async () => {
+    let failed = false;
+    try {
+      const errorBeforeRecord = flow.error;
+      await machtileRecordSingleStationProductionReport(code, args, options.order);
+      if (flow.error !== errorBeforeRecord && /App 報工紀錄未確認/.test(String(flow.error || ""))) throw new Error(flow.error);
+      await machtileFinishCloseAfterAppliedReport(code, args, commandUuid);
+      const submittedOrder = options.order || machtileStationReportOrderForCode(code);
+      const total = flow.singleReport?.overlayTotal;
+      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
+    } catch (error) {
+      failed = true;
+      flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
+    } finally {
+      flow.appliedFollowUpUuid = commandUuid;
+      flow.appliedFollowUpPendingUuid = null;
+    }
+    if (!failed) {
+      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+      if (options.background) showToast("工廠已完成寫入");
+    } else {
+      machtileSetStationReportBackgroundStatus(flow.error, { error: true });
+    }
+    return !failed;
+  })();
+  return flow.appliedFollowUpPromise;
+}
+
 async function machtileStationReportSendFinal(code, args, options = {}) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
@@ -25039,7 +25221,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   flow.phase = "submitting-report";
   flow.error = "";
   // Context for an unattended STALE re-send (pre-final checks need the submitted order).
-  flow.finalOrder = options.order || null;
+  flow.finalOrder = options.order || machtileStationReportOrderForCode(code);
   flow.staleAutoRetries = 0;
   machtileRenderStationReportSurfaces();
   try {
@@ -25050,34 +25232,50 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     if (item && core.isTerminal(item)) { flow.result = item; flow.phase = "finished"; flow.report = item; await machtileHandleOutsourceReceiptResult(code, item, "report"); }
     else await machtileStationReportWait(code, args.p_command_uuid, "report");
   } catch (error) {
-    flow.phase = "blocked";
-    flow.error = error.code === "STATION_REPORT_BACKEND_UNAVAILABLE"
-      ? "智慧報工後端尚未同步；未建立正式報工。"
-      : `${MACHTILE_STATION_REPORT_RESULT} ${error.message || ""}`;
+    machtileRecordReportRecoveryDiagnostic(flow, "final-submit", error);
+    // Receipt handling can replace flow.args with a newly minted command UUID. Those commands
+    // retain the established blocked behavior and are deliberately outside uncertainty recovery.
+    const isOriginalFinal = flow.args?.p_command_uuid === args.p_command_uuid;
+    const recovered = machtileReportUncertainRecoverEnabled() && isOriginalFinal && machtileReportErrorMayBeUncertain(error)
+      ? await machtileRecoverUncertainReport(code, { ...options, deferFollowUp: true }) : false;
+    if (!recovered) machtileStationReportBlockAfterUncertainFailure(flow, error);
   }
-  let followUpFailed = false;
   // A receipt re-submit replaces the command (new uuid) inside the handler; App records and
   // finish-close must reference the command that actually reached a final result.
   const resultArgs = flow.args?.p_preview === false ? flow.args : args;
-  try {
-    await machtileRecordSingleStationProductionReport(code, resultArgs, options.order);
-    await machtileFinishCloseAfterAppliedReport(code, resultArgs, resultArgs.p_command_uuid);
-  } catch (error) {
-    followUpFailed = true;
-    flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
-  }
-  if (["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind)) {
-    const submittedOrder = options.order || machtileStationReportOrderForCode(code);
-    const total = flow.singleReport?.overlayTotal;
-    if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
-  }
-  if (options.background) {
+  const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
+  if (!machtileReportUncertainRecoverEnabled()) {
+    // Keep the flag-off path byte-for-behavior identical to main, including close/overlay after
+    // an App record failure and no background banner for non-background submissions.
+    let followUpFailed = false;
+    try {
+      await machtileRecordSingleStationProductionReport(code, resultArgs, options.order);
+      await machtileFinishCloseAfterAppliedReport(code, resultArgs, resultArgs.p_command_uuid);
+    } catch (error) {
+      followUpFailed = true;
+      flow.error = `舊 MES 結果已回來，但 App 後續紀錄失敗：${error?.message || error}。請勿重送數量。`;
+    }
+    if (applied) {
+      const submittedOrder = options.order || machtileStationReportOrderForCode(code);
+      const total = flow.singleReport?.overlayTotal;
+      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
+    }
+    if (options.background) {
+      const background = document.getElementById("stationReportBackgroundStatus");
+      if (applied && !followUpFailed) {
+        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+        showToast("工廠已完成寫入");
+      } else if (background) {
+        machtileSetStationReportBackgroundStatus(
+          flow.error || "工廠寫入失敗，請勿重複報工並通知主管。",
+          { error: true },
+        );
+      }
+    }
+  } else if (applied) await machtileStationReportFinalizeApplied(code, resultArgs, options);
+  else if (options.background) {
     const background = document.getElementById("stationReportBackgroundStatus");
-    const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result)?.kind);
-    if (applied && !followUpFailed) {
-      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
-      showToast("工廠已完成寫入");
-    } else if (background) {
+    if (background) {
       machtileSetStationReportBackgroundStatus(
         flow.error || "工廠寫入失敗，請勿重複報工並通知主管。",
         { error: true },
@@ -25153,7 +25351,7 @@ function machtileStationReportState(row) {
 }
 
 function machtileStationReportFlowBusy(flow) {
-  return ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report"].includes(flow?.phase);
+  return ["submitting-preview", "waiting-preview", "submitting-report", "waiting-report", "recovering-report", "recovery-ready"].includes(flow?.phase);
 }
 
 function coreResultWasNotApplied(row) {
@@ -26005,6 +26203,8 @@ function machtileHandleBatchClick(event) {
     machtileSetStationReportBackgroundStatus("");
     return true;
   }
+  const recoveryResend = event.target.closest("[data-station-report-recovery-resend]");
+  if (recoveryResend) { void machtileResendUncertainReport(recoveryResend.dataset.stationReportRecoveryResend); return true; }
   const commandRetry = event.target.closest("[data-batch-command-retry]");
   if (commandRetry) { machtileBatchRetryStationCommand(commandRetry.dataset.batchCommandRetry); return true; }
   const commandType = event.target.closest("[data-batch-command-type]");
