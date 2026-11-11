@@ -177,7 +177,7 @@
       finish_close_zero_reported: "這一道還沒有報工數量，不能完工關站；請先報工",
       finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
       finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
-      finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。",
+      finish_close_unknown: "完工報工已成功，但關站未完成；請核對舊 MES 狀態。", finish_close_confirm_previous: "確認，仍要關站", finish_close_confirm_sending: "正在確認關站…", finish_close_confirm_sending_detail: "已確認仍要關站，正在請工廠處理。", finish_close_confirm_cancelled: "已取消關站", finish_close_confirm_cancelled_detail: "這次沒有再送關站指令。",
       short_completion_question: "實做數少於計畫（差 {{quantity}} 件）：短交完工？",
       short_completion_material: "材料短少",
       short_completion_scrap: "報廢",
@@ -509,7 +509,7 @@
       finish_close_zero_reported: "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.", // _draft
       finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
       finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
-      finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", // _draft
+      finish_close_unknown: "Báo cáo hoàn tất đã thành công nhưng chưa đóng được công đoạn; vui lòng kiểm tra trạng thái MES cũ.", finish_close_confirm_previous: "Xác nhận, vẫn đóng công đoạn", finish_close_confirm_sending: "Đang xác nhận đóng công đoạn…", finish_close_confirm_sending_detail: "Đã xác nhận vẫn đóng công đoạn; đang chờ nhà máy xử lý.", finish_close_confirm_cancelled: "Đã hủy đóng công đoạn", finish_close_confirm_cancelled_detail: "Lần này không gửi lại lệnh đóng công đoạn.", // _draft
       short_completion_question: "Số thực tế ít hơn kế hoạch (thiếu {{quantity}} sản phẩm): hoàn tất giao thiếu?", // _draft
       short_completion_material: "Thiếu vật liệu", // _draft
       short_completion_scrap: "Phế phẩm", // _draft

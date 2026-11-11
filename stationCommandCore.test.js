@@ -147,6 +147,9 @@ eq("合約欄位齊全", c.submitPayload({ commandUuid: UUID, commandType: "star
 eq("料號沒有 → null", c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: 1, partNo: null }).p_expected_part_no, null);
 eq("多工站帶 Id", c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "B03", orderNo: "X", step: 1, manufactureIiId: "77" }).p_manufacture_ii_id, "77");
 eq("close 帶預期 SimulationId", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1" }).p_expected_simulation_id, "SIM-1");
+eq("close 確認重送才帶 PREVIOUS_STEP_OPEN ack", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1", acks: ["PREVIOUS_STEP_OPEN"] }).p_acks, ["PREVIOUS_STEP_OPEN"]);
+throws("close 不收未知 ack", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", acks: ["OTHER"] }), "INVALID_ACK");
+throws("close 外指令不得帶 ack", () => c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "A04", orderNo: "X", step: 1, acks: ["PREVIOUS_STEP_OPEN"] }), "INVALID_ACK");
 eq("close 短交使用雲端具名參數與 Factory JSON 欄位", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "MATERIAL_SHORT", note: "缺料" } }).p_short_completion, { reason_code: "MATERIAL_SHORT", note: "缺料" });
 throws("短交 OTHER 缺說明", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "OTHER", note: "" } }), "SHORT_COMPLETION_REASON_INVALID");
 throws("close 缺 SimulationId", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1 }), "NO_SIMULATION_ID");
@@ -161,6 +164,11 @@ eq("close rejected 保留伺服器白話原因", c.statusView({ status: "rejecte
 eq("close ZERO_REPORTED 顯示 owner 定案白話", c.statusView({ status: "rejected", reject_code: "ZERO_REPORTED" }, "close", 0).text, "這一道還沒有報工數量，不能完工關站；請先報工");
 eq("close LOCK_TIMEOUT 顯示可再按一次", c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "close", 0).text, "這次沒有關成（系統忙），可以再按一次");
 eq("close STILL_RUNNING 照 #892 白話", c.statusView({ status: "rejected", reject_code: "STILL_RUNNING" }, "close", 0).text, "這筆仍在生產中，沒有關站；請先停工再試。");
+const previousStepHard = c.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "原工廠文字" }, "close", 0);
+eq("PREVIOUS_STEP_OPEN hard 未標 false → 維持 terminal 與工廠文字", [previousStepHard.terminal, previousStepHard.needsConfirmation, previousStepHard.detail], [true, undefined, "原工廠文字"]);
+const previousStepSoft = c.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", legacy_snapshot: { guard: { hard: false } } }, "close", 0);
+eq("PREVIOUS_STEP_OPEN hard=false → 顯示確認並沿用工廠文字", [previousStepSoft.terminal, previousStepSoft.needsConfirmation, previousStepSoft.text], [false, true, "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。"]);
+eq("preview guard.hard=false 也啟用；close 外不啟用", [c.closePreviousStepOpenConfirmation({ reject_code: "PREVIOUS_STEP_OPEN", preview: { guard: { hard: false } } }, "close"), c.closePreviousStepOpenConfirmation({ reject_code: "PREVIOUS_STEP_OPEN", preview: { guard: { hard: false } } }, "stop")], [true, false]);
 
 console.log("== 錯誤分類 ==");
 eq("表不存在 PGRST205 → missing", c.isMissingResourceError(new Error('404 {"code":"PGRST205","message":"Could not find the table"}')), true);
