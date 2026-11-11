@@ -2585,6 +2585,46 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
     ok(shown.includes(expected), `${label} → 完工畫面顯示「${expected}」`, shown);
   }
+  const originalCloseUuid = "11111111-1111-4111-8111-111111111111";
+  const closeRecord = { commandUuid: originalCloseUuid, commandType: "close", machineCode: "A04", orderNo: "XX01202502050012", step: 5,
+    partNo: "HCG-06-01", manufactureIiId: "MII-1", expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "MATERIAL_SHORT", note: "缺料" },
+    finishCloseReportCommandUuid: "22222222-2222-4222-8222-222222222222", startedAt: Date.now() };
+  await page.evaluate(({ record }) => {
+    const hard = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道仍開著" }, "close", 0);
+    machtileFinishCloseSetResult("A04", hard, record); machtileRenderStationReportSurfaces();
+  }, { record: closeRecord });
+  ok(await page.locator("#finishSheet [data-finish-close-confirm]").count() === 0 && (await page.locator("#finishSheet .finish-close-result").innerText()).includes("上一道仍開著"),
+    "旗標關／hard 未標 false：維持 terminal 工廠文字，不顯示確認");
+  await page.evaluate(({ record }) => {
+    machtileStationCmd.pending.A04 = record;
+    const soft = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", legacy_snapshot: { guard: { hard: false } } }, "close", 0);
+    machtileFinishCloseSetResult("A04", soft, record); machtileRenderStationReportSurfaces();
+  }, { record: closeRecord });
+  ok(await page.locator("#finishSheet [data-finish-close-confirm]").innerText() === "確認，仍要關站" && await page.locator("#finishSheet [data-finish-close-cancel]").isVisible(),
+    "旗標開／hard=false：結果卡顯示確認與取消");
+  const beforeConfirm = be.submits.length;
+  be.mode = "applied";
+  await page.locator("#finishSheet [data-finish-close-confirm]").click();
+  await page.waitForFunction((count) => window.__testBackendSubmits ? window.__testBackendSubmits.length > count : true, beforeConfirm).catch(() => {});
+  for (let i = 0; i < 30 && be.submits.length === beforeConfirm; i++) await page.waitForTimeout(50);
+  const ackedClose = be.submits.at(-1) || {};
+  const closeKeys = ["p_acks", "p_command_type", "p_command_uuid", "p_expected_index_sn", "p_expected_order_no", "p_expected_part_no", "p_expected_simulation_id", "p_machine_code", "p_manufacture_ii_id", "p_short_completion"];
+  ok(be.submits.length === beforeConfirm + 1 && ackedClose.p_command_uuid !== originalCloseUuid && JSON.stringify(ackedClose.p_acks) === JSON.stringify(["PREVIOUS_STEP_OPEN"])
+    && JSON.stringify(Object.keys(ackedClose).sort()) === JSON.stringify(closeKeys.sort()) && ackedClose.p_expected_order_no === closeRecord.orderNo
+    && ackedClose.p_expected_index_sn === closeRecord.step && ackedClose.p_expected_part_no === closeRecord.partNo && ackedClose.p_expected_simulation_id === closeRecord.expectedSimulationId
+    && JSON.stringify(ackedClose.p_short_completion) === JSON.stringify(closeRecord.shortCompletion),
+    "確認以新 UUID 重送；保留 close 參數並精確只增加 p_acks", JSON.stringify(ackedClose));
+  const cancelRecord = { ...closeRecord, commandUuid: "33333333-3333-4333-8333-333333333333" };
+  await page.evaluate(({ record }) => {
+    machtileStationCmd.pending.A04 = record;
+    const soft = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", preview: { guard: { hard: false } } }, "close", 0);
+    machtileFinishCloseSetResult("A04", soft, record); machtileRenderStationReportSurfaces();
+  }, { record: cancelRecord });
+  const beforeCancel = be.submits.length;
+  await page.locator("#finishSheet [data-finish-close-cancel]").click();
+  await page.waitForTimeout(200);
+  ok(be.submits.length === beforeCancel && await page.locator("#finishSheet [data-finish-close-confirm]").count() === 0 && (await page.locator("#finishSheet .finish-close-result").innerText()).includes("這次沒有再送關站指令"),
+    "取消不送 RPC 並收起確認按鈕");
   await page.evaluate(() => {
     const view = MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { ShortQty: 7 } }, "close", 0);
     machtileFinishCloseSetResult("A04", view);

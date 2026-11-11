@@ -14838,7 +14838,7 @@ function machtileFinishComboWrite(code, value) {
   try { localStorage.setItem(MACHTILE_FINISH_COMBO_KEY, JSON.stringify(all)); } catch { /* local-only recovery hint */ }
 }
 
-function machtileFinishCloseSetResult(code, view) {
+function machtileFinishCloseSetResult(code, view, record = null) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const closeIdentity = flow.close?.identity || null;
@@ -14859,7 +14859,42 @@ function machtileFinishCloseSetResult(code, view) {
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
     claim: null,
     identity: closeIdentity,
+    ...(view?.needsConfirmation && record ? { needsConfirmation: true, retryFields: {
+      orderNo: record.orderNo, step: record.step, partNo: record.partNo, manufactureIiId: record.manufactureIiId,
+      expectedSimulationId: record.expectedSimulationId, shortCompletion: record.shortCompletion || null,
+      finishCloseReportCommandUuid: record.finishCloseReportCommandUuid,
+    } } : {}),
   };
+}
+
+function machtileFinishCloseClearPending(code) {
+  clearTimeout(machtileStationCmd.timers[code]);
+  delete machtileStationCmd.timers[code];
+  delete machtileStationCmd.pending[code];
+  machtileStationCmdSavePending();
+}
+
+async function machtileFinishCloseConfirmPreviousStep(code) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const fields = flow.close?.retryFields;
+  if (!flow.close?.needsConfirmation || !fields) return;
+  machtileFinishCloseClearPending(code);
+  flow.close = { ...flow.close, phase: "pending", title: machtileTranslate("finish_close_confirm_sending"), message: machtileTranslate("finish_close_confirm_sending_detail"), needsConfirmation: false };
+  machtileRenderStationReportSurfaces();
+  const commandUuid = machtileStationCmdCore.newUuid(window.crypto);
+  await machtileStationCmdRunSubmission({ commandUuid, commandType: "close", machineCode: code,
+    fields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"] }, recordFields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"] }, startedAt: Date.now(),
+    onError: ({ info }) => { flow.close = { ...flow.close, phase: "rejected", title: machtileTranslate("finish_close_rejected_title"), message: info.text }; machtileRenderStationReportSurfaces(); },
+    afterRecord: ({ record, view }) => { if (view.terminal || view.needsConfirmation) machtileFinishCloseSetResult(code, view, record); machtileRenderStationReportSurfaces(); },
+  });
+}
+
+function machtileFinishCloseCancelPreviousStep(code) {
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  if (!flow.close?.needsConfirmation) return;
+  machtileFinishCloseClearPending(code);
+  flow.close = { ...flow.close, phase: "rejected", title: machtileTranslate("finish_close_confirm_cancelled"), message: machtileTranslate("finish_close_confirm_cancelled_detail"), needsConfirmation: false };
+  machtileRenderStationReportSurfaces();
 }
 
 function machtileStandardFinishClaimText(code, detail = "") {
@@ -15006,8 +15041,9 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
     onError: ({ info }) => {
       flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid, identity };
     },
-    afterRecord: ({ view }) => {
-      if (view.terminal) machtileFinishCloseSetResult(code, view);
+    afterRecord: ({ record, view }) => {
+      if (view.terminal || view.needsConfirmation) machtileFinishCloseSetResult(code, view, record);
+      machtileRenderStationReportSurfaces();
     },
   });
 }
@@ -16082,7 +16118,7 @@ async function machtileStationCmdRunSubmission(options) {
   machtileStationCmdSavePending();
   if (afterRecord) await afterRecord({ row, record, view });
   if (view.terminal) machtileStationCmdFinish(machineCode, view);
-  else machtileStationCmdPoll(machineCode);
+  else if (!view.needsConfirmation) machtileStationCmdPoll(machineCode);
   machtileStationCmdRerender();
   return { ok: true, payload, row, record, view };
 }
@@ -16187,7 +16223,7 @@ function machtileStationCmdFinish(code, view) {
     showToast(machtileTakeoverCore?.resultText(view) || view.title);
     if (view.phase === "applied") void machtileTakeoverRefreshAfterApplied(code, record.orderNo, record.step);
   }
-  if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view);
+  if (record.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view, record);
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
   if (record.commandType === "start" && record.standardFinishComboStart) {
     const combo = machtileFinishComboRead()[code] || {};
@@ -16221,7 +16257,7 @@ function machtileStationCmdPoll(code) {
     const current = machtileStationCmd.pending[code];
     if (!current || current.commandUuid !== record.commandUuid) return;
     try {
-      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,legacy_snapshot,applied_at&command_uuid=eq.${current.commandUuid}`);
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,preview,legacy_snapshot,applied_at&command_uuid=eq.${current.commandUuid}`);
       const row = Array.isArray(rows) ? rows[0] : null;
       if (machtileStationCmd.pending[code] !== current) return;
       if (row) {
@@ -16243,6 +16279,13 @@ function machtileStationCmdPoll(code) {
           if (sheet.phase === "status") { sheet.view = view; machtileStationCmdRenderSheet(); }
         }
         if (changed) machtileStationCmdRerender();
+        if (view.needsConfirmation) {
+          clearTimeout(machtileStationCmd.timers[code]);
+          delete machtileStationCmd.timers[code];
+          if (current.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view, current);
+          machtileRenderStationReportSurfaces();
+          return;
+        }
       } else if (current.unconfirmed) {
         current.emptyPolls = (current.emptyPolls || 0) + 1;
         if (core.unconfirmedNotSent(current, Date.now())) {
@@ -24715,6 +24758,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   if (flow.close) {
     const closeTone = flow.close.phase === "applied" ? "success" : flow.close.phase === "pending" ? "pending" : "warning";
     resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p></div>`;
+    if (flow.close.needsConfirmation) resultHtml += `<div class="station-report-actions finish-close-confirm-actions"><button type="button" class="primary-action station-report-action" data-finish-close-confirm="${escapeHtml(code)}">${escapeHtml(machtileTranslate("finish_close_confirm_previous"))}</button><button type="button" class="secondary-action station-report-action" data-finish-close-cancel="${escapeHtml(code)}">${escapeHtml(machtileTranslate("cancel"))}</button></div>`;
     if (flow.close.nextStep) {
       const next = flow.close.nextStep;
       const copy = { same_class_here: ["standard_finish_same_title", "standard_finish_same_body"], other_class: ["standard_finish_other_title", "standard_finish_other_body"], outsource: ["standard_finish_outsource_title", "standard_finish_outsource_body"], last_step: ["standard_finish_last_title", "standard_finish_last_body"] }[next.case];
@@ -26242,6 +26286,10 @@ function machtileHandleBatchClick(event) {
   if (cancelButton) { machtileStationReportCancel(cancelButton.dataset.stationReportCancel); return true; }
   const nextButton = event.target.closest("[data-station-report-new]");
   if (nextButton) { machtileStationReportNew(nextButton.dataset.stationReportNew); return true; }
+  const finishCloseConfirm = event.target.closest("[data-finish-close-confirm]");
+  if (finishCloseConfirm) { void machtileFinishCloseConfirmPreviousStep(finishCloseConfirm.dataset.finishCloseConfirm); return true; }
+  const finishCloseCancel = event.target.closest("[data-finish-close-cancel]");
+  if (finishCloseCancel) { machtileFinishCloseCancelPreviousStep(finishCloseCancel.dataset.finishCloseCancel); return true; }
   const finishClaim = event.target.closest("[data-standard-finish-claim]");
   if (finishClaim) { void machtileStandardFinishClaim(finishClaim.dataset.standardFinishClaim); return true; }
   const finishClaimStart = event.target.closest("[data-standard-finish-claim-start]");

@@ -276,7 +276,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped, acks } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!GENERIC_SUBMIT_COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -302,6 +302,12 @@
         if (!["MATERIAL_SHORT", "SCRAP", "OTHER"].includes(reason) || note.length > 500 || (reason === "OTHER" && !note)) throw new Error("SHORT_COMPLETION_REASON_INVALID");
         payload.p_short_completion = { reason_code: reason, note };
       }
+      if (acks != null) {
+        if (!Array.isArray(acks) || acks.length !== 1 || text(acks[0]).toUpperCase() !== "PREVIOUS_STEP_OPEN") throw new Error("INVALID_ACK");
+        payload.p_acks = ["PREVIOUS_STEP_OPEN"];
+      }
+    } else if (acks != null) {
+      throw new Error("INVALID_ACK");
     }
     if (commandType === "claim_next") {
       if (!text(poolItemId)) throw new Error("NO_POOL_ITEM_ID");
@@ -458,6 +464,14 @@
     return Number.isFinite(qty) && qty > 0 ? qty : 0;
   }
 
+  function closePreviousStepOpenConfirmation(row, commandType) {
+    const type = COMMAND_TYPES.includes(commandType) ? commandType : text(row && row.command_type);
+    if (type !== "close" || text(row && row.reject_code).toUpperCase() !== "PREVIOUS_STEP_OPEN") return false;
+    const preview = row && row.preview;
+    const sources = [preview && typeof preview === "object" ? preview : {}, legacySnapshot(row)];
+    return sources.some((source) => source?.guard?.hard === false);
+  }
+
   function standardFinishNextStep(row) {
     const raw = legacySnapshot(row).next_step;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -493,6 +507,11 @@
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
+      if (closePreviousStepOpenConfirmation(row, type)) {
+        const detail = text(row.reject_message);
+        return { phase: "rejected", terminal: false, needsConfirmation: true, tone: "warn", title: "關站前請確認",
+          text: detail || "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", code: r.code, detail: "" };
+      }
       const special = REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
       const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
@@ -837,7 +856,7 @@
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
-    statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
+    statusView, closePreviousStepOpenConfirmation, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startAppliedInWindow, startButtonState, startedToday,
