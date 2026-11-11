@@ -19,11 +19,11 @@
   const displayName = (v) => text(v) || "未提供";
 
   function normalizeSearchText(value) {
-    return text(value).toLocaleLowerCase().replace(/[\s-]+/g, "");
+    return text(value).normalize("NFKC").toLocaleLowerCase().replace(/[\s\-‐-―ー]+/g, "");
   }
 
   function matchesOrderSearch(item, query) {
-    const terms = text(query).toLocaleLowerCase().split(/\s+/).map(normalizeSearchText).filter(Boolean);
+    const terms = text(query).normalize("NFKC").toLocaleLowerCase().split(/\s+/).map(normalizeSearchText).filter(Boolean);
     if (!terms.length) return true;
     const haystack = normalizeSearchText([
       item?.work_order_no ?? item?.orderNo ?? item?.id,

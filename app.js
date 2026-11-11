@@ -12220,7 +12220,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   const withOld = pickOrder && machtileTakeoverActive(String(machineCode || ""));
   const title = pickOrder ? "pick_order" : poolOnly ? "dispatch_pool_title" : "select_work_order";
   const body = pickOrder
-    ? `<div class="pick-order-search"><label><span class="sr-only">${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}</span><input type="search" data-pick-order-search autocomplete="off" placeholder="${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}"></label><button type="button" data-pick-order-search-clear aria-label="${escapeHtml(machtileTranslate("pick_order_search_clear"))}" hidden>✕</button></div>
+    ? `<div class="pick-order-search"><label><span class="wo-sr-only">${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}</span><input type="search" data-pick-order-search autocomplete="off" placeholder="${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}"></label><button type="button" data-pick-order-search-clear aria-label="${escapeHtml(machtileTranslate("pick_order_search_clear"))}" hidden>✕</button></div>
     <p class="pick-order-search-count" data-pick-order-search-count role="status"></p>
     <div class="takeover-tabs pick-order-tabs" role="tablist"><button type="button" role="tab" data-pick-tab="new" class="is-selected" aria-selected="true">${escapeHtml(machtileTranslate("pick_order_new"))}</button>${withOld ? `<button type="button" role="tab" data-pick-tab="old" aria-selected="false">${escapeHtml(machtileTranslate("pick_order_old"))}</button>` : ""}</div>
     <p class="pick-order-note">${escapeHtml(machtileTranslate("pick_order_note"))}</p>
