@@ -11964,7 +11964,7 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const busy = Boolean(machtileDispatchPoolState.claimBusy);
     const disabled = !claim.enabled || busy;
     const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
-    return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pool-key="${escapeHtml(item.source_key)}">
+    return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}">
         <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
         <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}</span>
         <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
@@ -12057,6 +12057,7 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
     }
   }
   machtilePickOrderUpdateEmpty(holder);
+  machtilePickOrderApplySearch(holder);
   return true;
 }
 
@@ -12204,7 +12205,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   }
   machtileCloseCardSelection();
   if (refreshPool) machtileRefreshDispatchPoolOnOpen(machineCode, poolOnly);
-  const listMarkup = (orders, empty) => orders.map(order => `<li><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
+  const listMarkup = (orders, empty) => orders.map(order => `<li data-pick-search-item data-pick-search-order="${escapeHtml(order.id)}" data-pick-search-part-no="${escapeHtml(order.partNo || order.part_no || "")}" data-pick-search-part-name="${escapeHtml(order.part || order.partName || "")}" data-pick-search-process="${escapeHtml(order.process || order.processName || "")}"><strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(machtileOperationLabel(order))} · ${escapeHtml(order.part)}</span><span>已報 ${escapeHtml(order.done)} / ${escapeHtml(order.total)}</span><button type="button" data-card-select-machine="${escapeHtml(machineCode)}" data-card-select-process="${escapeHtml(order.processId)}">設為目前工單</button>${machtileDispatchPoolReturnMarkup(order, machineCode)}</li>`).join("") || `<li>${empty}</li>`;
   let selectionMarkup = "";
   if (!poolOnly) {
     const { assigned, unassigned } = machtileCardSelectionCandidates(machine);
@@ -12219,11 +12220,14 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   const withOld = pickOrder && machtileTakeoverActive(String(machineCode || ""));
   const title = pickOrder ? "pick_order" : poolOnly ? "dispatch_pool_title" : "select_work_order";
   const body = pickOrder
-    ? `<div class="takeover-tabs pick-order-tabs" role="tablist"><button type="button" role="tab" data-pick-tab="new" class="is-selected" aria-selected="true">${escapeHtml(machtileTranslate("pick_order_new"))}</button>${withOld ? `<button type="button" role="tab" data-pick-tab="old" aria-selected="false">${escapeHtml(machtileTranslate("pick_order_old"))}</button>` : ""}</div>
+    ? `<div class="pick-order-search"><label><span class="wo-sr-only">${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}</span><input type="search" data-pick-order-search autocomplete="off" placeholder="${escapeHtml(machtileTranslate("pick_order_search_placeholder"))}"></label><button type="button" data-pick-order-search-clear aria-label="${escapeHtml(machtileTranslate("pick_order_search_clear"))}" hidden>✕</button></div>
+    <p class="pick-order-search-count" data-pick-order-search-count role="status"></p>
+    <div class="takeover-tabs pick-order-tabs" role="tablist"><button type="button" role="tab" data-pick-tab="new" class="is-selected" aria-selected="true">${escapeHtml(machtileTranslate("pick_order_new"))}</button>${withOld ? `<button type="button" role="tab" data-pick-tab="old" aria-selected="false">${escapeHtml(machtileTranslate("pick_order_old"))}</button>` : ""}</div>
     <p class="pick-order-note">${escapeHtml(machtileTranslate("pick_order_note"))}</p>
     <div data-pick-pane="new">${selectionMarkup}
     ${machtileDispatchPoolSectionMarkup(machine)}</div>
     ${withOld ? `<div data-pick-pane="old" hidden><div data-takeover-pane="takeover"><p>${escapeHtml(machtileTranslate("loading"))}</p></div></div>` : ""}
+    <div class="pick-order-empty" data-pick-order-search-empty role="status" hidden><span>${escapeHtml(machtileTranslate("pick_order_search_none"))}</span><button type="button" data-pick-order-search-clear>${escapeHtml(machtileTranslate("pick_order_search_clear"))}</button></div>
     <p class="pick-order-empty" data-pick-order-empty role="status" hidden>${escapeHtml(machtileTranslate("pick_order_none"))}</p>`
     : `${selectionMarkup}
     ${machtileDispatchPoolSectionMarkup(machine)}`;
@@ -12237,6 +12241,7 @@ function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool 
   holder.querySelector("button")?.focus();
   if (pickOrder) {
     machtilePickOrderUpdateEmpty(holder);
+    machtilePickOrderApplySearch(holder);
     if (withOld) void machtilePickOrderLoadOld(holder, String(machineCode || ""));
   }
 }
@@ -14597,15 +14602,18 @@ function machtileTakeoverReopenStopRejected(code, draft, view, message) {
 function machtileTakeoverCandidateModel(row) {
   const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find((item) => item.id === row.order_no && Number(item.stationStep) === Number(row.index_sn));
   const policy = machtileTakeover.policies.find((item) => item.code === row.reason_code);
-  return machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code, order?.done);
+  const candidate = machtileTakeoverCore.candidateView(row, order?.total || 0, policy ? machtileTakeoverLabel(policy) : row.reason_code, order?.done);
+  return { ...candidate,
+    partNo: order?.partNo || order?.part_no || "", partName: order?.part || order?.partName || "", processName: order?.process || order?.processName || "" };
 }
 function machtileTakeoverCandidateCard(row) {
-  return `<article class="takeover-candidate"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
+  return `<article class="takeover-candidate" data-pick-search-item data-pick-search-order="${escapeHtml(row.orderNo || "")}" data-pick-search-part-no="${escapeHtml(row.partNo || "")}" data-pick-search-part-name="${escapeHtml(row.partName || "")}" data-pick-search-process="${escapeHtml(row.processName || "")}"><h3>${escapeHtml(row.orderNo || "—")} · ${escapeHtml(machtileTranslate("takeover_step", { step: row.indexSn ?? "—" }))}</h3><p>${escapeHtml(row.sourceMachine || "—")} · ${escapeHtml(row.stoppedBy || "—")} · ${escapeHtml(formatDateTime(row.stoppedAt))}</p><p>${escapeHtml(row.reasonLabel || row.reasonCode || "—")}${row.note ? ` · ${escapeHtml(row.note)}` : ""}</p><p>${escapeHtml(machtileTranslate("takeover_done_remaining", { done: row.doneQty, remaining: row.remainingQty }))}</p><button type="button" data-takeover-candidate="${escapeHtml(row.stopNoteId)}">${escapeHtml(machtileTranslate("takeover_take"))}</button></article>`;
 }
 async function machtileTakeoverLoadCandidates(holder, code) {
   const rows = await supabaseFetch("rpc/takeover_candidates", { method: "POST", body: JSON.stringify({ p_machine_code: code }) });
   holder._candidates = machtileTakeoverCore.candidateMap((Array.isArray(rows) ? rows : []).map(machtileTakeoverCandidateModel));
   holder.querySelector('[data-takeover-pane="takeover"]').innerHTML = holder._candidates.size ? [...holder._candidates.values()].map(machtileTakeoverCandidateCard).join("") : `<p>${escapeHtml(machtileTranslate("takeover_none"))}</p>`;
+  machtilePickOrderApplySearch(holder);
 }
 // 選工單／開工分開（owner 2026-10-26）：選工單＝只把單掛到機台；開工＝開始做（新單、接手的舊單都要按）。
 // 旗標開的機台，卡片只出現當下該按的按鈕；旗標關＝卡片跟以前一樣。
@@ -14667,6 +14675,37 @@ function machtilePickOrderUpdateEmpty(holder) {
   const newCount = holder.querySelectorAll("[data-card-select-process], [data-pool-claim]:not([disabled]), [data-pool-replace-stopped]:not([disabled])").length;
   empty.hidden = !(oldLoaded && oldCount === 0 && newCount === 0);
 }
+function machtilePickOrderApplySearch(holder) {
+  if (!holder || holder.dataset.pickOrder !== "true" || !machtileDispatchPoolCore) return;
+  const input = holder.querySelector("[data-pick-order-search]");
+  const query = input?.value || holder.dataset.pickSearch || "";
+  holder.dataset.pickSearch = query;
+  const activePane = holder.querySelector('[data-pick-pane]:not([hidden])');
+  const items = [...(activePane?.querySelectorAll("[data-pick-search-item]") || [])];
+  let matches = 0;
+  items.forEach((element) => {
+    const matched = machtileDispatchPoolCore.matchesOrderSearch({
+      work_order_no: element.dataset.pickSearchOrder,
+      part_no: element.dataset.pickSearchPartNo,
+      part_name: element.dataset.pickSearchPartName,
+      operation_name: element.dataset.pickSearchProcess,
+    }, query);
+    element.hidden = !matched;
+    if (matched) matches += 1;
+  });
+  const count = holder.querySelector("[data-pick-order-search-count]");
+  if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: items.length });
+  holder.querySelectorAll("[data-pick-order-search-clear]").forEach(button => { button.hidden = !query; });
+  const noMatches = holder.querySelector("[data-pick-order-search-empty]");
+  if (noMatches) noMatches.hidden = !(Boolean(query) && items.length > 0 && matches === 0);
+}
+function machtilePickOrderClearSearch(holder) {
+  const input = holder?.querySelector("[data-pick-order-search]");
+  if (!input) return;
+  input.value = "";
+  machtilePickOrderApplySearch(holder);
+  input.focus();
+}
 async function machtilePickOrderLoadOld(holder, code) {
   try {
     await machtileTakeoverLoadCandidates(holder, code);
@@ -14684,6 +14723,7 @@ async function machtilePickOrderLoadOld(holder, code) {
 function machtilePickOrderSelectTab(holder, tab) {
   holder.querySelectorAll("[data-pick-tab]").forEach((el) => { el.classList.toggle("is-selected", el === tab); el.setAttribute("aria-selected", el === tab ? "true" : "false"); });
   holder.querySelectorAll("[data-pick-pane]").forEach((el) => { el.hidden = el.dataset.pickPane !== tab.dataset.pickTab; });
+  machtilePickOrderApplySearch(holder);
 }
 async function machtileTakeoverSubmitCandidate(holder, candidate) {
   const machineCode = holder.dataset.machine, pending = machtileStationCmd.pending[machineCode];
@@ -16348,6 +16388,8 @@ function machtileStationCmdHandleClick(event) {
   }
   const pickHolder = event.target.closest('#machtileCardSelection[data-pick-order="true"]');
   if (pickHolder) {
+    const searchClear = event.target.closest("[data-pick-order-search-clear]");
+    if (searchClear) { machtilePickOrderClearSearch(pickHolder); return true; }
     const pickTab = event.target.closest("[data-pick-tab]");
     if (pickTab) { machtilePickOrderSelectTab(pickHolder, pickTab); return true; }
     const candidate = event.target.closest("[data-takeover-candidate]");
@@ -26680,6 +26722,10 @@ function bindEvents() {
     }
   }, true);
   document.addEventListener("change", machtileHandleSimpleReportChange);
+  document.addEventListener("input", (event) => {
+    const search = event.target.closest?.("[data-pick-order-search]");
+    if (search) machtilePickOrderApplySearch(search.closest('#machtileCardSelection[data-pick-order="true"]'));
+  });
 
   document.addEventListener("click", (event) => {
     if (machtileHandleSimpleReportClick(event)) return;

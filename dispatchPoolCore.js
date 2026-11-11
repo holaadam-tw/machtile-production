@@ -18,6 +18,26 @@
   const text = (v) => (v === null || v === undefined ? "" : String(v).trim());
   const displayName = (v) => text(v) || "未提供";
 
+  function normalizeSearchText(value) {
+    return text(value).normalize("NFKC").toLocaleLowerCase().replace(/[\s\-‐-―ー]+/g, "");
+  }
+
+  function matchesOrderSearch(item, query) {
+    const terms = text(query).normalize("NFKC").toLocaleLowerCase().split(/\s+/).map(normalizeSearchText).filter(Boolean);
+    if (!terms.length) return true;
+    const haystack = normalizeSearchText([
+      item?.work_order_no ?? item?.orderNo ?? item?.id,
+      item?.part_no ?? item?.partNo,
+      item?.part_name ?? item?.partName ?? item?.part,
+      item?.operation_name ?? item?.process_name ?? item?.processName ?? item?.process,
+    ].filter(Boolean).join(" "));
+    return terms.every(term => haystack.includes(term));
+  }
+
+  function filterOrderSearch(items, query) {
+    return (Array.isArray(items) ? items : []).filter(item => matchesOrderSearch(item, query));
+  }
+
   function departmentCodeOf(departmentName) {
     return DEPARTMENT_CODE_BY_NAME[text(departmentName)] || "";
   }
@@ -248,5 +268,8 @@
     quantityText,
     displayName,
     latestSyncedAt,
+    normalizeSearchText,
+    matchesOrderSearch,
+    filterOrderSearch,
   });
 });

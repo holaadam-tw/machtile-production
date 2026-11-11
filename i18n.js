@@ -226,6 +226,10 @@
       pick_order_old: "舊工單",
       pick_order_note: "選了只是把單掛到這台，還沒開始；要開始做請再按「開工」。",
       pick_order_none: "目前沒有可做的工單",
+      pick_order_search_placeholder: "搜尋工單號／料號／品名",
+      pick_order_search_count: "符合 {{matches}}／全部 {{total}} 張",
+      pick_order_search_none: "找不到符合的工單",
+      pick_order_search_clear: "清除",
       replace_stopped_sent_press_start: "已改掛，請按開工",
       pick_order_confirm: "把 {{order}} 第 {{step}} 道掛到 {{machine}}？（掛上後要再按開工才算開始）",
       standard_finish_start: "開工",
@@ -558,6 +562,10 @@
       pick_order_old: "Lệnh cũ", // _draft
       pick_order_note: "Chọn lệnh chỉ gắn lệnh vào máy này, chưa bắt đầu; muốn bắt đầu làm hãy bấm “Bắt đầu”.", // _draft
       pick_order_none: "Hiện không có lệnh nào để làm", // _draft
+      pick_order_search_placeholder: "Tìm số lệnh / mã hàng / tên hàng", // _draft
+      pick_order_search_count: "Phù hợp {{matches}} / tổng {{total}} phiếu", // _draft
+      pick_order_search_none: "Không tìm thấy lệnh phù hợp", // _draft
+      pick_order_search_clear: "Xóa", // _draft
       replace_stopped_sent_press_start: "Đã đổi lệnh, vui lòng bấm Bắt đầu", // _draft
       pick_order_confirm: "Gắn lệnh {{order}} công đoạn {{step}} vào máy {{machine}}? (Sau khi gắn phải bấm “Bắt đầu” mới tính là bắt đầu)", // _draft
       standard_finish_start: "Bắt đầu",

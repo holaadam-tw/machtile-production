@@ -184,6 +184,25 @@ try {
   }
   poolResponsePlan = [];
 
+  // Pick-order search filters locally and an in-place dispatch-pool refresh preserves value and focus.
+  {
+    poolMode = 'rows'; poolResponseRows = poolRows; poolQueries = [];
+    const { ctx, page } = await openApp('planner', 1440);
+    await page.evaluate(() => machtileOpenCardSelection('A01', { pickOrder: true }));
+    const search = page.locator('[data-pick-order-search]');
+    await search.fill('test p2');
+    ok(await page.locator('[data-pick-pane="new"] [data-pick-search-item]:visible').count() === 1, 'pick search: multiple keywords filter the new-order list immediately');
+    ok((await page.locator('[data-pick-order-search-count]').innerText()).includes('符合 1／全部 3 張'), 'pick search: result and total counts are shown');
+    await page.evaluate(async () => {
+      machtileDispatchPoolState.openRefreshByMachine.delete('A01');
+      await machtileLoadDispatchPool({ preserveItemsOnFailure: true });
+      machtileUpdateDispatchPoolSelection('A01');
+    });
+    ok(await search.inputValue() === 'test p2' && await search.evaluate(el => document.activeElement === el), 'pick search: pool refetch preserves query and input focus');
+    ok(await page.locator('[data-pick-pane="new"] [data-pick-search-item]:visible').count() === 1, 'pick search: filter remains applied after pool refetch');
+    await ctx.close();
+  }
+
   // A background pool refresh must not replace a selector while its schedule commit is pending.
   {
     exposeAssignedOrder = true;

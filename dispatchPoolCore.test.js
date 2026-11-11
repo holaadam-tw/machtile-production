@@ -114,5 +114,17 @@ eq("名稱空白 → 未提供", c.displayName("   "), "未提供");
 eq("最近同步時間", c.latestSyncedAt([{ synced_at: "2026-10-07T01:00:00Z" }, { synced_at: "2026-10-07T02:30:00Z" }]), "10/07 10:30");
 eq("沒有同步時間", c.latestSyncedAt([]), "");
 
+console.log("== 選工單搜尋 ==");
+const searchable = [
+  { work_order_no: "WO-AR16-0004", part_no: "AR-16", part_name: "主軸 套", operation_name: "CNC 車削" },
+  { work_order_no: "WO-0005", part_no: "B20", part_name: "底座", operation_name: "銑削" },
+];
+eq("搜尋不分大小寫且忽略連字號", c.filterOrderSearch(searchable, "ar16").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("有連字號輸入也找到無差異內容", c.filterOrderSearch(searchable, "AR-16").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("工單末碼可搜尋", c.filterOrderSearch(searchable, "0004").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("多關鍵字全部符合", c.filterOrderSearch(searchable, "主軸 車削").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("多關鍵字任一不符即排除", c.filterOrderSearch(searchable, "主軸 銑削"), []);
+eq("空字串保留全部", c.filterOrderSearch(searchable, "  "), searchable);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 if (fail) process.exit(1);
