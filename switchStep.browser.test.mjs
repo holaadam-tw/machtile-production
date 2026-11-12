@@ -38,7 +38,13 @@ const reset = (extra = {}) => { fx = { returnFlag: true, flag: undefined, role: 
   poolHang: false, afterClaim: null, cardReadsAfterClaim: 0, ...extra }; };
 // 不回應的請求先留著，情境結束時放掉（不會真的連到任何地方）
 const hung = [];
-const hang = route => new Promise(resolve => { hung.push(() => { route.abort('failed').catch(() => {}); resolve(); }); });
+// fx.answerHung(status, data)＝讓最後一個卡住的請求「很晚才回來」（晚到的成功／失敗）
+const hang = route => new Promise(resolve => {
+  let done = false;
+  const finish = act => { if (done) return; done = true; act().catch(() => {}); resolve(); };
+  fx.answerHung = (status, data) => finish(() => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) }));
+  hung.push(() => finish(() => route.abort('failed')));
+});
 const releaseHung = () => { while (hung.length) hung.pop()(); };
 const tokenFor = (sub, role) => 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role }, role: 'authenticated' })).toString('base64url') + '.test';
 const HELD_RPC = '/rest/v1/rpc/machtile_held_pool_claims';
@@ -626,6 +632,100 @@ try {
     ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === false && machtileReturnClaimBlockMessage('A05') === '' && Object.keys(machtileSwitchStep.active).length === 0), 'reload hangs after a successful claim: the lock is released without a page reload');
     await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '', null, { timeout: 10000 });
     ok(fx.claims.length === 1, 'reload hangs after a successful claim: the claim function is not left busy; one claim in total');
+    releaseHung(); await ctx.close();
+  }
+
+  // ================================================================ 審查修正（opus @ 185d16d8：LOW-B、LOW-C）
+  const UNCERTAIN = '原本那一道已經退回待做池；第 1 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。';
+  const CLAIM_PATH = '/rest/v1/rpc/dispatch_pool_claim';
+  const watchAborts = page => { const failed = []; page.on('requestfailed', r => { if (r.url().includes(CLAIM_PATH)) failed.push(r.failure()?.errorText || ''); }); return failed; };
+  const flowState = page => page.evaluate(() => ({ busy: machtileDispatchPoolState.claimBusy, message: machtileDispatchPoolState.claimMessage, inFlight: machtileRpcInFlight,
+    locks: machtileReturnClaimLocks('A05'), active: Object.keys(machtileSwitchStep.active).length, result: machtileReturnClaim.lastResult.A05?.view?.state || '',
+    switchResult: machtileReturnClaim.lastResult.A05?.view?.switchStep === true, toasts: window.__toasts.slice(), panel: document.getElementById('machtileCardSelection')?.dataset.machineCode || '' }));
+  // (a) LOW-B：接單送出後沒有回應 → 期限到：請求被中止、claimBusy 馬上放開、結果照舊「不確定」；「選工單」立刻可以再接
+  reset({ flag: true, claimMode: 'hang' });
+  {
+    const { ctx, page } = await openApp();
+    await shortLimit(page); await toastLog(page);
+    const aborted = watchAborts(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="claim_uncertain"]'), null, { timeout: 25000 });
+    let now = await flowState(page);
+    ok(now.busy === '' && now.message === '' && now.locks === false && now.active === 0, 'LOW-B: at the timeout claimBusy is released at once (the hung request has NOT answered yet), nothing locked, no claim message');
+    ok(now.result === 'claim_uncertain' && now.toasts.filter(t => t === UNCERTAIN).length === 1 && now.toasts.at(-1) === UNCERTAIN, 'LOW-B: the outcome is still "uncertain" — an aborted request may have reached the server');
+    await page.waitForFunction(() => machtileRpcInFlight === 0);
+    await page.waitForTimeout(200);
+    ok(aborted.length === 1 && /ABORTED/i.test(aborted[0]), 'LOW-B: the hung dispatch_pool_claim request was aborted by the app (fetch signal): ' + aborted.join(','));
+    ok(fx.claims.length === 1, 'LOW-B: one claim so far — the timeout does not resend');
+    // 「選工單」：A05 現在是空的，接第 2 道（操作員自己按的）
+    await sheet(page).locator('[data-return-claim-close]').click();
+    fx.claimMode = 'accept';
+    await page.waitForSelector('[data-card-pool-open="A05"]', { timeout: 15000 });
+    await page.locator('[data-card-pool-open="A05"]').click();
+    await page.waitForSelector(`#machtileCardSelection [data-pool-claim="${keyOf(2)}"]:not([disabled])`, { timeout: 15000 });
+    await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(2)}"]`).click();
+    await cardOf(page, 'N2');
+    await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '');
+    ok(fx.claims.length === 2 && fx.claims[1].raw === JSON.stringify({ p_source_key: keyOf(2), p_machine_code: 'A05' }) && await toastText(page) === '接單成功，工單已進入這台機台。', 'LOW-B: right after the timeout a pick-order claim works (not silently dropped); it is the operator\'s own claim, not a resend of step 1');
+    releaseHung(); await page.waitForTimeout(500);
+    now = await flowState(page);
+    ok(now.busy === '' && now.message === '' && fx.claims.length === 2, 'LOW-B: releasing the dead request changes nothing');
+    await ctx.close();
+  }
+  // (b) LOW-B：中止不了的請求（這裡把 signal 拿掉來模擬）很晚才回來 → 什麼都不動：不關面板、不留訊息、不跳提示、卡片那一句不變
+  for (const [label, status, body] of [['late success', 200, { process_id: id(301) }], ['late refusal', 400, { code: 'P0001', message: 'POOL_ITEM_NOT_WAITING', details: null, hint: null }]]) {
+    reset({ flag: true, claimMode: 'hang' });
+    const { ctx, page } = await openApp();
+    await shortLimit(page); await toastLog(page);
+    await page.evaluate(path => { const real = window.fetch.bind(window); window.fetch = (url, init) => real(url, String(url).includes(path) && init ? { ...init, signal: undefined } : init); }, CLAIM_PATH);
+    const aborted = watchAborts(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="claim_uncertain"]'), null, { timeout: 25000 });
+    ok((await flowState(page)).busy === '', `${label}: claimBusy is released at the timeout even though the request cannot be aborted`);
+    await sheet(page).locator('[data-return-claim-close]').click();
+    // 操作員這時開著別台（A03）的「選工單」面板
+    await page.locator('[data-card-pool-open="A03"]').click();
+    await page.waitForSelector(`#machtileCardSelection [data-pool-claim]:not([disabled])`, { timeout: 15000 });
+    const before = await flowState(page);
+    ok(before.panel === 'A03' && before.inFlight === 1 && aborted.length === 0, `${label}: the pick-order panel is open and usable while the old request is still in flight`);
+    if (status === 200) { fx.held = 1; fx.waiting = fx.waiting.filter(n => n !== 1); }
+    fx.claimMode = status === 200 ? 'accept' : 'POOL_ITEM_NOT_WAITING';
+    fx.answerHung(status, body);
+    await page.waitForFunction(() => machtileRpcInFlight === 0, null, { timeout: 15000 });
+    await page.waitForTimeout(1200);
+    const after = await flowState(page);
+    ok(after.panel === 'A03', `${label}: the open panel is NOT closed by the late answer`);
+    ok(after.message === '' && await page.evaluate(() => (document.querySelector('#machtileCardSelection [data-pool-claim-message]')?.textContent || '') === ''), `${label}: no stale claim message in state or on the panel`);
+    ok(JSON.stringify(after.toasts) === JSON.stringify(before.toasts), `${label}: no toast for the late answer: ${JSON.stringify(after.toasts)}`);
+    ok(after.result === 'claim_uncertain' && after.busy === '' && after.locks === false && after.active === 0, `${label}: the card keeps the "uncertain" sentence; nothing busy or locked`);
+    ok(fx.claims.length === 1 && fx.submits.length === 1, `${label}: one claim in total`);
+    releaseHung(); await ctx.close();
+  }
+  // (c) LOW-C：接單還在路上時登入的人換了／登出 → 結果丟掉：不寫卡片上的結果、不跳提示；下一個人的「選工單」不被卡住
+  for (const how of ['another user signs in', 'logout']) {
+    reset({ flag: true, claimMode: 'hang' });
+    const { ctx, page } = await openApp();
+    await toastLog(page);
+    const aborted = watchAborts(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => machtileSwitchStepHolds('A05') && machtileDispatchPoolState.claimBusy !== '', null, { timeout: 20000 });
+    const deadline = Date.now() + 10000;
+    while (fx.claims.length === 0 && Date.now() < deadline) await page.waitForTimeout(50);
+    const before = await flowState(page);
+    ok(fx.claims.length === 1 && before.busy === keyOf(1) && before.switchResult === false, `LOW-C ${how}: the switch's claim is in flight`);
+    if (how === 'logout') await page.evaluate(() => machtileClearSession());
+    else await page.evaluate(([token, sub]) => machtileSetSession({ access_token: token, user: { id: sub, email: 'other@test.invalid' } }, 'other@test.invalid'), [tokenFor(id(903), 'operator'), id(903)]);
+    await page.waitForFunction(() => machtileRpcInFlight === 0, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    const after = await flowState(page);
+    ok(after.active === 0 && after.busy === '' && after.message === '' && await page.evaluate(() => machtileSwitchStepHolds('A05') === false && document.getElementById('machtileReturnClaimSheet') === null), `LOW-C ${how}: the switch is gone, claimBusy released, no claim message, sheet closed`);
+    ok(after.switchResult === false && after.result === before.result, `LOW-C ${how}: no switch-step result is written for the next user (lastResult unchanged: "${after.result}")`);
+    ok(after.toasts.filter(t => t.includes('換道次') || t.includes('已換成') || t.includes('不確定有沒有接到') || t.includes('沒有接成功')).length === before.toasts.filter(t => t.includes('換道次') || t.includes('已換成') || t.includes('不確定有沒有接到') || t.includes('沒有接成功')).length, `LOW-C ${how}: no switch-step toast after the user changed: ${JSON.stringify(after.toasts)}`);
+    ok(aborted.length === 1 && /ABORTED/i.test(aborted[0]), `LOW-C ${how}: the in-flight claim request is no longer waited for (aborted)`);
+    ok(fx.claims.length === 1 && fx.submits.length === 1, `LOW-C ${how}: nothing is resent`);
     releaseHung(); await ctx.close();
   }
 

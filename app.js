@@ -10489,7 +10489,7 @@ function supabaseHeaders() {
 async function machtileSupabaseFetchRequest(path, options = {}) {
   const readOnlyRpc = new Set(["batch_report_progress", "attention_case_snapshot", "cnc_calibration_snapshot",
     "hmc_runtime_snapshot", "schedule_calendar_snapshot", "schedule_preview", "unified_event_list",
-    "manufacturing_quote_tracking_snapshot"]);
+    "manufacturing_quote_tracking_snapshot", "machtile_held_pool_claims"]);
   const rpc = path.split("?")[0].replace(/^rpc\//, "");
   if (machtileStrictMode() && path !== "rpc/machine_department_context"
       && !machtileDepartmentUnrestricted() && !readOnlyRpc.has(rpc)
@@ -11233,8 +11233,9 @@ function machtileMachineCardOrders() {
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
 }
 
-async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
-  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）
+async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration, statusOnly = false) {
+  // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）：跟下面的池列狀態同時讀、兩個都回來才算載入完；它只寫 order.heldPoolKey
+  if (!statusOnly && machtileReturnClaimEnabled()) { await Promise.all([machtileReturnClaimLoadHeldPoolKeys(generation), machtileLoadAssignedDispatchPoolStatuses(generation, true)]); return; }
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
   if (!keys.length) {
@@ -12114,7 +12115,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = nu
   holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
   try {
     const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
-    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
+    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args), ...(switchStep ? switchStep.request : null) });
     if (switchStep) switchStep.claimed = true;
     await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));
     deriveMachines();
@@ -12130,7 +12131,7 @@ async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = nu
     await machtileLoadDispatchPool();
     return { ok: false, error };
   } finally {
-    machtileDispatchPoolState.claimBusy = "";
+    if (!(switchStep && switchStep.abandoned)) machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
     if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
@@ -17152,6 +17153,7 @@ function machtileSwitchStepTarget(sheet) {
 // try：app.js 還在載入、下面用到的 const 還沒建立時被叫到（那時也不可能有換道次）＝什麼都不用做。
 function machtileSwitchStepForgetUser() {
   try {
+    Object.values(machtileSwitchStep.active).forEach((active) => machtileSwitchStepAbandonClaim(active.pass));   // 接單還在路上：不等它，晚到的結果不碰下一個人的畫面
     machtileSwitchStep.active = {};
     machtileSwitchStep.claimPass = "";
     if (machtileReturnClaim.sheet && machtileReturnClaim.sheet.switchStep) machtileReturnClaimCloseSheet();
@@ -17199,10 +17201,29 @@ async function machtileSwitchStepReadPool() {
 //   接單 RPC 已經成功（pass.claimed）＝接到了，只是重讀畫面失敗／逾時 → 不留「接單失敗」訊息，回 claimed: true；
 //   RPC 本身失敗＝跟一般接單一樣留訊息、重讀待做池；重讀只是送出去、不等它（等它會讓已經知道的結果卡在一個讀取上）。
 function machtileSwitchStepClaimError(pass, error) {
+  if (pass.abandoned === true) return { ok: false, abandoned: true, error };   // 已經不等這一筆了：不留訊息、不重讀待做池
   if (pass.claimed === true) return { ok: false, claimed: true, error };
   machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
   machtileLoadDispatchPool().catch((reloadError) => { console.warn("switch step: pool reload after a failed claim", reloadError); });
   return { ok: false, error };
+}
+
+// 換道次不再等這一筆接單了（等太久，或登入的人換了）：
+//   請求還在路上＝中止它（fetch 的 signal）。中止只是這台平板不再等，伺服器可能已經收到，所以結果照舊算「不確定」，絕不重送；
+//   既有接單函式佔著的 claimBusy 放開（還是這一筆佔著才放），「選工單」馬上可以再接；
+//   之後才回來的成功／失敗（或接單後還在跑的重讀畫面）全部不算：不關面板、不留接單訊息、不跳提示（pass.abandoned，
+//   machtileClaimDispatchPool 的 finally、pass.reload、machtileSwitchStepClaimError 都看它）。
+// pass.settled＝既有接單函式已經自己收尾：沒有東西要放棄。
+function machtileSwitchStepAbandonClaim(pass) {
+  if (!pass || pass.settled === true || pass.abandoned === true) return;
+  pass.abandoned = true;
+  try { if (pass.controller) pass.controller.abort(new Error("SWITCH_STEP_ABANDONED")); } catch (error) { console.warn("switch step: could not abort the claim request", error); }
+  if (pass.sourceKey && machtileDispatchPoolState.claimBusy === pass.sourceKey) {
+    machtileDispatchPoolState.claimBusy = "";
+    // 這時開著的「選工單」面板（別台的）按鈕還是灰的：用既有的面板更新讓它們馬上可以按
+    const holder = document.getElementById("machtileCardSelection");
+    if (holder && holder.dataset) machtileUpdateDispatchPoolSelection(holder.dataset.machineCode);
+  }
 }
 
 // 開確認卡時：重讀待做池，列出同一張工單、這台可以接的其他道。只有一道可以換就先幫忙選好（還是要按確認）。
@@ -17273,8 +17294,15 @@ async function machtileSwitchStepClaim(code, active, mode) {
   machtileStationCmdRerender();
   let reasonKey = "";
   let claimSent = false;
-  // pass.claimed＝接單 RPC 成功回來的那一刻由既有接單函式設成 true；reload＝接單後重讀畫面（有期限）
-  const pass = { claimed: false, reload: () => machtileSwitchStepTimeout(loadFromSupabase({ preserveDepartmentOnFailure: true })) };
+  // pass.claimed＝接單 RPC 成功回來的那一刻由既有接單函式設成 true；reload＝接單後重讀畫面（有期限）；
+  // request＝只有換道次的接單請求多帶的 signal（等不到時可以中止）；abandoned／settled 見 machtileSwitchStepAbandonClaim
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const pass = { claimed: false, abandoned: false, settled: false, sourceKey: "", controller, request: controller ? { signal: controller.signal } : null,
+    reload: async () => {
+      if (pass.abandoned) throw new Error("SWITCH_STEP_ABANDONED");
+      await machtileSwitchStepTimeout(loadFromSupabase({ preserveDepartmentOnFailure: true }));
+      if (pass.abandoned) throw new Error("SWITCH_STEP_ABANDONED");
+    } };
   try {
     const poolFresh = await machtileSwitchStepReadPool();
     // 等待中登入的人換了／登出：這一筆已經被丟掉，不接、不留結果、不跳提示（那是別人的畫面了）
@@ -17293,9 +17321,13 @@ async function machtileSwitchStepClaim(code, active, mode) {
       let claim;
       machtileSwitchStep.claimPass = code;
       // 機台代號用「選工單」面板接單時的同一個寫法（machine.code || machine.name，不轉大寫）：送出的內容才會逐字相同
+      pass.sourceKey = active.target.sourceKey;
+      active.pass = pass;
       try { claim = machtileClaimDispatchPool(active.target.sourceKey, String(machine?.code || machine?.name || code), pass); } finally { machtileSwitchStep.claimPass = ""; }
       claimSent = true;
-      const claimed = machtileSwitchStepCore.claimEvent(await machtileSwitchStepTimeout(claim));
+      const claimResult = await machtileSwitchStepTimeout(claim);
+      pass.settled = true;
+      const claimed = machtileSwitchStepCore.claimEvent(claimResult);
       reasonKey = claimed.reasonKey;
       active.phase = machtileSwitchStepCore.next(active.phase, claimed.event);
     }
@@ -17304,6 +17336,14 @@ async function machtileSwitchStepClaim(code, active, mode) {
     // 等太久或出錯：RPC 已經成功＝接到了（畫面沒更新）；已送出但沒有結果＝不確定；還沒送＝沒接
     active.phase = pass.claimed === true ? machtileSwitchStepCore.next("claiming", "claim_ok_unrefreshed") : claimSent ? "claim_uncertain" : "returned_not_claimed";
     reasonKey = "";
+    // 接單已送出、等不到它收尾：不再等（中止請求、放開 claimBusy、晚到的結果不算）。結果照上面那一行，不因為中止而改變。
+    if (claimSent) machtileSwitchStepAbandonClaim(pass);
+  }
+  // 接單在路上的時候登入的人換了／登出：結果不是現在這個人的 → 不留結果、不跳提示（跟上面重讀待做池之後的那一個檢查一樣）
+  if (claimSent && !machtileSwitchStepOwned(code, active)) {
+    if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
+    machtileStationCmdRerender();
+    return;
   }
   machtileSwitchStepEnd(code, active, machtileSwitchStepCore.outcome({ state: active.phase, mode, from: active.fromStep, to: active.target.step, reasonKey }));
 }
