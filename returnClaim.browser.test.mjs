@@ -1,0 +1,229 @@
+// 機台卡片「接錯了，退回」（return_claim，CONTRACT-P2 r1）瀏覽器端到端：真的 index.html／app.js，假資料 TEST-*，
+// 所有後端請求都由這支腳本攔截（假網域），不會碰任何真的後端。
+// MACHTILE_PLAYWRIGHT_MODULE=<playwright/index.mjs> node returnClaim.browser.test.mjs
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import path from 'node:path';
+const root = path.dirname(fileURLToPath(import.meta.url));
+const imported = await import(process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : 'playwright');
+const { chromium } = imported.default || imported;
+const fake = 'https://return-claim-fixture.test', id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const tenant = id(1), auth = id(901), actor = id(902);
+const POOL_KEY = '01|TESTNEED0001|TEST-SIM-1';
+const CONTRACT_SELECT = 'command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,legacy_snapshot';
+const machineRows = [
+  { id: id(101), machine_code: 'A01', name: 'A01', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 1 },
+  { id: id(102), machine_code: 'A02', name: 'A02', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 2 },
+];
+const order = { id: id(201), work_order_no: 'TEST-ON-A01', part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-12-20', status: 'in_progress', source_system: 'app_manual', created_by: actor, legacy_mes_source: 'dispatch_pool', external_ref: POOL_KEY };
+const proc = { id: id(301), tenant_id: tenant, work_order_id: id(201), process_order: 1, process_name: '車削', process_type: 'cnc', machine_id: id(101), status: 'pending', qty_completed: 0, qty_defect: 0 };
+
+// 每個情境重設的假後端狀態
+let fx;
+const reset = (extra = {}) => { fx = { flag: undefined, role: 'operator', assigned: true, procStatus: 'pending', poolStatus: 'claimed', submitMode: 'accept', submits: [], polls: [], command: null, afterPolls: null, ...extra }; };
+let checks = 0;
+const blocked = [], errors = [], writes = [];
+const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const server = createServer(async (req, res) => { if (req.method !== 'GET') { res.writeHead(405); res.end(); return; } const u = new URL(req.url, 'http://localhost'); const file = path.resolve(root, '.' + (u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname))); if (!file.startsWith(root + path.sep)) { res.writeHead(403); res.end(); return; } try { res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' }); res.end(await readFile(file)); } catch { res.writeHead(404); res.end(); } });
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const base = `http://127.0.0.1:${server.address().port}/`;
+const browser = await chromium.launch();
+
+async function openApp(language = 'zh-Hant') {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, serviceWorkers: 'block' });
+  const token = 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub: auth, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role: fx.role }, role: 'authenticated' })).toString('base64url') + '.test';
+  await ctx.addInitScript(([token, language]) => {
+    sessionStorage.setItem('machtileAuthSession', JSON.stringify({ version: 1, accessToken: token, refreshToken: '', email: 'user@test.invalid', authMethod: 'password', mode: 'session', createdAt: Date.now(), rememberUntil: 0 }));
+    if (language !== 'zh-Hant') localStorage.setItem('machtile.language', language);
+  }, [token, language]);
+  await ctx.route('**/*', async route => {
+    const req = route.request(), u = new URL(req.url());
+    const json = (status, data) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    if (req.url().startsWith(base)) {
+      if (u.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.MACHTILE_CONFIG={useSupabase:true,authMode:'strict',tenantId:'${tenant}',useTenantHeaderAuth:true,supabaseUrl:'${fake}',supabaseAnonKey:'fixture-public',oauthEnabled:false,disableServiceWorker:true,enableOutboxSubmit:false,enableProgramUpload:false,enableScheduleContracts:false,enableAccountDelete:false,enableJevTriage:false,enableFaceStatus:false,useHmcWorklistSupabase:false,hmcFixedStagingEnabled:false,dispatchPoolMachines:['A01','A02'],multiStationMachines:[],stationCommandMachines:['A01','A02']${fx.flag === undefined ? '' : `,enableReturnClaim:${JSON.stringify(fx.flag)}`}};` });
+      if (req.method() !== 'GET') { blocked.push(req.url()); return route.abort(); }
+      return route.continue();
+    }
+    if (u.origin !== fake) { blocked.push(req.url()); return route.abort(); }
+    const p = u.pathname;
+    if (p === '/rest/v1/rpc/machtile_submit_return_claim_command' && req.method() === 'POST') {
+      const body = JSON.parse(req.postData() || '{}'); fx.submits.push(body); writes.push(p);
+      if (fx.submitMode === 'network') return route.abort('failed');
+      if (fx.submitMode !== 'accept') return json(400, { code: 'P0001', message: fx.submitMode, details: null, hint: null });
+      fx.command = { command_uuid: body.p_command_uuid, command_type: 'return_claim', machine_code: body.p_machine_code, pool_item_id: body.p_pool_item_id,
+        expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, status: 'pending', requested_at: new Date().toISOString(),
+        claimed_at: null, applied_at: null, reject_code: null, reject_message: null, legacy_snapshot: null };
+      return json(200, fx.command);
+    }
+    if (p === '/rest/v1/station_commands' && req.method() === 'GET') {
+      const uuid = u.searchParams.get('command_uuid');
+      if (!uuid || !u.searchParams.get('select')?.includes('pool_item_id')) return json(200, []);
+      fx.polls.push({ select: u.searchParams.get('select'), uuid });
+      if (fx.command && fx.afterPolls && fx.polls.length >= fx.afterPolls.count) fx.afterPolls.apply();
+      return json(200, fx.command && `eq.${fx.command.command_uuid}` === uuid ? [fx.command] : []);
+    }
+    if (req.method() !== 'GET' && !['/rest/v1/rpc/batch_report_progress', '/rest/v1/rpc/machine_department_context'].includes(p) && !/_snapshot$|_list$/.test(p)) writes.push(p);
+    if (p === '/auth/v1/user') return json(200, { id: auth, email: 'user@test.invalid' });
+    if (p === '/rest/v1/app_users') return json(200, [{ id: actor, auth_user_id: auth, name: '測試使用者', legacy_user_id: 'TEST-001', role: fx.role, is_active: true }]);
+    if (p === '/rest/v1/rpc/machine_department_context') return json(200, { tenant_id: tenant, role: fx.role, all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] });
+    if (p === '/rest/v1/machines' || p === '/rest/v1/v_machine_management_cards') {
+      return json(200, p.endsWith('/v_machine_management_cards') ? machineRows.map(({ id, name, ...row }) => ({ ...row, machine_id: id, machine_name: name })) : machineRows);
+    }
+    const liveProc = { ...proc, status: fx.procStatus };
+    if (p === '/rest/v1/dispatch_pool_items') {
+      if ((u.searchParams.get('select') || '') === 'source_key,status') return json(200, fx.poolStatus ? [{ source_key: POOL_KEY, status: fx.poolStatus }] : []);
+      return json(200, []);
+    }
+    if (p === '/rest/v1/work_orders') return json(200, fx.assigned ? [{ ...order, work_order_processes: [liveProc] }] : []);
+    if (p === '/rest/v1/work_order_processes') {
+      if (!fx.assigned) return json(200, []);
+      if ((u.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, [{ ...liveProc, off_station_at: null, work_orders: order, machines: machineRows[0] }]);
+      return json(200, [liveProc]);
+    }
+    if (p === '/rest/v1/v_work_order_cards') return json(200, fx.assigned ? [{ id: order.id, tenant_id: tenant, work_order_no: order.work_order_no, part_name: order.part_name, quantity: order.quantity, due_date: order.due_date, work_order_status: order.status, current_process_id: proc.id, current_process_name: proc.process_name, current_process_status: fx.procStatus, machine_name: 'A01', qty_completed: 0, qty_defect: 0, current_process_off_station: false }] : []);
+    return json(200, []);
+  });
+  const page = await ctx.newPage(); page.on('pageerror', e => errors.push(String(e)));
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
+  await page.waitForFunction(() => typeof machtileDeferredLoadState !== 'undefined' && machtileDeferredLoadState.get('card-details')?.status === 'ready'
+    && typeof machtileStationCmd !== 'undefined' && ['ready', 'missing', 'off'].includes(machtileStationCmd.availability)
+    && typeof machtileBackgroundLoadPromise !== 'undefined');
+  await page.evaluate(() => machtileBackgroundLoadPromise);
+  await page.waitForTimeout(150);
+  return { ctx, page };
+}
+const cardHtml = (page, code = 'A01') => page.evaluate(code => [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(card => card.querySelector('h2')?.textContent.trim().startsWith(code))?.outerHTML || '', code);
+const sheet = page => page.locator('#machtileReturnClaimSheet');
+const BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail="" data-return-claim-open="A01">接錯了，退回</button>';
+
+try {
+  // ---- 旗標關（沒設、false）＝卡片 HTML 逐字相同；旗標開＝只多那一顆按鈕
+  reset(); const absent = await openApp(); const htmlAbsent = await cardHtml(absent.page); await absent.ctx.close();
+  reset({ flag: false }); const off = await openApp(); const htmlOff = await cardHtml(off.page);
+  ok(htmlAbsent.includes('TEST-ON-A01') && htmlAbsent.includes('data-station-cmd="start"'), 'flag off: A01 card shows the claimed order with its start button');
+  ok(htmlOff === htmlAbsent, 'flag off: card HTML is byte-identical whether the flag is missing or false');
+  ok(await off.page.locator('[data-return-claim-open], [data-return-claim-status], #machtileReturnClaimSheet').count() === 0, 'flag off: no return-claim element anywhere');
+  ok(await off.page.evaluate(() => { machtileReturnClaimOpen('A01', null); return document.getElementById('machtileReturnClaimSheet') === null && localStorage.getItem('machtile.returnClaimPending.v1') === null; }), 'flag off: calling the open handler directly does nothing');
+  await off.ctx.close();
+
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    const htmlOn = await cardHtml(page);
+    ok(htmlOn.split(BUTTON).length === 2, 'flag on: the claimed, not-started card shows 「接錯了，退回」 once');
+    ok(htmlOn.replace(BUTTON, '') === htmlAbsent, 'flag on: apart from that one button the card HTML is byte-identical to flag off');
+    ok(await page.locator('.machine-tile-card [data-return-claim-open]').count() === 1, 'flag on: only the claimed card has the button (empty A02 has none)');
+
+    // ---- 確認卡：白話三句；取消＝什麼都不送
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    const text = await sheet(page).innerText();
+    ok(text.includes('確認退回這張單') && text.includes('這張單會回到待做池，別人可以再接。') && text.includes('這台機台會變成沒有工單。') && text.includes('不會報工，也不會記任何數量。'), 'confirm sheet: plain-language explanation (back to pool, machine empty, nothing reported)');
+    ok(text.includes('A01') && text.includes('TEST-ON-A01') && text.includes('第 1 道'), 'confirm sheet: machine, order and step are shown');
+    ok(await sheet(page).locator('[data-return-claim-reason]').count() === 0, 'operator: no reason field');
+    await sheet(page).locator('[data-return-claim-close]').click();
+    ok(await sheet(page).count() === 0 && fx.submits.length === 0, 'cancel: sheet closes and nothing is sent');
+
+    // ---- 送出 → 輪詢 → applied → 卡片變空
+    fx.afterPolls = { count: 2, apply: () => { fx.assigned = false; fx.poolStatus = 'waiting'; fx.command = { ...fx.command, status: 'applied', claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(), legacy_snapshot: { return_claim: { mode: 'unassigned', pool_status: 'returned', station_cleared: true }, cloud_finalize: { claim_returned: true, process_detached: true, item_reopened: true } } }; } };
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    ok(fx.submits.length === 1, 'one submit');
+    const sent = fx.submits[0];
+    ok(JSON.stringify(Object.keys(sent)) === JSON.stringify(['p_command_uuid', 'p_machine_code', 'p_pool_item_id', 'p_expected_order_no', 'p_expected_index_sn', 'p_expected_part_no', 'p_reason']), 'submit body has exactly the seven contract parameters');
+    ok(/^[0-9a-f-]{36}$/.test(sent.p_command_uuid) && sent.p_machine_code === 'A01' && sent.p_pool_item_id === POOL_KEY && sent.p_expected_order_no === 'TEST-ON-A01' && sent.p_expected_index_sn === 1 && sent.p_expected_part_no === 'TEST-PART' && sent.p_reason === null, 'submit body values: machine, pool item, order, step, part no, operator reason = null');
+    ok(await page.locator('#workOrderGrid [data-station-cmd="start"][data-station-cmd-machine="A01"]').isDisabled(), 'while the return is pending the start button is locked');
+    ok(await page.locator('#workOrderGrid [data-return-claim-open]').count() === 0, 'while pending there is no second return button');
+    ok((await sheet(page).innerText()).includes('已送出，等工廠處理。請稍等，不要重按。'), 'sheet shows the waiting state');
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-result="applied"]'), null, { timeout: 15000 });
+    ok(fx.polls.length >= 2 && fx.polls.every(poll => poll.select === CONTRACT_SELECT && poll.uuid === `eq.${sent.p_command_uuid}`), 'every poll uses the contract select and the submitted command_uuid');
+    ok((await sheet(page).innerText()).includes('已退回待做池，這台現在沒有工單。'), 'applied: plain result sentence');
+    await page.waitForFunction(() => { const card = [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(c => c.querySelector('h2')?.textContent.trim().startsWith('A01')); return card && !card.innerHTML.includes('TEST-ON-A01'); }, null, { timeout: 15000 });
+    ok(!(await cardHtml(page)).includes('data-return-claim-open'), 'applied: after the reload the A01 card is empty and has no return button');
+    ok(await page.evaluate(() => localStorage.getItem('machtile.returnClaimPending.v1')) === '{}', 'applied: nothing left pending in storage');
+    const pollsAtEnd = fx.polls.length;
+    await page.waitForTimeout(2500);
+    ok(fx.polls.length === pollsAtEnd && fx.submits.length === 1, 'after the terminal status: no more polls, no resubmit');
+    await ctx.close();
+  }
+
+  // ---- 伺服器拒絕：一句白話、不顯示代碼、沒有重送鈕
+  for (const [code, sentence] of [['NOT_CLAIM_OWNER', '這張單不是你接的，你不能退回。請找接單的人或生管。'], ['BRAND_NEW_UNKNOWN_CODE', '沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。']]) {
+    reset({ flag: true, submitMode: code });
+    const { ctx, page } = await openApp();
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-result="failed"]'));
+    const text = await sheet(page).innerText();
+    ok(text.includes(sentence) && !text.includes(code), `${code}: one plain sentence, raw code not shown`);
+    ok(await sheet(page).locator('[data-return-claim-confirm]').count() === 0 && fx.polls.length === 0, `${code}: no resend button, no polling`);
+    await sheet(page).locator('[data-return-claim-close]').click();
+    ok(await page.locator('#workOrderGrid [data-station-cmd="start"][data-station-cmd-machine="A01"]').isEnabled(), `${code}: start button is not left locked`);
+    await ctx.close();
+  }
+
+  // ---- 送出時斷線：不自動重送；「用同一筆重送」＝同一個 uuid、同樣內容
+  reset({ flag: true, submitMode: 'network' });
+  {
+    const { ctx, page } = await openApp();
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-result="uncertain"]'));
+    ok((await sheet(page).innerText()).includes('網路不穩，還不知道有沒有送到。'), 'network cut: uncertain message');
+    await page.waitForTimeout(4500);
+    ok(fx.submits.length === 1 && fx.polls.length >= 1, 'network cut: the app only polls, it does not resubmit by itself');
+    fx.submitMode = 'accept';
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    ok(fx.submits.length === 2 && JSON.stringify(fx.submits[1]) === JSON.stringify(fx.submits[0]), 'resend: same command_uuid and identical body');
+    await ctx.close();
+  }
+
+  // ---- 管理員／生管：原因必填
+  reset({ flag: true, role: 'planner' });
+  {
+    const { ctx, page } = await openApp();
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    ok(await sheet(page).locator('[data-return-claim-reason]').count() === 1 && (await sheet(page).innerText()).includes('退回原因（必填）'), 'planner: reason field is shown');
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-reason-error]'));
+    ok(fx.submits.length === 0 && (await sheet(page).innerText()).includes('代退要寫原因，請填一句話。'), 'planner: empty reason is not sent');
+    await sheet(page).locator('[data-return-claim-reason]').fill('  代退：接錯機台  ');
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    ok(fx.submits.length === 1 && fx.submits[0].p_reason === '代退：接錯機台', 'planner: typed reason is sent trimmed as p_reason');
+    await ctx.close();
+  }
+
+  // ---- 不該出現的情況
+  for (const [label, extra] of [['process already running', { procStatus: 'running' }], ['pool row not claimed (gone)', { poolStatus: 'gone' }], ['pool status unknown', { poolStatus: '' }], ['manager role', { role: 'manager' }]]) {
+    reset({ flag: true, ...extra });
+    const { ctx, page } = await openApp();
+    ok((await cardHtml(page)).includes('TEST-ON-A01') && await page.locator('[data-return-claim-open]').count() === 0, `button hidden: ${label}`);
+    await ctx.close();
+  }
+
+  // ---- 越南文
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp('vi');
+    ok((await page.locator('[data-return-claim-open="A01"]').innerText()).includes('Nhận nhầm, trả lại'), 'vi: button text is Vietnamese');
+    await ctx.close();
+  }
+
+  ok(writes.every(p => p === '/rest/v1/rpc/machtile_submit_return_claim_command'), 'the only write sent in every scenario is the return-claim RPC: ' + [...new Set(writes)].join(','));
+  ok(blocked.length === 0, 'no real backend or non-GET local request: ' + blocked.join(','));
+  ok(errors.length === 0, 'no JS errors: ' + errors.join(' | '));
+  console.log(`${checks}/${checks} return-claim browser checks passed`);
+} finally {
+  await browser.close(); server.close();
+}

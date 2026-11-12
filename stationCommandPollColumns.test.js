@@ -28,4 +28,10 @@ for (const { name, list } of selects) {
     checked += 1;
   }
 }
+// return_claim poll (CONTRACT-P2 §6): must be picked up by the scan above (so it is written as one literal in
+// returnClaimCore.js) and must be exactly the list the cloud repo pins in return_claim_poll_select.txt.
+const returnClaimSelects = selects.filter((entry) => entry.name === "returnClaimCore.js");
+assert.equal(returnClaimSelects.length, 1, "returnClaimCore.js must contain exactly one literal station_commands select");
+assert.equal(returnClaimSelects[0].list, "command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,legacy_snapshot");
+assert.equal(require("./returnClaimCore.js").POLL_SELECT, returnClaimSelects[0].list, "the path the app polls uses that same literal");
 console.log(`PASS station_commands select columns exist: ${selects.length} selects, ${checked} columns`);
