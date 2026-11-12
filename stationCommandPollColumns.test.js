@@ -40,3 +40,35 @@ const vendoredReturnClaimSelect = fs.readFileSync(path.join(__dirname, "fixtures
 assert.deepEqual(vendoredReturnClaimSelect, [returnClaimSelects[0].list], "returnClaimCore.js select == vendored cloud fixture");
 assert.equal(require("./returnClaimCore.js").POLL_SELECT, returnClaimSelects[0].list, "the path the app polls uses that same literal");
 console.log(`PASS station_commands select columns exist: ${selects.length} selects, ${checked} columns`);
+
+// dispatch_pool_items: every column the app selects must exist. The list is the table as the checked-in cloud migrations
+// build it (machtile-mini-mes 20261007120000_dispatch_pool_items.sql; later migrations add no column) -- NOT read from
+// production information_schema. The App can only read rows RLS allows: same tenant, own department(s),
+// status waiting or claimed (20261014035353_dispatch_pool_claimed_state_upgrade.sql).
+const POOL_COLUMNS = new Set(["tenant_id", "source_key", "work_order_no", "process_order", "operation_name", "part_no", "part_name",
+  "quantity", "due_date", "planned_start", "urgency", "department_code", "eligible_machine_codes", "source_status", "pooled_at",
+  "status", "first_seen_at", "synced_at", "gone_at"]);
+const poolSelects = fs.readdirSync(__dirname).filter((name) => name.endsWith(".js") && !name.endsWith(".test.js")).flatMap((name) => {
+  const source = fs.readFileSync(path.join(__dirname, name), "utf8");
+  return [...source.matchAll(/dispatch_pool_items\?select=([A-Za-z0-9_,:]*)/g)].map((m) => ({ name, list: m[1] }));
+});
+// app.js: the pool list and the assigned-status read (both already in production); returnClaimCore.js: the held-step lookup.
+assert.deepEqual(poolSelects.map((entry) => entry.name).sort(), ["app.js", "app.js", "returnClaimCore.js"], "every dispatch_pool_items select is one of the three known literals");
+let poolChecked = 0;
+for (const { name, list } of poolSelects) {
+  assert.ok(list.length > 0, `${name}: dispatch_pool_items select must be a literal column list`);
+  for (const column of list.split(",")) {
+    assert.ok(POOL_COLUMNS.has(column), `${name}: dispatch_pool_items has no column "${column}" (select=${list})`);
+    poolChecked += 1;
+  }
+}
+const heldSelect = poolSelects.find((entry) => entry.name === "returnClaimCore.js");
+assert.equal(heldSelect.list, "source_key,work_order_no,process_order,status", "held-step lookup select");
+const heldPrefix = require("./returnClaimCore.js").HELD_POOL_PATH_PREFIX;
+assert.equal(heldPrefix, `dispatch_pool_items?select=${heldSelect.list}&status=eq.claimed&limit=1000&work_order_no=in.`, "the path the app uses is that same literal, claimed rows only");
+// No dispatch_pool_items read may be assembled without a literal select (it would escape the scan above).
+for (const name of fs.readdirSync(__dirname).filter((file) => file.endsWith(".js") && !file.endsWith(".test.js"))) {
+  const source = fs.readFileSync(path.join(__dirname, name), "utf8");
+  assert.equal([...source.matchAll(/dispatch_pool_items\?/g)].length, [...source.matchAll(/dispatch_pool_items\?select=[a-z]/g)].length, `${name}: every dispatch_pool_items query starts with a literal select`);
+}
+console.log(`PASS dispatch_pool_items select columns exist: ${poolSelects.length} selects, ${poolChecked} columns`);

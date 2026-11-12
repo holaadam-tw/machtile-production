@@ -21,15 +21,20 @@ const machineRows = [
   { id: id(105), machine_code: 'A05', name: 'A05', department_name: '車床課', status: 'idle', machine_type: 'lathe', display_order: 2 },
 ];
 // 雲端的 work_orders.external_ref＝這張工單第一次被接的那個池列（dispatch_pool_claim 的 on conflict 不更新它）：這裡＝第 3 道
-const order = { id: id(201), work_order_no: ORDER_NO, part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-12-20', status: 'in_progress', source_system: 'app_manual', created_by: actor, legacy_mes_source: 'dispatch_pool', external_ref: keyOf(3) };
+const orderBase = { id: id(201), work_order_no: ORDER_NO, part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-12-20', status: 'in_progress', source_system: 'app_manual', created_by: actor, legacy_mes_source: 'dispatch_pool', external_ref: keyOf(3) };
 const procOf = (step, status) => ({ id: id(300 + step), tenant_id: tenant, work_order_id: id(201), process_order: step, process_name: STEP_NAME[step], process_type: 'cnc', machine_id: id(105), status, qty_completed: 0, qty_defect: 0 });
 const poolRow = step => ({ source_key: keyOf(step), work_order_no: ORDER_NO, process_order: step, operation_name: STEP_NAME[step], part_no: 'TEST-PART', part_name: '測試零件', quantity: 50, due_date: '2026-12-20', planned_start: null, urgency: 2, department_code: 'LATHE', eligible_machine_codes: ['A03', 'A05'], source_status: 'pending', synced_at: new Date().toISOString() });
 const otherOrderRow = { ...poolRow(1), source_key: '01|TESTNEED0009|TEST-SIM-9', work_order_no: 'TEST-WO-OTHER' };
 
 // 每個情境重設的假後端狀態。held＝A05 上掛的是第幾道（null＝沒有）；waiting＝待做池裡這張單 waiting 的道次
 let fx;
-const reset = (extra = {}) => { fx = { returnFlag: true, flag: undefined, role: 'operator', held: 3, procStatus: 'pending', waiting: [1, 2], eligible: null, submitMode: 'accept', claimMode: 'accept', submits: [], claims: [], polls: [], poolReads: 0, events: [], command: null, afterPolls: null, ...extra }; };
-const applyReturn = () => { fx.held = null; if (!fx.waiting.includes(3)) fx.waiting.push(3); fx.command = { ...fx.command, status: 'applied', claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(), legacy_snapshot: { return_claim: { mode: 'unassigned', pool_status: 'returned', station_cleared: true }, cloud_finalize: { claim_returned: true, process_detached: true, item_reopened: true } } }; };
+const reset = (extra = {}) => { fx = { returnFlag: true, flag: undefined, role: 'operator', held: 3, procStatus: 'pending', waiting: [1, 2], eligible: null, submitMode: 'accept', claimMode: 'accept', submits: [], claims: [], polls: [], poolReads: 0, events: [], command: null, afterPolls: null,
+  // firstClaimed＝work_orders.external_ref 指的那一道（這張工單第一次被接的；雲端不會更新它）；
+  // heldRows＝待做池裡 claimed 的列（null＝機台上掛的那一道一列）；heldQueries＝App 查「機台上這一道是池裡哪一列」的紀錄
+  firstClaimed: 3, heldRows: null, heldQueries: [], ...extra }; };
+const HELD_SELECT = 'source_key,work_order_no,process_order,status';
+const claimedRow = (step, extra = {}) => ({ source_key: keyOf(step), work_order_no: ORDER_NO, process_order: step, status: 'claimed', ...extra });
+const applyReturn = () => { const returned = fx.held || 3; fx.held = null; if (!fx.waiting.includes(returned)) fx.waiting.push(returned); fx.command = { ...fx.command, status: 'applied', claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(), legacy_snapshot: { return_claim: { mode: 'unassigned', pool_status: 'returned', station_cleared: true }, cloud_finalize: { claim_returned: true, process_detached: true, item_reopened: true } } }; };
 let checks = 0;
 const blocked = [], errors = [], writes = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -100,10 +105,18 @@ async function openApp(language = 'zh-Hant') {
       return json(200, p.endsWith('/v_machine_management_cards') ? machineRows.map(({ id, name, ...row }) => ({ ...row, machine_id: id, machine_name: name })) : machineRows);
     }
     const liveProc = fx.held ? procOf(fx.held, fx.procStatus) : null;
+    const order = { ...orderBase, external_ref: keyOf(fx.firstClaimed) };
     if (p === '/rest/v1/dispatch_pool_items') {
       const select = u.searchParams.get('select') || '';
-      // 卡片明細：工單 external_ref 那個池列現在的狀態（第 3 道：掛在機台上＝claimed，退回後＝waiting）
-      if (select === 'source_key,status') return json(200, [{ source_key: keyOf(3), status: fx.held === 3 ? 'claimed' : fx.waiting.includes(3) ? 'waiting' : 'claimed' }]);
+      // 卡片明細：工單 external_ref 那個池列現在的狀態（掛在機台上＝claimed，退回後＝waiting）
+      if (select === 'source_key,status') return json(200, [{ source_key: keyOf(fx.firstClaimed), status: fx.held === fx.firstClaimed ? 'claimed' : fx.waiting.includes(fx.firstClaimed) ? 'waiting' : 'claimed' }]);
+      if (select === HELD_SELECT) {
+        // 機台上這一道是池裡哪一列：claimed、工單號在 in 清單裡的列
+        const query = { status: u.searchParams.get('status'), limit: u.searchParams.get('limit'), orders: u.searchParams.get('work_order_no') || '' };
+        fx.heldQueries.push(query);
+        const rows = fx.heldRows ? fx.heldRows() : (fx.held ? [claimedRow(fx.held)] : []);
+        return json(200, rows.filter(row => query.status === `eq.${row.status}` && query.orders.includes(`"${row.work_order_no}"`)));
+      }
       if (select !== POOL_SELECT || u.searchParams.get('status') !== 'eq.waiting') { blocked.push('unexpected pool select: ' + u.search); return json(400, {}); }
       fx.poolReads += 1; fx.events.push('pool_read');
       return json(200, [...fx.waiting.map(step => ({ ...poolRow(step), ...(fx.eligible ? { eligible_machine_codes: fx.eligible } : {}) })), otherOrderRow]);
@@ -140,6 +153,7 @@ const startSwitch = async (page, step, reason) => {
 try {
   // ---- 旗標：關（沒設、false、非布林，或退回功能沒開）＝卡片 HTML 逐字相同
   reset({ returnFlag: undefined }); const none = await openApp(); const htmlNone = await cardHtml(none.page); await none.ctx.close();
+  ok(fx.heldQueries.length === 0, 'both flags missing: the held-step pool lookup is never requested');
   reset(); const returnOnly = await openApp(); const htmlReturnOnly = await cardHtml(returnOnly.page); await returnOnly.ctx.close();
   ok(htmlNone.includes(ORDER_NO) && htmlNone.includes('N3 精車') && !htmlNone.includes('data-return-claim-open') && !htmlNone.includes('switch-step'), 'both flags missing: A05 shows the claimed step 3 and neither button');
   ok(htmlReturnOnly.replace(RETURN_BUTTON, '') === htmlNone && htmlReturnOnly.split(RETURN_BUTTON).length === 2, 'return-claim on, switch flag missing: only 「接錯了，退回」 is added (the build before this change)');
@@ -246,6 +260,63 @@ try {
     const claimsAtEnd = fx.claims.length, pollsAtEnd = fx.polls.length;
     await page.waitForTimeout(2500);
     ok(fx.claims.length === claimsAtEnd && fx.submits.length === 1 && fx.polls.length === pollsAtEnd, 'afterwards: no second claim, no resubmit, no more polls');
+
+    // ---- 換完之後（機台上是第 1 道；work_orders.external_ref 還停在第 3 道）：新的那一道卡片上兩顆按鈕都在，可以再換
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-switch-step-open="A05"]') && document.querySelector('#workOrderGrid [data-return-claim-open="A05"]'), null, { timeout: 15000 });
+    const afterSwitch = await cardHtml(page);
+    ok(afterSwitch.includes('N1 粗車') && afterSwitch.split(RETURN_BUTTON + SWITCH_BUTTON).length === 2, 'after the switch: the new step\'s card shows 「接錯了，退回」 and 「換道次」 again');
+    ok(await page.evaluate(order => machtileMachineCardOrders().find(o => o.id === order && o.machine === 'A05')?.dispatchPoolSourceKey, ORDER_NO) === keyOf(3)
+      && await page.evaluate(order => machtileMachineCardOrders().find(o => o.id === order && o.machine === 'A05')?.heldPoolKey, ORDER_NO) === keyOf(1),
+      'after the switch: external_ref still names step 3; the key used is the pool row of step 1 (looked up in the pool)');
+    fx.afterPolls = { count: fx.polls.length + 2, apply: applyReturn };
+    await sheet(page).locator('[data-return-claim-close]').click();   // 第一次換道次的結果卡還開著：先關掉
+    await page.locator('[data-switch-step-open="A05"]').click();
+    await page.waitForSelector('#machtileReturnClaimSheet [data-switch-step-choices]');
+    const text2 = await sheet(page).innerText();
+    ok(text2.includes('現在掛的：第 1 道 · 粗車') && text2.includes('第 2 道 · 車牙 · 50 件') && text2.includes('第 3 道 · 精車 · 50 件') && await sheet(page).locator('[data-switch-step-choice]').count() === 2,
+      'second switch: the sheet holds step 1 and offers steps 2 and 3 (3 is the one just returned)');
+    await sheet(page).locator('[data-switch-step-choice-step="2"]').click();
+    await sheet(page).locator('[data-switch-step-confirm]:not([disabled])').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="done"]'), null, { timeout: 20000 });
+    const sent2 = fx.submits[1];
+    ok(fx.submits.length === 2 && sent2.p_pool_item_id === keyOf(1) && sent2.p_expected_index_sn === 1 && sent2.p_command_uuid !== sent.p_command_uuid,
+      'second switch: the return names the pool row of step 1 (the step the machine holds now), not external_ref: ' + sent2.p_pool_item_id);
+    ok(fx.claims.length === 2 && fx.claims[1].raw === JSON.stringify({ p_source_key: keyOf(2), p_machine_code: 'A05' }), 'second switch: then claims step 2 with the normal claim request');
+    await page.waitForFunction(() => { const card = [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(c => c.querySelector('h2')?.textContent.trim().startsWith('A05')); return card && card.innerHTML.includes('N2 車牙'); }, null, { timeout: 15000 });
+    ok((await sheet(page).innerText()).includes('已換成第 2 道。原本的第 1 道已退回待做池。'), 'second switch: done sentence names 1 → 2');
+    await ctx.close();
+  }
+
+  // ---- 機台上掛的不是這張工單第一次被接的那一道（external_ref＝第 1 道、已退回池子；機台上是第 3 道）
+  reset({ flag: true, firstClaimed: 1 });
+  {
+    const { ctx, page } = await openApp();
+    const html = await cardHtml(page);
+    ok(html.includes('N3 精車') && html.split(RETURN_BUTTON + SWITCH_BUTTON).length === 2, 'held step ≠ first-claimed step: both buttons show on the card');
+    ok(fx.heldQueries.length >= 1 && fx.heldQueries.every(q => q.status === 'eq.claimed' && q.limit === '1000' && q.orders === `in.("${ORDER_NO}")`), 'held step ≠ first-claimed step: the key comes from a claimed-rows lookup in the pool: ' + JSON.stringify(fx.heldQueries[0]));
+    await page.locator('[data-switch-step-open="A05"]').click();
+    await page.waitForSelector('#machtileReturnClaimSheet [data-switch-step-choices]');
+    const text = await sheet(page).innerText();
+    ok(text.includes('現在掛的：第 3 道 · 精車') && text.includes('第 1 道 · 粗車 · 50 件') && text.includes('第 2 道 · 車牙 · 50 件') && await sheet(page).locator('[data-switch-step-choice]').count() === 2,
+      'held step ≠ first-claimed step: step 1 (the external_ref row, back in the pool) is offered as a choice, not treated as the held step');
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await sheet(page).locator('[data-switch-step-choice-step="1"]').click();
+    await sheet(page).locator('[data-switch-step-confirm]:not([disabled])').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="done"]'), null, { timeout: 20000 });
+    ok(fx.submits.length === 1 && fx.submits[0].p_pool_item_id === keyOf(3) && fx.submits[0].p_expected_index_sn === 3, 'held step ≠ first-claimed step: the return carries the pool row of step 3, not external_ref (step 1)');
+    ok(fx.claims.length === 1 && fx.claims[0].raw === JSON.stringify({ p_source_key: keyOf(1), p_machine_code: 'A05' }), 'held step ≠ first-claimed step: then step 1 is claimed');
+    await ctx.close();
+  }
+  // ---- 查不到唯一的一列＝兩顆按鈕都不出
+  for (const [label, heldRows] of [
+    ['two claimed pool rows for the held step', () => [claimedRow(3), claimedRow(3, { source_key: '01|TESTNEED0003|TEST-SIM-DUP' })]],
+    ['no claimed pool row for the held step', () => []],
+    ['only another step of the order is claimed', () => [claimedRow(1)]],
+  ]) {
+    reset({ flag: true, heldRows });
+    const { ctx, page } = await openApp();
+    ok(fx.heldQueries.length >= 1 && (await cardHtml(page)).includes(ORDER_NO) && await page.locator('[data-switch-step-open], [data-return-claim-open], #machtileReturnClaimSheet').count() === 0, `ambiguous lookup hides both buttons: ${label}`);
+    ok(await page.evaluate(async () => { await machtileReturnClaimOpen('A05', null, true); return document.getElementById('machtileReturnClaimSheet') === null; }) && fx.submits.length === 0 && fx.claims.length === 0, `ambiguous lookup: nothing can be opened or sent: ${label}`);
     await ctx.close();
   }
 
