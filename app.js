@@ -8864,7 +8864,8 @@ function validateReportForm(type) {
 
 function buildReportRemark(type, remark) {
   const meta = reportTypeMeta[type] || reportTypeMeta.workStart;
-  const parts = [`[${meta.label}]`];
+  // Persisted historical contract: UI says「完工」, but production_reports.remark keeps the original prefix.
+  const parts = [`[${type === "finish" ? "收工 / 完工" : meta.label}]`];
   if (type === "workStart") {
     parts.push(`總數 ${$("#workTotalQty")?.value || 0}`);
     parts.push(`cycle ${formatSeconds(getReportCycleSeconds())}`);
@@ -8879,7 +8880,7 @@ function buildReportRemark(type, remark) {
     const plan = $("#overtimePlan")?.value;
     if (plan) parts.push(`加班安排 ${plan}`);
   }
-  if (type === "finish" && selectedRadioValue("finishOvertime") === "2030") parts.push("加班完工 20:30");
+  if (type === "finish" && selectedRadioValue("finishOvertime") === "2030") parts.push("加班收工 20:30");
   if (type === "abnormal") {
     parts.push(`異常類型 ${$("#abnormalType")?.value || "-"}`);
   }
@@ -14905,6 +14906,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
       finishCloseReportCommandUuid: record.finishCloseReportCommandUuid,
     } } : {}),
   };
+  if (view?.terminal) void machtileLoadCardLatestCloseForMachines([code], { render: true });
 }
 
 function machtileFinishCloseClearPending(code) {
@@ -22805,6 +22807,7 @@ function openFinishReport(orderId, options = {}) {
 }
 
 function closeReport() {
+  const closingMachineCode = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase();
   const returnDetailOrderId = activeReportReturnDetailOrderId;
   machtileRestoreReportForm();
   $("#finishSheet")?.classList.remove("is-open");
@@ -22818,6 +22821,7 @@ function closeReport() {
   machtileSingleStationReportState.processId = "";
   machtileSingleStationReportState.loading = false;
   machtileRenderSingleStationReport();
+  if (closingMachineCode) void machtileLoadCardLatestCloseForMachines([closingMachineCode], { render: true });
   activeReportReturnDetailOrderId = "";
   if (returnDetailOrderId) openDetail(returnDetailOrderId);
 }
@@ -27723,6 +27727,7 @@ const machtileCardEstimateCore = () => (typeof window === "undefined" ? null : w
 const machtileCardMachineTimeCore = () => (typeof window === "undefined" ? null : window.MachTileCardMachineTimeCore);
 const MACHTILE_CARD_CT_DRAFT_KEY = "machtile-card-machine-time-drafts";
 const MACHTILE_CARD_FETCH_TIMEOUT_MS = 4000;
+const MACHTILE_CARD_CLOSE_REFETCH_MS = 5 * 60 * 1000;
 const machtileCardState = {
   statsByKey: new Map(),   // 產品＋工序 → 上下料／實際每件時間樣本
   statsStatus: "idle",     // idle | ok | error（error＝全部用預設值）
@@ -27733,6 +27738,7 @@ const machtileCardState = {
   userNames: new Map(),
   latestCloseByOrder: new Map(), // machine|order|step → newest station_commands close row
   closeStatus: "idle",
+  closeLoadedAt: 0,
   editor: null,            // 開著的小框：{ ref, processId, machineCode, loading, saving, readOnly, notice, error, ctx }
 };
 
@@ -27787,20 +27793,52 @@ async function machtileLoadCardTodayAndLoadUnload(orders) {
   await Promise.all([machtileLoadCardToday(core), machtileLoadCardLoadUnload(core, Array.isArray(orders) ? orders : []), machtileLoadCardLatestClose(Array.isArray(orders) ? orders : [])]);
 }
 
-async function machtileLoadCardLatestClose(orders) {
+async function machtileLoadCardLatestCloseForMachines(machineCodes, { replace = false, render = false } = {}) {
   if (!machtileStationCmdCore || config.enableFinishClose !== true) return;
-  const machines = [...new Set(orders.map((o) => String(o?.machine || "").trim().toUpperCase()).filter(Boolean))];
+  const machines = [...new Set(machineCodes.map((code) => String(code || "").trim().toUpperCase()).filter(Boolean))];
   if (!machines.length) return;
   try {
     const list = machines.map(encodeURIComponent).join(",");
     const rows = await machtileCardFetch(`station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,expected_part_no,manufacture_ii_id,expected_simulation_id,status,requested_at,claimed_at,reject_code,reject_message,legacy_snapshot,applied_at,short_completion&command_type=eq.close&machine_code=in.(${list})&order=requested_at.desc&limit=1000`);
-    machtileCardState.latestCloseByOrder = machtileStationCmdCore.latestCloseByOrder(rows);
+    const refreshed = machtileStationCmdCore.latestCloseByOrder(rows);
+    if (replace) machtileCardState.latestCloseByOrder = refreshed;
+    else {
+      const affected = new Set(machines);
+      const merged = new Map([...machtileCardState.latestCloseByOrder].filter(([key]) => !affected.has(String(key).split("|")[0])));
+      refreshed.forEach((row, key) => merged.set(key, row));
+      machtileCardState.latestCloseByOrder = merged;
+    }
     machtileCardState.closeStatus = "ok";
+    machtileCardState.closeLoadedAt = Date.now();
+    if (render) renderWorkOrders();
   } catch (error) {
     console.warn("latest close status unavailable; cards keep report-only status", error);
-    machtileCardState.latestCloseByOrder = new Map();
-    machtileCardState.closeStatus = "error";
+    if (replace) {
+      machtileCardState.latestCloseByOrder = new Map();
+      machtileCardState.closeStatus = "error";
+    }
   }
+}
+
+async function machtileLoadCardLatestClose(orders) {
+  const machines = (Array.isArray(orders) ? orders : []).map((o) => o?.machine);
+  return machtileLoadCardLatestCloseForMachines(machines, { replace: true });
+}
+
+function machtileCardCloseRow(order, machine) {
+  const code = String(machine?.code || machine?.name || order?.machine || "").trim().toUpperCase();
+  const orderNo = String(order?.id || "").trim();
+  const step = Number(order?.stationStep);
+  const local = machtileStationCmd.pending[code];
+  if (local?.commandType === "close" && String(local.orderNo || "").trim() === orderNo && Number(local.step) === step) {
+    return {
+      status: local.view?.phase || local.lastStatus || "pending",
+      reject_code: local.view?.code || null,
+      reject_message: local.view?.detail || local.view?.text || null,
+      legacy_snapshot: local.view?.needsConfirmation ? { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } : null,
+    };
+  }
+  return machtileCardState.latestCloseByOrder.get(`${code}|${orderNo}|${step}`);
 }
 
 // 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已完工」與總覽「今日報工狀態」三格共用這一次查詢。
@@ -27882,21 +27920,12 @@ function machtileCardFooterStatus(order, machine) {
     const title = order.lastReport ? ` title="最後回報：${escapeHtml(order.lastReport)}"` : "";
     if (label.tone === "finished" && machtileCardState.closeStatus === "ok") {
       const code = String(machine?.code || machine?.name || order.machine || "").trim().toUpperCase();
-      const key = `${code}|${String(order.id || "").trim()}|${Number(order.stationStep)}`;
-      const row = machtileCardState.latestCloseByOrder.get(key);
+      const row = machtileCardCloseRow(order, machine);
       const close = machtileStationCmdCore.closeCardState(row);
       if (close && close.kind !== "applied") {
         const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
-        if (close.kind === "confirm") {
-          const flow = machtileStationReportState(machtileBatchRow(code));
-          flow.close = { phase: "rejected", needsConfirmation: true, retryFields: { orderNo: row.expected_order_no, step: row.expected_index_sn,
-            partNo: row.expected_part_no, manufactureIiId: row.manufacture_ii_id, expectedSimulationId: row.expected_simulation_id,
-            shortCompletion: row.short_completion || null }, title: machtileTranslate("finish_close_rejected_title"),
-            message: machtileTranslate("card_finish_close_confirm") };
-        }
         const reason = close.reason || machtileTranslate("finish_close_unknown");
-        const button = close.kind === "confirm" ? `<button type="button" class="card-close-confirm" data-finish-close-confirm="${escapeHtml(code)}">${escapeHtml(machtileTranslate("finish_close_confirm_previous"))}</button>` : "";
-        return `<span class="card-today-status is-close-incomplete" data-today-status="close-incomplete"${title}><strong>${escapeHtml(machtileTranslate("card_finish_recorded"))}</strong><span>${escapeHtml(machtileTranslate(textKey, { reason }))}</span>${button}</span>`;
+        return `<span class="card-today-status is-close-incomplete" data-today-status="close-incomplete"${title}><strong>${escapeHtml(machtileTranslate("card_finish_recorded"))}</strong><span>${escapeHtml(machtileTranslate(textKey, { reason }))}</span></span>`;
       }
     }
     return `<span class="card-today-status is-${escapeHtml(label.tone)}" data-today-status="${escapeHtml(label.tone)}"${title}>${escapeHtml(label.text)}</span>`;
@@ -28322,6 +28351,11 @@ async function machtileTodayTick() {
     try { await machtileLoadOvertimeStartSegments(new Date()); } catch (error) { console.warn("today start commands refresh failed; keeping the last result", error); }
   }
   const ecore = machtileCardEstimateCore();
+  if (state.source === "supabase" && machtileCardState.closeStatus === "ok" && !document.hidden
+    && Date.now() - (machtileCardState.closeLoadedAt || 0) >= MACHTILE_CARD_CLOSE_REFETCH_MS - 5000) {
+    try { await machtileLoadCardLatestClose(machtileCardOrders()); }
+    catch (error) { console.warn("latest close refresh failed; keeping the last result", error); }
+  }
   if (ecore && state.source === "supabase" && machtileCardState.todayStatus === "ok" && !document.hidden && !machtileTodayRefetching
     && Date.now() - (machtileCardState.todayLoadedAt || 0) >= MACHTILE_TODAY_REFETCH_MS - 5000) { // 容許計時器誤差：每 2 次重算重讀一次
     machtileTodayRefetching = true;

@@ -170,7 +170,7 @@
       finish_total_help: "填這一道從頭到尾的良品總數；系統只補報尚未回報的差額。",
       counter_qty_help: "報工請照機台計數器填累計數量",
       finish_work_hint: "開啟完工回報；目前不直接關閉舊 MES 工站",
-      card_finish_recorded: "完工已記錄", card_finish_close_pending: "關站處理中…", card_finish_close_confirm: "關站還沒完成：上一道還在進行中，請再按『完工』並按『確認，仍要關站』", card_finish_close_rejected: "關站沒成功：{{reason}}，請再按完工",
+      card_finish_recorded: "完工已記錄", card_finish_close_pending: "關站處理中…", card_finish_close_confirm: "完工已記錄，關站還沒完成：請再按『完工』，跳出確認後按『確認，仍要關站』", card_finish_close_rejected: "關站沒成功：{{reason}}，請再按完工",
       finish_work_close_hint: "完工報工成功後，會接著關閉舊 MES 工站並讓下一道進池", finish_close_applied: "已關站",
       finish_close_applied_short: "少 {{quantity}} 件，已關站並依實做數入庫",
       finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
@@ -507,7 +507,7 @@
       finish_total_help: "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", // _draft
       counter_qty_help: "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", // _draft
       finish_work_hint: "Mở báo cáo hoàn tất; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
-      card_finish_recorded: "Đã ghi nhận hoàn tất", card_finish_close_pending: "Đang xử lý đóng công đoạn…", card_finish_close_confirm: "Chưa đóng xong công đoạn: công đoạn trước vẫn đang chạy. Hãy bấm ‘Hoàn tất’ lần nữa rồi chọn ‘Xác nhận, vẫn đóng công đoạn’.", card_finish_close_rejected: "Đóng công đoạn không thành công: {{reason}}. Hãy bấm Hoàn tất lần nữa.", // _draft
+      card_finish_recorded: "Đã ghi nhận hoàn tất", card_finish_close_pending: "Đang xử lý đóng công đoạn…", card_finish_close_confirm: "Đã ghi nhận hoàn tất nhưng chưa đóng xong công đoạn. Hãy bấm ‘Hoàn tất’ lần nữa, rồi khi hộp xác nhận hiện ra hãy chọn ‘Xác nhận, vẫn đóng công đoạn’.", card_finish_close_rejected: "Đóng công đoạn không thành công: {{reason}}. Hãy bấm Hoàn tất lần nữa.", // _draft
       finish_work_close_hint: "Sau khi báo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa công đoạn tiếp theo vào danh sách.", finish_close_applied: "Đã đóng công đoạn", // _draft
       finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm", // _draft
       finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft

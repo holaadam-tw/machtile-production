@@ -114,7 +114,7 @@
   "finish_work_close_hint": "完工報工成功後，會接著關閉舊 MES 工站並讓下一道進池",
   "card_finish_recorded": "完工已記錄",
   "card_finish_close_pending": "關站處理中…",
-  "card_finish_close_confirm": "關站還沒完成：上一道還在進行中，請再按『完工』並按『確認，仍要關站』",
+  "card_finish_close_confirm": "完工已記錄，關站還沒完成：請再按『完工』，跳出確認後按『確認，仍要關站』",
   "card_finish_close_rejected": "關站沒成功：{{reason}}，請再按完工",
   "finish_close_applied": "已關站",
   "finish_close_applied_short": "少 {{quantity}} 件，已關站並依實做數入庫",

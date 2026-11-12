@@ -2614,6 +2614,19 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     && ackedClose.p_expected_index_sn === closeRecord.step && ackedClose.p_expected_part_no === closeRecord.partNo && ackedClose.p_expected_simulation_id === closeRecord.expectedSimulationId
     && JSON.stringify(ackedClose.p_short_completion) === JSON.stringify(closeRecord.shortCompletion),
     "確認以新 UUID 重送；保留 close 參數並精確只增加 p_acks", JSON.stringify(ackedClose));
+  const afterConfirmCount = be.submits.length;
+  const afterTick = await page.evaluate(async () => {
+    const flow = machtileStationReportState(machtileBatchRow("A04"));
+    flow.close = { ...(flow.close || {}), phase: "applied", needsConfirmation: false,
+      nextStep: { case: "same_class_here", nextIndexSn: 6, nextName: "N6", canClaimHere: true } };
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 60 * 1000;
+    try { await machtileTodayTick(); } finally { Date.now = realNow; }
+    return { confirmCount: document.querySelectorAll("[data-finish-close-confirm]").length,
+      nextStep: machtileStationReportState(machtileBatchRow("A04")).close?.nextStep || null };
+  });
+  ok(be.submits.length === afterConfirmCount && afterTick.confirmCount === 0 && afterTick.nextStep?.nextIndexSn === 6,
+    "確認後推進假時鐘 2 分鐘：不重送 close、不重現確認鈕、applied nextStep 保留", JSON.stringify(afterTick));
   const cancelRecord = { ...closeRecord, commandUuid: "33333333-3333-4333-8333-333333333333" };
   await page.evaluate(({ record }) => {
     machtileStationCmd.pending.A04 = record;

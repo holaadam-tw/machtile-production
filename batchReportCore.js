@@ -37,7 +37,7 @@
     finish: Object.freeze({ key: "finish", label: "完工", submitLabel: "送出完工回報", quantity: true }),
   });
   const MODE_ORDER = Object.freeze(["dailyStart", "noon", "finish"]);
-  const FINISH_OVERTIME = Object.freeze({ none: "一般下班 17:00", "2030": "加班完工 20:30" });
+  const FINISH_OVERTIME = Object.freeze({ none: "一般下班 17:00", "2030": "加班收工 20:30" });
   const failReasonCodes = () => stationCore()?.FAIL_REASON_DEFAULTS || [];
 
   function validateFailReason(row, bad) {

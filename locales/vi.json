@@ -186,7 +186,7 @@
   },
   "card_finish_recorded": { "value": "Đã ghi nhận hoàn tất", "_draft": true },
   "card_finish_close_pending": { "value": "Đang xử lý đóng công đoạn…", "_draft": true },
-  "card_finish_close_confirm": { "value": "Chưa đóng xong công đoạn: công đoạn trước vẫn đang chạy. Hãy bấm ‘Hoàn tất’ lần nữa rồi chọn ‘Xác nhận, vẫn đóng công đoạn’.", "_draft": true },
+  "card_finish_close_confirm": { "value": "Đã ghi nhận hoàn tất nhưng chưa đóng xong công đoạn. Hãy bấm ‘Hoàn tất’ lần nữa, rồi khi hộp xác nhận hiện ra hãy chọn ‘Xác nhận, vẫn đóng công đoạn’.", "_draft": true },
   "card_finish_close_rejected": { "value": "Đóng công đoạn không thành công: {{reason}}. Hãy bấm Hoàn tất lần nữa.", "_draft": true },
   "finish_close_applied": {
     "value": "Đã đóng công đoạn",

@@ -279,8 +279,17 @@ console.log("== 手機（Pixel 7）==");
   be.closeRow = { ...be.closeRow, status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道仍開著",
     legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } };
   await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
-  ok((await closeStatus()).includes("關站還沒完成") && await cardOf(page, "A04").locator("[data-finish-close-confirm]").count() === 1,
-    "需確認：醒目文案與沿用確認按鈕", await closeStatus());
+  const renderPurity = await page.evaluate(() => {
+    const order = machtileCardOrders().find((item) => item.machine === "A04");
+    const machine = machtileMachineForOrder(order);
+    const flow = machtileStationReportState(machtileBatchRow("A04"));
+    const before = JSON.stringify({ close: flow.close, pending: machtileStationCmd.pending });
+    machtileCardFooterStatus(order, machine);
+    return { before, after: JSON.stringify({ close: flow.close, pending: machtileStationCmd.pending }) };
+  });
+  ok((await closeStatus()).includes("完工已記錄，關站還沒完成") && await cardOf(page, "A04").locator("[data-finish-close-confirm]").count() === 0,
+    "需確認：卡片只有指引文字、沒有送出按鈕", await closeStatus());
+  ok(renderPurity.before === renderPurity.after, "卡片 render 不改 flow.close 或 station command pending", JSON.stringify(renderPurity));
   await cardOf(page, "A04").screenshot({ path: path.join(outDir, "06-close-needs-confirmation.png") });
   be.closeRow = { ...be.closeRow, reject_code: "LOCK_TIMEOUT", reject_message: "工廠系統忙碌", legacy_snapshot: null };
   await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
