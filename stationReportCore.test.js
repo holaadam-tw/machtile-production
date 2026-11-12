@@ -482,6 +482,8 @@ check("operator message keys map guard codes to plain-language sentences", () =>
   assert.equal(core.operatorMessageKey("QTY_EXCEEDS_AVAILABLE"), "simple_block_qty_exceeds");
   assert.equal(core.operatorMessageKey("STATION_NOT_STARTED"), "simple_block_not_started");
   assert.equal(core.operatorMessageKey("ORDER_MISMATCH"), "simple_block_changed");
+  // 2026-11-12 A03: a data guard was shown as "order just changed, press again" and operators kept retrying.
+  assert.equal(core.operatorMessageKey("LEGACY_STATE_INCONSISTENT"), "simple_block_data");
   assert.equal(core.operatorMessageKey("PREV_OUTSOURCE_RECEIPT_REQUIRED"), "simple_block_receipt");
   assert.equal(core.operatorMessageKey("SOMETHING_NEW"), "simple_block_generic");
   assert.equal(core.operatorMessageKey(""), "simple_block_generic");
