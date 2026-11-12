@@ -95,8 +95,11 @@ test("state machine: the only way into claiming is returning → verifying → c
     returning: { return_applied: "verifying", return_applied_no_continue: "returned_not_claimed", return_rejected: "return_rejected",
       return_unsure: "return_unsure", return_uncertain: "stopped_uncertain" },
     verifying: { verify_ok: "claiming", verify_failed: "returned_not_claimed" },
-    claiming: { claim_ok: "done", claim_failed: "returned_not_claimed", claim_uncertain: "claim_uncertain" },
+    claiming: { claim_ok: "done", claim_failed: "returned_not_claimed", claim_uncertain: "claim_uncertain", claim_ok_unrefreshed: "claimed_refresh_failed" },
   });
+  assert.deepEqual([...core.TERMINAL_STATES], ["closed", "return_rejected", "return_unsure", "stopped_uncertain", "returned_not_claimed", "claim_uncertain", "claimed_refresh_failed", "done"]);
+  assert.equal(core.next("claiming", "claim_ok_unrefreshed"), "claimed_refresh_failed");
+  assert.equal(core.claimAllowed("claimed_refresh_failed") || core.holds("claimed_refresh_failed"), false, "claimed-but-not-refreshed ends the flow: no lock, no second claim");
   assert.equal(core.next("choosing", "confirm"), "returning");
   assert.equal(core.next("returning", "return_applied"), "verifying");
   assert.equal(core.next("verifying", "verify_ok"), "claiming");
@@ -181,6 +184,16 @@ test("claim result → event: ok, certainly failed (one reason), or uncertain; a
   assert.deepEqual(failed("Failed to fetch"), { event: "claim_uncertain", reasonKey: "" });
   assert.deepEqual(failed("503 upstream"), { event: "claim_uncertain", reasonKey: "" });
   assert.deepEqual(core.claimEvent({ ok: false }), { event: "claim_uncertain", reasonKey: "" }, "no error object: we do not know");
+  // 接單 RPC 成功、之後重讀畫面出錯：不管錯誤長什麼樣子（401、4xx 碼、斷線）都是「接到了」，不是沒接到、也不是不確定
+  for (const message of ["401 unauthorized", '400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}', "Failed to fetch", "SWITCH_STEP_TIMEOUT", "503 upstream"]) {
+    assert.deepEqual(core.claimEvent({ ok: false, claimed: true, error: new Error(message) }), { event: "claim_ok_unrefreshed", reasonKey: "" }, message);
+  }
+  assert.deepEqual(core.claimEvent({ ok: false, claimed: true }), { event: "claim_ok_unrefreshed", reasonKey: "" });
+  // claimed 只認嚴格的 true；沒有它＝照舊判斷
+  for (const claimed of [false, undefined, null, "true", 1]) {
+    assert.deepEqual(core.claimEvent({ ok: false, claimed, error: new Error("401 unauthorized") }), { event: "claim_failed", reasonKey: "switch_step_reason_login" }, String(claimed));
+  }
+  assert.deepEqual(core.claimEvent({ ok: true, claimed: true }), { event: "claim_ok", reasonKey: "" });
 });
 
 test("outcome sentences (zh-Hant): done, returned-but-not-claimed (machine empty / machine untouched), claim uncertain", () => {
@@ -200,6 +213,16 @@ test("outcome sentences (zh-Hant): done, returned-but-not-claimed (machine empty
   assert.equal(say(unsure), "原本那一道已經退回待做池；第 1 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。");
   assert.doesNotMatch(say(unsure), /沒有接成功/, "uncertain is never worded as a failure");
   assert.equal(core.outcome({ state: "anything_else", from: 3, to: 1 }).state, "returned_not_claimed", "an unexpected state is reported as returned-but-not-claimed");
+  // 接到了、但畫面沒更新：自己的一句，不說沒接到、不說不確定、不叫人去「選工單」再接
+  for (const mode of core.APPLIED_MODES) {
+    const stale = core.outcome({ state: "claimed_refresh_failed", mode, from: 3, to: 1, reasonKey: "switch_step_reason_login" });
+    assert.equal(say(stale), "已換成第 1 道（原本的第 3 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。", mode);
+    assert.deepEqual({ state: stale.state, tone: stale.tone, phase: stale.phase, reasonKey: stale.reasonKey, messageKey: stale.messageKey },
+      { state: "claimed_refresh_failed", tone: "warn", phase: "applied", reasonKey: "", messageKey: "switch_step_claimed_refresh_failed" });
+    assert.doesNotMatch(say(stale), /沒有接成功|不確定|選工單/);
+  }
+  assert.equal(fill(d.vi.switch_step_claimed_refresh_failed, { from: 3, to: 1 }),
+    "Đã đổi sang công đoạn 1 (công đoạn 3 ban đầu đã được trả về danh sách chờ), nhưng màn hình chưa cập nhật được. Hãy tải lại màn hình.");
 });
 
 test("every switch_step string exists in both languages, vi is draft, no raw code, and nothing tells the operator to press again", () => {
@@ -240,7 +263,7 @@ function slice(from, to) {
 const blockSource = slice("// ============================================================================================\n// 機台卡片「接錯了，退回」", "function renderMachineCard(machine) {");
 const switchSource = slice("// ---- 換道次 ----", "function renderMachineCard(machine) {");
 const poolSource = slice("const machtileDispatchPoolState = {", "function machtileDispatchPoolOpenRefreshState(machine) {");
-const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, machineCode) {", "async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {");
+const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {");
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const PENDING_KEY = "machtile.returnClaimPending.v1";
 const POOL_URL = "dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name,part_no,part_name,quantity,due_date,planned_start,urgency,department_code,eligible_machine_codes,source_status,synced_at&status=eq.waiting&order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast,work_order_no.asc,process_order.asc&limit=500";
@@ -254,6 +277,7 @@ const commandRow = (extra) => Object.assign({ command_uuid: UUID, command_type: 
 const appliedRow = (mode = "unassigned") => commandRow({ status: "applied", applied_at: new Date().toISOString(),
   legacy_snapshot: { return_claim: { mode, pool_status: "returned", station_cleared: mode === "unassigned" } } });
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+const NEVER = new Promise(() => {});   // 一個永遠不會回來的請求（卡住的網路）
 
 // 假後端：退回送出／輪詢、待做池清單、接單。state 可以中途改。
 function backendOf(state) {
@@ -268,6 +292,7 @@ function backendOf(state) {
     if (url.startsWith("dispatch_pool_items?")) {
       assert.equal(url, POOL_URL, "the pool is re-read with the existing select (no new select)");
       state.poolReads += 1;
+      if (state.poolHang) await NEVER;
       if (state.poolFail) throw new TypeError("Failed to fetch");
       return state.pool ? state.pool() : [poolRow(1), poolRow(2), OTHER_ORDER_ROW];
     }
@@ -292,6 +317,7 @@ function harness(options = {}) {
   const d = dictionaries();
   const dict = options.language === "vi" ? d.vi : d.zh;
   const timers = [];
+  let timerSeq = 0;
   const holders = {};
   const storage = options.storage instanceof Map ? options.storage : new Map(Object.entries(options.storage || {}));
   const calls = { fetch: [], toasts: [], rerenders: 0, refresh: [], storageReads: 0, reloads: 0, closedSelection: 0 };
@@ -312,7 +338,7 @@ function harness(options = {}) {
     machtileCardState: { todayStatus: "ok", todayRows: options.todayRows || [] },
     machtileDeferredLoadState: new Map([["card-details", { status: "ready" }]]),
     machtileDepartmentAccess: { role: options.role || "operator", is_bridge: false },
-    machtileAuthState: Object.assign({}, SESSION),
+    machtileAuthState: Object.assign({}, SESSION, options.userId === undefined ? {} : { userId: options.userId }),
     machtileBatchState: { formError: "" },
     machtileRenderBatchReport() {},
     machtileActualRole: () => options.role || "operator",
@@ -326,7 +352,7 @@ function harness(options = {}) {
     machtileRefreshAfterApplied: async (code, type) => { calls.refresh.push([code, type]); },
     machtileCloseCardSelection: () => { calls.closedSelection += 1; },
     machtileOpenCardSelection() {}, machtileCardSelectionReopenOptions() { return {}; }, machtilePickOrderConfirm: () => true,
-    loadFromSupabase: async () => { calls.reloads += 1; }, deriveMachines() {}, renderAll() {},
+    loadFromSupabase: async (...args) => { calls.reloads += 1; if (options.reload) await options.reload(...args); }, deriveMachines() {}, renderAll() {},
     machtileTranslate: (key, params) => String(dict[key] ?? `MISSING:${key}`).replace(/\{\{(\w+)\}\}/g, (_, name) => String(params?.[name] ?? "")),
     escapeHtml: htmlEscape,
     showToast: (message) => { calls.toasts.push(message); },
@@ -345,8 +371,9 @@ function harness(options = {}) {
       createElement() { return { id: "", innerHTML: "", contains() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; }, remove() { delete holders[this.id]; } }; },
       body: { appendChild(el) { holders[el.id] = el; } },
     },
-    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
-    clearTimeout: () => {},
+    setTimeout: (fn, ms) => { timerSeq += 1; timers.push({ fn, ms, id: `t${timerSeq}` }); return ms === stationCore.SUBMIT_TIMEOUT_MS ? `t${timerSeq}` : timers.length; },
+    // 既有的輪詢計時器照舊不清（跟原本一樣）；只有「逾時期限」（SUBMIT_TIMEOUT_MS）被清掉時真的拿掉，才數得出還有幾個期限沒結束
+    clearTimeout: (id) => { const index = timers.findIndex((timer) => timer.id === id && timer.ms === stationCore.SUBMIT_TIMEOUT_MS); if (index >= 0) timers.splice(index, 1); },
     AbortController, console: { warn() {}, log() {} }, Date, JSON, Object, Array, Number, String, Boolean, Error, Map, Set, TypeError,
   };
   const api = vm.runInNewContext(`${poolSource}
@@ -357,7 +384,7 @@ function harness(options = {}) {
        markup: machtileReturnClaimCardMarkup, buttonMarkup: machtileSwitchStepButtonMarkup, gate: machtileSwitchStepGate, active: machtileSwitchStepActive,
        holds: machtileSwitchStepHolds, restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry,
        choose: machtileSwitchStepChoose, submit: machtileReturnClaimSubmit, handleClick: machtileReturnClaimHandleClick, switchClick: machtileSwitchStepHandleClick,
-       closeSheet: machtileReturnClaimCloseSheet, loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys })`, context);
+       closeSheet: machtileReturnClaimCloseSheet, loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys, forgetUser: machtileSwitchStepForgetUser })`, context);
   // 待做池：畫面載入時已經讀到的那一份
   if (options.pool !== null) Object.assign(api.poolState, { status: options.poolStatus || "ready", items: options.pool || [poolRow(1), poolRow(2), OTHER_ORDER_ROW] });
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
@@ -370,7 +397,16 @@ function harness(options = {}) {
   };
   const pollTimers = () => timers.filter((timer) => timer.ms !== stationCore.SUBMIT_TIMEOUT_MS).length;
   const urls = (prefix) => calls.fetch.filter((call) => call.url.startsWith(prefix));
-  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, urls, context };
+  // 換道次的等待期限（setTimeout SUBMIT_TIMEOUT_MS）：測試裡時間不會自己走，由這裡讓「最早排的那一個期限」到期
+  const timeouts = () => timers.filter((timer) => timer.ms === stationCore.SUBMIT_TIMEOUT_MS).length;
+  const expire = async () => {
+    const index = timers.findIndex((timer) => timer.ms === stationCore.SUBMIT_TIMEOUT_MS);
+    assert.ok(index >= 0, "a switch-step time limit must be pending");
+    const [timer] = timers.splice(index, 1);
+    timer.fn();
+    await settle();
+  };
+  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, urls, context, timeouts, expire };
 }
 const RETURN_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="A05">接錯了，退回</button>';
 const SWITCH_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-open="A05">換道次</button>';
@@ -844,6 +880,242 @@ test("admin / planner: the reason is mandatory exactly as in return-claim and tr
   }
 });
 
+// ================================================================ 審查修正（opus L3 @ c0e7af04）
+test("MEDIUM-1: claim RPC succeeded but the screen reload failed → reported as CLAIMED (screen not refreshed), one toast, never 'not claimed'", async () => {
+  const CLAIMED = "已換成第 1 道（原本的第 3 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。";
+  for (const [label, reload] of [
+    ["reload 401", async () => { throw new Error("401 {\"message\":\"JWT expired\"}"); }],
+    ["reload refused with a code the claim flow knows", async () => { throw new Error('400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}'); }],
+    ["reload network cut", async () => { throw new TypeError("Failed to fetch"); }],
+  ]) {
+    const state = {};
+    const h = harness({ returnFlag: true, flag: true, backend: backendOf(state), reload });
+    await startSwitch(h, 1);
+    const readsBefore = state.poolReads;
+    state.row = appliedRow();
+    await h.runPoll();
+    assert.equal(state.claims.length, 1, `${label}: the claim went out once`);
+    assert.equal(h.calls.reloads, 1, `${label}: the reload was tried once`);
+    assert.deepEqual(h.calls.toasts, [CLAIMED], `${label}: exactly one toast, and it says the step WAS switched`);
+    assert.match(h.sheetHtml(), /data-switch-step-result="claimed_refresh_failed"/, label);
+    assert.ok(h.sheetHtml().includes(`<p>${CLAIMED}</p>`), label);
+    assert.doesNotMatch(h.sheetHtml(), /沒有接成功|不確定有沒有接到|JWT|POOL_ITEM_NOT_WAITING|data-return-claim-confirm/, `${label}: not worded as a failure, no raw text, no retry button`);
+    assert.equal(h.api.poolState.claimMessage, "", `${label}: no 'claim failed' message is left for the pool panel`);
+    assert.equal(h.api.poolState.claimBusy, "", label);
+    assert.equal(state.poolReads - readsBefore, 1, `${label}: only the verify re-read (no failure re-read of the pool)`);
+    assert.equal(h.api.locks("A05"), false, `${label}: card not left locked`);
+    assert.equal(h.api.blockMessage("A05"), "");
+    assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+    assert.deepEqual(h.calls.refresh, [["A05", "return_claim"]], `${label}: one more background reload is asked for`);
+    assert.equal(h.timeouts(), 0, `${label}: no time limit left pending`);
+    await settle(); await settle();
+    assert.equal(state.claims.length, 1, `${label}: never retried`);
+    assert.equal(h.api.markup({ code: "A05", name: "A05", status: "idle", order: null }),
+      `<p class="station-cmd-status is-warn" data-no-detail data-return-claim-status="applied" role="status">${CLAIMED}</p>`, `${label}: the card keeps that sentence`);
+  }
+});
+
+test("MEDIUM-1: the switch flow shows ONE toast per outcome (the claim function stays quiet in switch mode); a normal claim keeps its own toasts", async () => {
+  // 換成功：只有換道次那一句
+  const okState = {};
+  const ok = harness({ returnFlag: true, flag: true, backend: backendOf(okState) });
+  await startSwitch(ok, 1);
+  okState.row = appliedRow();
+  await ok.runPoll();
+  assert.deepEqual(ok.calls.toasts, ["已換成第 1 道。原本的第 3 道已退回待做池。"]);
+  assert.equal(ok.calls.reloads, 1);
+  // 接單被拒：只有換道次那一句；待做池面板照舊留下既有的那一句失敗訊息
+  const badState = { claimError: '400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}' };
+  const bad = harness({ returnFlag: true, flag: true, backend: backendOf(badState) });
+  await startSwitch(bad, 1);
+  badState.row = appliedRow();
+  await bad.runPoll();
+  assert.deepEqual(bad.calls.toasts, ["原本那一道已經退回待做池，這台現在沒有工單；第 1 道沒有接成功（已經被別台接走）。請到「選工單」重新接。"]);
+  assert.equal(bad.api.poolState.claimMessage, "這張單已被別台接走。");
+  assert.equal(bad.calls.reloads, 0, "a refused claim does not reload the screen");
+  // 一般接單（選工單面板）：成功／失敗／接到了但重讀失敗，提示跟以前一樣
+  const normalOk = harness({ backend: backendOf({}) });
+  assert.deepEqual(JSON.parse(JSON.stringify(await normalOk.api.claim(keyOf(1), "A05"))), { ok: true });
+  assert.deepEqual(normalOk.calls.toasts, ["接單成功，工單已進入這台機台。"]);
+  const reloadFails = {};
+  const normalStale = harness({ backend: backendOf(reloadFails), reload: async () => { throw new Error("401 unauthorized"); } });
+  const stale = await normalStale.api.claim(keyOf(1), "A05");
+  assert.equal(stale.ok, false);
+  assert.equal(stale.claimed, undefined, "the normal caller's result has no new field");
+  assert.equal(normalStale.calls.toasts.length, 1, "normal claim + failed reload: one error toast, as before this change");
+  assert.equal(normalStale.calls.toasts[0], poolCore.claimErrorText(new Error("401 unauthorized")));
+  assert.equal(reloadFails.poolReads, 1, "normal claim + failed reload: the pool is re-read once, as before");
+});
+
+test("LOW-2: the logged-in user changes / logs out → the switch in memory is dropped and no claim goes out under the next session", async () => {
+  // (1) 退回還在等工廠：登出 → 之後退回成功只是一筆普通的退回
+  const state = {};
+  const h = harness({ returnFlag: true, flag: true, userId: "user-a", backend: backendOf(state) });
+  await startSwitch(h, 1);
+  assert.equal(h.api.active("A05").userId, "user-a", "the switch remembers who pressed it");
+  assert.match(h.sheetHtml(), /data-switch-step-sheet="A05"/);
+  h.api.forgetUser();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  assert.equal(h.sheetHtml(), "", "the open switch sheet is closed");
+  assert.equal(h.api.active("A05"), null);
+  h.context.machtileAuthState.userId = "user-b";
+  const readsBefore = state.poolReads;
+  state.row = appliedRow();
+  await h.runPoll();
+  assert.equal(state.claims.length, 0, "return applied after the user changed: NO claim");
+  assert.equal(state.poolReads, readsBefore, "the pool is not even re-read");
+  assert.deepEqual(h.calls.toasts, ["已退回待做池，這台現在沒有工單。"], "it ends as a plain return");
+  assert.equal(h.api.locks("A05"), false);
+  // (2) 退回已成功、正在重讀待做池時換人：重讀回來之後不接、不留結果、不跳提示、不鎖
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const state2 = {};
+  const backend2 = backendOf(state2);
+  let gated = false;
+  const h2 = harness({ returnFlag: true, flag: true, userId: "user-a",
+    backend: async (url, init) => { if (gated && url.startsWith("dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name")) await gate; return backend2(url, init); } });
+  await startSwitch(h2, 1);
+  gated = true;
+  state2.row = appliedRow();
+  await h2.runPoll();
+  assert.equal(h2.api.holds("A05"), true, "step (b) is waiting on the pool re-read and holds the machine");
+  h2.api.forgetUser();
+  h2.context.machtileAuthState.userId = "user-b";
+  assert.equal(h2.api.holds("A05"), false, "the lock goes with the forgotten switch");
+  release();
+  await settle(); await settle();
+  assert.equal(state2.claims.length, 0, "pool re-read returns after the user changed: NO claim");
+  assert.deepEqual(h2.calls.toasts, [], "nothing is announced on the next user's screen");
+  assert.equal(h2.api.machtileReturnClaim.lastResult.A05.view.messageKey, "return_claim_applied", "the card keeps only the plain return result (the true state)");
+  assert.equal(h2.api.machtileReturnClaim.lastResult.A05.view.switchStep, undefined, "and no switch-step result line");
+  assert.equal(h2.api.locks("A05"), false);
+  assert.equal(h2.timeouts(), 0);
+  // (3) 保險：active 沒被清掉、但現在登入的不是按的那個人 → 一樣不接，而且不會留著鎖
+  const state3 = {};
+  const h3 = harness({ returnFlag: true, flag: true, userId: "user-a", backend: backendOf(state3) });
+  await startSwitch(h3, 1);
+  h3.context.machtileAuthState.userId = "user-b";
+  state3.row = appliedRow();
+  await h3.runPoll();
+  assert.equal(state3.claims.length, 0, "user id differs from the one who pressed: NO claim");
+  assert.deepEqual(JSON.parse(JSON.stringify(h3.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  assert.equal(h3.api.locks("A05"), false);
+  // (4) 沒換人：照常接
+  const state4 = {};
+  const h4 = harness({ returnFlag: true, flag: true, userId: "user-a", backend: backendOf(state4) });
+  await startSwitch(h4, 1);
+  state4.row = appliedRow();
+  await h4.runPoll();
+  assert.equal(state4.claims.length, 1);
+  // 旗標關：叫了也沒有任何效果（不關「接錯了，退回」的確認卡、不碰任何東西）
+  const off = harness({ returnFlag: true, flag: false, backend: backendOf({}) });
+  await off.api.open("A05", null);
+  const before = off.sheetHtml();
+  off.api.forgetUser();
+  assert.equal(off.sheetHtml(), before, "flag off: the plain return sheet stays open");
+  assert.deepEqual(JSON.parse(JSON.stringify(off.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  // 接線：登出與換人兩個地方都叫得到（machtileClearSession 在清 userId 之前；machtileSetSession 只在 userId 真的不同時）
+  assert.equal([...appSource.matchAll(/\n  machtileSwitchStepForgetUser\(\);\r?\n  machtileAuthState\.userId = "";/g)].length, 1, "logout hook, before the user id is cleared");
+  assert.equal([...appSource.matchAll(/\n  if \(machtileAuthState\.userId !== \(authResponse\?\.user\?\.id \|\| jwtPayload\.sub \|\| ""\)\) machtileSwitchStepForgetUser\(\);\r?\n  machtileAuthState\.userId = authResponse\?\.user\?\.id \|\| jwtPayload\.sub \|\| "";/g)].length, 1, "sign-in hook, only when the user id really differs");
+  assert.equal([...appSource.matchAll(/machtileSwitchStepForgetUser\(\)/g)].length, 3, "definition + the two session hooks");
+});
+
+test("LOW-4: every wait in the switch flow has a time limit, so the machine lock always releases without a page reload; a timeout never claims", async () => {
+  assert.equal(stationCore.SUBMIT_TIMEOUT_MS, 20000, "the limit is the existing command-submit timeout");
+  // (1) 開確認卡時待做池讀不回來 → 期限到＝「讀不到最新的待做池」，不能按、沒有送任何東西
+  const openState = { poolHang: true };
+  const o = harness({ returnFlag: true, flag: true, backend: backendOf(openState) });
+  const opening = o.api.open("A05", null, true);
+  await settle();
+  assert.equal(o.timeouts(), 1, "the pool read is on a time limit");
+  await o.expire();
+  await opening;
+  assert.match(o.sheetHtml(), /data-switch-step-pool-failed>讀不到最新的待做池，現在不能換道次。請檢查網路後重新整理畫面。</);
+  assert.match(o.sheetHtml(), /data-switch-step-confirm disabled/);
+  assert.equal(openState.poolReads, 1, "after the limit no second read is started");
+  await o.api.submit();
+  assert.equal(o.urls("rpc/").length, 0);
+  // (2) 退回成功後重讀待做池卡住 → 期限到＝沒接（讀不到最新的待做池），鎖放開，沒有送接單
+  const verifyState = {};
+  const v = harness({ returnFlag: true, flag: true, backend: backendOf(verifyState) });
+  await startSwitch(v, 1);
+  verifyState.poolHang = true;
+  verifyState.row = appliedRow();
+  await v.runPoll();
+  assert.equal(v.api.holds("A05"), true, "waiting on the pool re-read: the machine is held");
+  assert.equal(v.api.blockMessage("A05"), SWITCH_BUSY);
+  assert.equal(v.timeouts(), 1);
+  await v.expire();
+  assert.equal(verifyState.claims.length, 0, "pool re-read timed out: NO claim");
+  assert.deepEqual(v.calls.toasts, ["原本那一道已經退回待做池，這台現在沒有工單；第 1 道沒有接成功（讀不到最新的待做池）。請到「選工單」重新接。"]);
+  assert.match(v.sheetHtml(), /data-switch-step-result="returned_not_claimed"/);
+  assert.equal(v.api.locks("A05"), false, "lock released without a page reload");
+  assert.equal(v.api.blockMessage("A05"), "");
+  assert.deepEqual(JSON.parse(JSON.stringify(v.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  assert.equal(v.timeouts(), 0);
+  // (3) 接單送出後沒有回應 → 期限到＝既有的「不確定」那一句，鎖放開，不重送
+  const claimState = { claimGate: NEVER };
+  const c = harness({ returnFlag: true, flag: true, backend: backendOf(claimState) });
+  await startSwitch(c, 1);
+  claimState.row = appliedRow();
+  await c.runPoll();
+  assert.equal(claimState.claims.length, 1);
+  assert.equal(c.api.holds("A05"), true);
+  assert.equal(c.timeouts(), 1, "the claim wait is on a time limit");
+  await c.expire();
+  assert.deepEqual(c.calls.toasts, ["原本那一道已經退回待做池；第 1 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。"]);
+  assert.match(c.sheetHtml(), /data-switch-step-result="claim_uncertain"/);
+  assert.equal(c.api.locks("A05"), false, "lock released without a page reload");
+  assert.equal(c.api.blockMessage("A05"), "");
+  await settle(); await settle();
+  assert.equal(claimState.claims.length, 1, "a timeout never sends a second claim");
+  // (4) 接單 RPC 成功、之後重讀畫面卡住 → 期限到＝「接到了，但畫面沒更新」，鎖放開
+  const reloadState = {};
+  const r = harness({ returnFlag: true, flag: true, backend: backendOf(reloadState), reload: () => NEVER });
+  await startSwitch(r, 1);
+  reloadState.row = appliedRow();
+  await r.runPoll();
+  assert.equal(reloadState.claims.length, 1);
+  assert.equal(r.calls.reloads, 1);
+  assert.equal(r.api.holds("A05"), true, "waiting on the reload: the machine is held");
+  assert.equal(r.timeouts(), 2, "the claim wait and the reload each have a limit");
+  await r.expire();
+  assert.deepEqual(r.calls.toasts, ["已換成第 1 道（原本的第 3 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。"]);
+  assert.match(r.sheetHtml(), /data-switch-step-result="claimed_refresh_failed"/);
+  assert.equal(r.api.locks("A05"), false, "lock released without a page reload");
+  assert.deepEqual(JSON.parse(JSON.stringify(r.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  await r.expire();   // 既有接單函式裡的那一個期限也到了：它自己收尾（claimBusy 放開），不再多說一次
+  assert.equal(r.api.poolState.claimBusy, "", "the claim function itself is not left busy");
+  assert.equal(r.api.poolState.claimMessage, "");
+  assert.equal(r.calls.toasts.length, 1, "still one toast");
+  assert.equal(reloadState.claims.length, 1);
+  // (5) 接單被拒之後那一次重讀待做池卡住 → 已經知道的結果不等它：馬上說沒接到（那個原因），鎖放開，沒有期限留著
+  const refusedState = { claimError: '400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}' };
+  const refusedBackend = backendOf(refusedState);
+  let claimSeen = false;
+  const f = harness({ returnFlag: true, flag: true, backend: async (url, init) => {
+    if (url === "rpc/dispatch_pool_claim") claimSeen = true;
+    else if (claimSeen && url.startsWith("dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name")) refusedState.poolHang = true;
+    return refusedBackend(url, init);
+  } });
+  await startSwitch(f, 1);
+  refusedState.row = appliedRow();
+  await f.runPoll();
+  assert.deepEqual(f.calls.toasts, ["原本那一道已經退回待做池，這台現在沒有工單；第 1 道沒有接成功（已經被別台接走）。請到「選工單」重新接。"]);
+  assert.equal(f.api.locks("A05"), false, "lock released without waiting for the hung pool read");
+  assert.equal(f.api.poolState.claimBusy, "");
+  assert.equal(f.timeouts(), 0);
+  assert.equal(refusedState.claims.length, 1);
+  // 正常路徑不留任何還沒清掉的期限
+  const okState = {};
+  const ok = harness({ returnFlag: true, flag: true, backend: backendOf(okState) });
+  await startSwitch(ok, 1);
+  okState.row = appliedRow();
+  await ok.runPoll();
+  assert.equal(ok.calls.toasts.at(-1), "已換成第 1 道。原本的第 3 道已退回待做池。");
+  assert.equal(ok.timeouts(), 0, "the happy path leaves no time limit pending");
+});
+
 test("click delegation: the card button opens the switch sheet; choices are picked inside the sheet", async () => {
   const state = {};
   const h = harness({ returnFlag: true, flag: true, backend: backendOf(state) });
@@ -954,7 +1226,15 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     ["  if (machtileSwitchStepAfterReturn(code, rec, view)) return;\n", ""],
     ["  if (machtileSwitchStepHandleClick(target)) return true;\n", ""],
     // 既有接單函式多回一個結果物件；原本的呼叫端（`void machtileClaimDispatchPool(...)`）不看回傳值
-    ["    showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
+    ["    if (!switchStep) showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
+    // 換道次模式（第三個參數，只有換道次會傳；一般接單＝null）：記下 RPC 已成功、重讀畫面有期限、不跳提示、錯誤交給換道次自己說
+    ["async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileClaimDispatchPool(sourceKey, machineCode) {"],
+    ["    if (switchStep) switchStep.claimed = true;\n", ""],
+    ["    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));\n", "    await loadFromSupabase({ preserveDepartmentOnFailure: true });\n"],
+    ["    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);\n", ""],
+    // 登入的人換了／登出：丟掉記憶體裡的換道次（旗標關時 active 本來就是空的、也沒有換道次確認卡＝沒有效果）
+    ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStepForgetUser();\n", ""],
+    ["  machtileAuthState.email = \"\";\n  machtileSwitchStepForgetUser();\n", "  machtileAuthState.email = \"\";\n"],
     ["    await machtileLoadDispatchPool();\n    return { ok: false, error };\n  } finally {", "    await machtileLoadDispatchPool();\n  } finally {"],
   ];
   for (const [now, before] of hooks) {

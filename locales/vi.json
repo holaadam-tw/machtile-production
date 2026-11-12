@@ -788,6 +788,7 @@
   "switch_step_claim_failed": { "value": "Công đoạn ban đầu đã được trả về danh sách chờ, máy này hiện không có lệnh; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", "_draft": true },
   "switch_step_claim_failed_reconciled": { "value": "Công đoạn ban đầu đã được trả về danh sách chờ, lệnh đang gắn trên máy này không bị thay đổi; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", "_draft": true },
   "switch_step_claim_uncertain": { "value": "Công đoạn ban đầu đã được trả về danh sách chờ; chưa chắc đã nhận được công đoạn {{to}} hay chưa (mạng không ổn định). Hãy tải lại màn hình để xem máy đang gắn lệnh nào; nếu chưa có, hãy vào «Chọn lệnh» để nhận lại.", "_draft": true },
+  "switch_step_claimed_refresh_failed": { "value": "Đã đổi sang công đoạn {{to}} (công đoạn {{from}} ban đầu đã được trả về danh sách chờ), nhưng màn hình chưa cập nhật được. Hãy tải lại màn hình.", "_draft": true },
   "switch_step_reason_taken": { "value": "máy khác đã nhận mất", "_draft": true },
   "switch_step_reason_not_in_pool": { "value": "công đoạn này không còn trong danh sách chờ", "_draft": true },
   "switch_step_reason_not_eligible": { "value": "máy này không làm được công đoạn này", "_draft": true },

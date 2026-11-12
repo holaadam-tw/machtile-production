@@ -440,6 +440,7 @@
   "switch_step_claim_failed": "原本那一道已經退回待做池，這台現在沒有工單；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
   "switch_step_claim_failed_reconciled": "原本那一道已經退回待做池，這台機台目前掛的工單沒有動；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
   "switch_step_claim_uncertain": "原本那一道已經退回待做池；第 {{to}} 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。",
+  "switch_step_claimed_refresh_failed": "已換成第 {{to}} 道（原本的第 {{from}} 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。",
   "switch_step_reason_taken": "已經被別台接走",
   "switch_step_reason_not_in_pool": "待做池裡已經沒有這一道",
   "switch_step_reason_not_eligible": "這台不能做這一道",
