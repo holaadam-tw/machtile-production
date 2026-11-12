@@ -130,12 +130,16 @@ const testConfig = `window.MACHTILE_CONFIG = {
   useSupabase: true, useTenantHeaderAuth: true, enableOutboxSubmit: true, enableFileUpload: false,
   enableScheduleContracts: false, enableCalibrationGovernance: false, enableManufacturingQuoteTracking: false,
   useHmcWorklistSupabase: false, oauthEnabled: false, enableJevTriage: false, enableAccountDelete: false,
+  enableFinishClose: true, finishCloseMachines: ["A04"], stationCommandMachines: ["A04"],
   enableFaceStatus: false, faceAdminUrl: "", disableServiceWorker: true, hmcFixedStagingEnabled: false,
 };`;
 
 // ---------- fake backend ----------
 function makeBackend(opts = {}) {
   const b = { calls: [], inserted: new Map(), failNext: 0, reads: [] };
+  b.closeRow = opts.closeRow || { command_uuid: id(880), command_type: "close", machine_code: "A04", expected_order_no: "XX01202604140011",
+    expected_index_sn: 1, expected_part_no: "CPDG-03-01", status: "applied", requested_at: todayAt("17:01"), applied_at: todayAt("17:02"),
+    legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 1, OrderNo: "XX01202604140011", Warning: "", station: "A04", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } };
   b.handle = async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -170,6 +174,7 @@ function makeBackend(opts = {}) {
       if (q.includes("cycle_time_seconds=not.is.null")) return json(200, machineTimeRows);
       return json(200, []);
     }
+    if (p === "/rest/v1/station_commands") return json(200, q.includes("command_type=eq.close") ? [b.closeRow] : [{ command_uuid: b.closeRow.command_uuid }]);
     if (p === "/rest/v1/rpc/batch_report_progress") {
       const body = JSON.parse(req.postData() || "{}");
       return json(200, (body.p_process_ids || []).filter((pid) => progress[pid]).map((pid) => ({ process_id: pid, ...progress[pid] })));
@@ -260,11 +265,37 @@ console.log("== 手機（Pixel 7）==");
   console.log("-- 今日開工狀態 --");
   const foot = async (code) => cardOf(page, code).locator(".machine-tile-footer > span").first();
   ok((await (await foot("A01")).innerText()) === "今日已開工 08:05・王小明" && await (await foot("A01")).getAttribute("data-today-status") === "started", "A01：今日已開工 08:05・王小明（綠）", await (await foot("A01")).innerText());
-  ok((await (await foot("A04")).innerText()) === "今日已收工 17:00" && await (await foot("A04")).getAttribute("data-today-status") === "finished", "A04：先開工後收工 → 今日已收工 17:00", await (await foot("A04")).innerText());
+  ok((await (await foot("A04")).innerText()) === "今日已完工 17:00" && await (await foot("A04")).getAttribute("data-today-status") === "finished", "A04：先開工後完工 → 今日已完工 17:00", await (await foot("A04")).innerText());
   ok((await (await foot("B03")).innerText()) === "今日尚未開工" && await (await foot("B03")).getAttribute("data-today-status") === "none", "B03：今日尚未開工（灰）");
   ok((await (await foot("A02")).innerText()) === "今日尚未開工", "A02：昨天的開工不算");
   const colors = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll(".card-today-status")].map((e) => [e.dataset.todayStatus, getComputedStyle(e).color])));
   ok(colors.started === "rgb(21, 128, 61)" && colors.none === "rgb(115, 128, 149)", "顏色：開工綠、未開工灰", JSON.stringify(colors));
+
+  console.log("-- 收工後關站狀態（正式欄位形狀＋重新整理）--");
+  const closeStatus = async () => (await (await foot("A04")).innerText()).replace(/\s+/g, " ").trim();
+  be.closeRow = { ...be.closeRow, status: "pending", applied_at: null, legacy_snapshot: null };
+  await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
+  ok((await closeStatus()).includes("完工已記錄 關站處理中"), "等待中：不再只顯示今日已完工", await closeStatus());
+  be.closeRow = { ...be.closeRow, status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道仍開著",
+    legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } };
+  await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
+  ok((await closeStatus()).includes("關站還沒完成") && await cardOf(page, "A04").locator("[data-finish-close-confirm]").count() === 1,
+    "需確認：醒目文案與沿用確認按鈕", await closeStatus());
+  await cardOf(page, "A04").screenshot({ path: path.join(outDir, "06-close-needs-confirmation.png") });
+  be.closeRow = { ...be.closeRow, reject_code: "LOCK_TIMEOUT", reject_message: "工廠系統忙碌", legacy_snapshot: null };
+  await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
+  ok((await closeStatus()).includes("關站沒成功：工廠系統忙碌") && await cardOf(page, "A04").locator("[data-finish-close-confirm]").count() === 0,
+    "其他拒絕：白話原因且沒有確認按鈕", await closeStatus());
+  be.closeRow = { ...be.closeRow, status: "applied", reject_code: null, reject_message: null, applied_at: todayAt("17:02"),
+    legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 1, OrderNo: "XX01202604140011", Warning: "", station: "A04", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } };
+  await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
+  ok((await closeStatus()) === "今日已完工 17:00", "applied：維持完工狀態", await closeStatus());
+  be.closeRow = { ...be.closeRow, status: "pending", applied_at: null, legacy_snapshot: null };
+  await page.evaluate(() => localStorage.setItem("machtile.language", "vi"));
+  await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
+  const viClose = await closeStatus();
+  ok(viClose.includes("Đã ghi nhận hoàn tất") && !viClose.includes("card_finish_"), "越南文重新整理後不露 key", viClose);
+  await page.evaluate(() => localStorage.setItem("machtile.language", "zh-Hant"));
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok(overflow <= 1, `手機沒有橫向捲動（${overflow}px）`);
   await a01.scrollIntoViewIfNeeded();

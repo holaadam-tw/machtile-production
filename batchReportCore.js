@@ -30,14 +30,14 @@
   const REPORT_TYPE = "batch";
   // 報工類型（owner 2026-10-02「是否也需要今日開工、中午報工、收工完工」）。label／submitLabel／remark 前綴
   // 全部照單台報工 app.js reportTypeMeta，送出的 payload 跟單台同類型逐欄同形（見 buildReportPayload）。
-  // 單台的「收工 / 完工」是同一個類型 finish（不會把工序標成完工），所以這裡也只有一個，不另外發明「完工」。
+  // 單台的「完工」是同一個類型 finish（不會改動既有資料契約），所以這裡也只有一個模式。
   const MODES = Object.freeze({
     dailyStart: Object.freeze({ key: "dailyStart", label: "今日開工", submitLabel: "送出今日開工", quantity: false }),
     noon: Object.freeze({ key: "noon", label: "中午報工", submitLabel: "送出中午報工", quantity: true }),
-    finish: Object.freeze({ key: "finish", label: "收工 / 完工", submitLabel: "送出收工回報", quantity: true }),
+    finish: Object.freeze({ key: "finish", label: "完工", submitLabel: "送出完工回報", quantity: true }),
   });
   const MODE_ORDER = Object.freeze(["dailyStart", "noon", "finish"]);
-  const FINISH_OVERTIME = Object.freeze({ none: "一般下班 17:00", "2030": "加班收工 20:30" });
+  const FINISH_OVERTIME = Object.freeze({ none: "一般下班 17:00", "2030": "加班完工 20:30" });
   const failReasonCodes = () => stationCore()?.FAIL_REASON_DEFAULTS || [];
 
   function validateFailReason(row, bad) {

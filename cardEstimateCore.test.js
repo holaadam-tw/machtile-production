@@ -131,7 +131,7 @@ console.log("== 今日開工狀態 ==");
   const names = { u1: "王小明", u2: "李大華", u5: "陳一" };
   const label = (pid) => c.todayStatusLabel(m.get(pid), (id) => names[id]);
   eq("開工：時間＋報工人（operator_ids 第一位優先）", label("p1"), { tone: "started", text: "今日已開工 08:05・王小明" });
-  eq("同一道先開工後收工 → 取最新：收工 17:00", label("p2"), { tone: "finished", text: "今日已收工 17:00" });
+  eq("同一道先開工後完工 → 取最新：完工 17:00", label("p2"), { tone: "finished", text: "今日已完工 17:00" });
   eq("昨天的開工不算 → 今日尚未開工", label("p3"), { tone: "none", text: "今日尚未開工" });
   eq("中午報工不算", m.has("p4"), false);
   eq("沒有 ended_at 用 created_at（08:30）", label("p5"), { tone: "started", text: "今日已開工 08:30・陳一" });

@@ -160,7 +160,7 @@
       pool_return_factory_note: "已派到工廠，退回請找生管（Factory 總覽）",
       work_start_first: "首次開工",
       daily_start: "今日開工",
-      finish_work: "收工/完工",
+      finish_work: "完工",
       finish_button: "完工",
       finish_screen_eyebrow: "完工回報",
       finish_screen_title: "完工",
@@ -169,8 +169,9 @@
       finish_reported_qty: "已報 {{quantity}} 件",
       finish_total_help: "填這一道從頭到尾的良品總數；系統只補報尚未回報的差額。",
       counter_qty_help: "報工請照機台計數器填累計數量",
-      finish_work_hint: "開啟收工／完工回報；目前不直接關閉舊 MES 工站",
-      finish_close_applied: "已關站",
+      finish_work_hint: "開啟完工回報；目前不直接關閉舊 MES 工站",
+      card_finish_recorded: "完工已記錄", card_finish_close_pending: "關站處理中…", card_finish_close_confirm: "關站還沒完成：上一道還在進行中，請再按『完工』並按『確認，仍要關站』", card_finish_close_rejected: "關站沒成功：{{reason}}，請再按完工",
+      finish_work_close_hint: "完工報工成功後，會接著關閉舊 MES 工站並讓下一道進池", finish_close_applied: "已關站",
       finish_close_applied_short: "少 {{quantity}} 件，已關站並依實做數入庫",
       finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
       finish_close_rejected_title: "關站未完成",
@@ -496,7 +497,7 @@
       pool_return_factory_note: "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)", // _draft
       work_start_first: "Bắt đầu lần đầu",
       daily_start: "Bắt đầu hôm nay",
-      finish_work: "Kết thúc / Hoàn tất",
+      finish_work: "Hoàn tất",
       finish_button: "Hoàn tất",
       finish_screen_eyebrow: "Báo cáo hoàn tất", // _draft
       finish_screen_title: "Hoàn tất", // _draft
@@ -505,8 +506,9 @@
       finish_reported_qty: "Đã báo {{quantity}} sản phẩm", // _draft
       finish_total_help: "Nhập tổng số sản phẩm đạt của toàn bộ công đoạn; hệ thống chỉ báo bổ sung phần chênh lệch chưa báo.", // _draft
       counter_qty_help: "Khi báo cáo, hãy nhập số tích lũy trên bộ đếm máy", // _draft
-      finish_work_hint: "Mở báo cáo kết thúc; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
-      finish_close_applied: "Đã đóng công đoạn", // _draft
+      finish_work_hint: "Mở báo cáo hoàn tất; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
+      card_finish_recorded: "Đã ghi nhận hoàn tất", card_finish_close_pending: "Đang xử lý đóng công đoạn…", card_finish_close_confirm: "Chưa đóng xong công đoạn: công đoạn trước vẫn đang chạy. Hãy bấm ‘Hoàn tất’ lần nữa rồi chọn ‘Xác nhận, vẫn đóng công đoạn’.", card_finish_close_rejected: "Đóng công đoạn không thành công: {{reason}}. Hãy bấm Hoàn tất lần nữa.", // _draft
+      finish_work_close_hint: "Sau khi báo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa công đoạn tiếp theo vào danh sách.", finish_close_applied: "Đã đóng công đoạn", // _draft
       finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm", // _draft
       finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
       finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft
