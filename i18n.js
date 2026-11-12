@@ -346,7 +346,61 @@
       asm_block_qty_exceeds: "這次數量比可以報的還多，請確認件數。",
       asm_block_qty_invalid: "數量不對，請確認件數。",
       asm_block_not_started: "這張單還沒開工，請先按開工再報工。",
-      login_timeout: "登入流程已逾時，請重新登入。"
+      login_timeout: "登入流程已逾時，請重新登入。",
+      // 接錯了，退回（return_claim，P2；config.enableReturnClaim）
+      return_claim_button: "接錯了，退回",
+      return_claim_title: "確認退回這張單",
+      return_claim_explain_pool: "這張單會回到待做池，別人可以再接。",
+      return_claim_explain_machine: "這台機台會變成沒有工單。",
+      return_claim_explain_no_report: "不會報工，也不會記任何數量。",
+      return_claim_on_behalf: "你是用管理員／生管身分代退，這筆會記成你按的。",
+      return_claim_field_machine: "機台",
+      return_claim_field_order: "工單號",
+      return_claim_field_step: "第幾道／工序",
+      return_claim_step_value: "第 {{step}} 道",
+      return_claim_reason_label: "退回原因（必填）",
+      return_claim_reason_required: "代退要寫原因，請填一句話。",
+      return_claim_reason_too_long: "原因太長了，最多 500 個字。",
+      return_claim_confirm: "確認退回",
+      return_claim_close: "關閉",
+      return_claim_close_later: "先關掉（結果會顯示在卡片上）",
+      return_claim_checking: "正在確認這張單的最新狀況…",
+      return_claim_fresh_changed: "這張單的狀況變了（已開工、已有報工，或已經不在這台），不能退回。請重新整理畫面。",
+      return_claim_fresh_failed: "讀不到這張單的最新資料，現在不能退回。請檢查網路後重新整理畫面。",
+      return_claim_sending: "送出中…",
+      return_claim_waiting: "已送出，等工廠處理。請稍等，不要重按。",
+      return_claim_processing: "工廠處理中，請稍等。",
+      return_claim_card_pending: "退回中，等工廠處理…",
+      return_claim_card_slow: "退回送出很久還沒有結果，請問生管。",
+      return_claim_uncertain: "網路不穩，還不知道有沒有送到。按「用同一筆重送」不會重複退回。",
+      return_claim_card_uncertain: "退回：上次送出時網路斷了，正在確認有沒有送到。",
+      return_claim_not_found: "目前查不到這筆退回，這張單還在這台。要退回請按「用同一筆重送」，不會重複。",
+      return_claim_resend: "用同一筆重送",
+      return_claim_dismiss: "不退了",
+      return_claim_applied: "已退回待做池，這台現在沒有工單。",
+      return_claim_applied_reconciled: "已把這張單退回待做池；這台機台目前掛的工單沒有動。",
+      return_claim_old_tablet: "這台平板太舊，不能用這個功能，請找生管。",
+      return_claim_err_login: "登入已過期，請重新登入。",
+      return_claim_err_role: "這個帳號不能退回接單，請用作業員、生管或管理員帳號。",
+      return_claim_err_account: "你的帳號資料還沒設定好，不能退回。請找管理員。",
+      return_claim_err_admin_disabled: "管理員／生管代退還沒開放，請找管理員。",
+      return_claim_err_card_data: "卡片上的工單資料不完整，請重新整理畫面；還是不行請找生管。",
+      return_claim_err_conflict: "這筆退回跟剛才送出的內容不一樣，沒有送出。請關掉、重新整理畫面後再看。",
+      return_claim_err_not_open: "退回功能還沒開放，請找生管幫你處理。",
+      return_claim_err_station_not_open: "這台機台還沒開放退回，請找生管幫你處理。",
+      return_claim_err_stale: "畫面上的工單資料跟系統不一樣了，沒有退回。請重新整理畫面。",
+      return_claim_err_machine_not_allowed: "你的帳號不能操作這台機台（課別不符），請找生管。",
+      return_claim_err_no_claim: "這張單已經不在接單狀態（可能已經退回了）。請重新整理畫面。",
+      return_claim_err_not_owner: "這張單不是你接的，你不能退回。請找接單的人或生管。",
+      return_claim_err_claim_not_applied: "接單還沒被工廠確認，現在不能退回。請等一兩分鐘再試。",
+      return_claim_err_started: "這張單已經開工或已有報工，不能退回。要換單請找生管。",
+      return_claim_err_in_flight: "這台還有一筆指令在等工廠處理，等它有結果再試。",
+      return_claim_err_inconsistent: "舊 MES 的資料對不起來，系統不敢退回。請找生管處理。",
+      return_claim_err_pool_missing: "工廠找不到這張待做單，沒有退回。請找生管。",
+      return_claim_err_stale_command: "工廠太晚處理，這次沒有退回，工單還在這台。需要的話請再按一次。",
+      return_claim_err_expired: "超過 10 分鐘工廠都沒有接手，這次沒有退回，工單還在這台。需要的話請再按一次。",
+      return_claim_err_released: "主管取消了這筆退回，有沒有退成不確定。請重新整理畫面看這台的工單，或問生管。",
+      return_claim_err_generic: "沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。",
     },
     vi: {
       app_update_available: "Có phiên bản mới",
@@ -683,7 +737,60 @@
       asm_block_qty_exceeds: "Số lượng lần này nhiều hơn số được báo; hãy kiểm tra lại.",
       asm_block_qty_invalid: "Số lượng không đúng; hãy kiểm tra lại.",
       asm_block_not_started: "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.",
-      login_timeout: "Quá thời gian đăng nhập. Vui lòng đăng nhập lại."
+      login_timeout: "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.",
+      return_claim_button: "Nhận nhầm, trả lại", // _draft
+      return_claim_title: "Xác nhận trả lại phiếu này", // _draft
+      return_claim_explain_pool: "Phiếu này sẽ quay về danh sách chờ làm, người khác có thể nhận.", // _draft
+      return_claim_explain_machine: "Máy này sẽ không còn phiếu nào.", // _draft
+      return_claim_explain_no_report: "Không báo công và không ghi số lượng nào.", // _draft
+      return_claim_on_behalf: "Bạn đang trả thay với quyền quản trị／kế hoạch; thao tác này sẽ ghi tên bạn.", // _draft
+      return_claim_field_machine: "Máy", // _draft
+      return_claim_field_order: "Số phiếu", // _draft
+      return_claim_field_step: "Công đoạn", // _draft
+      return_claim_step_value: "Công đoạn {{step}}", // _draft
+      return_claim_reason_label: "Lý do trả lại (bắt buộc)", // _draft
+      return_claim_reason_required: "Trả thay phải ghi lý do; hãy ghi một câu.", // _draft
+      return_claim_reason_too_long: "Lý do quá dài, tối đa 500 ký tự.", // _draft
+      return_claim_confirm: "Xác nhận trả lại", // _draft
+      return_claim_close: "Đóng", // _draft
+      return_claim_close_later: "Đóng trước (kết quả sẽ hiện trên thẻ máy)", // _draft
+      return_claim_checking: "Đang kiểm tra tình trạng mới nhất của phiếu…", // _draft
+      return_claim_fresh_changed: "Tình trạng phiếu đã thay đổi (đã bắt đầu, đã có báo công, hoặc không còn ở máy này) nên không trả lại được. Hãy tải lại màn hình.", // _draft
+      return_claim_fresh_failed: "Không đọc được dữ liệu mới nhất của phiếu nên chưa trả lại được. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      return_claim_sending: "Đang gửi…", // _draft
+      return_claim_waiting: "Đã gửi, đang chờ nhà máy xử lý. Vui lòng chờ, đừng bấm lại.", // _draft
+      return_claim_processing: "Nhà máy đang xử lý, vui lòng chờ.", // _draft
+      return_claim_card_pending: "Đang trả lại, chờ nhà máy xử lý…", // _draft
+      return_claim_card_slow: "Đã gửi trả lại khá lâu mà chưa có kết quả; hãy hỏi bộ phận kế hoạch.", // _draft
+      return_claim_uncertain: "Mạng không ổn định, chưa biết đã gửi được chưa. Bấm “Gửi lại cùng lệnh” sẽ không trả lại hai lần.", // _draft
+      return_claim_card_uncertain: "Trả lại: lần gửi trước bị mất mạng, đang kiểm tra đã gửi được chưa.", // _draft
+      return_claim_not_found: "Hiện không tìm thấy lệnh trả lại này, phiếu vẫn ở máy này. Muốn trả lại hãy bấm “Gửi lại cùng lệnh”; sẽ không bị trùng.", // _draft
+      return_claim_resend: "Gửi lại cùng lệnh", // _draft
+      return_claim_dismiss: "Không trả nữa", // _draft
+      return_claim_applied: "Đã trả về danh sách chờ làm; máy này hiện không có phiếu.", // _draft
+      return_claim_applied_reconciled: "Đã trả phiếu này về danh sách chờ làm; phiếu đang gắn trên máy này không thay đổi.", // _draft
+      return_claim_old_tablet: "Máy tính bảng này quá cũ nên không dùng được chức năng này; hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_login: "Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.", // _draft
+      return_claim_err_role: "Tài khoản này không trả lại phiếu được; hãy dùng tài khoản công nhân, kế hoạch hoặc quản trị.", // _draft
+      return_claim_err_account: "Tài khoản của bạn chưa được thiết lập đầy đủ nên không trả lại được. Hãy báo quản trị viên.", // _draft
+      return_claim_err_admin_disabled: "Chức năng trả thay của quản trị／kế hoạch chưa mở; hãy báo quản trị viên.", // _draft
+      return_claim_err_card_data: "Dữ liệu phiếu trên thẻ máy chưa đầy đủ; hãy tải lại màn hình, nếu vẫn lỗi hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_conflict: "Lệnh trả lại này khác với nội dung vừa gửi nên chưa được gửi. Hãy đóng lại, tải lại màn hình rồi xem lại.", // _draft
+      return_claim_err_not_open: "Chức năng trả lại chưa mở; hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_station_not_open: "Máy này chưa mở chức năng trả lại; hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_stale: "Dữ liệu phiếu trên màn hình không còn khớp với hệ thống nên chưa trả lại. Hãy tải lại màn hình.", // _draft
+      return_claim_err_machine_not_allowed: "Tài khoản của bạn không được thao tác máy này (khác bộ phận); hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_no_claim: "Phiếu này không còn ở trạng thái đã nhận (có thể đã được trả lại). Hãy tải lại màn hình.", // _draft
+      return_claim_err_not_owner: "Phiếu này không phải do bạn nhận nên bạn không trả lại được. Hãy tìm người đã nhận hoặc bộ phận kế hoạch.", // _draft
+      return_claim_err_claim_not_applied: "Việc nhận phiếu chưa được nhà máy xác nhận nên chưa trả lại được. Hãy chờ một hai phút rồi thử lại.", // _draft
+      return_claim_err_started: "Phiếu này đã bắt đầu hoặc đã có báo công nên không trả lại được. Muốn đổi phiếu hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_in_flight: "Máy này còn một lệnh đang chờ nhà máy xử lý; hãy chờ có kết quả rồi thử lại.", // _draft
+      return_claim_err_inconsistent: "Dữ liệu trên MES cũ không khớp nên hệ thống không dám trả lại. Hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_pool_missing: "Nhà máy không tìm thấy phiếu chờ làm này nên chưa trả lại. Hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_stale_command: "Nhà máy xử lý quá muộn nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
+      return_claim_err_expired: "Quá 10 phút nhà máy vẫn chưa tiếp nhận nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
+      return_claim_err_released: "Quản lý đã hủy lệnh trả lại này, chưa chắc đã trả được hay chưa. Hãy tải lại màn hình để xem phiếu của máy, hoặc hỏi bộ phận kế hoạch.", // _draft
+      return_claim_err_generic: "Chưa trả lại được. Hãy tải lại màn hình để kiểm tra phiếu của máy; nếu vẫn không đúng hãy báo bộ phận kế hoạch.", // _draft
     }
   };
 
