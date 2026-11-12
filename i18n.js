@@ -157,6 +157,9 @@
       eligible_machines: "可做機台 {{machines}}",
       not_in_list: "（{{machine}} 不在清單）",
       returned_waiting_claim: "退回待接",
+      pool_step_label: "第 {{step}} 道",
+      pool_group_steps: "這張單在待做池有 {{count}} 道：第 {{steps}} 道",
+      pool_earlier_steps_waiting: "前面第 {{steps}} 道還在待做池（還沒做完），請確認你做的是這一道",
       pool_return_factory_note: "已派到工廠，退回請找生管（Factory 總覽）",
       work_start_first: "首次開工",
       daily_start: "今日開工",
@@ -494,6 +497,9 @@
       eligible_machines: "Máy phù hợp {{machines}}",
       not_in_list: "（{{machine}} không có trong danh sách）",
       returned_waiting_claim: "Trả lại, chờ nhận",
+      pool_step_label: "Công đoạn {{step}}", // _draft
+      pool_group_steps: "Lệnh này có {{count}} công đoạn trong danh sách chờ: công đoạn {{steps}}", // _draft
+      pool_earlier_steps_waiting: "Công đoạn trước ({{steps}}) vẫn còn trong danh sách chờ (chưa làm xong); hãy kiểm tra đúng công đoạn bạn đang gia công", // _draft
       pool_return_factory_note: "Đã giao đến nhà máy; muốn trả lại, vui lòng liên hệ bộ phận kế hoạch (Tổng quan Factory)", // _draft
       work_start_first: "Bắt đầu lần đầu",
       daily_start: "Bắt đầu hôm nay",

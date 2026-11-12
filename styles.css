@@ -12996,6 +12996,13 @@ body.tv-mode .p0-safe-mode-banner { display: none !important; }
 .pool-returned { font-size: 0.85em; color: #8a3b00; }
 .card-selection-panel .pool-item.is-not-eligible { opacity: 0.7; }
 .card-selection-panel .pool-eligible { color: #4b5a68; }
+/* 待做池：同一張工單多道收成一組（dispatchPoolGroupSteps）。組標題＋組內每一道靠左色條連成一塊。 */
+.card-selection-panel .pool-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 10px; padding: 8px 10px; border-bottom: 0; border-left: 4px solid #1f5fa8; background: #eef1f4; }
+.card-selection-panel .pool-group-head[hidden] { display: none; }
+.card-selection-panel .pool-group-head .pool-group-count { color: #4b5a68; font-size: 0.92em; }
+.card-selection-panel .pool-item.is-grouped { padding-left: 10px; border-left: 4px solid #b9cfe8; }
+.card-selection-panel .pool-step { font-size: 1.05em; }
+.card-selection-panel .pool-step-hint { color: #8a3b00; font-weight: 700; }
 .card-selection-panel button[data-pool-claim]:disabled { cursor: not-allowed; opacity: 0.6; }
 .card-pool-entry { background: #f6efe3; color: #8a3b00; }
 .card-selection-panel .pool-claim-reason { display: block; color: #8a3b00; }

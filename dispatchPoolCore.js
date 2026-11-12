@@ -88,6 +88,52 @@
     return { department, items: hideNotEligible ? list.filter((item) => item.eligibleHere) : list };
   }
 
+  // 同一張工單在池子裡有好幾道時（owner 2026-11-12：之後每一道未完成的加工工序都會進池）：只做顯示用的分組。
+  // 純函式、不改傳入的陣列或列；dispatch_pool_items 沒有「共幾道／已報數量／上一道狀態」欄位，這裡不猜。
+  function stepNumber(item) {
+    const n = Number(item && item.process_order);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+
+  // 傳入「已照 owner 排序」的清單：不同工單之間維持原順序（每張工單排在它最前面那一列的位置），
+  // 同一張工單的列收在一起、依道次由小到大。每張工單只有一列時，攤平後的順序與傳入完全相同。
+  function groupByWorkOrder(items) {
+    const groups = [];
+    const byOrder = new Map();
+    for (const item of Array.isArray(items) ? items : []) {
+      const key = text(item && item.work_order_no);
+      let group = key ? byOrder.get(key) : null;
+      if (!group) {
+        group = { workOrderNo: key, items: [] };
+        if (key) byOrder.set(key, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+    }
+    return groups.map((group) => {
+      const sorted = group.items.map((item, index) => ({ item, index }))
+        .sort((a, b) => compareNullableAsc(stepNumber(a.item), stepNumber(b.item)) || a.index - b.index)
+        .map((entry) => entry.item);
+      const firstText = (field) => text((sorted.find((item) => text(item && item[field])) || {})[field]);
+      return { workOrderNo: group.workOrderNo, partNo: firstText("part_no"), partName: firstText("part_name"), items: sorted };
+    });
+  }
+
+  // 同一張工單、道次比這一列小、而且也還在待做池（＝還沒做完）的道次，由小到大、不重複。
+  // allItems＝使用者看得到的整個池子（不只這台可做的），所以前一道只能在別台做時也提示得到。
+  function earlierPoolSteps(allItems, item) {
+    const order = text(item && item.work_order_no);
+    const step = stepNumber(item);
+    if (!order || step === null) return [];
+    const steps = new Set();
+    for (const other of Array.isArray(allItems) ? allItems : []) {
+      if (text(other && other.work_order_no) !== order) continue;
+      const otherStep = stepNumber(other);
+      if (otherStep !== null && otherStep < step) steps.add(otherStep);
+    }
+    return [...steps].sort((a, b) => a - b);
+  }
+
   function claimArgs(sourceKey, machineCode, replaceStopped = false) {
     const args = { p_source_key: text(sourceKey), p_machine_code: text(machineCode) };
     if (replaceStopped === true) args.p_replace_stopped = true;
@@ -249,6 +295,9 @@
     urgencyOf,
     sortItems,
     itemsForMachine,
+    stepNumber,
+    groupByWorkOrder,
+    earlierPoolSteps,
     eligibleCount,
     claimArgs,
     replaceStoppedState,

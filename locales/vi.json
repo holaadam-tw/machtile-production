@@ -443,6 +443,18 @@
     "value": "Trả lại, chờ nhận",
     "_draft": true
   },
+  "pool_step_label": {
+    "value": "Công đoạn {{step}}",
+    "_draft": true
+  },
+  "pool_group_steps": {
+    "value": "Lệnh này có {{count}} công đoạn trong danh sách chờ: công đoạn {{steps}}",
+    "_draft": true
+  },
+  "pool_earlier_steps_waiting": {
+    "value": "Công đoạn trước ({{steps}}) vẫn còn trong danh sách chờ (chưa làm xong); hãy kiểm tra đúng công đoạn bạn đang gia công",
+    "_draft": true
+  },
   "work_start_first": {
     "value": "Bắt đầu lần đầu",
     "_draft": true

@@ -79,6 +79,9 @@ window.MACHTILE_CONFIG = {
   stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // 派工池接單：全部車床 A01–A05＋全部加工中心 B01–B06（2026-10-14 owner「池開加工中心」）。
   dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
+  // 待做池同一張工單有好幾道時收成一組、依道次排，並提示「前面第 n 道還在待做池」（owner 2026-11-12；只影響顯示）。
+  // 關掉＝改成 false（清單回到一列一張、完全跟以前一樣）。
+  dispatchPoolGroupSteps: true,
   // machines / v_machine_management_cards 尚未同步舊 MES Station_Type；machine_type 不是多工能力。
   // 因此明列已由 Factory MachTileDispatchAssign 證實可多工的 B01–B06，其餘一律 single（fail closed）。
   multiStationMachines: ["B01", "B02", "B03", "B04", "B05", "B06"],

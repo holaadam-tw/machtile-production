@@ -63,6 +63,8 @@ const config = {
   pickStartFlowMachines: [],
   // 派工池接單機台 allowlist。預設全關；首波核准值 ["A01", "A03"] 由部署旗標同步開啟。
   dispatchPoolMachines: [],
+  // 待做池同一張工單多道收成一組（只影響顯示）。預設關＝清單與以前完全一樣。
+  dispatchPoolGroupSteps: false,
   // 多工站明確名單；machines view 尚無 Station_Type/station_mode，空陣列即全部按 single 處理。
   multiStationMachines: [],
   inspectionLinkMachines: [],
@@ -11948,7 +11950,10 @@ function machtileDispatchPoolSectionMarkup(machine) {
   const refreshMessage = openRefresh?.status === "loading"
     ? machtileTranslate("pool_refreshing")
     : openRefresh?.status === "error" ? machtileTranslate("pool_refresh_failed_stale") : "";
-  const items = pool.items.map(item => {
+  // dispatchPoolGroupSteps（owner 2026-11-12）：同一張工單在池子裡有好幾道時收成一組、依道次排。只改顯示：
+  // 不寫任何狀態；接單鈕（data-pool-claim／data-pool-machine）與送出的參數完全不變。每張工單只有一列時輸出與關閉旗標相同。
+  const groupSteps = config.dispatchPoolGroupSteps === true;
+  const renderItem = (item, group) => {
     const u = core.urgencyOf(item);
     const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
     const machineCode = machine?.code || machine?.name || "";
@@ -11965,17 +11970,35 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const busy = Boolean(machtileDispatchPoolState.claimBusy);
     const disabled = !claim.enabled || busy;
     const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
-    return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}">
-        <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
-        <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}</span>
-        <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
+    // 前面的道次也還在待做池（＝還沒做完）：只提示，不擋接單（owner 2026-11-12）。
+    const earlier = groupSteps ? core.earlierPoolSteps(machtileDispatchPoolState.items, item) : [];
+    const stepHint = earlier.length ? `<span class="pool-step-hint" data-pool-earlier-steps="${escapeHtml(earlier.join(","))}">${escapeHtml(machtileTranslate("pool_earlier_steps_waiting", { steps: earlier.join("、") }))}</span>` : "";
+    const step = core.stepNumber(item);
+    const groupAttrs = group ? ` data-pool-group="${escapeHtml(group.workOrderNo)}"` : "";
+    // 組內的列：工單號／品名在組標題，這一列的標題改成「第 n 道 · 工序名稱」讓 2–3 道一眼分得開。
+    const headTitle = group
+      ? `<strong class="pool-step" data-pool-step="${step || ""}">${escapeHtml(step ? `${machtileTranslate("pool_step_label", { step })} · ${core.displayName(item.operation_name)}` : core.displayName(item.operation_name))}</strong>`
+      : `<strong>${escapeHtml(item.work_order_no)}</strong>`;
+    const operationLine = group ? "" : `
+        <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}</span>`;
+    return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}${group ? " is-grouped" : ""}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}"${groupAttrs}>
+        <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span>${headTitle}${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>${operationLine}
+        <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>${stepHint}
         <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
         <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
         ${replace.visible ? `<button type="button" class="pool-replace-stopped-action" data-pool-replace-stopped="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${!replace.enabled || busy ? "disabled" : ""} title="${escapeHtml(replace.reason)}">改掛此單（不關站）</button>` : ""}
         ${canRelease ? `<button type="button" class="pool-release-action" data-pool-release="${escapeHtml(item.source_key)}" ${busy ? "disabled" : ""}>${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("release_claiming") : machtileTranslate("release_claim")}</button>` : ""}
         ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
       </li>`;
-  }).join("");
+  };
+  const items = !groupSteps
+    ? pool.items.map(item => renderItem(item, null)).join("")
+    : core.groupByWorkOrder(pool.items).map(group => {
+      if (group.items.length < 2) return group.items.map(item => renderItem(item, null)).join("");
+      const steps = group.items.map(item => core.stepNumber(item)).filter(Boolean).join("、");
+      const part = [group.partNo, core.displayName(group.partName)].filter(Boolean).join(" · ");
+      return `<li class="pool-group-head" data-pool-group-head="${escapeHtml(group.workOrderNo)}"><strong>${escapeHtml(group.workOrderNo)}</strong><span>${escapeHtml(part)}</span><span class="pool-group-count">${escapeHtml(machtileTranslate("pool_group_steps", { count: group.items.length, steps }))}</span></li>${group.items.map(item => renderItem(item, group)).join("")}`;
+    }).join("");
   const machineCode = String(machine?.code || machine?.name || "");
   const empty = status === "error"
     ? `<li data-pool-error role="alert">${escapeHtml(machtileDispatchPoolState.error)}</li>`
@@ -14693,6 +14716,10 @@ function machtilePickOrderApplySearch(holder) {
     }, query);
     element.hidden = !matched;
     if (matched) matches += 1;
+  });
+  // 待做池的組標題不算一筆：組內沒有任何一道符合搜尋時跟著藏起來。
+  (activePane?.querySelectorAll("[data-pool-group-head]") || []).forEach((head) => {
+    head.hidden = !items.some(element => !element.hidden && element.dataset.poolGroup === head.dataset.poolGroupHead);
   });
   const count = holder.querySelector("[data-pick-order-search-count]");
   if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: items.length });

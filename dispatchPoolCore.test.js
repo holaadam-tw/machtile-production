@@ -126,5 +126,34 @@ eq("多關鍵字全部符合", c.filterOrderSearch(searchable, "主軸 車削").
 eq("多關鍵字任一不符即排除", c.filterOrderSearch(searchable, "主軸 銑削"), []);
 eq("空字串保留全部", c.filterOrderSearch(searchable, "  "), searchable);
 
+console.log("== groupByWorkOrder／earlierPoolSteps（同一張工單多道，只供顯示）==");
+const multi = c.sortItems([
+  item({ source_key: "k-a3", work_order_no: "W-a", process_order: 3, planned_start: "2026-10-08T00:00:00Z", part_no: "P-a", part_name: "軸" }),
+  item({ source_key: "k-a1", work_order_no: "W-a", process_order: 1, planned_start: "2026-10-10T00:00:00Z", part_no: "P-a", part_name: "軸" }),
+  item({ source_key: "k-b1", work_order_no: "W-b", process_order: 1, urgency: 1 }),
+  item({ source_key: "k-a2", work_order_no: "W-a", process_order: 2, planned_start: "2026-10-09T00:00:00Z", part_no: "", part_name: null }),
+  item({ source_key: "k-c2", work_order_no: "W-c", process_order: 2, urgency: 4 }),
+]);
+const groups = c.groupByWorkOrder(multi);
+eq("不同工單之間維持 owner 排序（緊急 → 交期 → 預計開始）", groups.map((g) => g.workOrderNo), ["W-b", "W-a", "W-c"]);
+eq("同一張工單的列收在一起、依道次由小到大", groups[1].items.map((x) => x.source_key), ["k-a1", "k-a2", "k-a3"]);
+eq("組標題的料號／品名取第一個有值的", [groups[1].partNo, groups[1].partName], ["P-a", "軸"]);
+eq("分組不丟列、不重複", groups.flatMap((g) => g.items.map((x) => x.source_key)).sort(), multi.map((x) => x.source_key).sort());
+eq("分組不改傳入陣列的順序", multi.map((x) => x.source_key), ["k-b1", "k-a3", "k-a2", "k-a1", "k-c2"]);
+eq("分組回傳原本的列物件（不複製、不加欄位）", groups[1].items.every((x) => multi.includes(x)), true);
+const singles = c.sortItems([item({ work_order_no: "W-1", urgency: 3 }), item({ work_order_no: "W-2", urgency: 1 }), item({ work_order_no: "W-3", urgency: 2 })]);
+eq("每張工單只有一列：攤平後順序與傳入完全相同", c.groupByWorkOrder(singles).flatMap((g) => g.items), singles);
+eq("每張工單只有一列：每組一列", c.groupByWorkOrder(singles).map((g) => g.items.length), [1, 1, 1]);
+eq("沒有工單號的列各自一組（不互相併）", c.groupByWorkOrder([{ work_order_no: "", process_order: 1 }, { work_order_no: null, process_order: 2 }]).length, 2);
+eq("非陣列 → 空", c.groupByWorkOrder(null), []);
+eq("道次：正整數才算", [c.stepNumber({ process_order: 2 }), c.stepNumber({ process_order: "3" }), c.stepNumber({ process_order: 0 }), c.stepNumber({}), c.stepNumber(null)], [2, 3, null, null, null]);
+eq("第 1 道前面沒有", c.earlierPoolSteps(multi, multi.find((x) => x.source_key === "k-a1")), []);
+eq("第 3 道前面還有第 1、2 道在池子", c.earlierPoolSteps(multi, multi.find((x) => x.source_key === "k-a3")), [1, 2]);
+eq("別張工單的道次不算", c.earlierPoolSteps(multi, multi.find((x) => x.source_key === "k-c2")), []);
+eq("同道次／較後面的不算", c.earlierPoolSteps([item({ process_order: 2 }), item({ process_order: 5 })], item({ process_order: 2 })), []);
+eq("道次不明不提示", c.earlierPoolSteps(multi, { work_order_no: "W-a", process_order: null }), []);
+eq("接單參數與分組無關：同一列分組前後相同", groups.flatMap((g) => g.items).map((x) => JSON.stringify(c.claimArgs(x.source_key, "A02"))).sort(),
+  multi.map((x) => JSON.stringify(c.claimArgs(x.source_key, "A02"))).sort());
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 if (fail) process.exit(1);

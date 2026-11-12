@@ -1,0 +1,21 @@
+<h3>待做池（同課）</h3><p class="pool-note">生管放進池子、還沒派機台的工序，依緊急程度 → 交期 → APS 預計開始排序；空閒且在可做清單、並已開 pilot 的機台才能接單。 資料時間 11/12 11:00</p>
+    
+    <ul class="pool-list" data-card-selection-pool><li class="pool-item" data-pick-search-item data-pick-search-order="TEST-WO-1" data-pick-search-part-no="TEST-P1" data-pick-search-part-name="測試軸" data-pick-search-process="CNC車床加工-1/2" data-pool-key="01|N1|S1">
+        <div class="pool-item-head"><span class="pool-urgency is-u2" data-pool-urgency="2">緊急 2</span><strong>TEST-WO-1</strong></div>
+        <span>N2 CNC車床加工-1/2 · 測試軸</span>
+        <span>數量 120 · 交期 11/20 · APS 預計開始 11/13 08:00</span>
+        <span class="pool-eligible">可做機台 A01、A02</span>
+        <button type="button" data-pool-claim="01|N1|S1" data-pool-machine="A01"  aria-disabled="false" title="">接單</button>
+        
+        
+        
+      </li><li class="pool-item" data-pick-search-item data-pick-search-order="TEST-WO-3" data-pick-search-part-no="TEST-P1" data-pick-search-part-name="" data-pick-search-process="" data-pool-key="01|N3|S3">
+        <div class="pool-item-head"><span class="pool-urgency is-u3" data-pool-urgency="3">緊急 3</span><strong>TEST-WO-3</strong></div>
+        <span>N3 未提供 · 未提供</span>
+        <span>數量 120 · 交期 11/20 · APS 預計開始 11/13 08:00</span>
+        <span class="pool-eligible">可做機台 A01、A02</span>
+        <button type="button" data-pool-claim="01|N3|S3" data-pool-machine="A01"  aria-disabled="false" title="">接單</button>
+        
+        
+        
+      </li></ul><p class="pool-claim-message" data-pool-claim-message role="status"></p>
