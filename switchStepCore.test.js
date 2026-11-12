@@ -244,8 +244,8 @@ const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, m
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const PENDING_KEY = "machtile.returnClaimPending.v1";
 const POOL_URL = "dispatch_pool_items?select=source_key,work_order_no,process_order,operation_name,part_no,part_name,quantity,due_date,planned_start,urgency,department_code,eligible_machine_codes,source_status,synced_at&status=eq.waiting&order=urgency.asc,due_date.asc.nullslast,planned_start.asc.nullslast,work_order_no.asc,process_order.asc&limit=500";
-const heldOrder = (extra) => Object.assign({ id: "TEST-WO-1", stationStep: 3, processId: PROCESS_ID, part: "測試軸", process: "精車", dispatchPoolSourceKey: CURRENT_KEY,
-  dispatchPoolStatus: "claimed", processStatus: "pending", done: 0, offStation: false }, extra);
+const heldOrder = (extra) => Object.assign({ id: "TEST-WO-1", stationStep: 3, processId: PROCESS_ID, part: "測試軸", process: "精車", heldPoolKey: CURRENT_KEY,
+  processStatus: "pending", done: 0, offStation: false }, extra);
 const freshRow = (extra) => [Object.assign({ id: PROCESS_ID, process_order: 3, process_name: "精車", status: "pending", off_station_at: null, qty_completed: 0,
   work_orders: { work_order_no: "TEST-WO-1", part_no: "TEST-P1", part_name: "測試軸", status: "in_progress" }, machines: { machine_code: "A05" } }, extra)];
 const commandRow = (extra) => Object.assign({ command_uuid: UUID, command_type: "return_claim", machine_code: "A05", pool_item_id: CURRENT_KEY,
@@ -260,6 +260,11 @@ function backendOf(state) {
   Object.assign(state, { returns: [], claims: [], poolReads: 0, row: null, ...state });
   return async (url, init) => {
     if (url.startsWith("work_order_processes?")) return freshRow();
+    if (url.startsWith(returnCore.HELD_POOL_PATH_PREFIX)) {
+      // 卡片明細載入時查「機台上這一道是池裡哪一列」（returnClaimCore.heldPoolPath）
+      state.heldReads = (state.heldReads || 0) + 1;
+      return state.held ? state.held() : [];
+    }
     if (url.startsWith("dispatch_pool_items?")) {
       assert.equal(url, POOL_URL, "the pool is re-read with the existing select (no new select)");
       state.poolReads += 1;
@@ -297,7 +302,8 @@ function harness(options = {}) {
   const context = {
     window: { MachTileReturnClaimCore: returnCore, MachTileSwitchStepCore: options.noCore ? undefined : core, crypto: { randomUUID: () => (options.uuids ? options.uuids.shift() : UUID) } },
     config,
-    state: { source: "supabase", dailyStationStartRows: options.startRows || [], localStationStartRows: [] },
+    state: { source: "supabase", dailyStationStartRows: options.startRows || [], localStationStartRows: [], assignedCardOrders: options.assigned === undefined ? null : options.assigned },
+    machtileDeferredLoadGeneration: 7,
     machtileStationCmdCore: stationCore,
     machtileDispatchPoolCore: poolCore,
     machtileStationCmd: { pending: options.stationPending || {} },
@@ -351,7 +357,7 @@ function harness(options = {}) {
        markup: machtileReturnClaimCardMarkup, buttonMarkup: machtileSwitchStepButtonMarkup, gate: machtileSwitchStepGate, active: machtileSwitchStepActive,
        holds: machtileSwitchStepHolds, restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry,
        choose: machtileSwitchStepChoose, submit: machtileReturnClaimSubmit, handleClick: machtileReturnClaimHandleClick, switchClick: machtileSwitchStepHandleClick,
-       closeSheet: machtileReturnClaimCloseSheet })`, context);
+       closeSheet: machtileReturnClaimCloseSheet, loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys })`, context);
   // 待做池：畫面載入時已經讀到的那一份
   if (options.pool !== null) Object.assign(api.poolState, { status: options.poolStatus || "ready", items: options.pool || [poolRow(1), poolRow(2), OTHER_ORDER_ROW] });
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
@@ -474,8 +480,8 @@ test("flag on: 「換道次」 sits next to 「接錯了，退回」 only when t
   }
   // 退回的條件不成立 → 兩顆都沒有
   for (const options of [
-    { order: heldOrder({ processStatus: "running" }) }, { order: heldOrder({ done: 5 }) }, { order: heldOrder({ dispatchPoolStatus: "gone" }) },
-    { order: heldOrder({ dispatchPoolSourceKey: "" }) }, { role: "manager" }, { stationPending: { A05: { commandType: "start" } } },
+    { order: heldOrder({ processStatus: "running" }) }, { order: heldOrder({ done: 5 }) }, { order: heldOrder({ heldPoolKey: "" }) },
+    { order: heldOrder({ heldPoolKey: undefined }) }, { role: "manager" }, { stationPending: { A05: { commandType: "start" } } },
     { todayRows: [{ report_type: "noon", process_id: PROCESS_ID }] },
     { startRows: [{ machine_code: "A05", command_type: "start", status: "applied", expected_order_no: "TEST-WO-1", expected_index_sn: 3, applied_at: new Date().toISOString() }] },
   ]) {
@@ -612,7 +618,7 @@ test("happy path (A05 holds step 3, switches to step 1): return with the existin
   assert.deepEqual([state.returns.length, state.claims.length], [1, 1], "exactly one return and one claim");
   assert.equal(h.storage.get(PENDING_KEY), "{}");
   // 重讀後卡片是新的那一道：留一行結果（2 分鐘）
-  const after = h.api.markup({ code: "A05", name: "A05", status: "idle", order: heldOrder({ stationStep: 1, dispatchPoolSourceKey: keyOf(1), process: "CNC車床加工", processId: "00000000-0000-4000-8000-000000000301" }) });
+  const after = h.api.markup({ code: "A05", name: "A05", status: "idle", order: heldOrder({ stationStep: 1, heldPoolKey: keyOf(1), process: "CNC車床加工", processId: "00000000-0000-4000-8000-000000000301" }) });
   assert.match(after, /^<p class="station-cmd-status is-ok"[^>]*data-return-claim-status="applied"[^>]*>已換成第 1 道。原本的第 3 道已退回待做池。<\/p>/);
 });
 
@@ -853,6 +859,65 @@ test("click delegation: the card button opens the switch sheet; choices are pick
   assert.equal(h.api.active("A05").target.step, 2);
 });
 
+// ---------------------------------------------------------------- 池列鍵從待做池自己查（不靠 work_orders.external_ref）
+const claimedRow = (step, extra) => Object.assign({ source_key: keyOf(step), work_order_no: "TEST-WO-1", process_order: step, status: "claimed" }, extra);
+
+test("after a switch (3 → 1) the new step's card shows both buttons again, and the next return/switch carries the NEW step's pool row", async () => {
+  // 換完之後雲端的樣子：work_orders.external_ref 還是第 3 道（第一次接的那一道，on conflict 不更新）；機台上掛的是第 1 道；
+  // 池裡第 1 道 claimed、第 3 道退回後 waiting、第 2 道一直 waiting。
+  const after = heldOrder({ stationStep: 1, process: "CNC車床加工", processId: "00000000-0000-4000-8000-000000000301", heldPoolKey: undefined,
+    dispatchPoolSourceKey: keyOf(3), dispatchPoolStatus: "waiting" });
+  const state = { held: () => [claimedRow(1)], pool: () => [poolRow(2), poolRow(3, { source_status: "returned" }), OTHER_ORDER_ROW] };
+  const backend = backendOf(state);
+  const h = harness({ returnFlag: true, flag: true, order: after, assigned: [after], pool: [poolRow(2), poolRow(3, { source_status: "returned" }), OTHER_ORDER_ROW],
+    backend: async (url, init) => (url.startsWith("work_order_processes?") ? freshRow({ id: after.processId, process_order: 1, process_name: "CNC車床加工" }) : backend(url, init)) });
+  assert.equal(h.api.markup(h.machine), "", "before the lookup of this load: no button (the stale external_ref key is not used)");
+  await h.api.loadHeldKeys(7);
+  assert.equal(state.heldReads, 1);
+  assert.equal(after.heldPoolKey, keyOf(1));
+  assert.equal(h.api.markup(h.machine), RETURN_BUTTON + SWITCH_BUTTON, "both buttons on the new step's card");
+  assert.deepEqual(h.api.gate(h.machine).choices.map((choice) => choice.step), [2, 3], "the other steps: 2 and the one just returned (3); not the held step 1");
+  // 再換一次（1 → 3）：退回的是第 1 道的池列
+  await h.api.open("A05", null, true);
+  assert.match(h.sheetHtml(), /data-switch-step-current>現在掛的：第 1 道 · CNC車床加工</);
+  assert.equal(h.sheetHtml().split("data-switch-step-choice=").length, 3);
+  h.api.choose(keyOf(3));
+  await h.api.submit();
+  await settle();
+  assert.equal(state.returns.length, 1);
+  assert.equal(state.returns[0].p_pool_item_id, keyOf(1), "the return names the pool row of the step the machine holds now");
+  assert.equal(state.returns[0].p_expected_index_sn, 1);
+  assert.equal(h.api.active("A05").target.sourceKey, keyOf(3));
+});
+
+test("held step ≠ first-claimed step, ambiguous or missing pool row: 「換道次」 follows the same fail-closed lookup as 「接錯了，退回」", async () => {
+  const run = async (held) => {
+    const order = heldOrder({ heldPoolKey: undefined, dispatchPoolSourceKey: keyOf(1), dispatchPoolStatus: "waiting" });   // external_ref＝第 1 道；機台上是第 3 道
+    const state = { held };
+    const h = harness({ returnFlag: true, flag: true, order, assigned: [order], backend: backendOf(state) });
+    await h.api.loadHeldKeys(7);
+    return { h, order, state };
+  };
+  const good = await run(() => [claimedRow(3)]);
+  assert.equal(good.order.heldPoolKey, keyOf(3));
+  assert.equal(good.h.api.markup(good.h.machine), RETURN_BUTTON + SWITCH_BUTTON);
+  assert.deepEqual(good.h.api.gate(good.h.machine).choices.map((choice) => choice.sourceKey), [keyOf(1), keyOf(2)], "step 1 (the first-claimed one, back in the pool) is offered, not mistaken for the held step");
+  for (const [label, held] of [
+    ["no claimed row", () => []],
+    ["two claimed rows for the held step", () => [claimedRow(3), claimedRow(3, { source_key: "01|TEST-WO-1|S3-DUP" })]],
+    ["only another step is claimed", () => [claimedRow(1)]],
+    ["read failed", () => { throw new TypeError("Failed to fetch"); }],
+  ]) {
+    const bad = await run(held);
+    assert.equal(bad.order.heldPoolKey, "", label);
+    assert.equal(bad.h.api.markup(bad.h.machine), "", `${label}: neither button`);
+    assert.equal(bad.h.api.gate(bad.h.machine).reason, "return_hidden", label);
+    await bad.h.api.open("A05", null, true);
+    assert.equal(bad.h.sheetHtml(), "", `${label}: the sheet does not open`);
+    assert.deepEqual([bad.state.returns.length, bad.state.claims.length], [0, 0]);
+  }
+});
+
 // ---------------------------------------------------------------- 旗標關＝跟「只有退回」那一版逐字相同（原始碼層）
 test("app.js minus the switch-step section and its listed hooks is byte-identical to the return-claim build; other files only gain what is listed", (t) => {
   const git = (args) => childProcess.execFileSync("git", args, { cwd: __dirname, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -896,6 +961,26 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     assert.equal(current.split(now).length, 2, `hook must appear exactly once: ${now.slice(0, 70)}`);
     current = current.replace(now, () => before);
   }
+  // ---- 不是「換道次旗標關＝等於原字串」的那一類：下面幾處是修正「池列鍵靠 work_orders.external_ref」的錯（退回與換道次共用），
+  //      enableReturnClaim 開著就生效，跟 enableSwitchStep 無關；enableReturnClaim 關＝都不執行（退回那支測試的「flag off」與
+  //      它的 base 對照測試負責證明）。這裡只是把它們逐一列出來、還原，證明除此之外沒有別的差異。
+  const cut = (text, from, to) => {
+    const start = text.indexOf(from);
+    const end = text.indexOf(to, start);
+    assert.ok(start >= 0 && end > start && text.indexOf(from, start + 1) === -1, `must appear exactly once: ${from.slice(0, 50)}`);
+    return text.slice(0, start) + text.slice(end);
+  };
+  const heldKeyFix = [
+    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）\n",
+      "async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n"],
+    ["fields: { poolItemId: order.heldPoolKey, orderNo: order.id,", "fields: { poolItemId: order.dispatchPoolSourceKey, orderNo: order.id,"],
+  ];
+  for (const [now, before] of heldKeyFix) {
+    assert.equal(current.split(now).length, 2, `held-key fix must appear exactly once: ${now.slice(0, 70)}`);
+    current = current.replace(now, () => before);
+  }
+  current = cut(current, "// 卡片明細載入時叫（旗標開才會進來）", "function machtileReturnClaimGate(machine) {");
+  assert.doesNotMatch(current, /heldPoolKey|HeldPoolKeys|heldPoolPath/, "no other held-key reference outside the switch-step section");
   assert.doesNotMatch(current, /machtileSwitchStep|enableSwitchStep|switch_step|switchStep/, "no other switch-step reference in app.js");
   assert.equal(current, baseApp, "with the section removed and the hooks reverted, app.js is byte-identical to the return-claim build");
   assert.doesNotMatch(appSource, /void machtileClaimDispatchPool\([^)]*\)[^;]*;[^\n]*\.ok/, "sanity");
@@ -903,7 +988,22 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   // 其他檔案
   const show = (file) => norm(git(["show", `${base}:${file}`]));
   const read = (file) => norm(fs.readFileSync(path.join(__dirname, file), "utf8"));
-  for (const file of ["returnClaimCore.js", "dispatchPoolCore.js", "stationCommandCore.js", "fixtures/return_claim_poll_select.txt", "version.json", "sw.js"]) {
+  // returnClaimCore.js：只多了池列鍵那幾樣（同一個修正），其餘逐字相同
+  let returnCoreNow = read("returnClaimCore.js");
+  returnCoreNow = cut(returnCoreNow, "  // 機台上這一道的池列鍵（source_key）＝從待做池自己查", "  const ROLES = Object.freeze(");
+  returnCoreNow = cut(returnCoreNow, "  // ---------------------------------------------------------------- 機台上這一道的池列鍵\n", "  // ---------------------------------------------------------------- 卡片要不要出現「接錯了，退回」");
+  for (const [now, before] of [
+    ["  // 「接了、還沒開工」＝這一道在待做池裡剛好有一列 claimed（order.heldPoolKey，這次載入用 heldPoolKey 查到的）、\n",
+      "  // 「接了、還沒開工」＝這張單是從待做池接的（工單來源 dispatch_pool＋池列狀態 claimed，這次載入有核對到）、\n"],
+    ["    if (cardDetailsReady !== true) return no(\"pool_status_unverified\");\n    const poolItemId = text(order.heldPoolKey);\n    if (poolItemId.length < 5 || poolItemId.length > 120) return no(\"pool_not_claimed\");\n",
+      "    const poolItemId = text(order.dispatchPoolSourceKey);\n    if (poolItemId.length < 5 || poolItemId.length > 120) return no(\"not_from_pool\");\n    if (cardDetailsReady !== true) return no(\"pool_status_unverified\");\n    if (text(order.dispatchPoolStatus) !== \"claimed\") return no(\"pool_not_claimed\");\n"],
+    ["    HELD_POOL_PATH_PREFIX, HELD_POOL_ROW_LIMIT, heldPoolPath, heldPoolKey,\n", ""],
+  ]) {
+    assert.equal(returnCoreNow.split(now).length, 2, `returnClaimCore.js change must appear exactly once: ${now.slice(0, 60)}`);
+    returnCoreNow = returnCoreNow.replace(now, () => before);
+  }
+  assert.equal(returnCoreNow, show("returnClaimCore.js"), "returnClaimCore.js: only the held-pool-key lookup and the visibility lines that use it");
+  for (const file of ["dispatchPoolCore.js", "stationCommandCore.js", "fixtures/return_claim_poll_select.txt", "version.json", "sw.js"]) {
     assert.equal(read(file), show(file), `${file} is unchanged`);
   }
   const config = read("config.js");
@@ -923,6 +1023,8 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   }
   // 沒有新的 station_commands select，也沒有新的資料表查詢
   assert.doesNotMatch(section, /\?select=/, "the switch-step section adds no select");
+  // app.js 也沒有多任何寫死的 select：新的那一個查詢路徑由 returnClaimCore.heldPoolPath 組（stationCommandPollColumns.test.js 逐欄核對）
+  assert.equal([...norm(appSource).matchAll(/\?select=/g)].length, [...baseApp.matchAll(/\?select=/g)].length, "app.js gains no literal select");
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, "switchStepCore.js"), "utf8").replace(/^\s*\/\/.*$/gm, ""), /\?select=|fetch\(|localStorage|sessionStorage|document\.|window\./, "the core does no I/O");
   assert.doesNotMatch(section.replace(/^\s*\/\/.*$/gm, ""), /localStorage|sessionStorage|indexedDB/, "the switch-step section persists nothing (comments aside)");
   assert.doesNotMatch(section, /(?:const|let|var)\s+\w+\s*=\s*machtile\w*Core\s*[;,]/, "no core aliases (coreExportsUsed must see every member)");
