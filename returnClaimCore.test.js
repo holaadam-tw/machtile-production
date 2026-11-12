@@ -1071,8 +1071,17 @@ test("outside the return-claim block, app.js differs from the base only by the l
     ["    if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }\n", ""],
     // ---- 「換道次」（enableSwitchStep）加的掛點：既有接單函式多回一個結果物件（成功／失敗）。原本的呼叫端都不看回傳值
     //      （`void machtileClaimDispatchPool(...)`），所以旗標關時行為等於原字串。其餘換道次程式都在上面那一段 block 裡。
-    ["    showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
+    ["    if (!switchStep) showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
     ["    await machtileLoadDispatchPool();\n    return { ok: false, error };\n  } finally {", "    await machtileLoadDispatchPool();\n  } finally {"],
+    //      換道次模式＝既有接單函式的第三個參數（只有換道次會傳；一般接單＝null → 下面每一句都等於原字串）：
+    //      記下 RPC 已成功、接單後重讀畫面有期限、不另外跳提示、錯誤交給換道次自己說。
+    ["async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileClaimDispatchPool(sourceKey, machineCode) {"],
+    ["    if (switchStep) switchStep.claimed = true;\n", ""],
+    ["    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));\n", "    await loadFromSupabase({ preserveDepartmentOnFailure: true });\n"],
+    ["    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);\n", ""],
+    //      登入的人換了／登出：丟掉記憶體裡的換道次（旗標關時 active 本來就是空的、也沒有換道次確認卡＝沒有效果）
+    ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStepForgetUser();\n", ""],
+    ["  machtileAuthState.email = \"\";\n  machtileSwitchStepForgetUser();\n", "  machtileAuthState.email = \"\";\n"],
     // ---- 池列鍵改從待做池查（不靠 work_orders.external_ref）：卡片明細載入（既有的池列狀態那一步開頭）多一步，旗標關＝整句不執行（連 await 都沒有）。
     //      查詢本身（machtileReturnClaimLoadHeldPoolKeys）在上面那一段 block 裡。
     ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）\n",

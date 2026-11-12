@@ -431,6 +431,7 @@
       switch_step_claim_failed: "原本那一道已經退回待做池，這台現在沒有工單；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
       switch_step_claim_failed_reconciled: "原本那一道已經退回待做池，這台機台目前掛的工單沒有動；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
       switch_step_claim_uncertain: "原本那一道已經退回待做池；第 {{to}} 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。",
+      switch_step_claimed_refresh_failed: "已換成第 {{to}} 道（原本的第 {{from}} 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。",
       switch_step_reason_taken: "已經被別台接走",
       switch_step_reason_not_in_pool: "待做池裡已經沒有這一道",
       switch_step_reason_not_eligible: "這台不能做這一道",
@@ -862,6 +863,7 @@
       switch_step_claim_failed: "Công đoạn ban đầu đã được trả về danh sách chờ, máy này hiện không có lệnh; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", // _draft
       switch_step_claim_failed_reconciled: "Công đoạn ban đầu đã được trả về danh sách chờ, lệnh đang gắn trên máy này không bị thay đổi; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", // _draft
       switch_step_claim_uncertain: "Công đoạn ban đầu đã được trả về danh sách chờ; chưa chắc đã nhận được công đoạn {{to}} hay chưa (mạng không ổn định). Hãy tải lại màn hình để xem máy đang gắn lệnh nào; nếu chưa có, hãy vào «Chọn lệnh» để nhận lại.", // _draft
+      switch_step_claimed_refresh_failed: "Đã đổi sang công đoạn {{to}} (công đoạn {{from}} ban đầu đã được trả về danh sách chờ), nhưng màn hình chưa cập nhật được. Hãy tải lại màn hình.", // _draft
       switch_step_reason_taken: "máy khác đã nhận mất", // _draft
       switch_step_reason_not_in_pool: "công đoạn này không còn trong danh sách chờ", // _draft
       switch_step_reason_not_eligible: "máy này không làm được công đoạn này", // _draft

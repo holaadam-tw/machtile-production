@@ -9464,6 +9464,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.status = "signedIn";
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
+  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStepForgetUser();
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
   const signedTenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || "";
   machtileAuthState.hmcFixedSignedTenantId = signedTenantId;
@@ -9498,6 +9499,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.status = "signedOut";
   machtileAuthState.accessToken = "";
   machtileAuthState.email = "";
+  machtileSwitchStepForgetUser();
   machtileAuthState.userId = "";
   machtileAuthState.tenantId = "";
   machtileAuthState.role = "";
@@ -12063,7 +12065,7 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
   return true;
 }
 
-async function machtileClaimDispatchPool(sourceKey, machineCode) {
+async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
   if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), "error"); return; }
   const holder = document.getElementById("machtileCardSelection");
@@ -12078,13 +12080,15 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   try {
     const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
     await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
-    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    if (switchStep) switchStep.claimed = true;
+    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));
     deriveMachines();
     renderAll();
     machtileCloseCardSelection();
-    showToast(machtileTranslate("claim_success"), "success");
+    if (!switchStep) showToast(machtileTranslate("claim_success"), "success");
     return { ok: true };
   } catch (error) {
+    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);
     machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
     if (message) message.textContent = machtileDispatchPoolState.claimMessage;
     showToast(machtileDispatchPoolState.claimMessage, "error");
@@ -16952,7 +16956,7 @@ document.addEventListener("keydown", (event) => {
 //   還原回來的只是一筆普通的退回，不會自動接。畫面函式（Active／Holds／Gate／…Markup／RenderSheet）只讀不寫。
 const machtileSwitchStepCore = window.MachTileSwitchStepCore || null;
 const machtileSwitchStep = {
-  active: {},      // 機台代號 → { uuid（退回那筆的 command_uuid）, phase, orderNo, fromStep, target: { sourceKey, step, name }, startedAt }
+  active: {},      // 機台代號 → { uuid（退回那筆的 command_uuid）, userId（按的人）, phase, orderNo, fromStep, target: { sourceKey, step, name }, startedAt }
   claimPass: "",   // 只在呼叫既有接單函式的那一瞬間（同步）＝機台代號：讓這一次接單不被「換道次處理中」自己擋住
 };
 
@@ -17023,18 +17027,62 @@ function machtileSwitchStepTarget(sheet) {
   return sw ? sw.choices.find((choice) => choice.sourceKey === sw.targetKey) || null : null;
 }
 
-// 重讀待做池（只是讀）。回 true＝這一次真的讀到最新的；被別的載入蓋掉、讀不到＝false（不拿舊資料來猜）。
+// 登入的人換了／登出（machtileSetSession、machtileClearSession 叫進來）：記憶體裡「要接哪一道」全部丟掉，
+// 之後就算退回成功也不會用另一個人的登入去接；開著的換道次確認卡一起關掉。旗標關時 active 本來就是空的＝沒有任何效果。
+// try：app.js 還在載入、下面用到的 const 還沒建立時被叫到（那時也不可能有換道次）＝什麼都不用做。
+function machtileSwitchStepForgetUser() {
+  try {
+    machtileSwitchStep.active = {};
+    machtileSwitchStep.claimPass = "";
+    if (machtileReturnClaim.sheet && machtileReturnClaim.sheet.switchStep) machtileReturnClaimCloseSheet();
+  } catch { /* still loading: nothing to forget */ }
+}
+
+// 這一筆換道次還算數：沒有被上面那支丟掉，而且現在登入的還是按的那個人。
+function machtileSwitchStepOwned(code, active) {
+  return machtileSwitchStep.active[code] === active && active.userId === String(machtileAuthState.userId || "");
+}
+
+// 換道次裡每一個等待（重讀待做池、接單、接單後重讀畫面）都有期限，沿用既有指令送出的逾時（SUBMIT_TIMEOUT_MS）：
+// 等不到就當成失敗往下走，機台的鎖一定會放開，不用重新整理頁面。逾時只是不再等，絕不重送、也不會因此去接單。
+function machtileSwitchStepTimeout(work) {
+  let timer = null;
+  const limit = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error("SWITCH_STEP_TIMEOUT")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS); });
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+}
+
+// 重讀待做池（只是讀）。回 true＝這一次真的讀到最新的；被別的載入蓋掉、讀不到、等太久＝false（不拿舊資料來猜）。
 async function machtileSwitchStepReadPool() {
-  for (let attempt = 0; attempt < machtileSwitchStepCore.POOL_READ_ATTEMPTS; attempt += 1) {
-    const sequence = machtileDispatchPoolState.requestSequence + 1;
-    try {
-      await machtileLoadDispatchPool({ preserveItemsOnFailure: true });
-      if (machtileDispatchPoolState.status === "ready" && machtileDispatchPoolState.requestSequence === sequence) return true;
-    } catch (error) {
-      console.warn("switch step: dispatch pool re-read failed", error);
+  const watch = { expired: false };
+  const read = async () => {
+    for (let attempt = 0; attempt < machtileSwitchStepCore.POOL_READ_ATTEMPTS && !watch.expired; attempt += 1) {
+      const sequence = machtileDispatchPoolState.requestSequence + 1;
+      try {
+        await machtileLoadDispatchPool({ preserveItemsOnFailure: true });
+        if (!watch.expired && machtileDispatchPoolState.status === "ready" && machtileDispatchPoolState.requestSequence === sequence) return true;
+      } catch (error) {
+        console.warn("switch step: dispatch pool re-read failed", error);
+      }
     }
+    return false;
+  };
+  try {
+    return await machtileSwitchStepTimeout(read());
+  } catch (error) {
+    watch.expired = true;
+    console.warn("switch step: dispatch pool re-read timed out", error);
+    return false;
   }
-  return false;
+}
+
+// 既有接單函式在換道次模式下出錯（machtileClaimDispatchPool 的 catch 叫進來）。不跳提示：結果那一句由換道次自己說一次。
+//   接單 RPC 已經成功（pass.claimed）＝接到了，只是重讀畫面失敗／逾時 → 不留「接單失敗」訊息，回 claimed: true；
+//   RPC 本身失敗＝跟一般接單一樣留訊息、重讀待做池；重讀只是送出去、不等它（等它會讓已經知道的結果卡在一個讀取上）。
+function machtileSwitchStepClaimError(pass, error) {
+  if (pass.claimed === true) return { ok: false, claimed: true, error };
+  machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
+  machtileLoadDispatchPool().catch((reloadError) => { console.warn("switch step: pool reload after a failed claim", reloadError); });
+  return { ok: false, error };
 }
 
 // 開確認卡時：重讀待做池，列出同一張工單、這台可以接的其他道。只有一道可以換就先幫忙選好（還是要按確認）。
@@ -17063,7 +17111,7 @@ function machtileSwitchStepChoose(sourceKey) {
 function machtileSwitchStepBegin(sheet) {
   const target = machtileSwitchStepTarget(sheet);
   if (!machtileSwitchStepEnabled() || !target || !sheet.switchStep.poolOk || sheet.switchStep.stopped) return false;
-  machtileSwitchStep.active[sheet.code] = { uuid: sheet.uuid, phase: machtileSwitchStepCore.next("choosing", "confirm"), orderNo: sheet.fields.orderNo,
+  machtileSwitchStep.active[sheet.code] = { uuid: sheet.uuid, userId: String(machtileAuthState.userId || ""), phase: machtileSwitchStepCore.next("choosing", "confirm"), orderNo: sheet.fields.orderNo,
     fromStep: sheet.fields.step, target: { sourceKey: target.sourceKey, step: target.step, name: target.name }, startedAt: Date.now() };
   return true;
 }
@@ -17105,8 +17153,16 @@ async function machtileSwitchStepClaim(code, active, mode) {
   machtileStationCmdRerender();
   let reasonKey = "";
   let claimSent = false;
+  // pass.claimed＝接單 RPC 成功回來的那一刻由既有接單函式設成 true；reload＝接單後重讀畫面（有期限）
+  const pass = { claimed: false, reload: () => machtileSwitchStepTimeout(loadFromSupabase({ preserveDepartmentOnFailure: true })) };
   try {
     const poolFresh = await machtileSwitchStepReadPool();
+    // 等待中登入的人換了／登出：這一筆已經被丟掉，不接、不留結果、不跳提示（那是別人的畫面了）
+    if (!machtileSwitchStepOwned(code, active)) {
+      if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
+      machtileStationCmdRerender();
+      return;
+    }
     const machine = machtileStationCmdMachineByCode(code);
     const check = machtileSwitchStepCore.verifyTarget({ poolFresh, items: machtileDispatchPoolState.items, target: active.target, orderNo: active.orderNo,
       machine: machtileSwitchStepMachineInfo(machine, code) });
@@ -17117,15 +17173,16 @@ async function machtileSwitchStepClaim(code, active, mode) {
       let claim;
       machtileSwitchStep.claimPass = code;
       // 機台代號用「選工單」面板接單時的同一個寫法（machine.code || machine.name，不轉大寫）：送出的內容才會逐字相同
-      try { claim = machtileClaimDispatchPool(active.target.sourceKey, String(machine?.code || machine?.name || code)); } finally { machtileSwitchStep.claimPass = ""; }
+      try { claim = machtileClaimDispatchPool(active.target.sourceKey, String(machine?.code || machine?.name || code), pass); } finally { machtileSwitchStep.claimPass = ""; }
       claimSent = true;
-      const claimed = machtileSwitchStepCore.claimEvent(await claim);
+      const claimed = machtileSwitchStepCore.claimEvent(await machtileSwitchStepTimeout(claim));
       reasonKey = claimed.reasonKey;
       active.phase = machtileSwitchStepCore.next(active.phase, claimed.event);
     }
   } catch (error) {
     console.warn("switch step: second step failed", error);
-    active.phase = claimSent ? "claim_uncertain" : "returned_not_claimed";
+    // 等太久或出錯：RPC 已經成功＝接到了（畫面沒更新）；已送出但沒有結果＝不確定；還沒送＝沒接
+    active.phase = pass.claimed === true ? machtileSwitchStepCore.next("claiming", "claim_ok_unrefreshed") : claimSent ? "claim_uncertain" : "returned_not_claimed";
     reasonKey = "";
   }
   machtileSwitchStepEnd(code, active, machtileSwitchStepCore.outcome({ state: active.phase, mode, from: active.fromStep, to: active.target.step, reasonKey }));
@@ -17135,12 +17192,12 @@ async function machtileSwitchStepClaim(code, active, mode) {
 function machtileSwitchStepEnd(code, active, outcome) {
   if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
   machtileReturnClaim.lastResult[code] = { view: outcome, at: Date.now(), orderNo: active.orderNo, step: active.target.step };
-  if (outcome.state !== "done") console.warn("switch step: returned but not switched", outcome.state, outcome.reasonKey);
+  if (outcome.state !== "done") console.warn("switch step: ended without a clean switch", outcome.state, outcome.reasonKey);
   const sheet = machtileSwitchStepSheetFor(code, active.uuid);
   if (sheet) { sheet.phase = "switch"; sheet.switchStep.outcome = outcome; machtileReturnClaimRenderSheet(); }
   machtileStationCmdRerender();
   showToast(machtileSwitchStepText(outcome));
-  // 接到了＝既有接單函式已經重讀過；沒接到／不確定＝這裡重讀一次（機台多半已經空了、池子多一張）
+  // 接到了＝既有接單函式已經重讀過；沒接到／不確定／接到了但畫面沒更新＝這裡重讀一次（背景，不擋、不鎖）
   if (outcome.state !== "done") void machtileRefreshAfterApplied(code, machtileReturnClaimCore.COMMAND_TYPE);
 }
 
