@@ -22,7 +22,7 @@ const proc = { id: id(301), tenant_id: tenant, work_order_id: id(201), process_o
 
 // 每個情境重設的假後端狀態
 let fx;
-const reset = (extra = {}) => { fx = { flag: undefined, role: 'operator', assigned: true, procStatus: 'pending', poolStatus: 'claimed', submitMode: 'accept', submits: [], polls: [], command: null, afterPolls: null, ...extra }; };
+const reset = (extra = {}) => { fx = { flag: undefined, role: 'operator', assigned: true, procStatus: 'pending', poolStatus: 'claimed', submitMode: 'accept', submits: [], polls: [], command: null, afterPolls: null, storedPending: null, ...extra }; };
 let checks = 0;
 const blocked = [], errors = [], writes = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
@@ -35,10 +35,11 @@ const browser = await chromium.launch();
 async function openApp(language = 'zh-Hant') {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, serviceWorkers: 'block' });
   const token = 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub: auth, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role: fx.role }, role: 'authenticated' })).toString('base64url') + '.test';
-  await ctx.addInitScript(([token, language]) => {
+  await ctx.addInitScript(([token, language, storedPending]) => {
+    if (storedPending && localStorage.getItem('machtile.returnClaimPending.v1') === null) localStorage.setItem('machtile.returnClaimPending.v1', storedPending);
     sessionStorage.setItem('machtileAuthSession', JSON.stringify({ version: 1, accessToken: token, refreshToken: '', email: 'user@test.invalid', authMethod: 'password', mode: 'session', createdAt: Date.now(), rememberUntil: 0 }));
     if (language !== 'zh-Hant') localStorage.setItem('machtile.language', language);
-  }, [token, language]);
+  }, [token, language, fx.storedPending]);
   await ctx.route('**/*', async route => {
     const req = route.request(), u = new URL(req.url());
     const json = (status, data) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
@@ -209,6 +210,145 @@ try {
     reset({ flag: true, ...extra });
     const { ctx, page } = await openApp();
     ok((await cardHtml(page)).includes('TEST-ON-A01') && await page.locator('[data-return-claim-open]').count() === 0, `button hidden: ${label}`);
+    await ctx.close();
+  }
+
+  // ---- MAJOR 2：舊的「退回池子」（dispatch_pool_return，只動雲端）不跟新按鈕並存
+  const OLD_BUTTON = `<button type="button" class="card-select-entry pool-return-action" data-no-detail="" data-pool-return="${POOL_KEY}" data-pool-return-machine="A01">退回池子</button>`;
+  const BUSY = '這台有一筆「退回接單」還在等工廠處理，等它有結果再操作。';
+  const toastText = page => page.evaluate(() => document.getElementById('toast')?.textContent || '');
+  const submitReturn = async (page, reason) => {
+    await page.locator('[data-return-claim-open="A01"]').click();
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));
+    if (reason) await sheet(page).locator('[data-return-claim-reason]').fill(reason);
+    await sheet(page).locator('[data-return-claim-confirm]').click();
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    await sheet(page).locator('[data-return-claim-close]').click();
+  };
+  reset({ role: 'planner' }); const plannerAbsent = await openApp(); const htmlPlannerAbsent = await cardHtml(plannerAbsent.page); await plannerAbsent.ctx.close();
+  reset({ flag: false, role: 'planner' });
+  {
+    const { ctx, page } = await openApp();
+    const htmlPlannerOff = await cardHtml(page);
+    ok(htmlPlannerOff.split(OLD_BUTTON).length === 2 && htmlPlannerOff === htmlPlannerAbsent, 'flag off (planner): the old 「退回池子」 button is on the card exactly as today (byte-identical, flag missing or false)');
+    ok(await page.locator('[data-return-claim-open]').count() === 0, 'flag off (planner): no new button');
+    await page.locator('[data-card-select-open="A01"]').click();
+    ok(await page.locator('#machtileCardSelection').count() === 1, 'flag off (planner): 選工單 opens the selection panel as today');
+    await ctx.close();
+    reset({ flag: true, role: 'planner' });
+    const on = await openApp();
+    const htmlPlannerOn = await cardHtml(on.page);
+    ok(!htmlPlannerOn.includes('data-pool-return=') && htmlPlannerOn.split(BUTTON).length === 2, 'flag on (planner): the old cloud-only button is hidden; only 「接錯了，退回」 is offered');
+    ok(htmlPlannerOn.replace(BUTTON, '') === htmlPlannerOff.replace(OLD_BUTTON, ''), 'flag on (planner): the card differs from flag off only by old button → new button');
+    const oldHandler = await on.page.evaluate(async key => { let prompts = 0; window.prompt = () => { prompts += 1; return 'x'; }; await machtileReturnDispatchPool(key); return prompts; }, POOL_KEY);
+    ok(oldHandler === 0 && !writes.includes('/rest/v1/rpc/dispatch_pool_return'), 'flag on: the old handler does nothing even when called directly (no prompt, no dispatch_pool_return)');
+    await on.page.locator('[data-card-select-open="A01"]').click();
+    await on.page.waitForSelector('#machtileCardSelection');
+    ok(await on.page.locator('#machtileCardSelection [data-pool-return]').count() === 0, 'flag on: the selection panel does not offer the old button either');
+    await on.page.locator('#machtileCardSelection [data-close-card-selection]').click();
+    // MAJOR 4（選工單入口）：退回等待中 → 選工單被擋，說的是「退回」
+    await submitReturn(on.page, '代退：接錯機台');
+    ok(await on.page.locator('#workOrderGrid [data-pool-return]').count() === 0, 'pending return: the old button is not on the card');
+    await on.page.locator('[data-card-select-open="A01"]').click();
+    await on.page.waitForTimeout(200);
+    ok(await on.page.locator('#machtileCardSelection').count() === 0 && await toastText(on.page) === BUSY, 'pending return: 選工單 does not open; the toast says a return is being processed');
+    ok(!BUSY.includes('開工') && !BUSY.includes('停工') && BUSY.includes('退回'), 'the blocking sentence is about the return, not start/stop');
+    await on.page.locator('[data-card-select-open="A02"]').click();
+    ok(await on.page.locator('#machtileCardSelection').count() === 1, 'pending return on A01: 選工單 on another machine (A02) still opens');
+    await on.ctx.close();
+  }
+
+  // ---- MAJOR 4：退回等待中，其他入口（待做池入口、接單、批次開工／停工、批次報工、智慧報工）都被擋下來
+  reset({ flag: false });
+  const batchChoice = page => page.evaluate(() => JSON.stringify(['start', 'stop'].map(type => machtileBatchCommandChoice('A01', type))));
+  const openBatch = async page => {
+    await page.evaluate(() => switchView('batchLathe'));
+    await page.waitForFunction(() => document.querySelector('[data-batch-root="lathe"] [data-batch-row="A01"]') && typeof machtileBatchState !== 'undefined' && machtileBatchState.loading === false);
+  };
+  let batchOff;
+  {
+    const { ctx, page } = await openApp();
+    await page.locator('[data-card-pool-open="A01"]').click();
+    ok(await page.locator('#machtileCardSelection').count() === 1, 'flag off (operator): the pool entry on the card opens as today');
+    await page.locator('#machtileCardSelection [data-close-card-selection]').click();
+    await openBatch(page);
+    batchOff = { choice: await batchChoice(page), panel: await page.locator('[data-batch-command-panel] .batch-command-machine').first().innerHTML() };
+    await ctx.close();
+  }
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await openBatch(page);
+    ok(await batchChoice(page) === batchOff.choice && await page.locator('[data-batch-command-panel] .batch-command-machine').first().innerHTML() === batchOff.panel, 'flag on, nothing pending: batch start/stop row for A01 is identical to flag off: ' + batchOff.choice);
+    ok(JSON.parse(batchOff.choice)[0].eligible === true, 'fixture: A01 is eligible for batch start before the return');
+    await page.evaluate(() => switchView('dashboard'));
+    await submitReturn(page);
+    // 卡片上的待做池入口、接單
+    await page.locator('[data-card-pool-open="A01"]').click();
+    await page.waitForTimeout(200);
+    ok(await page.locator('#machtileCardSelection').count() === 0 && await toastText(page) === BUSY, 'pending return: the pool entry (接單) on the card does not open; the toast says a return is being processed');
+    await page.evaluate(key => machtileClaimDispatchPool(key, 'A01'), POOL_KEY);
+    ok(!writes.includes('/rest/v1/rpc/dispatch_pool_claim'), 'pending return: a direct claim call sends nothing');
+    // 批次頁：開工／停工
+    await openBatch(page);
+    const choices = JSON.parse(await batchChoice(page));
+    ok(choices.every(choice => choice.eligible === false && choice.checked === false) && choices[0].reason === BUSY, 'pending return: neither batch start nor batch stop is eligible for A01; batch start (eligible before) now gives the return sentence as its reason; stop: ' + choices[1].reason);
+    const row = page.locator('[data-batch-command-panel] .batch-command-machine').first();
+    ok((await row.innerText()).includes('A01') && (await row.innerText()).includes(BUSY) && await row.locator('[data-batch-command-select="A01"]').isDisabled(), 'pending return: the batch start/stop row shows the return sentence and its checkbox is disabled');
+    ok(await page.locator('[data-batch-command-submit]').isDisabled(), 'pending return: the batch start/stop button has nothing to send');
+    // 批次報工（直送 field_report_upsert 那條）與智慧報工
+    const blockedBatch = await page.evaluate(() => { const hit = machtileReturnClaimBatchBlock(['A02', 'A01']); return { hit, formError: machtileBatchState.formError, shown: document.querySelector('[data-batch-root="lathe"] .batch-notice.is-error')?.textContent || '' }; });
+    ok(blockedBatch.hit === true && blockedBatch.formError === `A01：${BUSY}` && blockedBatch.shown === `A01：${BUSY}`, 'pending return: a batch report that contains A01 is stopped as a whole with the return sentence in red');
+    const smart = await page.evaluate(async () => { await machtileStationReportSubmitPreview('A01', { batch: true }); return machtileStationReportState(machtileBatchRow('A01')).error; });
+    ok(smart === BUSY, 'pending return: the smart-report preview (station report panel / batch smart report) is blocked with the return sentence');
+    ok(fx.submits.length === 1 && writes.filter(p => p !== '/rest/v1/rpc/machtile_submit_return_claim_command').length === 0, 'pending return: none of the blocked entry points sent a write');
+    // 工廠回覆結果不確定 → 不說沒有退回；鎖解除
+    fx.command = { ...fx.command, status: 'rejected', reject_code: 'OUTCOME_UNKNOWN', reject_message: 'raw factory text' };
+    await page.waitForFunction(() => machtileReturnClaimBlockMessage('A01') === '', null, { timeout: 15000 });
+    const uncertainToast = await toastText(page);
+    ok(uncertainToast.includes('不確定') && uncertainToast.includes('重新整理') && uncertainToast.includes('生管') && !uncertainToast.includes('沒有退回') && !uncertainToast.includes('OUTCOME_UNKNOWN') && !uncertainToast.includes('raw factory text'), 'factory OUTCOME_UNKNOWN: the result is shown as uncertain (refresh / ask planner), never as "did not return": ' + uncertainToast);
+    ok(JSON.parse(await batchChoice(page))[0].reason !== BUSY, 'after the result the batch page is no longer blocked by the return');
+    await ctx.close();
+  }
+
+  // ---- MINOR 8／7：別人的等待紀錄不還原；自己的還原；卡片換單後不再顯示
+  {
+    const stored = who => JSON.stringify({ A01: { commandUuid: '3f0c1a52-7c1e-4b7e-9d43-2f6a8f1f0a11', machineCode: 'A01', orderNo: who.orderNo || 'TEST-ON-A01', step: 1, processId: id(301), tenantId: who.tenantId, appUserId: who.appUserId,
+      args: { p_command_uuid: '3f0c1a52-7c1e-4b7e-9d43-2f6a8f1f0a11', p_machine_code: 'A01', p_pool_item_id: POOL_KEY, p_expected_order_no: who.orderNo || 'TEST-ON-A01', p_expected_index_sn: 1, p_expected_part_no: 'TEST-PART', p_reason: null },
+      startedAt: Date.now(), unconfirmed: who.unconfirmed === true, notFound: who.notFound === true, lastStatus: who.unconfirmed ? null : 'pending' } });
+    for (const [label, who, locked] of [['another user of the same tenant', { tenantId: tenant, appUserId: id(903) }, false], ['another tenant', { tenantId: id(2), appUserId: actor }, false],
+      ['a record without tenant/user', { tenantId: '', appUserId: '' }, false], ['the same tenant and user', { tenantId: tenant, appUserId: actor }, true]]) {
+      reset({ flag: true, storedPending: stored(who) });
+      const { ctx, page } = await openApp();
+      const state = await page.evaluate(() => ({ locked: machtileReturnClaimLocks('A01'), kept: localStorage.getItem('machtile.returnClaimPending.v1') }));
+      ok(state.locked === locked && await page.locator('#workOrderGrid [data-return-claim-status="pending"]').count() === (locked ? 1 : 0) && await page.locator('#workOrderGrid [data-return-claim-open="A01"]').count() === (locked ? 0 : 1),
+        `stored pending record of ${label}: ${locked ? 'restored, card locked and polled' : 'not restored, card not locked'}`);
+      if (locked) await page.waitForTimeout(3500);
+      ok(locked ? (fx.polls.length >= 1 && fx.polls.every(poll => poll.uuid === 'eq.3f0c1a52-7c1e-4b7e-9d43-2f6a8f1f0a11' && poll.select === CONTRACT_SELECT)) : (fx.polls.length === 0 && state.kept === fx.storedPending), `stored pending record of ${label}: ${locked ? 'same uuid is polled, nothing resubmitted' : 'left untouched in storage, never polled'}`);
+      ok(fx.submits.length === 0, `stored pending record of ${label}: nothing is submitted on load`);
+      await ctx.close();
+    }
+    // 自己的 notFound 紀錄，但卡片已經是別張單 → 不顯示「這張單還在這台」，沒有重送／不退了
+    reset({ flag: true, storedPending: stored({ tenantId: tenant, appUserId: actor, orderNo: 'TEST-OLD-ORDER', unconfirmed: true, notFound: true }) });
+    const { ctx, page } = await openApp();
+    ok(await page.evaluate(() => Boolean(machtileReturnClaim.pending.A01?.notFound)) && await page.locator('#workOrderGrid [data-return-claim-status], #workOrderGrid [data-return-claim-retry], #workOrderGrid [data-return-claim-dismiss]').count() === 0
+      && await page.locator('#workOrderGrid [data-return-claim-open="A01"]').count() === 1, 'own not-found record for an order that is no longer on the card: not rendered; the card shows the plain button for the current order');
+    // session 過期 → 重新登入（同一個人）：自己的紀錄還在；換成別人 → 放掉
+    reset({ flag: true, storedPending: stored({ tenantId: tenant, appUserId: actor }) });
+    const again = await openApp();
+    const relogin = await again.page.evaluate(async other => {
+      const before = machtileReturnClaimLocks('A01');
+      machtileAuthState.appUserId = other;            // 換人登入後 app_users 查到的是另一個人
+      machtileStationCmdRestorePendingEarly();        // 登入後 machtileResumeInit → loadFromSupabase({ deferSecondary: true }) 會叫的同一個掛點
+      const asOther = machtileReturnClaimLocks('A01');
+      const kept = Boolean(JSON.parse(localStorage.getItem('machtile.returnClaimPending.v1') || '{}').A01);
+      machtileAuthState.appUserId = '';
+      await machtileResumeInit();                      // 真的走一次登入後的重新載入（重查 app_users）
+      return { before, asOther, kept, after: machtileReturnClaimLocks('A01'), user: machtileAuthState.appUserId };
+    }, id(903));
+    ok(relogin.before === true && relogin.asOther === false && relogin.kept === true, 're-login as another user without a page reload: the previous user\'s pending return no longer locks the card (record stays in storage)');
+    ok(relogin.after === true && relogin.user === actor, 're-login as the same user (post-login resume path): the pending return is restored again');
+    await again.ctx.close();
     await ctx.close();
   }
 
