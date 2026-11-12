@@ -357,7 +357,8 @@
   // 備註：照單台 buildReportRemark（批次畫面沒有備註欄，所以只有前綴＋固定段落）。
   function buildRemark(mode, { machineQty = 0, overtime = "", reportNote = "" } = {}) {
     const m = MODES[mode] ? mode : "noon";
-    const parts = [`[${MODES[m].label}]`];
+    // Stored remark prefix is a persisted contract: keep the historical finish prefix even though the UI label is now 完工.
+    const parts = [`[${m === "finish" ? "收工 / 完工" : MODES[m].label}]`];
     if (m === "dailyStart") {
       parts.push(`機台已加工數量 ${machineQty || 0}`);
       // 2026-10-05 owner：首件檢查只在首次開工做，今日開工（單台／批次）都不再宣告首件完成。

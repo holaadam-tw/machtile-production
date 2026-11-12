@@ -51,7 +51,7 @@ assert.deepEqual({ machine_qty: report.report_payload.machine_qty, completed_qty
 const finish = core.buildReportPayload({ row: { ...base, finished: true }, actorAppUserId: "actor", endedAt: "2026-10-14T01:00:00.000Z", reportUuid: "r2" }).payload;
 assert.equal(finish.report_type, "finish");
 assert.equal(finish.report_payload.overtime_plan, "none");
-assert.match(finish.remark, /^\[完工\]/);
+assert.match(finish.remark, /^\[收工 \/ 完工\]/);
 assert.notEqual(core.rowFingerprint(base), core.rowFingerprint({ ...base, finished: true }));
 
 const dailyStartRow = { ...base, mode: "dailyStart", selected: true, order: { ...order, done: 96 } };
