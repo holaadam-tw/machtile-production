@@ -85,6 +85,28 @@
     return { send: true, reason: "" };
   }
 
+  // Rows must already be ordered requested_at.desc. Keep the newest close for each card identity.
+  function latestCloseByOrder(rows) {
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const machine = normCode(row?.machine_code), order = text(row?.expected_order_no), step = Number(row?.expected_index_sn);
+      if (!machine || !order || !Number.isInteger(step) || step <= 0) return;
+      const key = `${machine}|${order}|${step}`;
+      if (!result.has(key)) result.set(key, row);
+    });
+    return result;
+  }
+
+  function closeCardState(row) {
+    if (!row) return null;
+    const status = text(row.status).toLowerCase();
+    if (status === "applied") return { kind: "applied" };
+    if (status === "pending" || status === "claimed") return { kind: "pending" };
+    const guard = row.legacy_snapshot?.guard || {};
+    if (status === "rejected" && text(guard.code) === "PREVIOUS_STEP_OPEN" && guard.hard === false) return { kind: "confirm" };
+    return { kind: "rejected", reason: text(row.reject_message) || text(row.reject_code) };
+  }
+
   // 有卡片「開工／停工」的機台，開工確認卡已順便記今日開工；單台報工不再顯示重複的「今日開工」分頁。
   // 若既有連結／flow 指定 dailyStart，移到下一個仍可用的分頁「中午報工」。
   function dailyStartReportVisible(flag, machineCode) {
@@ -851,7 +873,7 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS, INSTANT_START_TIMEOUT_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, dailyStartReportVisible, reportTypeForMachine,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,

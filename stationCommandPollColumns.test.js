@@ -15,14 +15,16 @@ const COLUMNS = new Set(["id", "command_uuid", "tenant_id", "command_type", "mac
   "stop_note_id", "stop_reason_code", "allow_takeover", "stop_note", "operator_display_name", "short_completion",
   "previous_outsource_receipt_qty", "expected_doc4_fingerprint", "operator_legacy_user_nos"]);
 
-const source = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
-const selects = [...source.matchAll(/station_commands\?select=([A-Za-z0-9_,:]+)/g)].map((m) => m[1]);
+const selects = fs.readdirSync(__dirname).filter((name) => name.endsWith(".js")).flatMap((name) => {
+  const source = fs.readFileSync(path.join(__dirname, name), "utf8");
+  return [...source.matchAll(/station_commands\?select=([A-Za-z0-9_,:]+)/g)].map((m) => ({ name, list: m[1] }));
+});
 assert.ok(selects.length >= 5, `expected at least 5 station_commands selects, found ${selects.length}`);
 let checked = 0;
-for (const list of selects) {
+for (const { name, list } of selects) {
   for (const item of list.split(",")) {
     const column = item.includes(":") ? item.split(":")[1] : item; // PostgREST alias:column
-    assert.ok(COLUMNS.has(column), `station_commands has no column "${column}" (select=${list})`);
+    assert.ok(COLUMNS.has(column), `${name}: station_commands has no column "${column}" (select=${list})`);
     checked += 1;
   }
 }

@@ -11978,6 +11978,8 @@ body .machtile-session-badge .machtile-session-toggle {
 .card-today-status.is-started { color: var(--green-strong); }
 .card-today-status.is-finished { color: var(--blue); }
 .card-today-status.is-none { color: var(--gray); }
+.card-today-status.is-close-incomplete { display: grid; color: #b42318; align-items: start; }
+.card-today-status.is-close-incomplete::before { grid-row: 1 / span 2; margin-top: 5px; }
 .sheet.card-ct-sheet { z-index: 9500; }
 .card-ct-panel { top: auto; bottom: 18px; height: auto; max-height: calc(100vh - 36px); }
 .card-ct-form { display: grid; gap: 12px; }

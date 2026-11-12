@@ -397,9 +397,9 @@ const reportTypeMeta = {
     quantityMode: "none",
   },
   finish: {
-    label: "收工 / 完工",
+    label: "完工",
     needsQty: true,
-    submitLabel: "送出收工回報",
+    submitLabel: "送出完工回報",
     quantityMode: "cumulative",
   },
   abnormal: {
@@ -1537,7 +1537,7 @@ function renderWorkDetailContent(context) {
       <a href="${escapeHtml(reportWorkUrl)}">進入現場報工</a>
       <button type="button" disabled>首次開工（未啟用）</button>
       <button type="button" disabled>今日開工（未啟用）</button>
-      <button type="button" disabled>收工 / 完工（未啟用）</button>
+      <button type="button" disabled>完工（未啟用）</button>
     </div>
     <section class="work-detail-grid">
       <article class="work-detail-card work-detail-card-main">
@@ -8864,7 +8864,8 @@ function validateReportForm(type) {
 
 function buildReportRemark(type, remark) {
   const meta = reportTypeMeta[type] || reportTypeMeta.workStart;
-  const parts = [`[${meta.label}]`];
+  // Persisted historical contract: UI says「完工」, but production_reports.remark keeps the original prefix.
+  const parts = [`[${type === "finish" ? "收工 / 完工" : meta.label}]`];
   if (type === "workStart") {
     parts.push(`總數 ${$("#workTotalQty")?.value || 0}`);
     parts.push(`cycle ${formatSeconds(getReportCycleSeconds())}`);
@@ -14905,6 +14906,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
       finishCloseReportCommandUuid: record.finishCloseReportCommandUuid,
     } } : {}),
   };
+  if (view?.terminal) void machtileLoadCardLatestCloseForMachines([code], { render: true });
 }
 
 function machtileFinishCloseClearPending(code) {
@@ -16481,7 +16483,7 @@ function renderMachineCard(machine) {
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
   const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport
-    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
+    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
   return `
@@ -19625,7 +19627,7 @@ function renderReportRulesModule() {
   const rules = [
     ["首次開工", "工件總數、cycle time 必填", "開工照片、首件檢查必填；程式選填", "產生預估完工與中午目標"],
     ["報工", "隨時可按", "照計數器填累計良品 / 不良", "智慧報工先預覽再確認"],
-    ["收工 / 完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）必填；完工照片選填", "結算當日進度"],
+    ["完工", "17:00 或 20:30", "這次良品 / 這次不良（不是累計）必填；完工照片選填", "結算當日進度"],
     ["異常回報", "事件式", "異常類型必填；異常照片選填", "異常備註與主管處理"],
   ];
   return renderRuleTable("報工規則", rules, "儲存報工規則");
@@ -22805,6 +22807,7 @@ function openFinishReport(orderId, options = {}) {
 }
 
 function closeReport() {
+  const closingMachineCode = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase();
   const returnDetailOrderId = activeReportReturnDetailOrderId;
   machtileRestoreReportForm();
   $("#finishSheet")?.classList.remove("is-open");
@@ -22818,6 +22821,7 @@ function closeReport() {
   machtileSingleStationReportState.processId = "";
   machtileSingleStationReportState.loading = false;
   machtileRenderSingleStationReport();
+  if (closingMachineCode) void machtileLoadCardLatestCloseForMachines([closingMachineCode], { render: true });
   activeReportReturnDetailOrderId = "";
   if (returnDetailOrderId) openDetail(returnDetailOrderId);
 }
@@ -23461,13 +23465,13 @@ function appendAiSupportMessage(role, text) {
 function aiSupportAnswer(question) {
   const q = String(question || "").toLowerCase();
   if (q.includes("相機") || q.includes("拍照") || q.includes("照片")) {
-    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n只有首次開工的開工照片必填；今日開工、收工/完工、異常回報的照片與 CNC 程式檔都是選填。";
+    return "拍照欄位要點「開啟相機拍照」。手機會優先開後鏡頭，拍完按「拍照使用」。如果瀏覽器沒有相機權限，才會退回手機內建拍照/選檔。\n\n只有首次開工的開工照片必填；今日開工、完工、異常回報的照片與 CNC 程式檔都是選填。";
   }
   if (q.includes("暫停") || q.includes("pause") || q.includes("停工")) {
     return "「暫停加工」用在加工真的中斷時，例如換刀、待料、量測、機台異音、等主管確認。\n\n點下去後輸入原因，系統會把製程狀態標成 paused，並寫一筆暫停回報。一般進度請用「報工」。";
   }
   if (q.includes("報工") || q.includes("一天") || q.includes("中午") || q.includes("4:30") || q.includes("下午")) {
-    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 報工：隨時可按，照機台計數器填累計數量，先預覽再確認。\n3. 收工/完工：填數量與是否加班，完工照片選填。\n4. 異常回報：異常類型必填，照片選填。";
+    return "建議報工節點是：\n1. 首次開工：工件總數、cycle time、開工照片、首件檢查必填。\n2. 報工：隨時可按，照機台計數器填累計數量，先預覽再確認。\n3. 完工：填數量與是否加班，完工照片選填。\n4. 異常回報：異常類型必填，照片選填。";
   }
   if (q.includes("qr") || q.includes("掃碼") || q.includes("未排機")) {
     return "QR Code 只給實際機台使用，例如 CNC-01 到 CNC-08。師傅掃機台 QR 會直接進該機台報工頁。\n\n「未排機」只代表工單尚未指派機台，不應該產生 QR，也不能報工。";
@@ -27715,7 +27719,7 @@ async function machtileResumeInit() {
 // 1. 點卡片「機台加工時間」→ 小框填分／秒（作業員看機台控制器螢幕上的每件加工時間）→ 儲存＝送一筆 0／0 的報工，
 //    只帶 cycle_time_seconds。PR #93 後批次改用累計數契約，這裡改由 cardMachineTimeCore 組專用 payload，
 //    started_at＝ended_at＝上一筆報工的時間（不推進起算點）、report_uuid 冪等、報工人＝登入者。
-// 2. 卡片底部改成這道工序「今天」的狀態：今日已開工 08:05・姓名／今日已收工 17:00／今日尚未開工。
+// 2. 卡片底部改成這道工序「今天」的狀態：今日已開工 08:05・姓名／今日已完工 17:00／今日尚未開工。
 //    資料＝production_reports 今天（台灣時區）的 dailyStart／finish 最新一筆。讀不到 → 原本的顯示。
 // 3. 每日估算的上下料時間：cardEstimateCore（實績中位數 ≥ 3 筆，否則車床 60／銑床 180 秒預設）。
 // 全部只讀＋前端計算；寫入只有第 1 項（跟批次報工同一支 field_report_upsert）。
@@ -27723,6 +27727,7 @@ const machtileCardEstimateCore = () => (typeof window === "undefined" ? null : w
 const machtileCardMachineTimeCore = () => (typeof window === "undefined" ? null : window.MachTileCardMachineTimeCore);
 const MACHTILE_CARD_CT_DRAFT_KEY = "machtile-card-machine-time-drafts";
 const MACHTILE_CARD_FETCH_TIMEOUT_MS = 4000;
+const MACHTILE_CARD_CLOSE_REFETCH_MS = 5 * 60 * 1000;
 const machtileCardState = {
   statsByKey: new Map(),   // 產品＋工序 → 上下料／實際每件時間樣本
   statsStatus: "idle",     // idle | ok | error（error＝全部用預設值）
@@ -27731,6 +27736,9 @@ const machtileCardState = {
   todayLoadedAt: 0,        // 上一次讀到 todayRows 的時間（每分鐘重算時，超過 2 分鐘就重讀同一份查詢）
   todayStatus: "idle",     // idle | ok | error（不是 ok＝卡片底部照原本顯示、總覽三格顯示「—」）
   userNames: new Map(),
+  latestCloseByOrder: new Map(), // machine|order|step → newest station_commands close row
+  closeStatus: "idle",
+  closeLoadedAt: 0,
   editor: null,            // 開著的小框：{ ref, processId, machineCode, loading, saving, readOnly, notice, error, ctx }
 };
 
@@ -27782,10 +27790,58 @@ function machtileLoadUnloadFor(order) {
 async function machtileLoadCardTodayAndLoadUnload(orders) {
   const core = machtileCardEstimateCore();
   if (!core || state.source !== "supabase") return;
-  await Promise.all([machtileLoadCardToday(core), machtileLoadCardLoadUnload(core, Array.isArray(orders) ? orders : [])]);
+  await Promise.all([machtileLoadCardToday(core), machtileLoadCardLoadUnload(core, Array.isArray(orders) ? orders : []), machtileLoadCardLatestClose(Array.isArray(orders) ? orders : [])]);
 }
 
-// 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已收工」與總覽「今日報工狀態」三格共用這一次查詢。
+async function machtileLoadCardLatestCloseForMachines(machineCodes, { replace = false, render = false } = {}) {
+  if (!machtileStationCmdCore || config.enableFinishClose !== true) return;
+  const machines = [...new Set(machineCodes.map((code) => String(code || "").trim().toUpperCase()).filter(Boolean))];
+  if (!machines.length) return;
+  try {
+    const list = machines.map(encodeURIComponent).join(",");
+    const rows = await machtileCardFetch(`station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,expected_part_no,manufacture_ii_id,expected_simulation_id,status,requested_at,claimed_at,reject_code,reject_message,legacy_snapshot,applied_at,short_completion&command_type=eq.close&machine_code=in.(${list})&order=requested_at.desc&limit=1000`);
+    const refreshed = machtileStationCmdCore.latestCloseByOrder(rows);
+    if (replace) machtileCardState.latestCloseByOrder = refreshed;
+    else {
+      const affected = new Set(machines);
+      const merged = new Map([...machtileCardState.latestCloseByOrder].filter(([key]) => !affected.has(String(key).split("|")[0])));
+      refreshed.forEach((row, key) => merged.set(key, row));
+      machtileCardState.latestCloseByOrder = merged;
+    }
+    machtileCardState.closeStatus = "ok";
+    machtileCardState.closeLoadedAt = Date.now();
+    if (render) renderWorkOrders();
+  } catch (error) {
+    console.warn("latest close status unavailable; cards keep report-only status", error);
+    if (replace) {
+      machtileCardState.latestCloseByOrder = new Map();
+      machtileCardState.closeStatus = "error";
+    }
+  }
+}
+
+async function machtileLoadCardLatestClose(orders) {
+  const machines = (Array.isArray(orders) ? orders : []).map((o) => o?.machine);
+  return machtileLoadCardLatestCloseForMachines(machines, { replace: true });
+}
+
+function machtileCardCloseRow(order, machine) {
+  const code = String(machine?.code || machine?.name || order?.machine || "").trim().toUpperCase();
+  const orderNo = String(order?.id || "").trim();
+  const step = Number(order?.stationStep);
+  const local = machtileStationCmd.pending[code];
+  if (local?.commandType === "close" && String(local.orderNo || "").trim() === orderNo && Number(local.step) === step) {
+    return {
+      status: local.view?.phase || local.lastStatus || "pending",
+      reject_code: local.view?.code || null,
+      reject_message: local.view?.detail || local.view?.text || null,
+      legacy_snapshot: local.view?.needsConfirmation ? { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } : null,
+    };
+  }
+  return machtileCardState.latestCloseByOrder.get(`${code}|${orderNo}|${step}`);
+}
+
+// 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已完工」與總覽「今日報工狀態」三格共用這一次查詢。
 // 下限＝台灣今天 00:00（created_at）；卡片底部只看 dailyStart／finish（todayStatusByProcess 會略過 noon）。
 // started_at／completed_qty／defect_qty：認出「只改機台加工時間」的 0／0 noon（不算中午報工，見 todayReportStatusCore）。
 function machtileCardTodayPath(core) {
@@ -27862,6 +27918,16 @@ function machtileCardFooterStatus(order, machine) {
   try {
     const label = core.todayStatusLabel(machtileCardState.today.get(String(order.processId)), (uid) => machtileCardState.userNames.get(String(uid)) || "");
     const title = order.lastReport ? ` title="最後回報：${escapeHtml(order.lastReport)}"` : "";
+    if (label.tone === "finished" && machtileCardState.closeStatus === "ok") {
+      const code = String(machine?.code || machine?.name || order.machine || "").trim().toUpperCase();
+      const row = machtileCardCloseRow(order, machine);
+      const close = machtileStationCmdCore.closeCardState(row);
+      if (close && close.kind !== "applied") {
+        const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
+        const reason = close.reason || machtileTranslate("finish_close_unknown");
+        return `<span class="card-today-status is-close-incomplete" data-today-status="close-incomplete"${title}><strong>${escapeHtml(machtileTranslate("card_finish_recorded"))}</strong><span>${escapeHtml(machtileTranslate(textKey, { reason }))}</span></span>`;
+      }
+    }
     return `<span class="card-today-status is-${escapeHtml(label.tone)}" data-today-status="${escapeHtml(label.tone)}"${title}>${escapeHtml(label.text)}</span>`;
   } catch (error) {
     console.warn("today status label failed", error);
@@ -28149,7 +28215,7 @@ document.addEventListener("keydown", (event) => {
 
 // ---- Monitor 總覽「今日報工狀態」三格（owner 2026-10-02 拍板）----
 // 今日未開工／今日未報工／未收工（可能加班）。判斷規則在 todayReportStatusCore.js（台灣時間，不看瀏覽器時區）。
-// 資料＝卡片底部「今日已開工／已收工」同一次查詢（machtileCardState.todayRows），不另外打 API；
+// 資料＝卡片底部「今日已開工／已完工」同一次查詢（machtileCardState.todayRows），不另外打 API；
 // 每分鐘重算一次（跨過 08:30／13:00／17:15／20:45 自動切換），順便每 2 分鐘重讀那同一份查詢（不然整天開著的畫面看不到新的報工）。
 // 只改畫面，不寫資料庫。點格子＝卡片牆只顯示那幾台；再點一次或按「顯示全部」恢復。選擇記在 localStorage（讀寫都包 try/catch）。
 const machtileTodayReportCore = () => (typeof window === "undefined" ? null : window.MachTileTodayReportCore);
@@ -28285,6 +28351,11 @@ async function machtileTodayTick() {
     try { await machtileLoadOvertimeStartSegments(new Date()); } catch (error) { console.warn("today start commands refresh failed; keeping the last result", error); }
   }
   const ecore = machtileCardEstimateCore();
+  if (state.source === "supabase" && machtileCardState.closeStatus === "ok" && !document.hidden
+    && Date.now() - (machtileCardState.closeLoadedAt || 0) >= MACHTILE_CARD_CLOSE_REFETCH_MS - 5000) {
+    try { await machtileLoadCardLatestClose(machtileCardOrders()); }
+    catch (error) { console.warn("latest close refresh failed; keeping the last result", error); }
+  }
   if (ecore && state.source === "supabase" && machtileCardState.todayStatus === "ok" && !document.hidden && !machtileTodayRefetching
     && Date.now() - (machtileCardState.todayLoadedAt || 0) >= MACHTILE_TODAY_REFETCH_MS - 5000) { // 容許計時器誤差：每 2 次重算重讀一次
     machtileTodayRefetching = true;

@@ -136,7 +136,7 @@
 
     // 今日狀態
     const entry = latestTodayEntry(todayMap, input?.processIds);
-    if (entry && entry.type === "finish") cell.today = { tone: "finished", text: `已收工 ${entry.time}` };
+    if (entry && entry.type === "finish") cell.today = { tone: "finished", text: `已完工 ${entry.time}` };
     else if (entry) cell.today = { tone: "started", text: `${entry.time} 開工` };
     else if (sets.notStarted.has(key)) cell.today = { tone: "notStarted", text: "今日未開工" };
     else if (order) cell.today = { tone: "none", text: "尚未開工" };

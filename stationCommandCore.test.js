@@ -16,6 +16,18 @@ const UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 const PID = "00000000-0000-4000-8000-000000000304";
 const order = { id: "XX01202502050012", processId: PID, part: "HCG-06本體", drawing: "DRW-77", process: "車床加工", stationStep: 5, offStation: false };
 
+console.log("== card close status ==");
+eq("pending close", c.closeCardState({ status: "pending" }), { kind: "pending" });
+eq("claimed close", c.closeCardState({ status: "claimed" }), { kind: "pending" });
+eq("soft previous-step guard", c.closeCardState({ status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } }), { kind: "confirm" });
+eq("other rejection", c.closeCardState({ status: "rejected", reject_code: "LOCK_TIMEOUT" }), { kind: "rejected", reason: "LOCK_TIMEOUT" });
+eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied" });
+const newestClose = c.latestCloseByOrder([
+  { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } },
+  { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "applied" },
+]);
+eq("ordered rows keep newest command", newestClose.get("A03|WO-1|3").status, "rejected");
+
 console.log("== parseFlag／enabledForMachine ==");
 eq("沒設 → 關", c.flagIsOn(c.parseFlag(undefined)), false);
 eq("空陣列 → 關", c.flagIsOn(c.parseFlag([])), false);
