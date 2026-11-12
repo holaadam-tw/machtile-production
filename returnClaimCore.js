@@ -126,6 +126,8 @@
 
   // ---------------------------------------------------------------- 拒絕碼 → 一句白話（i18n key）
   // submit 的 raise 與 Factory finish 的 reject_code 共用一張表。畫面絕不顯示代碼本身。
+  // Factory 那一半＝從套用端原始碼列出 return_claim 會回的每一個碼（StationReturnClaimApplier.cs、StationCommandProcessor.cs、
+  // StationCommandMatcher.cs、StationCommandPoller.cs；測試 FACTORY_CODES 是同一份清單）。
   const REJECT_MESSAGE_KEY = Object.freeze({
     AUTH_REQUIRED: "return_claim_err_login",
     OPERATOR_REQUIRED: "return_claim_err_role",
@@ -158,10 +160,25 @@
     STALE_COMMAND: "return_claim_err_stale_command",
     EXPIRED: "return_claim_err_expired",
     MANUAL_RELEASED: "return_claim_err_released",
+    // ---- Factory 套用端另外會回的碼（合約 §2 的表沒列）
+    // 工廠旗標關（當成不認得的指令種類）、指令欄位不合、管理員代退但稽核表缺欄位 → 都是「還沒開放／找生管」
+    COMMAND_INVALID: "return_claim_err_not_open",
+    OPERATOR_UNKNOWN: "return_claim_err_account",
+    // 整筆已取消、沒有寫入；等一下再按有機會成功
+    LOCK_TIMEOUT: "return_claim_err_busy_retry",
+    INTERNAL_ERROR: "return_claim_err_internal_retry",
+    // 結果不確定：不可以說「沒有退回」
+    OUTCOME_UNKNOWN: "return_claim_err_outcome_unknown",
+    LEGACY_APPLIED_LATE: "return_claim_err_outcome_unknown",
+    // 沒有寫入，再按也一樣 → 找生管
+    LEDGER_CONFLICT: "return_claim_err_factory_problem",
+    WRITE_TARGET_DENIED: "return_claim_err_factory_problem",
   });
   const GENERIC_MESSAGE_KEY = "return_claim_err_generic";
   // 只有這幾個「等一下再按」有機會成功；其餘再按也一樣，文字不可以叫人再按。
-  const RETRY_LATER_CODES = Object.freeze(["CLAIM_NOT_APPLIED", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND", "EXPIRED"]);
+  const RETRY_LATER_CODES = Object.freeze(["CLAIM_NOT_APPLIED", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND", "EXPIRED", "LOCK_TIMEOUT", "INTERNAL_ERROR"]);
+  // 結果不確定的碼：畫面用「注意」色，不用「失敗」色；文字不說沒有退回。
+  const UNCERTAIN_CODES = Object.freeze(["OUTCOME_UNKNOWN", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED"]);
 
   function rejectInfo(code) {
     const key = normCode(code);
@@ -233,7 +250,7 @@
     }
     if (status === "rejected") {
       const info = rejectInfo(row.reject_code);
-      return { phase: "rejected", status, terminal: true, tone: "bad", mode: "", code: info.code, messageKey: info.messageKey };
+      return { phase: "rejected", status, terminal: true, tone: UNCERTAIN_CODES.includes(info.code) ? "warn" : "bad", mode: "", code: info.code, messageKey: info.messageKey };
     }
     if (status === "expired") {
       return { phase: "expired", status, terminal: true, tone: "warn", mode: "", code: "EXPIRED", messageKey: REJECT_MESSAGE_KEY.EXPIRED };
@@ -262,6 +279,10 @@
       machineCode: normCode(rec.machineCode),
       orderNo: text(rec.orderNo),
       step: positiveInt(rec.step),
+      processId: isUuid(rec.processId) ? String(rec.processId) : "",
+      // 這筆是誰（哪個租戶、哪個 app_users.id）送的：共用平板換人登入後不可以把別人的等待紀錄套到自己身上
+      tenantId: text(rec.tenantId),
+      appUserId: text(rec.appUserId),
       args,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
@@ -285,6 +306,46 @@
     return out;
   }
 
+  // 這筆紀錄是不是目前登入的這個人（同租戶＋同 app_users.id）送的。任一邊是空的＝無法確認＝不是。
+  function sameSession(rec, session) {
+    const tenantId = text(session && session.tenantId);
+    const appUserId = text(session && session.appUserId);
+    return Boolean(rec) && tenantId !== "" && appUserId !== "" && text(rec.tenantId) === tenantId && text(rec.appUserId) === appUserId;
+  }
+
+  // 還原：只拿回「目前登入的這個人」送的紀錄；別人的、沒有記是誰的（舊格式）一律不還原。
+  function restoreForSession(raw, nowMs, session) {
+    const all = restorePending(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (sameSession(all[code], session)) out[code] = all[code]; });
+    return out;
+  }
+
+  // 存檔：自己的紀錄照寫；同一台平板上別人還沒過期的紀錄原樣留著（不替別人刪），同一台機台以自己的為準。
+  function mergeForSave(raw, own, nowMs, session) {
+    const all = restorePending(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (!sameSession(all[code], session)) out[code] = all[code]; });
+    Object.keys(own || {}).forEach((code) => { out[normCode(code)] = own[code]; });
+    return out;
+  }
+
+  // 這筆紀錄講的是不是卡片現在顯示的那張單、那一道。不是＝卡片不可以顯示「這張單…」的字與重送／不退了。
+  function recordMatchesOrder(rec, order) {
+    return Boolean(rec) && Boolean(order) && text(rec.orderNo) !== "" && text(rec.orderNo) === text(order.id)
+      && positiveInt(rec.step) !== null && positiveInt(rec.step) === positiveInt(order.stationStep);
+  }
+
+  // 卡片上這筆紀錄要怎麼顯示：
+  //   own＝就是這張單這一道 → 照原本（等待中／不確定＋重送／查不到＋重送、不退了）
+  //   machine＝還鎖著這台、但卡片已經是別張單（或沒有單）→ 只說「這台有一筆退回在處理」，不給重送
+  //   none＝不鎖、也不是這張單 → 不顯示（紀錄已過時；按新的退回時丟掉）
+  function cardRecordMode(rec, order, released) {
+    if (!rec) return "none";
+    if (recordMatchesOrder(rec, order)) return "own";
+    return locks(rec, released) ? "machine" : "none";
+  }
+
   // 這筆等結果的退回要不要鎖住這台的開工／報工（合約 §5：退回 pending 期間鎖住）。
   // 查了幾次都查不到（notFound）＝沒送到，不鎖；released＝本機等超過解鎖時間而且最後看到的不是 claimed。
   function locks(record, released) {
@@ -305,9 +366,9 @@
 
   return Object.freeze({
     COMMAND_TYPE, SUBMIT_RPC, POLL_PATH_PREFIX, POLL_SELECT, ROLES, REASON_ROLES, REASON_MAX, PENDING_KEEP_MS, ARG_KEYS,
-    REJECT_MESSAGE_KEY, GENERIC_MESSAGE_KEY, RETRY_LATER_CODES,
+    REJECT_MESSAGE_KEY, GENERIC_MESSAGE_KEY, RETRY_LATER_CODES, UNCERTAIN_CODES,
     isUuid, roleAllowed, needsReason, visibility, freshCheck, reasonCheck, buildArgs, rejectInfo, errorCodeOf, serverMessage,
     isMissingResourceError, isNetworkError, submitErrorInfo, legacySnapshot, resultView, rowIsThis, pollPath,
-    pendingRecord, restorePending, locks, lastResultVisible,
+    pendingRecord, restorePending, restoreForSession, mergeForSave, sameSession, recordMatchesOrder, cardRecordMode, locks, lastResultVisible,
   });
 });
