@@ -126,4 +126,7 @@ window.MACHTILE_CONFIG = {
   // 機台卡片「接錯了，退回」（作業員退回自己接、還沒開工的單；CONTRACT-P2）。預設關。
   // 開之前要先有：雲端 migration 20261112200000 已套、Factory 套用端支援 return_claim、雲端 return_claim_enabled=true。
   enableReturnClaim: false,
+  // 機台卡片「換道次」（同一張工單換成待做池裡另一道：先退回現在這一道，再接選的那一道）。預設關。
+  // enableReturnClaim 也要開才有效；開之前還要先有：工廠把同一張工單沒做完的道次都放進待做池。
+  enableSwitchStep: false,
 };

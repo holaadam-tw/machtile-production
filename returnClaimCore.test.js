@@ -955,16 +955,20 @@ test("outside the return-claim block, app.js differs from the base only by the l
     // 退回等待中：批次報工（直送 field_report_upsert 那條與智慧報工）、單台報工表單送出
     ["  if (machtileReturnClaimBatchBlock(toSend.map(({ model }) => model.machineCode))) return;\n", ""],
     ["    if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }\n", ""],
+    // ---- 「換道次」（enableSwitchStep）加的掛點：既有接單函式多回一個結果物件（成功／失敗）。原本的呼叫端都不看回傳值
+    //      （`void machtileClaimDispatchPool(...)`），所以旗標關時行為等於原字串。其餘換道次程式都在上面那一段 block 裡。
+    ["    showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
+    ["    await machtileLoadDispatchPool();\n    return { ok: false, error };\n  } finally {", "    await machtileLoadDispatchPool();\n  } finally {"],
   ];
   for (const [now, before] of hooks) {
     assert.equal(current.split(now).length, 2, `hook must appear exactly once: ${now.slice(0, 60)}`);
     current = current.replace(now, () => before);
   }
-  assert.doesNotMatch(current, /machtileReturnClaim|returnClaimLocked|enableReturnClaim/, "no other reference outside the block");
+  assert.doesNotMatch(current, /machtileReturnClaim|returnClaimLocked|enableReturnClaim|machtileSwitchStep|enableSwitchStep/, "no other reference outside the block");
   assert.equal(current, baseApp, "with the block removed and the hooks reverted, app.js is byte-identical to the base");
   // 設定檔：只多一個預設關的旗標
   const baseConfig = norm(git(["show", `${base}:config.js`]));
   const config = norm(fs.readFileSync(path.join(__dirname, "config.js"), "utf8"));
   assert.match(config, /\n  enableReturnClaim: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableReturnClaim|接錯了，退回|return_claim/.test(line)).join("\n"), baseConfig);
+  assert.equal(config.split("\n").filter((line) => !/enableReturnClaim|接錯了，退回|return_claim|enableSwitchStep|換道次/.test(line)).join("\n"), baseConfig);
 });

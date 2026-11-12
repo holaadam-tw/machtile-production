@@ -13417,3 +13417,8 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .asm-short { display: grid; gap: 8px; padding: 10px; border: 2px solid #f79009; border-radius: var(--radius); background: var(--amber-soft); }
 .asm-short-question { margin: 0; font-weight: 800; color: #93370d; }
 .asm-short-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 換道次確認卡：選要換成哪一道（config.enableSwitchStep） */
+.switch-step-choices { display: grid; gap: 8px; margin-top: 8px; }
+.switch-step-choice { min-height: 56px; padding: 10px 14px; border: 2px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 19px; font-weight: 700; text-align: left; cursor: pointer; }
+.switch-step-choice[aria-checked="true"] { border-color: var(--green-strong); background: var(--green-soft); }
+.switch-step-choice:disabled { opacity: 0.6; cursor: default; }
