@@ -52,8 +52,9 @@ const poolSelects = fs.readdirSync(__dirname).filter((name) => name.endsWith(".j
   const source = fs.readFileSync(path.join(__dirname, name), "utf8");
   return [...source.matchAll(/dispatch_pool_items\?select=([A-Za-z0-9_,:]*)/g)].map((m) => ({ name, list: m[1] }));
 });
-// app.js: the pool list and the assigned-status read (both already in production); returnClaimCore.js: the held-step lookup.
-assert.deepEqual(poolSelects.map((entry) => entry.name).sort(), ["app.js", "app.js", "returnClaimCore.js"], "every dispatch_pool_items select is one of the three known literals");
+// app.js: the pool list and the assigned-status read (both already in production). The held-step lookup no longer reads this
+// table (a claim Factory has acknowledged is 'gone' and RLS hides it): it calls the read-only RPC checked further down.
+assert.deepEqual(poolSelects.map((entry) => entry.name).sort(), ["app.js", "app.js"], "every dispatch_pool_items select is one of the two known literals");
 let poolChecked = 0;
 for (const { name, list } of poolSelects) {
   assert.ok(list.length > 0, `${name}: dispatch_pool_items select must be a literal column list`);
@@ -62,10 +63,36 @@ for (const { name, list } of poolSelects) {
     poolChecked += 1;
   }
 }
-const heldSelect = poolSelects.find((entry) => entry.name === "returnClaimCore.js");
-assert.equal(heldSelect.list, "source_key,work_order_no,process_order,status", "held-step lookup select");
-const heldPrefix = require("./returnClaimCore.js").HELD_POOL_PATH_PREFIX;
-assert.equal(heldPrefix, `dispatch_pool_items?select=${heldSelect.list}&status=eq.claimed&limit=1000&work_order_no=in.`, "the path the app uses is that same literal, claimed rows only");
+// Held-step lookup: one RPC, no select. Its name and the row fields the core reads must be what the cloud migration
+// (machtile-mini-mes 20261113100000_held_pool_claims_rpc.sql) declares: returns table(machine_code, work_order_no,
+// process_order, source_key, claimed_at). The list is vendored here; when the cloud worktree is on this machine the
+// migration itself is read (git show origin/main) and must agree.
+const HELD_RPC_COLUMNS = ["machine_code", "work_order_no", "process_order", "source_key", "claimed_at"];
+const returnClaimCore = require("./returnClaimCore.js");
+assert.equal(returnClaimCore.HELD_CLAIMS_RPC, "machtile_held_pool_claims", "held-step lookup RPC name");
+assert.equal(returnClaimCore.HELD_POOL_PATH_PREFIX, undefined, "the dispatch_pool_items claimed-row lookup is gone");
+assert.equal(returnClaimCore.heldPoolPath, undefined, "the dispatch_pool_items claimed-row lookup is gone");
+const returnClaimSource = fs.readFileSync(path.join(__dirname, "returnClaimCore.js"), "utf8");
+const heldFn = returnClaimSource.slice(returnClaimSource.indexOf("function heldPoolKey("), returnClaimSource.indexOf("// ---------------------------------------------------------------- 卡片要不要出現"));
+const heldFields = [...new Set([...heldFn.matchAll(/\b(?:row|hits\[0\])\.([a-z_]+)/g)].map((m) => m[1]))].sort();
+assert.deepEqual(heldFields, ["machine_code", "process_order", "source_key", "work_order_no"], "row fields the held-step resolver reads");
+for (const field of heldFields) assert.ok(HELD_RPC_COLUMNS.includes(field), `machtile_held_pool_claims() returns no column "${field}"`);
+const appSourceForRpc = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+assert.equal([...appSourceForRpc.matchAll(/machtileReturnClaimCore\.HELD_CLAIMS_RPC/g)].length, 1, "app.js calls the held-step RPC in exactly one place, by the core's constant");
+assert.doesNotMatch(appSourceForRpc, /machtile_held_pool_claims\?|HELD_CLAIMS_RPC\}\?/, "the RPC is called without a query string (no select to cover)");
+const cloudRepo = process.env.HELD_POOL_CLAIMS_CLOUD_REPO || "D:/04_SoftNet/wt-mini-return";
+let cloudSql = "";
+try {
+  cloudSql = require("node:child_process").execFileSync("git", ["-C", cloudRepo, "show", "origin/main:supabase/migrations/20261113100000_held_pool_claims_rpc.sql"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+} catch { /* cloud worktree not on this machine */ }
+if (cloudSql) {
+  const declared = /create function public\.machtile_held_pool_claims\(\)\s+returns table\(([^)]*)\)/.exec(cloudSql);
+  assert.ok(declared, "cloud migration declares public.machtile_held_pool_claims() returns table(...)");
+  assert.deepEqual(declared[1].split(",").map((part) => part.trim().split(/\s+/)[0]), HELD_RPC_COLUMNS, "vendored RPC column list == cloud migration");
+  console.log(`PASS held-step RPC columns match the cloud migration: ${HELD_RPC_COLUMNS.length} columns`);
+} else {
+  console.log(`  (cloud repo not on this machine: ${cloudRepo}; held-step RPC columns compared with the vendored list)`);
+}
 // No dispatch_pool_items read may be assembled without a literal select (it would escape the scan above).
 for (const name of fs.readdirSync(__dirname).filter((file) => file.endsWith(".js") && !file.endsWith(".test.js"))) {
   const source = fs.readFileSync(path.join(__dirname, name), "utf8");

@@ -430,7 +430,7 @@ function harness(options = {}) {
     await timer.fn();
   };
   const pollTimers = () => timers.filter((timer) => timer.ms !== stationCore.SUBMIT_TIMEOUT_MS).length;
-  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, context, session, batchState };
+  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, context, session, batchState, timers };
 }
 const freshRow = (extra) => [Object.assign({ id: PROCESS_ID, process_order: 1, process_name: "CNC車床加工", status: "pending", off_station_at: null, qty_completed: 0,
   work_orders: { work_order_no: "TEST-WO-1", part_no: "TEST-P1", part_name: "測試軸", status: "in_progress" }, machines: { machine_code: "A01" } }, extra)];
@@ -919,65 +919,82 @@ test("stored record carries tenant + app user; restore drops other sessions' rec
   assert.deepEqual(Object.keys(saved), ["A02"], "after my result only the other user's record is left");
 });
 
-// ---------------------------------------------------------------- 池列鍵從待做池自己查（不靠 work_orders.external_ref）
-const heldRow = (extra) => Object.assign({ source_key: POOL_KEY, work_order_no: "TEST-WO-1", process_order: 1, status: "claimed" }, extra);
+// ---------------------------------------------------------------- 池列鍵問雲端 RPC machtile_held_pool_claims()（不查 dispatch_pool_items、不靠 work_orders.external_ref）
+// RPC 回的列＝接單帳本裡還沒退回、工序 pending、還掛在那台的接單（沒有 status 欄：Factory 確認後池列是 gone，帳本列照樣在）。
+const HELD_RPC_URL = "rpc/machtile_held_pool_claims";
+const heldRow = (extra) => Object.assign({ machine_code: "A01", work_order_no: "TEST-WO-1", process_order: 1, source_key: POOL_KEY, claimed_at: "2026-11-13T01:00:00+00:00" }, extra);
+const cardOrder = (extra) => claimedOrder(Object.assign({ machine: "A01", heldPoolKey: undefined }, extra));   // 卡片物件上的機台代號（machtileAssignedCardProcess 填 machines.machine_code）
 const FIRST_CLAIMED_KEY = "01|TESTNEED0001|FIRST-STEP";   // work_orders.external_ref 會停在這裡（這張工單第一次被接的那一道）
 
-test("heldPoolKey: exactly one claimed pool row for (order, step) gives its source_key; anything else gives nothing", () => {
-  assert.equal(core.heldPoolKey({ rows: [heldRow()], orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
+test("heldPoolKey: exactly one live claim for (machine, order, step) gives its source_key; anything else gives nothing", () => {
+  const on = (extra) => core.heldPoolKey(Object.assign({ rows: [heldRow()], machineCode: "A01", orderNo: "TEST-WO-1", step: 1 }, extra));
+  assert.equal(core.HELD_CLAIMS_RPC, "machtile_held_pool_claims");
+  assert.equal(on(), POOL_KEY);
+  assert.equal(on({ machineCode: " a01 ", orderNo: " TEST-WO-1 ", step: "1" }), POOL_KEY, "same trimming / upper-casing / numeric step as the rest of the core");
+  assert.equal(on({ rows: [heldRow({ machine_code: "a01 " })] }), POOL_KEY);
   // 同一張工單別的道、別張工單同一道：不算
   const mixed = [heldRow({ source_key: "01|X|S2", process_order: 2 }), heldRow({ source_key: "01|Y|S1", work_order_no: "TEST-WO-2" }), heldRow()];
-  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
-  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 2 }), "01|X|S2");
-  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: " TEST-WO-1 ", step: "1" }), POOL_KEY, "same trimming / numeric step as the rest of the core");
+  assert.equal(on({ rows: mixed }), POOL_KEY);
+  assert.equal(on({ rows: mixed, step: 2 }), "01|X|S2");
+  // 別台機台接的同工單同道次：不是這張卡片的
+  assert.equal(on({ rows: [heldRow({ machine_code: "A02" })] }), "", "another machine's claim for the same order/step");
+  assert.equal(on({ rows: [heldRow({ machine_code: "A02", source_key: "01|OTHER|A02" }), heldRow()] }), POOL_KEY, "…and it does not make this machine's own claim ambiguous");
+  assert.equal(on({ rows: [heldRow({ machine_code: "A02", source_key: "01|OTHER|A02" }), heldRow()], machineCode: "A02" }), "01|OTHER|A02");
+  for (const machine_code of ["", null, undefined, "A011", "A0"]) assert.equal(on({ rows: [heldRow({ machine_code })] }), "", `row machine_code=${machine_code}`);
   // 0 列
-  assert.equal(core.heldPoolKey({ rows: [], orderNo: "TEST-WO-1", step: 1 }), "");
-  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 3 }), "");
-  // 超過 1 列（同工單同道次兩列 claimed）＝不猜
-  assert.equal(core.heldPoolKey({ rows: [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })], orderNo: "TEST-WO-1", step: 1 }), "");
-  // 狀態不是 claimed（就算伺服器沒照篩選回）
-  for (const status of ["waiting", "gone", "", null, undefined, "CLAIMED"]) assert.equal(core.heldPoolKey({ rows: [heldRow({ status })], orderNo: "TEST-WO-1", step: 1 }), "", `status=${status}`);
+  assert.equal(on({ rows: [] }), "");
+  assert.equal(on({ rows: mixed, step: 3 }), "");
+  // 超過 1 列（同機台同工單同道次兩筆）＝不猜
+  assert.equal(on({ rows: [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })] }), "");
+  // 池列狀態不看（RPC 不回 status；帳本列在＝還接著，池列是 gone 也一樣）
+  for (const status of ["gone", "claimed", "waiting", undefined]) assert.equal(on({ rows: [heldRow({ status })] }), POOL_KEY, `status=${status} is not consulted`);
   // 鍵長度不合合約（5–120）
-  for (const source_key of ["", "abcd", "x".repeat(121), null]) assert.equal(core.heldPoolKey({ rows: [heldRow({ source_key })], orderNo: "TEST-WO-1", step: 1 }), "");
+  for (const source_key of ["", "abcd", "x".repeat(121), null, undefined]) assert.equal(on({ rows: [heldRow({ source_key })] }), "", `source_key=${String(source_key).slice(0, 8)}`);
+  assert.equal(on({ rows: [heldRow({ source_key: "x".repeat(120) })] }), "x".repeat(120));
+  assert.equal(on({ rows: [heldRow({ source_key: "abcde" })] }), "abcde");
   // 沒讀到、讀到的不是陣列、筆數頂到上限（可能沒讀完）
-  for (const rows of [null, undefined, {}, "x"]) assert.equal(core.heldPoolKey({ rows, orderNo: "TEST-WO-1", step: 1 }), "");
+  for (const rows of [null, undefined, {}, "x", 0, { length: 1, 0: heldRow() }]) assert.equal(on({ rows }), "");
   const capped = [heldRow(), ...Array.from({ length: core.HELD_POOL_ROW_LIMIT - 1 }, (_, i) => heldRow({ source_key: `01|OTHER|${i}`, work_order_no: "TEST-WO-9" }))];
   assert.equal(capped.length, core.HELD_POOL_ROW_LIMIT);
-  assert.equal(core.heldPoolKey({ rows: capped, orderNo: "TEST-WO-1", step: 1 }), "", "a full page may be truncated: fail closed");
-  assert.equal(core.heldPoolKey({ rows: capped.slice(0, -1), orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
-  // 工單號／道次不對
-  for (const [orderNo, step] of [["", 1], [null, 1], ["TEST-WO-1", 0], ["TEST-WO-1", null], ["TEST-WO-1", 1.5]]) assert.equal(core.heldPoolKey({ rows: [heldRow()], orderNo, step }), "");
+  assert.equal(on({ rows: capped }), "", "a full page may be truncated: fail closed");
+  assert.equal(on({ rows: capped.slice(0, -1) }), POOL_KEY);
+  // 機台／工單號／道次不對
+  for (const [machineCode, orderNo, step] of [["", "TEST-WO-1", 1], [null, "TEST-WO-1", 1], [undefined, "TEST-WO-1", 1], ["A01", "", 1], ["A01", null, 1],
+    ["A01", "TEST-WO-1", 0], ["A01", "TEST-WO-1", null], ["A01", "TEST-WO-1", 1.5]]) assert.equal(on({ machineCode, orderNo, step }), "");
   assert.equal(core.heldPoolKey(), "");
-  assert.equal(core.heldPoolKey({ rows: [null, undefined, heldRow()], orderNo: "TEST-WO-1", step: 1 }), POOL_KEY, "junk rows are ignored");
+  assert.equal(on({ rows: [null, undefined, "x", 7, heldRow()] }), POOL_KEY, "junk rows are ignored");
 });
 
-test("heldPoolPath: claimed rows of the given orders only, literal select, quoted and encoded in-list", () => {
-  assert.equal(core.heldPoolPath([]), "");
-  assert.equal(core.heldPoolPath(null), "");
-  assert.equal(core.heldPoolPath(["", "  ", null, "x".repeat(101)]), "", "nothing usable: no query at all");
-  assert.equal(core.heldPoolPath(["TEST-WO-1", "TEST-WO-2", " TEST-WO-1 "]),
-    `dispatch_pool_items?select=source_key,work_order_no,process_order,status&status=eq.claimed&limit=1000&work_order_no=in.${encodeURIComponent('("TEST-WO-1","TEST-WO-2")')}`);
-  assert.equal(decodeURIComponent(core.heldPoolPath(['A"B', "C\\D", "E,F)"]).split("work_order_no=in.")[1]), '("A\\"B","C\\\\D","E,F)")', "quotes and backslashes are escaped inside the quoted value");
-  assert.ok(core.heldPoolPath(["TEST-WO-1"]).startsWith(core.HELD_POOL_PATH_PREFIX));
-  assert.equal(Number(/[&?]limit=(\d+)/.exec(core.HELD_POOL_PATH_PREFIX)[1]), core.HELD_POOL_ROW_LIMIT, "the cap the resolver checks is the limit the query asks for");
+test("the dispatch_pool_items claimed-row lookup is gone: no path builder, no claimed select anywhere in the app", () => {
+  assert.equal(core.heldPoolPath, undefined);
+  assert.equal(core.HELD_POOL_PATH_PREFIX, undefined);
+  for (const file of ["app.js", "returnClaimCore.js", "switchStepCore.js"]) {
+    const code = fs.readFileSync(path.join(__dirname, file), "utf8").replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(code, /status=eq\.claimed/, `${file}: no claimed-row pool select`);
+    assert.doesNotMatch(code, /heldPoolPath|HELD_POOL_PATH_PREFIX/, `${file}: no reference to the removed path builder`);
+  }
 });
 
-test("held step ≠ first-claimed step: the button shows and the return carries the pool row of the HELD step, not work_orders.external_ref", async () => {
-  // 這張工單第一次被接的是第 1 道（external_ref 停在那裡）；現在機台上掛的是第 2 道
-  const held = claimedOrder({ stationStep: 2, heldPoolKey: undefined, dispatchPoolSourceKey: FIRST_CLAIMED_KEY, dispatchPoolStatus: "waiting" });
+test("pool row gone, ledger claim present: the button shows and the return carries the RPC's key for the HELD step, not work_orders.external_ref", async () => {
+  // 這張工單第一次被接的是第 1 道（external_ref 停在那裡）；現在機台上掛的是第 2 道，Factory 已確認接單（池列 gone，App 讀不到）
+  const held = cardOrder({ stationStep: 2, dispatchPoolSourceKey: FIRST_CLAIMED_KEY, dispatchPoolStatus: "" });
   const HELD_KEY = "01|TESTNEED0001|SECOND-STEP";
-  const urls = [];
+  const seen = [];
   let posted = null;
   const h = harness({ flag: true, order: held, assigned: [held], backend: async (url, init) => {
-    urls.push(url);
-    if (url.startsWith("dispatch_pool_items?")) return [heldRow({ source_key: HELD_KEY, process_order: 2 })];
+    seen.push({ url, init });
+    if (url.startsWith("dispatch_pool_items?")) throw new Error("the pool table must not be read for the held key");
+    if (url === HELD_RPC_URL) return [heldRow({ source_key: HELD_KEY, process_order: 2 })];
     if (url.startsWith("work_order_processes?")) return freshRow({ process_order: 2 });
     if (url === "rpc/machtile_submit_return_claim_command") { posted = JSON.parse(init.body); return [commandRow({ pool_item_id: HELD_KEY, expected_index_sn: 2 })]; }
     throw new Error(`unexpected ${url}`);
   } });
   assert.equal(h.api.markup(h.machine), "", "before the lookup: nothing (external_ref alone never shows the button)");
   await h.api.loadHeldKeys(7);
-  assert.deepEqual(urls, [core.heldPoolPath(["TEST-WO-1"])], "one read: the claimed pool rows of the orders on the cards");
+  assert.deepEqual(seen.map((call) => call.url), [HELD_RPC_URL], "one request: the RPC, no query string");
+  assert.equal(seen[0].init.method, "POST");
+  assert.equal(seen[0].init.body, "{}", "no arguments");
+  assert.ok(seen[0].init.signal && typeof seen[0].init.signal.aborted === "boolean", "the request carries an abort signal (time limit)");
   assert.equal(held.heldPoolKey, HELD_KEY);
   assert.equal(held.dispatchPoolSourceKey, FIRST_CLAIMED_KEY, "the external_ref-based field is left alone");
   assert.match(h.api.markup(h.machine), /data-return-claim-open="A01"/);
@@ -988,31 +1005,63 @@ test("held step ≠ first-claimed step: the button shows and the return carries 
   assert.notEqual(posted.p_pool_item_id, FIRST_CLAIMED_KEY);
 });
 
-test("held-key lookup fails closed: no row, two rows, unreadable, superseded load, or nothing pending → no button", async () => {
+test("held-key lookup fails closed and silently: RPC missing, error, timeout, bad shape, 0 or 2 matches, other machine, bad key → no button, no toast, no retry", async () => {
+  const abortError = () => Object.assign(new Error("timeout"), { name: "AbortError" });
   const cases = [
-    ["no claimed row for this step", async () => [heldRow({ process_order: 2 })]],
-    ["two claimed rows for this step", async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })]],
-    ["read failed", async () => { throw new TypeError("Failed to fetch"); }],
-    ["not an array", async () => ({ message: "nope" })],
+    ["RPC not deployed (404 PGRST202)", async () => { throw new Error('404 {"code":"PGRST202","details":"Searched for the function public.machtile_held_pool_claims without parameters","hint":null,"message":"Could not find the function public.machtile_held_pool_claims without parameters in the schema cache"}'); }],
+    ["RPC not deployed (bare 404)", async () => { throw new Error("404 "); }],
+    ["no execute grant (403)", async () => { throw new Error('403 {"code":"42501","message":"permission denied for function machtile_held_pool_claims"}'); }],
+    ["server error (500)", async () => { throw new Error('500 {"message":"boom"}'); }],
+    ["network down", async () => { throw new TypeError("Failed to fetch"); }],
+    ["timed out (aborted)", async () => { throw abortError(); }],
+    ["not an array (object)", async () => ({ message: "nope" })],
+    ["not an array (null / 204)", async () => null],
+    ["not an array (string)", async () => "ok"],
+    ["no claim for this step", async () => [heldRow({ process_order: 2 })]],
+    ["no claim at all", async () => []],
+    ["two claims for this machine/order/step", async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })]],
+    ["only another machine holds this order/step", async () => [heldRow({ machine_code: "A02" })]],
+    ["key too short", async () => [heldRow({ source_key: "abcd" })]],
+    ["key too long", async () => [heldRow({ source_key: "x".repeat(121) })]],
+    ["key missing", async () => [heldRow({ source_key: null })]],
   ];
   for (const [label, backend] of cases) {
-    const held = claimedOrder({ heldPoolKey: POOL_KEY });   // 上一次載入查到的值也要被這一次蓋掉
+    const held = cardOrder({ heldPoolKey: POOL_KEY });   // 上一次載入查到的值也要被這一次蓋掉
     const h = harness({ flag: true, order: held, assigned: [held], backend });
     await h.api.loadHeldKeys(7);
     assert.equal(held.heldPoolKey, "", label);
     assert.equal(h.api.markup(h.machine), "", `${label}: button hidden`);
     await h.api.open("A01", null);
     assert.equal(h.sheetHtml(), "", `${label}: the sheet cannot be opened either`);
-    assert.equal(h.calls.fetch.length, 1, `${label}: only the lookup itself`);
+    assert.deepEqual(h.calls.fetch.map((call) => call.url), [HELD_RPC_URL], `${label}: only the lookup itself, once (no retry)`);
+    assert.deepEqual(h.calls.toasts, [], `${label}: no message to the operator`);
+    assert.equal(h.pollTimers(), 0, `${label}: nothing scheduled to try again`);
+    assert.equal(h.calls.rerenders, 0, `${label}: the loader does not render`);
   }
+  // 真的等太久：到期就中止那個請求，按鈕不出；期限＝既有指令送出的逾時
+  const slow = cardOrder();
+  let aborted = false;
+  const ht = harness({ flag: true, order: slow, assigned: [slow], backend: (url, init) => new Promise((resolve, reject) => {
+    init.signal.addEventListener("abort", () => { aborted = true; reject(abortError()); });
+  }) });
+  const loading = ht.api.loadHeldKeys(7);
+  const limitTimers = ht.timers.filter((timer) => timer.ms === stationCore.SUBMIT_TIMEOUT_MS);
+  assert.equal(limitTimers.length, 1, "one time limit, the same as other command RPCs");
+  limitTimers[0].fn();
+  await loading;
+  assert.equal(aborted, true);
+  assert.equal(slow.heldPoolKey, "");
+  assert.equal(ht.api.markup(ht.machine), "");
+  assert.deepEqual(ht.calls.toasts, []);
+  assert.equal(ht.calls.fetch.length, 1);
   // 這一次載入已經被更新的一次取代：不寫
-  const stale = claimedOrder({ heldPoolKey: undefined });
+  const stale = cardOrder();
   const hs = harness({ flag: true, order: stale, assigned: [stale], backend: async () => [heldRow()] });
   await hs.api.loadHeldKeys(6);
   assert.equal(stale.heldPoolKey, undefined, "a superseded load writes nothing");
   assert.equal(hs.api.markup(hs.machine), "");
-  // 沒有 pending 的工序：不用查；卡片清單沒讀到：什麼都不做
-  const running = claimedOrder({ processStatus: "running", heldPoolKey: POOL_KEY });
+  // 沒有 pending 的工序：不用問；卡片清單沒讀到：什麼都不做
+  const running = cardOrder({ processStatus: "running", heldPoolKey: POOL_KEY });
   const hr = harness({ flag: true, order: running, assigned: [running], backend: async () => { throw new Error("must not be called"); } });
   await hr.api.loadHeldKeys(7);
   assert.equal(hr.calls.fetch.length, 0);
@@ -1020,12 +1069,81 @@ test("held-key lookup fails closed: no row, two rows, unreadable, superseded loa
   const hn = harness({ flag: true, assigned: null, backend: async () => { throw new Error("must not be called"); } });
   await hn.api.loadHeldKeys(7);
   assert.equal(hn.calls.fetch.length, 0);
-  // 兩台機台、兩張工單：一次查詢，各拿各的
-  const a = claimedOrder(), b = claimedOrder({ id: "TEST-WO-2", stationStep: 4, heldPoolKey: undefined });
-  const hm = harness({ flag: true, order: a, assigned: [a, b], backend: async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0002|S4", work_order_no: "TEST-WO-2", process_order: 4 })] });
+  // 已經開工的工序就算帳本還有列也不拿鍵（RPC 自己只回 pending；這裡是雙重保險）
+  const started = cardOrder({ processStatus: "running", stationStep: 5 }), waiting = cardOrder();
+  const hx = harness({ flag: true, order: waiting, assigned: [started, waiting], backend: async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0001|S5", process_order: 5 })] });
+  await hx.api.loadHeldKeys(7);
+  assert.deepEqual([started.heldPoolKey, waiting.heldPoolKey], ["", POOL_KEY]);
+  // 卡片物件上沒有機台代號：不猜
+  const noMachine = claimedOrder({ heldPoolKey: undefined });
+  const hq = harness({ flag: true, order: noMachine, assigned: [noMachine], backend: async () => [heldRow()] });
+  await hq.api.loadHeldKeys(7);
+  assert.equal(noMachine.heldPoolKey, "");
+});
+
+test("one RPC call serves every card: each machine gets its own claim; the same order/step on two machines stays separate", async () => {
+  const a = cardOrder(), b = cardOrder({ id: "TEST-WO-2", stationStep: 4, machine: "A02" });
+  const hm = harness({ flag: true, order: a, assigned: [a, b], backend: async () => [heldRow(), heldRow({ machine_code: "A02", source_key: "01|TESTNEED0002|S4", work_order_no: "TEST-WO-2", process_order: 4 })] });
   await hm.api.loadHeldKeys(7);
   assert.deepEqual([a.heldPoolKey, b.heldPoolKey], [POOL_KEY, "01|TESTNEED0002|S4"]);
-  assert.deepEqual(hm.calls.fetch.map((call) => call.url), [core.heldPoolPath(["TEST-WO-1", "TEST-WO-2"])]);
+  assert.deepEqual(hm.calls.fetch.map((call) => call.url), [HELD_RPC_URL]);
+  // 同工單同道次掛在兩台（各自一筆接單）：各拿各的；只有 A02 有接單時，A01 的卡片不出按鈕
+  const onA01 = cardOrder(), onA02 = cardOrder({ machine: "A02" });
+  const both = harness({ flag: true, order: onA01, assigned: [onA01, onA02], backend: async () => [heldRow(), heldRow({ machine_code: "A02", source_key: "01|TESTNEED0001|ON-A02" })] });
+  await both.api.loadHeldKeys(7);
+  assert.deepEqual([onA01.heldPoolKey, onA02.heldPoolKey], [POOL_KEY, "01|TESTNEED0001|ON-A02"]);
+  const mine = cardOrder(), theirs = cardOrder({ machine: "A02" });
+  const other = harness({ flag: true, order: mine, assigned: [mine, theirs], backend: async () => [heldRow({ machine_code: "A02", source_key: "01|TESTNEED0001|ON-A02" })] });
+  await other.api.loadHeldKeys(7);
+  assert.deepEqual([mine.heldPoolKey, theirs.heldPoolKey], ["", "01|TESTNEED0001|ON-A02"]);
+  assert.equal(other.api.markup(other.machine), "", "A01's card: the claim belongs to A02 → no button here");
+});
+
+test("rows the RPC lists but the server refuses to return: each refusal is one plain sentence in both languages, no raw code, no resend, no retry loop", async () => {
+  // RPC 會列出「別人接的」「工廠還沒確認的」「已經有數量／報工的」；按下去由伺服器擋。三種都要有白話、說清楚接下來怎麼辦。
+  const zh = [["NOT_CLAIM_OWNER", "這張單不是你接的，你不能退回。請找接單的人或生管。"],
+    ["CLAIM_NOT_APPLIED", "接單還沒被工廠確認，現在不能退回。請等一兩分鐘再試。"],
+    ["CLAIM_ALREADY_STARTED", "這張單已經開工或已有報工，不能退回。要換單請找生管。"]];
+  const d = dictionaries();
+  for (const [code, sentence] of zh) {
+    const key = core.REJECT_MESSAGE_KEY[code];
+    assert.equal(d.zh[key], sentence, `${code}: zh-Hant sentence`);
+    assert.ok(typeof d.vi[key] === "string" && d.vi[key].length > 20 && d.vi[key] !== sentence && !/[一-鿿]/.test(d.vi[key]), `${code}: vi draft exists and is not the Chinese text`);
+    assert.equal(core.rejectInfo(code).known, true);
+    for (const viaPoll of [false, true]) {
+      for (const language of ["zh", "vi"]) {
+        const expected = language === "vi" ? d.vi[key] : sentence;
+        const held = cardOrder();
+        const state = { submitted: 0 };
+        const h = harness({ flag: true, language, order: held, assigned: [held], backend: async (url) => {
+          if (url === HELD_RPC_URL) return [heldRow()];
+          if (url.startsWith("work_order_processes?")) return freshRow();
+          if (url === "rpc/machtile_submit_return_claim_command") {
+            state.submitted += 1;
+            if (!viaPoll) throw new Error(`400 {"code":"P0001","message":"${code}","details":null,"hint":null}`);
+            return [commandRow()];
+          }
+          if (url.startsWith("station_commands?")) return [commandRow({ status: "rejected", reject_code: code, reject_message: "raw factory text" })];
+          throw new Error(`unexpected ${url}`);
+        } });
+        const label = `${code} ${viaPoll ? "from Factory (poll)" : "at submit"} [${language}]`;
+        await h.api.loadHeldKeys(7);
+        assert.match(h.api.markup(h.machine), /data-return-claim-open="A01"/, `${label}: the RPC lists the row, so the button shows`);
+        await h.api.open("A01", null);
+        await h.api.submit();
+        if (viaPoll) await h.runPoll();
+        const shown = `${h.sheetHtml()}\n${h.api.markup(h.machine)}\n${h.calls.toasts.join("\n")}`;
+        assert.ok(shown.includes(htmlEscape(expected)) || shown.includes(expected), `${label}: the sentence is shown`);
+        assert.doesNotMatch(shown, new RegExp(`${code}|raw factory text|MISSING:`), `${label}: no raw code or raw server text`);
+        assert.doesNotMatch(h.sheetHtml(), /data-return-claim-confirm/, `${label}: no resend button`);
+        assert.equal(state.submitted, 1, `${label}: submitted once`);
+        assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), [], `${label}: nothing left pending`);
+        assert.equal(h.api.locks("A01"), false, `${label}: the machine is not held`);
+        assert.equal(h.pollTimers(), 0, `${label}: no further poll, no automatic retry`);
+        assert.equal(h.calls.fetch.filter((call) => call.url === HELD_RPC_URL).length, 1, `${label}: the lookup is not repeated by the refusal`);
+      }
+    }
+  }
 });
 
 // ---------------------------------------------------------------- 旗標關＝跟上線版逐字相同（原始碼層）
