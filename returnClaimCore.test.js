@@ -42,7 +42,7 @@ const OTHER_USER = { tenantId: SESSION.tenantId, appUserId: "00000000-0000-4000-
 const OTHER_TENANT = { tenantId: "00000000-0000-4000-8000-000000000002", appUserId: SESSION.appUserId };
 
 const claimedOrder = (extra) => Object.assign({ id: "TEST-WO-1", stationStep: 1, processId: PROCESS_ID, part: "測試軸", process: "CNC車床加工",
-  dispatchPoolSourceKey: POOL_KEY, dispatchPoolStatus: "claimed", processStatus: "pending", done: 0, offStation: false }, extra);
+  heldPoolKey: POOL_KEY, processStatus: "pending", done: 0, offStation: false }, extra);
 const visible = (extra) => core.visibility(Object.assign({ enabled: true, role: "operator", isBridge: false, cardDetailsReady: true,
   isUnassignedBucket: false, machineCode: "A01", order: claimedOrder(), actualStartAt: null, startedLocally: false, startedToday: false,
   hasTodayReport: false, commandInFlight: false }, extra));
@@ -81,12 +81,12 @@ test("button shows only for a claimed, not-started pool job; any doubt hides it"
     [{ order: claimedOrder({ id: "" }) }, "no_order_no"],
     [{ order: claimedOrder({ stationStep: 0 }) }, "no_step"], [{ order: claimedOrder({ stationStep: null }) }, "no_step"],
     [{ order: claimedOrder({ processId: "process-1" }) }, "no_process"],
-    [{ order: claimedOrder({ dispatchPoolSourceKey: "" }) }, "not_from_pool"],
-    [{ order: claimedOrder({ dispatchPoolSourceKey: "abcd" }) }, "not_from_pool"],
+    [{ order: claimedOrder({ heldPoolKey: "" }) }, "pool_not_claimed"],
+    [{ order: claimedOrder({ heldPoolKey: "abcd" }) }, "pool_not_claimed"],
     [{ cardDetailsReady: false }, "pool_status_unverified"],
-    [{ order: claimedOrder({ dispatchPoolStatus: "" }) }, "pool_not_claimed"],
-    [{ order: claimedOrder({ dispatchPoolStatus: "gone" }) }, "pool_not_claimed"],
-    [{ order: claimedOrder({ dispatchPoolStatus: "waiting" }) }, "pool_not_claimed"],
+    [{ order: claimedOrder({ heldPoolKey: undefined }) }, "pool_not_claimed"],
+    [{ order: claimedOrder({ heldPoolKey: "x".repeat(121) }) }, "pool_not_claimed"],
+    [{ order: claimedOrder({ heldPoolKey: undefined, dispatchPoolSourceKey: POOL_KEY, dispatchPoolStatus: "claimed" }) }, "pool_not_claimed"],   // work_orders.external_ref 不算數
     [{ order: claimedOrder({ processStatus: "running" }) }, "started"],
     [{ order: claimedOrder({ processStatus: "paused" }) }, "started"],
     [{ order: claimedOrder({ processStatus: "abnormal" }) }, "started"],
@@ -375,7 +375,8 @@ function harness(options = {}) {
   const context = {
     window: { MachTileReturnClaimCore: options.noCore ? null : core, crypto: { randomUUID: () => options.uuids ? options.uuids.shift() : UUID } },
     config: options.flag === undefined ? {} : { enableReturnClaim: options.flag },
-    state: { source: "supabase", dailyStationStartRows: options.startRows || [], localStationStartRows: [] },
+    state: { source: "supabase", dailyStationStartRows: options.startRows || [], localStationStartRows: [], assignedCardOrders: options.assigned === undefined ? null : options.assigned },
+    machtileDeferredLoadGeneration: 7,
     machtileStationCmdCore: stationCore,
     machtileStationCmd: { pending: options.stationPending || {} },
     machtileInstantStartPending: {},
@@ -418,7 +419,8 @@ function harness(options = {}) {
     ({ machtileReturnClaim, enabled: machtileReturnClaimEnabled, locks: machtileReturnClaimLocks, markup: machtileReturnClaimCardMarkup,
        restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry, submit: machtileReturnClaimSubmit,
        dismiss: machtileReturnClaimDismiss, handleClick: machtileReturnClaimHandleClick, closeSheet: machtileReturnClaimCloseSheet,
-       blockMessage: machtileReturnClaimBlockMessage, batchBlock: machtileReturnClaimBatchBlock, save: machtileReturnClaimSave })`, context);
+       blockMessage: machtileReturnClaimBlockMessage, batchBlock: machtileReturnClaimBatchBlock, save: machtileReturnClaimSave,
+       loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys })`, context);
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
   // 跑下一個輪詢 timer（跳過送出逾時用的 20 秒 timer）
   const runPoll = async () => {
@@ -441,8 +443,11 @@ test("flag off (missing, false, or non-boolean): every hook is inert — no mark
   const stored = { [PENDING_KEY]: JSON.stringify({ A01: core.pendingRecord({ commandUuid: UUID, machineCode: "A01", orderNo: "TEST-WO-1", step: 1,
     args: core.buildArgs({ commandUuid: UUID, machineCode: "A01", poolItemId: POOL_KEY, orderNo: "TEST-WO-1", step: 1, role: "operator" }), startedAt: Date.now() }) }) };
   for (const flag of [undefined, false, "true", 1, null]) {
-    const h = harness({ flag, storage: stored });
+    const assigned = [claimedOrder({ heldPoolKey: undefined })];
+    const h = harness({ flag, storage: stored, assigned });
     assert.equal(h.api.enabled(), false);
+    await h.api.loadHeldKeys(7);
+    assert.equal(assigned[0].heldPoolKey, undefined, "flag off: the held-key lookup neither reads nor writes");
     assert.equal(h.api.markup(h.machine), "", `markup flag=${flag}`);
     assert.equal(h.api.locks("A01"), false);
     assert.equal(h.api.blockMessage("A01"), "", "flag off: other entry points are never blocked");
@@ -473,8 +478,8 @@ test("flag on: card markup follows the visibility rule and stays read-only", () 
   assert.match(harness({ flag: true, language: "vi" }).api.markup(h.machine), />Nhận nhầm, trả lại</);
   assert.equal(harness({ flag: true, order: null }).api.markup({ code: "A01", order: null }), "");
   for (const options of [
-    { order: claimedOrder({ processStatus: "running" }) }, { order: claimedOrder({ done: 5 }) }, { order: claimedOrder({ dispatchPoolStatus: "gone" }) },
-    { order: claimedOrder({ dispatchPoolSourceKey: "" }) }, { cardDetails: "loading" }, { role: "manager" },
+    { order: claimedOrder({ processStatus: "running" }) }, { order: claimedOrder({ done: 5 }) }, { order: claimedOrder({ heldPoolKey: "" }) },
+    { order: claimedOrder({ heldPoolKey: undefined }) }, { cardDetails: "loading" }, { role: "manager" },
     { stationPending: { A01: { commandType: "start" } } },
     { pickLocal: { A01: { type: "start", orderNo: "TEST-WO-1", step: 1, at: Date.now() } } },
     { todayRows: [{ report_type: "noon", process_id: PROCESS_ID }] },
@@ -914,6 +919,115 @@ test("stored record carries tenant + app user; restore drops other sessions' rec
   assert.deepEqual(Object.keys(saved), ["A02"], "after my result only the other user's record is left");
 });
 
+// ---------------------------------------------------------------- 池列鍵從待做池自己查（不靠 work_orders.external_ref）
+const heldRow = (extra) => Object.assign({ source_key: POOL_KEY, work_order_no: "TEST-WO-1", process_order: 1, status: "claimed" }, extra);
+const FIRST_CLAIMED_KEY = "01|TESTNEED0001|FIRST-STEP";   // work_orders.external_ref 會停在這裡（這張工單第一次被接的那一道）
+
+test("heldPoolKey: exactly one claimed pool row for (order, step) gives its source_key; anything else gives nothing", () => {
+  assert.equal(core.heldPoolKey({ rows: [heldRow()], orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
+  // 同一張工單別的道、別張工單同一道：不算
+  const mixed = [heldRow({ source_key: "01|X|S2", process_order: 2 }), heldRow({ source_key: "01|Y|S1", work_order_no: "TEST-WO-2" }), heldRow()];
+  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
+  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 2 }), "01|X|S2");
+  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: " TEST-WO-1 ", step: "1" }), POOL_KEY, "same trimming / numeric step as the rest of the core");
+  // 0 列
+  assert.equal(core.heldPoolKey({ rows: [], orderNo: "TEST-WO-1", step: 1 }), "");
+  assert.equal(core.heldPoolKey({ rows: mixed, orderNo: "TEST-WO-1", step: 3 }), "");
+  // 超過 1 列（同工單同道次兩列 claimed）＝不猜
+  assert.equal(core.heldPoolKey({ rows: [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })], orderNo: "TEST-WO-1", step: 1 }), "");
+  // 狀態不是 claimed（就算伺服器沒照篩選回）
+  for (const status of ["waiting", "gone", "", null, undefined, "CLAIMED"]) assert.equal(core.heldPoolKey({ rows: [heldRow({ status })], orderNo: "TEST-WO-1", step: 1 }), "", `status=${status}`);
+  // 鍵長度不合合約（5–120）
+  for (const source_key of ["", "abcd", "x".repeat(121), null]) assert.equal(core.heldPoolKey({ rows: [heldRow({ source_key })], orderNo: "TEST-WO-1", step: 1 }), "");
+  // 沒讀到、讀到的不是陣列、筆數頂到上限（可能沒讀完）
+  for (const rows of [null, undefined, {}, "x"]) assert.equal(core.heldPoolKey({ rows, orderNo: "TEST-WO-1", step: 1 }), "");
+  const capped = [heldRow(), ...Array.from({ length: core.HELD_POOL_ROW_LIMIT - 1 }, (_, i) => heldRow({ source_key: `01|OTHER|${i}`, work_order_no: "TEST-WO-9" }))];
+  assert.equal(capped.length, core.HELD_POOL_ROW_LIMIT);
+  assert.equal(core.heldPoolKey({ rows: capped, orderNo: "TEST-WO-1", step: 1 }), "", "a full page may be truncated: fail closed");
+  assert.equal(core.heldPoolKey({ rows: capped.slice(0, -1), orderNo: "TEST-WO-1", step: 1 }), POOL_KEY);
+  // 工單號／道次不對
+  for (const [orderNo, step] of [["", 1], [null, 1], ["TEST-WO-1", 0], ["TEST-WO-1", null], ["TEST-WO-1", 1.5]]) assert.equal(core.heldPoolKey({ rows: [heldRow()], orderNo, step }), "");
+  assert.equal(core.heldPoolKey(), "");
+  assert.equal(core.heldPoolKey({ rows: [null, undefined, heldRow()], orderNo: "TEST-WO-1", step: 1 }), POOL_KEY, "junk rows are ignored");
+});
+
+test("heldPoolPath: claimed rows of the given orders only, literal select, quoted and encoded in-list", () => {
+  assert.equal(core.heldPoolPath([]), "");
+  assert.equal(core.heldPoolPath(null), "");
+  assert.equal(core.heldPoolPath(["", "  ", null, "x".repeat(101)]), "", "nothing usable: no query at all");
+  assert.equal(core.heldPoolPath(["TEST-WO-1", "TEST-WO-2", " TEST-WO-1 "]),
+    `dispatch_pool_items?select=source_key,work_order_no,process_order,status&status=eq.claimed&limit=1000&work_order_no=in.${encodeURIComponent('("TEST-WO-1","TEST-WO-2")')}`);
+  assert.equal(decodeURIComponent(core.heldPoolPath(['A"B', "C\\D", "E,F)"]).split("work_order_no=in.")[1]), '("A\\"B","C\\\\D","E,F)")', "quotes and backslashes are escaped inside the quoted value");
+  assert.ok(core.heldPoolPath(["TEST-WO-1"]).startsWith(core.HELD_POOL_PATH_PREFIX));
+  assert.equal(Number(/[&?]limit=(\d+)/.exec(core.HELD_POOL_PATH_PREFIX)[1]), core.HELD_POOL_ROW_LIMIT, "the cap the resolver checks is the limit the query asks for");
+});
+
+test("held step ≠ first-claimed step: the button shows and the return carries the pool row of the HELD step, not work_orders.external_ref", async () => {
+  // 這張工單第一次被接的是第 1 道（external_ref 停在那裡）；現在機台上掛的是第 2 道
+  const held = claimedOrder({ stationStep: 2, heldPoolKey: undefined, dispatchPoolSourceKey: FIRST_CLAIMED_KEY, dispatchPoolStatus: "waiting" });
+  const HELD_KEY = "01|TESTNEED0001|SECOND-STEP";
+  const urls = [];
+  let posted = null;
+  const h = harness({ flag: true, order: held, assigned: [held], backend: async (url, init) => {
+    urls.push(url);
+    if (url.startsWith("dispatch_pool_items?")) return [heldRow({ source_key: HELD_KEY, process_order: 2 })];
+    if (url.startsWith("work_order_processes?")) return freshRow({ process_order: 2 });
+    if (url === "rpc/machtile_submit_return_claim_command") { posted = JSON.parse(init.body); return [commandRow({ pool_item_id: HELD_KEY, expected_index_sn: 2 })]; }
+    throw new Error(`unexpected ${url}`);
+  } });
+  assert.equal(h.api.markup(h.machine), "", "before the lookup: nothing (external_ref alone never shows the button)");
+  await h.api.loadHeldKeys(7);
+  assert.deepEqual(urls, [core.heldPoolPath(["TEST-WO-1"])], "one read: the claimed pool rows of the orders on the cards");
+  assert.equal(held.heldPoolKey, HELD_KEY);
+  assert.equal(held.dispatchPoolSourceKey, FIRST_CLAIMED_KEY, "the external_ref-based field is left alone");
+  assert.match(h.api.markup(h.machine), /data-return-claim-open="A01"/);
+  await h.api.open("A01", null);
+  await h.api.submit();
+  assert.deepEqual(posted, { p_command_uuid: UUID, p_machine_code: "A01", p_pool_item_id: HELD_KEY, p_expected_order_no: "TEST-WO-1",
+    p_expected_index_sn: 2, p_expected_part_no: "TEST-P1", p_reason: null });
+  assert.notEqual(posted.p_pool_item_id, FIRST_CLAIMED_KEY);
+});
+
+test("held-key lookup fails closed: no row, two rows, unreadable, superseded load, or nothing pending → no button", async () => {
+  const cases = [
+    ["no claimed row for this step", async () => [heldRow({ process_order: 2 })]],
+    ["two claimed rows for this step", async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0001|DUP" })]],
+    ["read failed", async () => { throw new TypeError("Failed to fetch"); }],
+    ["not an array", async () => ({ message: "nope" })],
+  ];
+  for (const [label, backend] of cases) {
+    const held = claimedOrder({ heldPoolKey: POOL_KEY });   // 上一次載入查到的值也要被這一次蓋掉
+    const h = harness({ flag: true, order: held, assigned: [held], backend });
+    await h.api.loadHeldKeys(7);
+    assert.equal(held.heldPoolKey, "", label);
+    assert.equal(h.api.markup(h.machine), "", `${label}: button hidden`);
+    await h.api.open("A01", null);
+    assert.equal(h.sheetHtml(), "", `${label}: the sheet cannot be opened either`);
+    assert.equal(h.calls.fetch.length, 1, `${label}: only the lookup itself`);
+  }
+  // 這一次載入已經被更新的一次取代：不寫
+  const stale = claimedOrder({ heldPoolKey: undefined });
+  const hs = harness({ flag: true, order: stale, assigned: [stale], backend: async () => [heldRow()] });
+  await hs.api.loadHeldKeys(6);
+  assert.equal(stale.heldPoolKey, undefined, "a superseded load writes nothing");
+  assert.equal(hs.api.markup(hs.machine), "");
+  // 沒有 pending 的工序：不用查；卡片清單沒讀到：什麼都不做
+  const running = claimedOrder({ processStatus: "running", heldPoolKey: POOL_KEY });
+  const hr = harness({ flag: true, order: running, assigned: [running], backend: async () => { throw new Error("must not be called"); } });
+  await hr.api.loadHeldKeys(7);
+  assert.equal(hr.calls.fetch.length, 0);
+  assert.equal(running.heldPoolKey, "");
+  const hn = harness({ flag: true, assigned: null, backend: async () => { throw new Error("must not be called"); } });
+  await hn.api.loadHeldKeys(7);
+  assert.equal(hn.calls.fetch.length, 0);
+  // 兩台機台、兩張工單：一次查詢，各拿各的
+  const a = claimedOrder(), b = claimedOrder({ id: "TEST-WO-2", stationStep: 4, heldPoolKey: undefined });
+  const hm = harness({ flag: true, order: a, assigned: [a, b], backend: async () => [heldRow(), heldRow({ source_key: "01|TESTNEED0002|S4", work_order_no: "TEST-WO-2", process_order: 4 })] });
+  await hm.api.loadHeldKeys(7);
+  assert.deepEqual([a.heldPoolKey, b.heldPoolKey], [POOL_KEY, "01|TESTNEED0002|S4"]);
+  assert.deepEqual(hm.calls.fetch.map((call) => call.url), [core.heldPoolPath(["TEST-WO-1", "TEST-WO-2"])]);
+});
+
 // ---------------------------------------------------------------- 旗標關＝跟上線版逐字相同（原始碼層）
 test("outside the return-claim block, app.js differs from the base only by the listed flag-guarded hooks", (t) => {
   const git = (args) => childProcess.execFileSync("git", args, { cwd: __dirname, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -959,6 +1073,10 @@ test("outside the return-claim block, app.js differs from the base only by the l
     //      （`void machtileClaimDispatchPool(...)`），所以旗標關時行為等於原字串。其餘換道次程式都在上面那一段 block 裡。
     ["    showToast(machtileTranslate(\"claim_success\"), \"success\");\n    return { ok: true };\n", "    showToast(machtileTranslate(\"claim_success\"), \"success\");\n"],
     ["    await machtileLoadDispatchPool();\n    return { ok: false, error };\n  } finally {", "    await machtileLoadDispatchPool();\n  } finally {"],
+    // ---- 池列鍵改從待做池查（不靠 work_orders.external_ref）：卡片明細載入（既有的池列狀態那一步開頭）多一步，旗標關＝整句不執行（連 await 都沒有）。
+    //      查詢本身（machtileReturnClaimLoadHeldPoolKeys）在上面那一段 block 裡。
+    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）\n",
+      "async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n"],
   ];
   for (const [now, before] of hooks) {
     assert.equal(current.split(now).length, 2, `hook must appear exactly once: ${now.slice(0, 60)}`);

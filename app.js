@@ -11232,6 +11232,7 @@ function machtileMachineCardOrders() {
 }
 
 async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
+  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
   if (!keys.length) {
@@ -16607,6 +16608,26 @@ function machtileReturnClaimSession() {
   return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
 }
 
+// 卡片明細載入時叫（旗標開才會進來）：機台上每一道在待做池裡是哪一列。不看 work_orders.external_ref
+// （它停在這張工單第一次被接的那一道）；改查 dispatch_pool_items 裡「同工單、同道次、狀態 claimed」的列，剛好一列才把它的
+// source_key 記在這次載入的卡片物件上（order.heldPoolKey）。讀不到、沒有、不只一列＝空字串＝兩顆按鈕都不出。
+// 這不是畫卡片的函式；除了 order.heldPoolKey 什麼都不寫。
+async function machtileReturnClaimLoadHeldPoolKeys(generation) {
+  if (!machtileReturnClaimEnabled()) return;
+  const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
+  const path = machtileReturnClaimCore.heldPoolPath(orders.filter((order) => order.processStatus === "pending").map((order) => order.id));
+  let rows = null;
+  if (path) {
+    try {
+      rows = await supabaseFetch(path);
+    } catch (error) {
+      console.warn("return claim: held pool key lookup failed; hiding the buttons", error);
+    }
+  }
+  if (generation !== machtileDeferredLoadGeneration) return;
+  orders.forEach((order) => { order.heldPoolKey = machtileReturnClaimCore.heldPoolKey({ rows, orderNo: order.id, step: order.stationStep }); });
+}
+
 function machtileReturnClaimGate(machine) {
   const code = machtileStationCmdMachineCode(machine);
   const order = machine?.order || null;
@@ -16811,7 +16832,7 @@ async function machtileReturnClaimOpen(code, returnFocus, switchStep = false) {
   const sheet = {
     code, uuid, role, phase: "confirm", loading: true, freshOk: false, freshKey: "", needsReason: gate.needsReason, reason: "", reasonError: "",
     returnFocus: returnFocus || null, args: null, messageKey: "", view: null,
-    fields: { poolItemId: order.dispatchPoolSourceKey, orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "" },
+    fields: { poolItemId: order.heldPoolKey, orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "" },
     ...(switchStep ? { switchStep: machtileSwitchStepNewState() } : {}),
   };
   if (!machtileReturnClaimNewSheet(sheet)) return;
@@ -17085,7 +17106,7 @@ function machtileSwitchStepGate(machine) {
   return machtileSwitchStepCore.visibility({
     enabled: true, returnShow: machtileReturnClaimGate(machine).show,
     poolStatus: machtileDispatchPoolState.status, items: machtileDispatchPoolState.items,
-    orderNo: order?.id, currentStep: order?.stationStep, currentSourceKey: order?.dispatchPoolSourceKey,
+    orderNo: order?.id, currentStep: order?.stationStep, currentSourceKey: order?.heldPoolKey,
     machine: machtileSwitchStepMachineInfo(machine, code),
   });
 }
