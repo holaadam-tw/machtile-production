@@ -496,7 +496,7 @@
     ORDER_MISMATCH: "simple_block_changed",
     PART_NO_MISMATCH: "simple_block_changed",
     STALE_COMMAND: "simple_block_changed",
-    LEGACY_STATE_INCONSISTENT: "simple_block_changed",
+    LEGACY_STATE_INCONSISTENT: "simple_block_data",
     GUARD_STATE_CHANGED: "simple_block_changed",
     EXPIRED: "simple_block_changed",
     PREV_OUTSOURCE_RECEIPT_STALE: "simple_block_changed",
