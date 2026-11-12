@@ -27,7 +27,13 @@ const reset = (extra = {}) => { fx = { flag: undefined, role: 'operator', assign
   // 機台上這一道的池列鍵＝唯讀 RPC machtile_held_pool_claims()（接單帳本）。heldRows＝它回的列（null＝單還掛在 A01 就有一列：
   // A01、這張工單、這一道、鍵 POOL_KEY——跟 poolStatus 無關，Factory 確認接單後池列是 gone 但帳本列還在）；
   // heldMode＝rows｜missing（正式環境還沒套 migration：404 PGRST202）｜error（500）；heldCalls＝App 叫了幾次、怎麼叫
-  externalRef: POOL_KEY, step: 1, heldRows: null, heldMode: 'rows', heldCalls: [], ...extra }; };
+  externalRef: POOL_KEY, step: 1, heldRows: null, heldMode: 'rows', heldCalls: [],
+  // deptMode 'fail'＝課別權限 RPC 回 500（deptCalls＝被叫幾次）；statusHang／heldHang＝卡片明細的池列狀態讀取／池列鍵查詢先不回應（releaseHung 放行）
+  deptMode: 'ok', deptCalls: 0, statusHang: false, heldHang: false, statusReads: 0, ...extra }; };
+// 先不回應的請求：放行時才照原本的內容回
+const hung = [];
+const hold = () => new Promise(resolve => { hung.push(resolve); });
+const releaseHung = () => { while (hung.length) hung.pop()(); };
 const HELD_RPC = '/rest/v1/rpc/machtile_held_pool_claims';
 const ledgerRow = (extra = {}) => ({ machine_code: 'A01', work_order_no: order.work_order_no, process_order: fx.step, source_key: POOL_KEY, claimed_at: '2026-11-13T01:00:00+00:00', ...extra });
 let checks = 0;
@@ -39,7 +45,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch();
 
-async function openApp(language = 'zh-Hant') {
+async function openApp(language = 'zh-Hant', { wait = true } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, serviceWorkers: 'block' });
   const token = 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub: auth, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role: fx.role }, role: 'authenticated' })).toString('base64url') + '.test';
   await ctx.addInitScript(([token, language, storedPending]) => {
@@ -76,6 +82,7 @@ async function openApp(language = 'zh-Hant') {
     if (p === HELD_RPC) {
       // 唯讀 RPC：不帶參數的 POST；不算寫入
       fx.heldCalls.push({ method: req.method(), body: req.postData(), query: u.search });
+      if (fx.heldHang) { await hold(); return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fx.heldRows || (fx.assigned ? [ledgerRow()] : [])) }).catch(() => {}); }
       if (fx.heldMode === 'missing') return json(404, { code: 'PGRST202', details: 'Searched for the function public.machtile_held_pool_claims without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.', hint: null, message: 'Could not find the function public.machtile_held_pool_claims without parameters in the schema cache' });
       if (fx.heldMode === 'error') return json(500, { code: 'XX000', message: 'boom' });
       return json(200, fx.heldRows || (fx.assigned ? [ledgerRow()] : []));
@@ -83,6 +90,8 @@ async function openApp(language = 'zh-Hant') {
     if (req.method() !== 'GET' && !['/rest/v1/rpc/batch_report_progress', '/rest/v1/rpc/machine_department_context'].includes(p) && !/_snapshot$|_list$/.test(p)) writes.push(p);
     if (p === '/auth/v1/user') return json(200, { id: auth, email: 'user@test.invalid' });
     if (p === '/rest/v1/app_users') return json(200, [{ id: actor, auth_user_id: auth, name: '測試使用者', legacy_user_id: 'TEST-001', role: fx.role, is_active: true }]);
+    if (p === '/rest/v1/rpc/machine_department_context') fx.deptCalls += 1;
+    if (p === '/rest/v1/rpc/machine_department_context' && fx.deptMode === 'fail') return json(500, { code: 'XX000', message: 'fixture: department context down' });
     if (p === '/rest/v1/rpc/machine_department_context') return json(200, { tenant_id: tenant, role: fx.role, all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] });
     if (p === '/rest/v1/machines' || p === '/rest/v1/v_machine_management_cards') {
       return json(200, p.endsWith('/v_machine_management_cards') ? machineRows.map(({ id, name, ...row }) => ({ ...row, machine_id: id, machine_name: name })) : machineRows);
@@ -92,6 +101,9 @@ async function openApp(language = 'zh-Hant') {
     if (p === '/rest/v1/dispatch_pool_items') {
       const select = u.searchParams.get('select') || '';
       // RLS 只給 waiting／claimed：gone 的列 App 讀不到（正式環境 Factory 確認接單後就是這樣）
+      const statusBody = ['waiting', 'claimed'].includes(fx.poolStatus) ? [{ source_key: fx.externalRef, status: fx.poolStatus }] : [];
+      if (select === 'source_key,status') fx.statusReads += 1;
+      if (select === 'source_key,status' && fx.statusHang) { await hold(); return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(statusBody) }).catch(() => {}); }
       if (select === 'source_key,status') return json(200, ['waiting', 'claimed'].includes(fx.poolStatus) ? [{ source_key: fx.externalRef, status: fx.poolStatus }] : []);
       if ((u.searchParams.get('status') || '') === 'eq.claimed') poolClaimedSelects.push(u.search);   // 舊的 claimed 列查詢：不可以再出現
       return json(200, []);
@@ -107,13 +119,16 @@ async function openApp(language = 'zh-Hant') {
   });
   const page = await ctx.newPage(); page.on('pageerror', e => errors.push(String(e)));
   await page.goto(base, { waitUntil: 'domcontentloaded' });
+  if (wait) await appReady(page);
+  return { ctx, page };
+}
+async function appReady(page) {
   await page.waitForFunction(() => document.getElementById('dataSourceLabel')?.textContent.includes('Supabase'));
   await page.waitForFunction(() => typeof machtileDeferredLoadState !== 'undefined' && machtileDeferredLoadState.get('card-details')?.status === 'ready'
     && typeof machtileStationCmd !== 'undefined' && ['ready', 'missing', 'off'].includes(machtileStationCmd.availability)
     && typeof machtileBackgroundLoadPromise !== 'undefined');
   await page.evaluate(() => machtileBackgroundLoadPromise);
   await page.waitForTimeout(150);
-  return { ctx, page };
 }
 const cardHtml = (page, code = 'A01') => page.evaluate(code => [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(card => card.querySelector('h2')?.textContent.trim().startsWith(code))?.outerHTML || '', code);
 const sheet = page => page.locator('#machtileReturnClaimSheet');
@@ -474,6 +489,75 @@ try {
     const pollsThen = fx.polls.length;
     await page.waitForTimeout(2500);
     ok(fx.polls.length === pollsThen && fx.submits.length === 1 && await page.locator('#machtileReturnClaimSheet [data-return-claim-confirm]').count() === 0, `${code} from Factory: no more polls, no resubmit, no resend button`);
+    await ctx.close();
+  }
+
+  // ================================================================ 審查修正（opus @ 185d16d8）
+  // ---- LOW-A：池列鍵查詢是唯讀 RPC → 嚴格模式下不先讀課別權限；課別權限這時讀不到，也不會因為這個查詢跳「課別權限讀取失敗」
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    const BANNER = '課別權限讀取失敗';
+    const probe = () => page.evaluate(() => ({ label: document.getElementById('dataSourceLabel').textContent, error: machtileDepartmentAccessError, inFlight: machtileRpcInFlight,
+      busy: window.MachTileAppUpdate.isBusy(), key: state.assignedCardOrders.find(order => order.machine === 'A01')?.heldPoolKey, restricted: machtileStrictMode() && !machtileDepartmentUnrestricted() }));
+    ok((await probe()).restricted === true, 'LOW-A fixture: strict mode, shop-floor account (department-restricted) — the case where non-listed POSTs load department access first');
+    // 課別權限的快取過期、而且現在讀不到
+    fx.deptMode = 'fail';
+    await page.evaluate(() => { machtileDepartmentAccessFetchedAt = 0; });
+    let dept = fx.deptCalls, held = fx.heldCalls.length;
+    await page.evaluate(() => machtileReturnClaimLoadHeldPoolKeys(machtileDeferredLoadGeneration));
+    let now = await probe();
+    ok(fx.heldCalls.length === held + 1 && fx.deptCalls === dept, 'LOW-A: the lookup goes straight out — department access is not requested in front of it');
+    ok(now.key === POOL_KEY && !now.label.includes(BANNER) && now.error === '', 'LOW-A: lookup ok while department access is down: key found, no department banner');
+    ok(now.inFlight === 0 && now.busy === false, 'LOW-A: once the lookup is back the app is not busy (an app update is not held back)');
+    // 查詢自己失敗（500／還沒部署）：按鈕不出，一樣沒有橫幅
+    for (const mode of ['error', 'missing']) {
+      fx.heldMode = mode; dept = fx.deptCalls; held = fx.heldCalls.length;
+      await page.evaluate(() => machtileReturnClaimLoadHeldPoolKeys(machtileDeferredLoadGeneration));
+      now = await probe();
+      ok(fx.heldCalls.length === held + 1 && fx.deptCalls === dept && now.key === '' && !now.label.includes(BANNER) && now.error === '' && now.inFlight === 0 && now.busy === false,
+        `LOW-A: lookup fails (${mode}) while department access is down: no key, no department banner, nothing left in flight`);
+    }
+    // 查詢卡住：在路上的那一段 App 算忙（既有機制：每一支 rpc/ 都算）；查詢自己的期限到了就中止、歸零
+    fx.heldMode = 'rows'; fx.heldHang = true; held = fx.heldCalls.length;
+    await page.evaluate(() => { window.MachTileStationCommandCore.SUBMIT_TIMEOUT_MS = 1200; window.__heldLoad = machtileReturnClaimLoadHeldPoolKeys(machtileDeferredLoadGeneration); });
+    await page.waitForFunction(() => machtileRpcInFlight === 1);
+    ok(fx.heldCalls.length === held + 1 && (await probe()).busy === true, 'LOW-A (existing mechanism, unchanged): while the lookup is in flight it counts as an RPC in flight, like every rpc/ call');
+    await page.evaluate(() => window.__heldLoad);
+    now = await probe();
+    ok(now.inFlight === 0 && now.busy === false && now.key === '' && !now.label.includes(BANNER), 'LOW-A: the lookup\'s own time limit aborts it — the app is no longer busy, no banner, button hidden');
+    fx.heldHang = false; releaseHung();
+    // 對照：不在唯讀名單上的 POST（接單）照舊先讀課別權限 → 讀不到就不送、橫幅出現（證明上面的情境真的會踩到）
+    dept = fx.deptCalls;
+    const refused = await page.evaluate(() => supabaseFetch('rpc/dispatch_pool_claim', { method: 'POST', body: '{}' }).then(() => 'sent', error => String(error.message)));
+    now = await probe();
+    ok(fx.deptCalls === dept + 1 && refused.includes('課別權限確認失敗') && now.label.includes(BANNER) && !writes.includes('/rest/v1/rpc/dispatch_pool_claim'), 'control: a write RPC still loads department access first; when that fails nothing is sent and the banner appears');
+    await ctx.close();
+  }
+
+  // ---- 池列鍵查詢跟池列狀態讀取同時出去（不是一個等一個）；兩個都回來卡片明細才算載入完
+  for (const which of ['statusHang', 'heldHang']) {
+    reset({ flag: true, [which]: true });
+    const { ctx, page } = await openApp('zh-Hant', { wait: false });
+    const deadline = Date.now() + 15000;
+    while ((fx.heldCalls.length === 0 || fx.statusReads === 0) && Date.now() < deadline) await page.waitForTimeout(50);
+    ok(fx.heldCalls.length >= 1 && fx.statusReads >= 1, `${which}: both requests are out while one of them is still unanswered (held ${fx.heldCalls.length}, status ${fx.statusReads})`);
+    ok(await page.evaluate(() => machtileDeferredLoadState.get('card-details')?.status !== 'ready' && document.querySelector('[data-return-claim-open]') === null), `${which}: card details are not ready (and no button) until both are back`);
+    fx[which] = false; releaseHung();
+    await appReady(page);
+    ok((await cardHtml(page)).split(BUTTON).length === 2, `${which}: once both are back the card shows the button`);
+    await ctx.close();
+  }
+  reset({ flag: false, statusHang: true });
+  {
+    const { ctx, page } = await openApp('zh-Hant', { wait: false });
+    const deadline = Date.now() + 15000;
+    while (fx.statusReads === 0 && Date.now() < deadline) await page.waitForTimeout(50);
+    await page.waitForTimeout(300);
+    ok(fx.statusReads >= 1 && fx.heldCalls.length === 0, 'flag off: the status read goes out as before and the held-claims RPC is still never requested');
+    fx.statusHang = false; releaseHung();
+    await appReady(page);
+    ok(fx.heldCalls.length === 0 && await cardHtml(page) === htmlAbsent, 'flag off: card HTML is still byte-identical');
     await ctx.close();
   }
 

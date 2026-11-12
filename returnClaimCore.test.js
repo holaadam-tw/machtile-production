@@ -1146,6 +1146,225 @@ test("rows the RPC lists but the server refuses to return: each refusal is one p
   }
 });
 
+// ---------------------------------------------------------------- 審查修正（opus @ 185d16d8：LOW-A、池列鍵跟池列狀態同時讀）
+const appSlice = (from, to) => {
+  const start = appSource.indexOf(from);
+  const end = appSource.indexOf(to, start);
+  assert.ok(start >= 0 && end > start && appSource.indexOf(from, start + 1) === -1, `app.js must contain exactly once: ${from}`);
+  return appSource.slice(start, end);
+};
+const tick = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+
+test("LOW-A: machtile_held_pool_claims is on the read-only RPC list — strict mode does not load department access first, so the lookup can never write the department banner", async () => {
+  const BANNER = "課別權限讀取失敗";
+  const fetchSource = appSlice("async function machtileSupabaseFetchRequest(path, options = {}) {", "function normalizeOrder(row) {");
+  const listed = /const readOnlyRpc = new Set\(\[([^\]]*)\]\);/.exec(fetchSource);
+  assert.ok(listed, "the read-only RPC list is a literal Set");
+  const names = [...listed[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(names.includes(core.HELD_CLAIMS_RPC), "the held-claims RPC is on the list, under the core's name");
+  assert.equal(names.filter((name) => name === core.HELD_CLAIMS_RPC).length, 1);
+  assert.deepEqual(names.filter((name) => name !== core.HELD_CLAIMS_RPC), ["batch_report_progress", "attention_case_snapshot", "cnc_calibration_snapshot",
+    "hmc_runtime_snapshot", "schedule_calendar_snapshot", "schedule_preview", "unified_event_list", "manufacturing_quote_tracking_snapshot"], "nothing else on the list changed");
+  assert.equal([...fetchSource.matchAll(/readOnlyRpc/g)].length, 2, "the list is used in one place only: the department-access precheck");
+  // 那一句橫幅只有課別權限讀取那支函式會寫；整個 app.js 只出現一次
+  assert.equal(appSource.split(BANNER).length, 2, "the banner sentence exists once in app.js");
+  assert.ok(appSlice("async function machtileLoadDepartmentAccess(", "let activeMillingModeFilter").includes(BANNER), "…inside machtileLoadDepartmentAccess");
+  assert.doesNotMatch(blockSource, /machtileLoadDepartmentAccess|machtileDepartmentAccessError|dataSourceLabel/, "the return-claim / switch-step block never touches the department banner itself");
+
+  // 真的函式在 vm 裡跑：嚴格模式、現場帳號（課別有限制）、課別權限這時讀不到（叫到就會寫橫幅並丟錯）
+  const run = (fetchImpl, options = {}) => {
+    const seen = { fetch: [], departmentLoads: 0, banner: "", inFlightDuringFetch: [] };
+    const context = {
+      config: { supabaseUrl: "https://fixture.invalid/" },
+      machtileRpcInFlight: 0,
+      machtileDepartmentGeneration: 3,
+      machtileDepartmentAccess: { all_departments: false, department_codes: ["LATHE"] },
+      machtileStrictMode: () => options.strict !== false,
+      machtileDepartmentUnrestricted: () => options.unrestricted === true,
+      machtileLoadDepartmentAccess: async () => {
+        seen.departmentLoads += 1;
+        seen.banner = `${BANNER}，已保留畫面；現場帳號送出前須重試確認。`;
+        throw new Error("課別權限確認失敗，本次未送出；已保留表單，請重試。");
+      },
+      machtileHandleUnauthorized: () => { seen.unauthorized = (seen.unauthorized || 0) + 1; },
+      supabaseHeaders: () => ({ apikey: "fixture" }),
+      fetch: (url, init) => { seen.fetch.push({ url, init }); seen.inFlightDuringFetch.push(context.machtileRpcInFlight); return fetchImpl(url, init); },
+      Error, Math, String, Set, console: { warn() {} },
+    };
+    const supabaseFetch = vm.runInNewContext(`${fetchSource}\nsupabaseFetch`, context);
+    return { seen, context, supabaseFetch };
+  };
+  const okResponse = (data) => ({ ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) });
+  const heldInit = () => ({ method: "POST", body: "{}", signal: new AbortController().signal });
+
+  const good = run(async () => okResponse([heldRow()]));
+  assert.deepEqual(JSON.parse(JSON.stringify(await good.supabaseFetch(`rpc/${core.HELD_CLAIMS_RPC}`, heldInit()))), [heldRow()]);
+  assert.equal(good.seen.departmentLoads, 0, "held-claims lookup: department access is NOT loaded first");
+  assert.equal(good.seen.banner, "");
+  assert.equal(good.seen.fetch.length, 1);
+  assert.equal(good.seen.fetch[0].url, `https://fixture.invalid/rest/v1/rpc/${core.HELD_CLAIMS_RPC}`);
+  assert.equal(good.seen.fetch[0].init.method, "POST");
+  assert.equal(good.context.machtileRpcInFlight, 0);
+
+  // 對照：不在名單上的 POST RPC（接單）照舊先讀課別權限，讀不到就不送
+  const write = run(async () => okResponse(null));
+  await assert.rejects(write.supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: "{}" }), /課別權限確認失敗/);
+  assert.equal(write.seen.departmentLoads, 1, "a write RPC still loads department access first");
+  assert.equal(write.seen.fetch.length, 0, "…and is not sent when that fails");
+  assert.notEqual(write.seen.banner, "");
+  // 對照：名單上原有的名字、GET、非嚴格模式、不受課別限制的角色，都跟以前一樣不讀
+  for (const [label, path, init, options] of [
+    ["an existing read-only RPC", "rpc/batch_report_progress", { method: "POST", body: "{}" }, {}],
+    ["a GET", "dispatch_pool_items?select=source_key,status", {}, {}],
+    ["non-strict mode", "rpc/dispatch_pool_claim", { method: "POST", body: "{}" }, { strict: false }],
+    ["unrestricted role", "rpc/dispatch_pool_claim", { method: "POST", body: "{}" }, { unrestricted: true }],
+  ]) {
+    const other = run(async () => okResponse([]), options);
+    await other.supabaseFetch(path, init);
+    assert.equal(other.seen.departmentLoads, 0, label);
+  }
+
+  // 查詢失敗的每一種：都不會去讀課別權限＝橫幅不可能被這一步寫出來；machtileRpcInFlight 一定歸零
+  const abortError = () => Object.assign(new Error("timeout"), { name: "AbortError" });
+  for (const [label, fetchImpl, expected] of [
+    ["RPC not deployed (404)", async () => ({ ok: false, status: 404, text: async () => '{"code":"PGRST202"}' }), /Error: 404 /],
+    ["no grant (403)", async () => ({ ok: false, status: 403, text: async () => '{"code":"42501"}' }), /Error: 403 /],
+    ["server error (500)", async () => ({ ok: false, status: 500, text: async () => "boom" }), /Error: 500 /],
+    ["network down", async () => { throw new TypeError("Failed to fetch"); }, /Failed to fetch/],
+    ["aborted by its time limit", async () => { throw abortError(); }, /timeout/],
+  ]) {
+    const bad = run(fetchImpl);
+    await assert.rejects(bad.supabaseFetch(`rpc/${core.HELD_CLAIMS_RPC}`, heldInit()), expected, label);
+    assert.equal(bad.seen.departmentLoads, 0, `${label}: department access is never loaded by the lookup`);
+    assert.equal(bad.seen.banner, "", `${label}: no department banner`);
+    assert.equal(bad.seen.fetch.length, 1, `${label}: one request, no retry`);
+    assert.equal(bad.context.machtileRpcInFlight, 0, `${label}: the in-flight RPC count is back to 0`);
+  }
+
+  // 既有機制（不是這次改的）：supabaseFetch 對每一支 rpc/ 路徑都數 machtileRpcInFlight，唯讀的也一樣；
+  // 所以查詢在路上的那段時間 App 算「忙」。它一定會結束：查詢自己帶的期限會中止請求，中止後歸零。
+  let rejectHung;
+  const hung = run((url, init) => new Promise((resolve, reject) => { rejectHung = reject; init.signal.addEventListener("abort", () => reject(abortError())); }));
+  const controller = new AbortController();
+  const pending = hung.supabaseFetch(`rpc/${core.HELD_CLAIMS_RPC}`, { method: "POST", body: "{}", signal: controller.signal });
+  await tick();
+  assert.equal(hung.seen.departmentLoads, 0);
+  assert.equal(hung.context.machtileRpcInFlight, 1, "while the lookup is in flight it is counted like every other RPC (existing mechanism)");
+  assert.deepEqual(hung.seen.inFlightDuringFetch, [1], "the request went out immediately (no department round-trip in front of it)");
+  controller.abort();
+  await assert.rejects(pending, /timeout/);
+  assert.equal(hung.context.machtileRpcInFlight, 0, "the lookup's own time limit ends the request and the count returns to 0");
+  assert.equal(typeof rejectHung, "function");
+  const existing = run(() => new Promise(() => {}));
+  void existing.supabaseFetch("rpc/batch_report_progress", { method: "POST", body: "{}" });
+  await tick();
+  assert.equal(existing.context.machtileRpcInFlight, 1, "the same is true of the read-only RPCs that were already on the list");
+});
+
+test("card-details load: the held-key lookup runs concurrently with the dispatch_pool_items status read; flag off → the lookup is not called at all", async () => {
+  const loaderSource = appSlice("async function machtileLoadAssignedDispatchPoolStatuses(", "async function machtileLoadCardLegacyProgress(");
+  const gateOf = () => { let release, fail; const gate = new Promise((resolve, reject) => { release = resolve; fail = reject; }); gate.catch(() => {}); return { gate, release, fail }; };
+  const STATUS_URL = `dispatch_pool_items?select=source_key,status&source_key=in.${encodeURIComponent('("01|K|1","01|K|2")')}`;
+  const run = (options = {}) => {
+    const orders = options.orders || [{ id: "TEST-WO-1", dispatchPoolSourceKey: "01|K|1" }, { id: "TEST-WO-2", dispatchPoolSourceKey: "01|K|2" }, { id: "TEST-WO-3", dispatchPoolSourceKey: "01|K|1" }];
+    const seen = { held: [], fetch: [], warnings: 0 };
+    const held = gateOf(), status = gateOf();
+    const context = {
+      state: { assignedCardOrders: orders },
+      machtileDeferredLoadGeneration: 7,
+      machtileReturnClaimEnabled: () => options.flag === true,
+      machtileReturnClaimLoadHeldPoolKeys: async (generation) => {
+        seen.held.push(generation);
+        await held.gate;
+        orders.forEach((order) => { order.heldPoolKey = `held:${order.id}`; });
+      },
+      supabaseFetch: async (url, init) => { seen.fetch.push({ url, init }); return status.gate; },
+      console: { warn() { seen.warnings += 1; } },
+    };
+    const load = vm.runInNewContext(`${loaderSource}\nmachtileLoadAssignedDispatchPoolStatuses`, context);
+    return { load, seen, held, status, orders, context };
+  };
+  const rows = [{ source_key: "01|K|1", status: "claimed" }, { source_key: "01|K|2", status: "waiting" }];
+  const watch = (promise) => { const result = { done: false, error: null }; promise.then(() => { result.done = true; }, (error) => { result.done = true; result.error = error; }); return result; };
+
+  // 旗標開：兩個讀取同時出去，誰都不等誰；兩個都回來才算載入完
+  for (const first of ["status", "held"]) {
+    const h = run({ flag: true });
+    const done = watch(h.load(7));
+    await tick();
+    assert.deepEqual(h.seen.held, [7], `${first} first: the lookup is called once, with this load's generation`);
+    assert.deepEqual(h.seen.fetch.map((call) => call.url), [STATUS_URL], `${first} first: the status read is already out while the lookup is still pending`);
+    assert.equal(h.seen.fetch[0].init, undefined, "the status read is the same plain GET as before");
+    assert.equal(done.done, false);
+    if (first === "status") {
+      h.status.release(rows);
+      await tick();
+      assert.deepEqual(h.orders.map((order) => order.dispatchPoolStatus), ["claimed", "waiting", "claimed"]);
+      assert.equal(h.orders[0].heldPoolKey, undefined);
+      assert.equal(done.done, false, "the load is not finished until the lookup is back too (the card must not render without the key)");
+      h.held.release();
+    } else {
+      h.held.release();
+      await tick();
+      assert.equal(h.orders[0].heldPoolKey, "held:TEST-WO-1");
+      assert.equal(h.orders[0].dispatchPoolStatus, undefined);
+      assert.equal(done.done, false, "…nor until the status read is back");
+      h.status.release(rows);
+    }
+    await tick();
+    assert.deepEqual([done.done, done.error], [true, null]);
+    assert.deepEqual(h.orders.map((order) => [order.heldPoolKey, order.dispatchPoolStatus]), [["held:TEST-WO-1", "claimed"], ["held:TEST-WO-2", "waiting"], ["held:TEST-WO-3", "claimed"]]);
+    assert.deepEqual(h.seen.held, [7], "the lookup is not called a second time by the status read");
+    assert.equal(h.seen.fetch.length, 1);
+  }
+  // 旗標開、狀態讀取失敗：照舊只記一筆警告、不丟錯；查詢照樣等到回來
+  const failed = run({ flag: true });
+  const failedDone = watch(failed.load(7));
+  await tick();
+  failed.status.fail(new TypeError("Failed to fetch"));
+  await tick();
+  assert.equal(failedDone.done, false);
+  failed.held.release();
+  await tick();
+  assert.deepEqual([failedDone.done, failedDone.error, failed.seen.warnings], [true, null, 1]);
+  assert.equal(failed.orders[0].heldPoolKey, "held:TEST-WO-1", "the lookup writes only its own field; the failed status read leaves the other untouched");
+  assert.equal(failed.orders[0].dispatchPoolStatus, undefined);
+  // 旗標開、沒有任何 external_ref 鍵：狀態那一步不發請求，查詢照樣叫一次
+  const noKeys = run({ flag: true, orders: [{ id: "TEST-WO-1" }] });
+  const noKeysDone = watch(noKeys.load(7));
+  await tick();
+  assert.deepEqual([noKeys.seen.held.length, noKeys.seen.fetch.length, noKeys.orders[0].dispatchPoolStatus], [1, 0, ""]);
+  noKeys.held.release();
+  await tick();
+  assert.equal(noKeysDone.done, true);
+  // 預設的 generation 照舊
+  const byDefault = run({ flag: true });
+  void byDefault.load();
+  await tick();
+  assert.deepEqual(byDefault.seen.held, [7]);
+  // 旗標關：查詢完全不叫；狀態讀取跟以前一樣
+  const off = run({ flag: false });
+  const offDone = watch(off.load(7));
+  await tick();
+  assert.deepEqual(off.seen.held, [], "flag off: the held-key lookup is never called");
+  assert.deepEqual(off.seen.fetch.map((call) => call.url), [STATUS_URL]);
+  off.status.release(rows);
+  await tick();
+  assert.deepEqual([offDone.done, offDone.error], [true, null]);
+  assert.deepEqual(off.orders.map((order) => [order.heldPoolKey, order.dispatchPoolStatus]), [[undefined, "claimed"], [undefined, "waiting"], [undefined, "claimed"]]);
+  // 被更新的一次載入取代：狀態不寫（照舊）
+  const stale = run({ flag: false });
+  const staleDone = watch(stale.load(6));
+  await tick();
+  stale.status.release(rows);
+  await tick();
+  assert.equal(staleDone.done, true);
+  assert.equal(stale.orders[0].dispatchPoolStatus, undefined);
+  // 接線：卡片明細那一步照舊只傳 generation（第二個參數只有函式自己用）
+  assert.equal([...appSource.matchAll(/machtileLoadAssignedDispatchPoolStatuses\(/g)].length, 3, "definition, the card-details caller, and the function's own status-only call");
+  assert.equal([...appSource.matchAll(/await machtileLoadAssignedDispatchPoolStatuses\(generation\);/g)].length, 1);
+});
+
 // ---------------------------------------------------------------- 旗標關＝跟上線版逐字相同（原始碼層）
 test("outside the return-claim block, app.js differs from the base only by the listed flag-guarded hooks", (t) => {
   const git = (args) => childProcess.execFileSync("git", args, { cwd: __dirname, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -1197,13 +1416,22 @@ test("outside the return-claim block, app.js differs from the base only by the l
     ["    if (switchStep) switchStep.claimed = true;\n", ""],
     ["    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));\n", "    await loadFromSupabase({ preserveDepartmentOnFailure: true });\n"],
     ["    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);\n", ""],
+    // 換道次的接單請求多帶一個 signal（等不到時可以中止）；一般接單 switchStep＝null → 展開 null＝什麼都不加，請求物件逐字相同
+    ["    await supabaseFetch(\"rpc/dispatch_pool_claim\", { method: \"POST\", body: JSON.stringify(args), ...(switchStep ? switchStep.request : null) });\n",
+      "    await supabaseFetch(\"rpc/dispatch_pool_claim\", { method: \"POST\", body: JSON.stringify(args) });\n"],
+    // 換道次已經不等的那一筆接單晚到時，不動 claimBusy（可能是後來另一筆接單的）；一般接單 switchStep＝null → 照舊一定清
+    ["    if (!(switchStep && switchStep.abandoned)) machtileDispatchPoolState.claimBusy = \"\";\n    const machine = machtileScheduleMachine(machineCode);\n",
+      "    machtileDispatchPoolState.claimBusy = \"\";\n    const machine = machtileScheduleMachine(machineCode);\n"],
     //      登入的人換了／登出：丟掉記憶體裡的換道次（旗標關時 active 本來就是空的、也沒有換道次確認卡＝沒有效果）
     ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStepForgetUser();\n", ""],
     ["  machtileAuthState.email = \"\";\n  machtileSwitchStepForgetUser();\n", "  machtileAuthState.email = \"\";\n"],
     // ---- 池列鍵改從待做池查（不靠 work_orders.external_ref）：卡片明細載入（既有的池列狀態那一步開頭）多一步，旗標關＝整句不執行（連 await 都沒有）。
     //      查詢本身（machtileReturnClaimLoadHeldPoolKeys）在上面那一段 block 裡。
-    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）\n",
+    // 池列鍵跟池列狀態同時讀（Promise.all）：旗標關＝第二個參數永遠是預設的 false、那個 if 整句不成立，後面逐字是原本的函式
+    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration, statusOnly = false) {\n  // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）：跟下面的池列狀態同時讀、兩個都回來才算載入完；它只寫 order.heldPoolKey\n  if (!statusOnly && machtileReturnClaimEnabled()) { await Promise.all([machtileReturnClaimLoadHeldPoolKeys(generation), machtileLoadAssignedDispatchPoolStatuses(generation, true)]); return; }\n",
       "async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n"],
+    // 唯讀 RPC 名單多一個名字（嚴格模式下不先讀課別權限）。旗標關＝這支 RPC 從來不叫，名單裡多一個名字沒有任何效果
+    ["    \"manufacturing_quote_tracking_snapshot\", \"machtile_held_pool_claims\"]);\n", "    \"manufacturing_quote_tracking_snapshot\"]);\n"],
   ];
   for (const [now, before] of hooks) {
     assert.equal(current.split(now).length, 2, `hook must appear exactly once: ${now.slice(0, 60)}`);

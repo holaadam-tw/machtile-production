@@ -306,7 +306,12 @@ function backendOf(state) {
     if (url.startsWith("station_commands?")) return state.row ? [state.row] : [];
     if (url === "rpc/dispatch_pool_claim") {
       state.claims.push({ url, init });
-      if (state.claimGate) await state.claimGate;
+      // claimAbortable＝像真的 fetch：signal 被中止就馬上以 AbortError 結束；沒設＝中止不了的請求（照 claimGate 等）
+      if (state.claimGate && state.claimAbortable && init.signal) {
+        await Promise.race([state.claimGate, new Promise((resolve, reject) => {
+          init.signal.addEventListener("abort", () => { state.claimAborted = (state.claimAborted || 0) + 1; reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" })); });
+        })]);
+      } else if (state.claimGate) await state.claimGate;
       if (state.claimError) throw new Error(state.claimError);
       return null;
     }
@@ -322,6 +327,7 @@ function harness(options = {}) {
   const holders = {};
   const storage = options.storage instanceof Map ? options.storage : new Map(Object.entries(options.storage || {}));
   const calls = { fetch: [], toasts: [], rerenders: 0, refresh: [], storageReads: 0, reloads: 0, closedSelection: 0 };
+  const selectionUpdates = [];   // 換道次放開 claimBusy 時叫既有的面板更新（不放進 calls：既有測試逐欄比對 calls）
   const machine = { code: "A05", name: "A05", status: options.machineStatus || "idle", order: options.order === undefined ? heldOrder() : options.order, isUnassignedBucket: false };
   const config = { dispatchPoolMachines: ["A03", "A05"] };
   if (options.returnFlag !== undefined) config.enableReturnClaim = options.returnFlag;
@@ -352,6 +358,7 @@ function harness(options = {}) {
     machtileStationCmdRerender: () => { calls.rerenders += 1; },
     machtileRefreshAfterApplied: async (code, type) => { calls.refresh.push([code, type]); },
     machtileCloseCardSelection: () => { calls.closedSelection += 1; },
+    machtileUpdateDispatchPoolSelection: (code) => { selectionUpdates.push(code); return true; },
     machtileOpenCardSelection() {}, machtileCardSelectionReopenOptions() { return {}; }, machtilePickOrderConfirm: () => true,
     loadFromSupabase: async (...args) => { calls.reloads += 1; if (options.reload) await options.reload(...args); }, deriveMachines() {}, renderAll() {},
     machtileTranslate: (key, params) => String(dict[key] ?? `MISSING:${key}`).replace(/\{\{(\w+)\}\}/g, (_, name) => String(params?.[name] ?? "")),
@@ -407,7 +414,7 @@ function harness(options = {}) {
     timer.fn();
     await settle();
   };
-  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, urls, context, timeouts, expire };
+  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, urls, context, timeouts, expire, holders, selectionUpdates };
 }
 const RETURN_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="A05">接錯了，退回</button>';
 const SWITCH_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-open="A05">換道次</button>';
@@ -640,7 +647,11 @@ test("happy path (A05 holds step 3, switches to step 1): return with the existin
   await settle();
   // 接單的請求＝一般接單逐字相同（網址、方法、內容）
   const normal = await NORMAL_CLAIM;
-  assert.deepEqual(JSON.parse(JSON.stringify(state.claims[0])), JSON.parse(JSON.stringify(normal)), "claim request identical to a normal claim");
+  // 換道次的接單多帶一個 signal（等不到時中止用，不會送到伺服器）；網址、方法、內容跟一般接單逐字相同
+  assert.deepEqual(Object.keys(state.claims[0].init), ["method", "body", "signal"]);
+  assert.equal(state.claims[0].init.signal.aborted, false, "a claim that completes is never aborted");
+  const { signal: _signal, ...sentInit } = state.claims[0].init;
+  assert.deepEqual(JSON.parse(JSON.stringify({ url: state.claims[0].url, init: sentInit })), JSON.parse(JSON.stringify(normal)), "claim request identical to a normal claim");
   assert.equal(state.claims[0].init.body, normal.init.body, "payload byte-identical");
   assert.equal(state.claims[0].init.body, '{"p_source_key":"01|TEST-WO-1|S1","p_machine_code":"A05"}');
   // 結果
@@ -1142,6 +1153,210 @@ test("LOW-4: every wait in the switch flow has a time limit, so the machine lock
   assert.equal(ok.timeouts(), 0, "the happy path leaves no time limit pending");
 });
 
+// ================================================================ 審查修正（opus @ 185d16d8：LOW-B、LOW-C）
+const UNCERTAIN = "原本那一道已經退回待做池；第 1 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。";
+const gateOf = () => { let release, fail; const gate = new Promise((resolve, reject) => { release = resolve; fail = reject; }); gate.catch(() => {}); return { gate, release, fail }; };
+// 走到「接單已送出、還沒回來」
+async function switchUntilClaimInFlight(state, options = {}) {
+  const h = harness(Object.assign({ returnFlag: true, flag: true, backend: backendOf(state) }, options));
+  await startSwitch(h, 1);
+  state.row = appliedRow();
+  await h.runPoll();
+  assert.equal(state.claims.length, 1, "the claim is in flight");
+  assert.equal(h.api.poolState.claimBusy, keyOf(1), "the existing claim function is busy with it");
+  assert.equal(h.api.holds("A05"), true);
+  return h;
+}
+
+test("LOW-B: the claim wait times out while dispatch_pool_claim is in flight → the request is aborted, claimBusy is released at once, the outcome stays 'uncertain', nothing is resent", async () => {
+  const g = gateOf();
+  const state = { claimGate: g.gate, claimAbortable: true };
+  const h = await switchUntilClaimInFlight(state);
+  const signal = state.claims[0].init.signal;
+  assert.equal(signal.aborted, false);
+  const closedBefore = h.calls.closedSelection;
+  // 這時別台開著「選工單」面板（按鈕因為 claimBusy 是灰的）
+  h.holders.machtileCardSelection = { dataset: { machineCode: "A03" } };
+  await h.expire();
+  assert.equal(signal.aborted, true, "the hung claim request is aborted through the fetch signal");
+  assert.equal(state.claimAborted, 1);
+  assert.equal(h.api.poolState.claimBusy, "", "claimBusy is released at the timeout, not when the request finally settles");
+  assert.deepEqual(h.selectionUpdates, ["A03"], "an open pick-order panel is refreshed once so its buttons work again");
+  assert.deepEqual(h.calls.toasts, [UNCERTAIN], "an aborted request may still have reached the server: the outcome is 'uncertain', exactly as before");
+  assert.match(h.sheetHtml(), /data-switch-step-result="claim_uncertain"/);
+  assert.equal(h.api.machtileReturnClaim.lastResult.A05.view.state, "claim_uncertain");
+  assert.equal(h.api.poolState.claimMessage, "", "the abort does not leave a 'claim failed' message for the pool panel");
+  assert.equal(h.calls.closedSelection, closedBefore, "no panel is closed");
+  assert.equal(h.calls.reloads, 0);
+  assert.equal(state.poolReads, 2, "no failure re-read of the pool either (open + verify only)");
+  assert.equal(h.api.locks("A05"), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+  assert.equal(h.timeouts(), 0, "no time limit left pending");
+  assert.deepEqual(h.calls.refresh, [["A05", "return_claim"]], "one background re-read, as before");
+  // 「選工單」馬上可以再接（操作員自己按的另一筆；伺服器決定收不收）——不是換道次重送
+  delete h.holders.machtileCardSelection;
+  state.claimGate = null;
+  const next = await h.api.claim(keyOf(2), "A05");
+  assert.deepEqual(JSON.parse(JSON.stringify(next)), { ok: true }, "a pick-order claim right after the timeout is not silently dropped");
+  assert.equal(state.claims.length, 2);
+  assert.deepEqual(Object.keys(state.claims[1].init), ["method", "body"], "that one is a plain claim (no signal)");
+  assert.equal(JSON.parse(state.claims[1].init.body).p_source_key, keyOf(2));
+  g.release();
+  await settle(); await settle();
+  assert.equal(state.claims.length, 2, "the switch never sends a second claim of its own");
+  assert.deepEqual(h.calls.toasts, [UNCERTAIN, "接單成功，工單已進入這台機台。"]);
+});
+
+test("LOW-B: a claim that cannot be aborted answers late (success or failure) → no panel closed, no stale claimMessage, no toast, and a newer claim's claimBusy is not cleared", async () => {
+  for (const [label, finish] of [
+    ["late success", (g) => g.release()],
+    ["late refusal", (g) => g.fail(new Error('400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}'))],
+    ["late network error", (g) => g.fail(new TypeError("Failed to fetch"))],
+  ]) {
+    const g = gateOf();
+    const state = { claimGate: g.gate };   // 不看 signal：中止不了
+    const h = await switchUntilClaimInFlight(state);
+    await h.expire();
+    assert.equal(state.claims[0].init.signal.aborted, true, `${label}: the abort is still asked for`);
+    assert.deepEqual(h.calls.toasts, [UNCERTAIN], `${label}: 'uncertain', exactly as before`);
+    assert.equal(h.api.poolState.claimBusy, "", `${label}: claimBusy released at the timeout`);
+    assert.equal(h.api.locks("A05"), false, label);
+    const result = JSON.stringify(h.api.machtileReturnClaim.lastResult.A05);
+    // 操作員這時在「選工單」接另一筆，而且那一筆還在路上
+    const g2 = gateOf();
+    state.claimGate = g2.gate;
+    const second = h.api.claim(keyOf(2), "A05");
+    await settle();
+    assert.equal(state.claims.length, 2, `${label}: the operator's own pick-order claim goes out`);
+    assert.equal(h.api.poolState.claimBusy, keyOf(2));
+    const before = { closed: h.calls.closedSelection, reloads: h.calls.reloads, rerenders: h.calls.rerenders, poolReads: state.poolReads, refresh: h.calls.refresh.length };
+    finish(g);
+    await settle(); await settle();
+    assert.equal(h.api.poolState.claimBusy, keyOf(2), `${label}: the late answer does not clear the newer claim's claimBusy`);
+    assert.equal(h.calls.closedSelection, before.closed, `${label}: no panel is closed`);
+    assert.equal(h.calls.reloads, before.reloads, `${label}: no screen reload is started for it`);
+    assert.equal(h.calls.rerenders, before.rerenders, `${label}: nothing is re-rendered for it`);
+    assert.equal(state.poolReads, before.poolReads, `${label}: no pool re-read`);
+    assert.equal(h.calls.refresh.length, before.refresh, label);
+    assert.equal(h.api.poolState.claimMessage, "", `${label}: no stale 'claim failed' message`);
+    assert.deepEqual(h.calls.toasts, [UNCERTAIN], `${label}: no second toast`);
+    assert.equal(JSON.stringify(h.api.machtileReturnClaim.lastResult.A05), result, `${label}: the card keeps the sentence it already showed`);
+    assert.match(h.sheetHtml(), /data-switch-step-result="claim_uncertain"/, label);
+    g2.release();
+    assert.deepEqual(JSON.parse(JSON.stringify(await second)), { ok: true }, `${label}: the newer claim finishes normally`);
+    assert.equal(h.api.poolState.claimBusy, "");
+    assert.equal(state.claims.length, 2, `${label}: two claims in total — one from the switch, one the operator pressed`);
+  }
+});
+
+test("LOW-B: the wait times out during the reload after a successful claim → the late reload does not close a panel or touch claimBusy; outcome unchanged", async () => {
+  const reload = gateOf();
+  const state = {};
+  const h = harness({ returnFlag: true, flag: true, backend: backendOf(state), reload: () => reload.gate });
+  await startSwitch(h, 1);
+  state.row = appliedRow();
+  await h.runPoll();
+  assert.equal(h.calls.reloads, 1);
+  await h.expire();
+  assert.deepEqual(h.calls.toasts, ["已換成第 1 道（原本的第 3 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。"]);
+  assert.equal(state.claims[0].init.signal.aborted, true, "aborting a request that already answered is harmless");
+  assert.equal(h.api.poolState.claimBusy, "", "claimBusy released at the timeout");
+  const g2 = gateOf();
+  state.claimGate = g2.gate;
+  const second = h.api.claim(keyOf(2), "A05");
+  await settle();
+  assert.equal(h.api.poolState.claimBusy, keyOf(2));
+  const closed = h.calls.closedSelection;
+  reload.release();
+  await settle(); await settle();
+  assert.equal(h.calls.closedSelection, closed, "the late reload does not close the panel the operator has open now");
+  assert.equal(h.api.poolState.claimBusy, keyOf(2), "…and does not clear the newer claim's claimBusy");
+  assert.equal(h.api.poolState.claimMessage, "");
+  assert.equal(h.calls.toasts.length, 1);
+  g2.release();
+  await second;
+  assert.equal(h.timeouts(), 0);
+});
+
+test("LOW-B: a claim that settles in time is not abandoned — the existing claim function finishes exactly as before", async () => {
+  const state = {};
+  const h = harness({ returnFlag: true, flag: true, backend: backendOf(state) });
+  await startSwitch(h, 1);
+  state.row = appliedRow();
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["已換成第 1 道。原本的第 3 道已退回待做池。"]);
+  assert.equal(state.claims[0].init.signal.aborted, false);
+  assert.equal(h.api.poolState.claimBusy, "");
+  assert.deepEqual(h.selectionUpdates, []);
+  // 結束之後才換人：已經收尾的那一筆沒有東西可放棄
+  h.api.forgetUser();
+  assert.equal(state.claims[0].init.signal.aborted, false);
+  // 一般接單（沒有第三個參數）不看 abandoned：失敗也一定放開 claimBusy
+  const plainState = { claimError: "500 boom" };
+  const plain = harness({ backend: backendOf(plainState) });
+  assert.equal((await plain.api.claim(keyOf(1), "A05")).ok, false);
+  assert.equal(plain.api.poolState.claimBusy, "");
+});
+
+test("LOW-C: the logged-in user changes while the switch's claim is in flight → the result is dropped: no lastResult write, no toast, nothing left locked or busy", async () => {
+  // (1) 登出／換人（machtileSwitchStepForgetUser）時接單還在路上
+  for (const [label, abortable] of [["abortable request", true], ["request that cannot be aborted", false]]) {
+    const g = gateOf();
+    const state = { claimGate: g.gate, claimAbortable: abortable };
+    const h = await switchUntilClaimInFlight(state, { userId: "user-a" });
+    const resultBefore = JSON.stringify(h.api.machtileReturnClaim.lastResult.A05);
+    const closed = h.calls.closedSelection;
+    h.api.forgetUser();
+    h.context.machtileAuthState.userId = "user-b";
+    assert.equal(state.claims[0].init.signal.aborted, true, `${label}: the in-flight claim is no longer waited for`);
+    assert.equal(h.api.poolState.claimBusy, "", `${label}: the next user's pick-order is not blocked`);
+    assert.equal(h.api.holds("A05"), false);
+    await settle(); await settle();
+    if (!abortable) { g.release(); await settle(); await settle(); }
+    assert.deepEqual(h.calls.toasts, [], `${label}: nothing is announced on the next user's screen`);
+    assert.equal(JSON.stringify(h.api.machtileReturnClaim.lastResult.A05), resultBefore, `${label}: no switch-step result is written`);
+    assert.equal(h.api.machtileReturnClaim.lastResult.A05?.view?.switchStep, undefined, label);
+    assert.equal(h.api.poolState.claimMessage, "", label);
+    assert.equal(h.api.poolState.claimBusy, "", label);
+    assert.equal(h.calls.closedSelection, closed, `${label}: no panel closed afterwards`);
+    assert.equal(h.calls.reloads, 0, `${label}: no reload under the next session`);
+    assert.deepEqual(h.calls.refresh, [], label);
+    assert.equal(h.sheetHtml(), "", `${label}: the switch sheet was closed with the session`);
+    assert.equal(h.api.locks("A05"), false);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" });
+    assert.equal(h.timeouts(), 0, `${label}: no time limit left pending`);
+    assert.equal(state.claims.length, 1, `${label}: nothing is resent`);
+  }
+  // (2) 保險：active 沒被清掉，但接單回來時登入的已經不是按的那個人（成功／被拒／逾時都一樣丟掉）
+  for (const [label, finish] of [
+    ["claim succeeds", async (h, g) => { g.release(); await settle(); await settle(); }],
+    ["claim refused", async (h, g) => { g.fail(new Error('400 {"code":"P0001","message":"POOL_ITEM_NOT_WAITING"}')); await settle(); await settle(); }],
+    ["claim wait times out", async (h) => { await h.expire(); }],
+  ]) {
+    const g = gateOf();
+    const state = { claimGate: g.gate };
+    const h = await switchUntilClaimInFlight(state, { userId: "user-a" });
+    const resultBefore = JSON.stringify(h.api.machtileReturnClaim.lastResult.A05);
+    h.context.machtileAuthState.userId = "user-b";
+    await finish(h, g);
+    assert.deepEqual(h.calls.toasts, [], `${label}: no toast for the next user`);
+    assert.equal(JSON.stringify(h.api.machtileReturnClaim.lastResult.A05), resultBefore, `${label}: no lastResult write`);
+    assert.deepEqual(h.calls.refresh, [], `${label}: no background re-read is asked for by the dropped switch`);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" }, `${label}: the machine is not left held`);
+    assert.equal(h.api.locks("A05"), false, label);
+    assert.equal(h.api.poolState.claimBusy, "", label);
+    assert.equal(state.claims.length, 1, label);
+  }
+  // (3) 沒換人：照常有結果
+  const g = gateOf();
+  const state = { claimGate: g.gate };
+  const h = await switchUntilClaimInFlight(state, { userId: "user-a" });
+  g.release();
+  await settle(); await settle();
+  assert.deepEqual(h.calls.toasts, ["已換成第 1 道。原本的第 3 道已退回待做池。"]);
+  assert.equal(h.api.machtileReturnClaim.lastResult.A05.view.state, "done");
+});
+
 test("click delegation: the card button opens the switch sheet; choices are picked inside the sheet", async () => {
   const state = {};
   const h = harness({ returnFlag: true, flag: true, backend: backendOf(state) });
@@ -1264,6 +1479,12 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     ["    if (switchStep) switchStep.claimed = true;\n", ""],
     ["    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));\n", "    await loadFromSupabase({ preserveDepartmentOnFailure: true });\n"],
     ["    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);\n", ""],
+    // 換道次的接單請求多帶一個 signal（等不到時可以中止）；一般接單 switchStep＝null → 展開 null＝什麼都不加，請求物件逐字相同
+    ["    await supabaseFetch(\"rpc/dispatch_pool_claim\", { method: \"POST\", body: JSON.stringify(args), ...(switchStep ? switchStep.request : null) });\n",
+      "    await supabaseFetch(\"rpc/dispatch_pool_claim\", { method: \"POST\", body: JSON.stringify(args) });\n"],
+    // 換道次已經不等的那一筆接單晚到時，不動 claimBusy（可能是後來另一筆接單的）；一般接單 switchStep＝null → 照舊一定清
+    ["    if (!(switchStep && switchStep.abandoned)) machtileDispatchPoolState.claimBusy = \"\";\n    const machine = machtileScheduleMachine(machineCode);\n",
+      "    machtileDispatchPoolState.claimBusy = \"\";\n    const machine = machtileScheduleMachine(machineCode);\n"],
     // 登入的人換了／登出：丟掉記憶體裡的換道次（旗標關時 active 本來就是空的、也沒有換道次確認卡＝沒有效果）
     ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStepForgetUser();\n", ""],
     ["  machtileAuthState.email = \"\";\n  machtileSwitchStepForgetUser();\n", "  machtileAuthState.email = \"\";\n"],
@@ -1283,8 +1504,11 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     return text.slice(0, start) + text.slice(end);
   };
   const heldKeyFix = [
-    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n  if (machtileReturnClaimEnabled()) await machtileReturnClaimLoadHeldPoolKeys(generation);   // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）\n",
+    // 池列鍵跟池列狀態同時讀（Promise.all）：旗標關＝第二個參數永遠是預設的 false、那個 if 整句不成立，後面逐字是原本的函式
+    ["async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration, statusOnly = false) {\n  // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）：跟下面的池列狀態同時讀、兩個都回來才算載入完；它只寫 order.heldPoolKey\n  if (!statusOnly && machtileReturnClaimEnabled()) { await Promise.all([machtileReturnClaimLoadHeldPoolKeys(generation), machtileLoadAssignedDispatchPoolStatuses(generation, true)]); return; }\n",
       "async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {\n"],
+    // 唯讀 RPC 名單多一個名字（嚴格模式下不先讀課別權限）。旗標關＝這支 RPC 從來不叫，名單裡多一個名字沒有任何效果
+    ["    \"manufacturing_quote_tracking_snapshot\", \"machtile_held_pool_claims\"]);\n", "    \"manufacturing_quote_tracking_snapshot\"]);\n"],
     ["fields: { poolItemId: order.heldPoolKey, orderNo: order.id,", "fields: { poolItemId: order.dispatchPoolSourceKey, orderNo: order.id,"],
   ];
   for (const [now, before] of heldKeyFix) {
