@@ -33,5 +33,10 @@ for (const { name, list } of selects) {
 const returnClaimSelects = selects.filter((entry) => entry.name === "returnClaimCore.js");
 assert.equal(returnClaimSelects.length, 1, "returnClaimCore.js must contain exactly one literal station_commands select");
 assert.equal(returnClaimSelects[0].list, "command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,legacy_snapshot");
+// The cloud fixture itself is vendored in this repo (fixtures/return_claim_poll_select.txt, header names source file + commit),
+// so this comparison does not depend on another worktree being on the machine.
+const vendoredReturnClaimSelect = fs.readFileSync(path.join(__dirname, "fixtures", "return_claim_poll_select.txt"), "utf8")
+  .split(/\r?\n/).filter((line) => line.trim() && !line.startsWith("#"));
+assert.deepEqual(vendoredReturnClaimSelect, [returnClaimSelects[0].list], "returnClaimCore.js select == vendored cloud fixture");
 assert.equal(require("./returnClaimCore.js").POLL_SELECT, returnClaimSelects[0].list, "the path the app polls uses that same literal");
 console.log(`PASS station_commands select columns exist: ${selects.length} selects, ${checked} columns`);

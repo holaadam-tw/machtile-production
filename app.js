@@ -12064,6 +12064,7 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
 
 async function machtileClaimDispatchPool(sourceKey, machineCode) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
+  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), "error"); return; }
   const holder = document.getElementById("machtileCardSelection");
   const message = holder?.querySelector("[data-pool-claim-message]");
   if (holder?.dataset.pickOrder === "true") {
@@ -12151,7 +12152,7 @@ function machtileDispatchPoolReturnMarkup(order, machineCode) {
   if (!order?.dispatchPoolSourceKey) return "";
   const cardDetailsReady = machtileDeferredLoadState.get("card-details")?.status === "ready";
   const isPendingClaim = cardDetailsReady && order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
-  if (machtileCanReturnDispatchPool() && isPendingClaim) {
+  if (machtileCanReturnDispatchPool() && isPendingClaim && !machtileReturnClaimEnabled()) {
     return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
   }
   if (!isPendingClaim && (order.dispatchPoolStatus === "gone" || order.processStatus === "running" || order.done > 0)) {
@@ -12161,7 +12162,7 @@ function machtileDispatchPoolReturnMarkup(order, machineCode) {
 }
 
 async function machtileReturnDispatchPool(sourceKey) {
-  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool()) return;
+  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool() || machtileReturnClaimEnabled()) return;
   const reason = window.prompt("請輸入退回池子的原因（1–500 字）", "");
   if (reason === null) return;
   const args = machtileDispatchPoolCore.returnArgs(sourceKey, reason);
@@ -12198,6 +12199,7 @@ function machtileCardSelectionReopenOptions(holder, machineCode) {
 function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true, pickOrder = false } = {}) {
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
+  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), "error"); return; }
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
   const current = document.getElementById("machtileCardSelection");
   if (!refreshPool && current?.dataset.machineCode === String(machineCode || "")) {
@@ -16467,6 +16469,28 @@ function machtileReturnClaimLocks(code) {
   return machtileReturnClaimCore.locks(rec, machtileReturnClaimReleased(rec));
 }
 
+// 卡片以外的入口（批次開工／停工、批次與單台報工、選工單／接單）：這台的退回還鎖著就用這一句擋下來。
+// 沒鎖、旗標關＝空字串＝照舊。只讀。
+function machtileReturnClaimBlockMessage(code) {
+  return machtileReturnClaimLocks(code) ? machtileTranslate("return_claim_busy") : "";
+}
+
+// 批次報工送出前：要送的機台裡有退回還鎖著的 → 整批不送，紅字說是哪一台、為什麼。回 true＝已擋下。
+function machtileReturnClaimBatchBlock(codes) {
+  const code = (Array.isArray(codes) ? codes : []).find((item) => machtileReturnClaimBlockMessage(item));
+  if (!code) return false;
+  machtileBatchState.formError = `${code}：${machtileReturnClaimBlockMessage(code)}`;
+  machtileRenderBatchReport();
+  showToast(machtileBatchState.formError);
+  return true;
+}
+
+// 目前登入的是誰（租戶＋app_users.id）：等待紀錄只屬於送出的那個人。
+let machtileReturnClaimSessionKey = "";
+function machtileReturnClaimSession() {
+  return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
+}
+
 function machtileReturnClaimGate(machine) {
   const code = machtileStationCmdMachineCode(machine);
   const order = machine?.order || null;
@@ -16492,7 +16516,12 @@ function machtileReturnClaimCardMarkup(machine) {
   if (!machtileReturnClaimEnabled() || !machine) return "";
   const code = machtileStationCmdMachineCode(machine);
   const rec = machtileReturnClaim.pending[code];
-  if (rec) {
+  // 紀錄講的不是卡片現在這張單這一道：還鎖著＝只說這台有一筆退回在處理；不鎖＝不顯示
+  const recMode = machtileReturnClaimCore.cardRecordMode(rec, machine.order || null, machtileReturnClaimReleased(rec));
+  if (recMode === "machine") {
+    return `<p class="station-cmd-status is-wait" data-no-detail data-return-claim-status="other-order" role="status">${escapeHtml(machtileTranslate("return_claim_busy"))}</p>`;
+  }
+  if (recMode === "own") {
     const uncertain = rec.unconfirmed === true;
     const key = rec.notFound ? "return_claim_not_found" : uncertain ? "return_claim_card_uncertain"
       : machtileReturnClaimReleased(rec) ? "return_claim_card_slow" : "return_claim_card_pending";
@@ -16510,20 +16539,37 @@ function machtileReturnClaimCardMarkup(machine) {
 }
 
 function machtileReturnClaimSave() {
-  const plain = {};
+  const own = {};
   Object.keys(machtileReturnClaim.pending).forEach((code) => {
     const { emptyPolls, releasedShown, ...rest } = machtileReturnClaim.pending[code];
-    plain[code] = rest;
+    own[code] = rest;
   });
-  try { localStorage.setItem(MACHTILE_RETURN_CLAIM_PENDING_KEY, JSON.stringify(plain)); } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+  try {
+    // 同一台平板上別人還沒過期的紀錄原樣留著；自己的照記憶體寫
+    const plain = machtileReturnClaimCore.mergeForSave(localStorage.getItem(MACHTILE_RETURN_CLAIM_PENDING_KEY), own, Date.now(), machtileReturnClaimSession());
+    localStorage.setItem(MACHTILE_RETURN_CLAIM_PENDING_KEY, JSON.stringify(plain));
+  } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
 }
 
-// 載入資料時呼叫（第一次畫卡片之前）：把上次還沒有結果的退回放回記憶體，繼續輪詢。
+// 載入資料時呼叫（第一次畫卡片之前；開機與 session 過期重新登入都會走到）：把「目前登入的這個人」上次還沒有結果的退回
+// 放回記憶體，繼續輪詢。換了人（租戶或 app_users.id 不同）＝記憶體裡前一個人的先放掉（localStorage 那筆不動）。
 function machtileReturnClaimRestore() {
   if (!machtileReturnClaimEnabled()) return;
+  const session = machtileReturnClaimSession();
+  const sessionKey = `${session.tenantId}|${session.appUserId}`;
+  if (sessionKey !== machtileReturnClaimSessionKey) {
+    machtileReturnClaimSessionKey = sessionKey;
+    machtileReturnClaim.lastResult = {};
+  }
+  Object.keys(machtileReturnClaim.pending).forEach((code) => {
+    if (machtileReturnClaimCore.sameSession(machtileReturnClaim.pending[code], session)) return;
+    clearTimeout(machtileReturnClaim.timers[code]);
+    delete machtileReturnClaim.timers[code];
+    delete machtileReturnClaim.pending[code];
+  });
   let raw = null;
   try { raw = localStorage.getItem(MACHTILE_RETURN_CLAIM_PENDING_KEY); } catch { raw = null; }
-  const restored = machtileReturnClaimCore.restorePending(raw, Date.now());
+  const restored = machtileReturnClaimCore.restoreForSession(raw, Date.now(), session);
   Object.keys(restored).forEach((code) => {
     if (machtileReturnClaim.pending[code]) return;
     machtileReturnClaim.pending[code] = restored[code];
@@ -16612,11 +16658,33 @@ function machtileReturnClaimNewSheet(sheet) {
   return true;
 }
 
+// 按下去之前重讀這一道（第一次送出與重送共用）：還在這台、同一道、pending、已報 0 才給送。
+async function machtileReturnClaimFreshRead(code, fields) {
+  try {
+    if (!machtileReturnClaimCore.isUuid(fields.processId)) throw new Error("NO_PROCESS_ID");
+    const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(fields.processId)}`);
+    const fresh = machtileReturnClaimCore.freshCheck({ machineCode: code, orderNo: fields.orderNo, step: fields.step, row: Array.isArray(rows) ? rows[0] : null });
+    return { ok: fresh.ok, key: fresh.ok ? "" : "return_claim_fresh_changed", partNo: fresh.partNo };
+  } catch (error) {
+    console.warn("return claim: work_order_processes re-read failed", error);
+    return { ok: false, key: "return_claim_fresh_failed", partNo: null };
+  }
+}
+
 async function machtileReturnClaimOpen(code, returnFocus) {
   if (!machtileReturnClaimEnabled()) return;
   const machine = machtileStationCmdMachineByCode(code);
   const gate = machine ? machtileReturnClaimGate(machine) : { show: false };
-  if (!gate.show || machtileReturnClaim.pending[code]) return;
+  if (!gate.show) return;
+  const stale = machtileReturnClaim.pending[code];
+  if (stale) {
+    // 還鎖著、或就是卡片這張單的紀錄 → 不開新的。過時的（不鎖、也不是這張單）→ 丟掉，照新的一筆走
+    if (machtileReturnClaimCore.cardRecordMode(stale, machine.order, machtileReturnClaimReleased(stale)) !== "none") return;
+    clearTimeout(machtileReturnClaim.timers[code]);
+    delete machtileReturnClaim.timers[code];
+    delete machtileReturnClaim.pending[code];
+    machtileReturnClaimSave();
+  }
   let uuid;
   try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast(machtileTranslate("return_claim_old_tablet")); return; }
   const order = machine.order;
@@ -16624,20 +16692,13 @@ async function machtileReturnClaimOpen(code, returnFocus) {
   const sheet = {
     code, uuid, role, phase: "confirm", loading: true, freshOk: false, freshKey: "", needsReason: gate.needsReason, reason: "", reasonError: "",
     returnFocus: returnFocus || null, args: null, messageKey: "", view: null,
-    fields: { poolItemId: order.dispatchPoolSourceKey, orderNo: order.id, step: Number(order.stationStep), partNo: null, part: order.part || "", process: order.process || "" },
+    fields: { poolItemId: order.dispatchPoolSourceKey, orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "" },
   };
   if (!machtileReturnClaimNewSheet(sheet)) return;
-  try {
-    const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(order.processId)}`);
-    const fresh = machtileReturnClaimCore.freshCheck({ machineCode: code, orderNo: order.id, step: order.stationStep, row: Array.isArray(rows) ? rows[0] : null });
-    sheet.freshOk = fresh.ok;
-    sheet.freshKey = fresh.ok ? "" : "return_claim_fresh_changed";
-    sheet.fields.partNo = fresh.partNo;
-  } catch (error) {
-    console.warn("return claim: work_order_processes re-read failed", error);
-    sheet.freshOk = false;
-    sheet.freshKey = "return_claim_fresh_failed";
-  }
+  const fresh = await machtileReturnClaimFreshRead(code, sheet.fields);
+  sheet.freshOk = fresh.ok;
+  sheet.freshKey = fresh.key;
+  sheet.fields.partNo = fresh.partNo;
   if (machtileReturnClaim.sheet !== sheet) return;
   sheet.loading = false;
   machtileReturnClaimRenderSheet();
@@ -16648,11 +16709,13 @@ function machtileReturnClaimOpenRetry(code, returnFocus) {
   if (!machtileReturnClaimEnabled()) return;
   const rec = machtileReturnClaim.pending[code];
   if (!rec || !rec.unconfirmed) return;
+  const cardOrder = machtileStationCmdMachineByCode(code)?.order || null;
+  if (!machtileReturnClaimCore.recordMatchesOrder(rec, cardOrder)) return;   // 卡片已經不是這張單：不給重送
   machtileReturnClaimNewSheet({
     code, uuid: rec.commandUuid, role: machtileActualRole(), phase: "uncertain", loading: false, freshOk: true, freshKey: "", needsReason: false,
     reason: "", reasonError: "", returnFocus: returnFocus || null, args: rec.args, view: null,
     messageKey: rec.notFound ? "return_claim_not_found" : "return_claim_uncertain",
-    fields: { poolItemId: rec.args.p_pool_item_id, orderNo: rec.orderNo, step: rec.step, partNo: rec.args.p_expected_part_no, part: "", process: "" },
+    fields: { poolItemId: rec.args.p_pool_item_id, orderNo: rec.orderNo, step: rec.step, processId: rec.processId || cardOrder.processId, partNo: rec.args.p_expected_part_no, part: "", process: "" },
   });
 }
 
@@ -16666,18 +16729,17 @@ function machtileReturnClaimDismiss(code) {
 
 async function machtileReturnClaimSubmit() {
   const sheet = machtileReturnClaim.sheet;
-  const core = machtileReturnClaimCore;
   if (!machtileReturnClaimEnabled() || !sheet || sheet.loading || !["confirm", "uncertain"].includes(sheet.phase)) return;
   const code = sheet.code;
   const existing = machtileReturnClaim.pending[code];
   if (existing && existing.commandUuid !== sheet.uuid) return;
   if (sheet.phase === "confirm") {
     if (!sheet.freshOk) return;
-    const checked = core.reasonCheck(sheet.role, sheet.reason);
+    const checked = machtileReturnClaimCore.reasonCheck(sheet.role, sheet.reason);
     if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileReturnClaimRenderSheet(); return; }
     sheet.reasonError = "";
     try {
-      sheet.args = core.buildArgs({ commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
+      sheet.args = machtileReturnClaimCore.buildArgs({ commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
         step: sheet.fields.step, partNo: sheet.fields.partNo, reason: checked.value, role: sheet.role });
     } catch (error) {
       console.warn("return claim: cannot build args", error);
@@ -16685,11 +16747,25 @@ async function machtileReturnClaimSubmit() {
     }
   }
   if (!sheet.args) return;
+  const resend = sheet.phase === "uncertain";
   sheet.phase = "sending";
   machtileReturnClaimRenderSheet();
+  if (resend) {
+    // 重送也跟第一次一樣先重讀：這張單已開工、已報工或已不在這台 → 不送
+    const fresh = await machtileReturnClaimFreshRead(code, sheet.fields);
+    if (machtileReturnClaim.sheet !== sheet || sheet.phase !== "sending") return;   // 等的時候輪詢已經拿到結果，確認卡已換成結果
+    const current = machtileReturnClaim.pending[code];
+    if (current && current.commandUuid === sheet.uuid && !current.unconfirmed) {
+      // 等的時候輪詢查到這筆已經在伺服器上：不用重送
+      sheet.phase = "status"; sheet.view = machtileReturnClaimCore.resultView({ status: current.lastStatus }); machtileReturnClaimRenderSheet();
+      return;
+    }
+    if (!fresh.ok) { sheet.phase = "uncertain"; sheet.messageKey = fresh.key; machtileReturnClaimRenderSheet(); return; }
+  }
   // 同一次嘗試沿用第一次按下的時間；之前查不到（notFound）才重送的，從現在重新算等待時間
   const startedAt = existing && !existing.notFound ? existing.startedAt : Date.now();
-  const record = (extra) => core.pendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step, args: sheet.args, startedAt, ...extra });
+  const record = (extra) => machtileReturnClaimCore.pendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+    processId: sheet.fields.processId, ...machtileReturnClaimSession(), args: sheet.args, startedAt, ...extra });
   const uncertain = () => {
     machtileReturnClaim.pending[code] = record({ unconfirmed: true });
     machtileReturnClaimSave();
@@ -16701,10 +16777,10 @@ async function machtileReturnClaimSubmit() {
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
-    const result = await supabaseFetch(`rpc/${core.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
+    const result = await supabaseFetch(`rpc/${machtileReturnClaimCore.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
-    const info = core.submitErrorInfo(error);
+    const info = machtileReturnClaimCore.submitErrorInfo(error);
     if (info.kind === "uncertain") { uncertain(); return; }
     console.warn("return claim: submit refused", info.code || info.kind, error);
     if (machtileReturnClaim.pending[code]?.commandUuid === sheet.uuid) { delete machtileReturnClaim.pending[code]; machtileReturnClaimSave(); }
@@ -16718,8 +16794,8 @@ async function machtileReturnClaimSubmit() {
     if (timer) clearTimeout(timer);
   }
   // 伺服器沒有回這一筆 → 不當成功也不當失敗：照「不確定」處理，輪詢去查
-  if (!core.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
-  const view = core.resultView(row);
+  if (!machtileReturnClaimCore.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
+  const view = machtileReturnClaimCore.resultView(row);
   machtileReturnClaim.pending[code] = record({ unconfirmed: false, lastStatus: view.status });
   delete machtileReturnClaim.lastResult[code];
   machtileReturnClaimSave();
@@ -16749,22 +16825,20 @@ function machtileReturnClaimFinish(code, view) {
 }
 
 function machtileReturnClaimPoll(code) {
-  const core = machtileReturnClaimCore;
-  const stationCore = machtileStationCmdCore;
   const rec = machtileReturnClaim.pending[code];
-  if (!core || !stationCore || !rec) return;
+  if (!machtileReturnClaimCore || !machtileStationCmdCore || !rec) return;
   clearTimeout(machtileReturnClaim.timers[code]);
   machtileReturnClaim.timers[code] = setTimeout(async () => {
     const current = machtileReturnClaim.pending[code];
     if (!current || current.commandUuid !== rec.commandUuid) return;
     try {
-      const rows = await supabaseFetch(core.pollPath(current.commandUuid));
+      const rows = await supabaseFetch(machtileReturnClaimCore.pollPath(current.commandUuid));
       if (machtileReturnClaim.pending[code] !== current) return;
       const row = Array.isArray(rows) ? rows[0] : null;
       const sheet = machtileReturnClaim.sheet;
       const sheetIsThis = Boolean(sheet) && sheet.code === code && sheet.uuid === current.commandUuid;
       if (row) {
-        const view = core.resultView(row);
+        const view = machtileReturnClaimCore.resultView(row);
         if (view.terminal) { current.unconfirmed = false; machtileReturnClaimFinish(code, view); return; }
         if (current.unconfirmed || current.notFound || current.lastStatus !== view.status) {
           current.unconfirmed = false; current.notFound = false; current.lastStatus = view.status;
@@ -16774,7 +16848,7 @@ function machtileReturnClaimPoll(code) {
         }
       } else if (current.unconfirmed) {
         current.emptyPolls = (current.emptyPolls || 0) + 1;
-        if (stationCore.unconfirmedNotSent(current, Date.now())) {
+        if (machtileStationCmdCore.unconfirmedNotSent(current, Date.now())) {
           // 送出時網路斷、之後連續查不到＝沒送到：停止輪詢、解開開工／報工；紀錄留著，重送仍是同一個 uuid
           current.notFound = true;
           delete machtileReturnClaim.timers[code];
@@ -16785,7 +16859,7 @@ function machtileReturnClaimPoll(code) {
         }
       }
     } catch (error) {
-      if (core.isMissingResourceError(error)) {
+      if (machtileReturnClaimCore.isMissingResourceError(error)) {
         // 表不見了：停止輪詢；不宣稱結果
         delete machtileReturnClaim.timers[code];
         delete machtileReturnClaim.pending[code];
@@ -16797,7 +16871,7 @@ function machtileReturnClaimPoll(code) {
     }
     if (!current.releasedShown && machtileReturnClaimReleased(current)) { current.releasedShown = true; machtileStationCmdRerender(); }
     machtileReturnClaimPoll(code);
-  }, stationCore.pollDelay(Date.now() - rec.startedAt));
+  }, machtileStationCmdCore.pollDelay(Date.now() - rec.startedAt));
 }
 
 // 卡片按鈕與確認卡的點擊（document 層代理）。旗標關時畫面上沒有這些元素，一律回 false。
@@ -25317,6 +25391,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     else showToast(message);
     machtileRenderStationReportSurfaces();
   };
+  if (machtileReturnClaimBlockMessage(code)) { block(machtileReturnClaimBlockMessage(code)); return; }
   if (!core) { block("智慧報工尚未載入，請重新整理後再試。"); return; }
   if (!context) { block("智慧報工缺少舊 MES 對照資料，本次未送出；請重新整理或通知主管。"); return; }
   if (machtileStationReportFlowBusy(flow)) { block("上一筆智慧報工仍在處理，請稍候查看結果。"); return; }
@@ -25571,6 +25646,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow) || !flow.preview) return;
+  if (machtileReturnClaimBlockMessage(code)) { flow.error = machtileReturnClaimBlockMessage(code); machtileRenderStationReportSurfaces(); return; }
   let snapshot;
   try { snapshot = core.buildClientGuardSnapshot(flow.preview); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
@@ -26101,6 +26177,7 @@ function machtileBatchCommandChoice(code, type = machtileBatchState.commandType)
   const order = machtileBatchSelectedOrder(code);
   const base = machtileBatchCore().batchCommandChoice(type, machtileBatchState.stationShiftByMachine.get(code), Boolean(order));
   if (!base.eligible) return base;
+  if (machtileReturnClaimBlockMessage(code)) return { eligible: false, checked: false, reason: machtileReturnClaimBlockMessage(code) };
   const pending = machtileStationCmd.pending[code];
   if (pending && !machtileStationCmdUnlocked(pending)) {
     return { eligible: false, checked: false, reason: pending.unconfirmed ? "等待確認（可用同一筆重送）" : "指令等待中" };
@@ -26559,6 +26636,7 @@ async function machtileSubmitBatchReport() {
     return;
   }
   if (!toSend.length) { showToast(mode === "dailyStart" ? "沒有勾選要開工的機台。" : "沒有要送的機台（累計數與不良皆空白）。"); return; }
+  if (machtileReturnClaimBatchBlock(toSend.map(({ model }) => model.machineCode))) return;
   if (mode !== "dailyStart") {
     try {
       for (const { model } of toSend) {
@@ -27692,6 +27770,7 @@ function bindEvents() {
       machtileShowReportSubmitError("此機台尚未指派工單，請先由主管排入工單。");
       return;
     }
+    if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }
     if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(activeReportType)) {
       const fresh = await machtileRefreshReportTotalState(selectedOrder);
       if (!fresh) {

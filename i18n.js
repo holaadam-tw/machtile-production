@@ -399,6 +399,11 @@
       return_claim_err_stale_command: "工廠太晚處理，這次沒有退回，工單還在這台。需要的話請再按一次。",
       return_claim_err_expired: "超過 10 分鐘工廠都沒有接手，這次沒有退回，工單還在這台。需要的話請再按一次。",
       return_claim_err_released: "主管取消了這筆退回，有沒有退成不確定。請重新整理畫面看這台的工單，或問生管。",
+      return_claim_busy: "這台有一筆「退回接單」還在等工廠處理，等它有結果再操作。",
+      return_claim_err_busy_retry: "工廠系統剛好在忙，這次沒有退回，工單還在這台。請等一下再按一次。",
+      return_claim_err_internal_retry: "工廠處理時出了問題，這次沒有退回，工單還在這台。請過幾分鐘再試一次；還是不行請找生管。",
+      return_claim_err_outcome_unknown: "工廠那邊的結果不確定：這張單可能已經退回，也可能還在這台。請重新整理畫面看這台現在掛哪張單；看不出來請問生管。",
+      return_claim_err_factory_problem: "工廠系統那邊有問題，這次沒有退回，工單還在這台。請找生管處理。",
       return_claim_err_generic: "沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。",
     },
     vi: {
@@ -788,6 +793,11 @@
       return_claim_err_stale_command: "Nhà máy xử lý quá muộn nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
       return_claim_err_expired: "Quá 10 phút nhà máy vẫn chưa tiếp nhận nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
       return_claim_err_released: "Quản lý đã hủy lệnh trả lại này, chưa chắc đã trả được hay chưa. Hãy tải lại màn hình để xem phiếu của máy, hoặc hỏi bộ phận kế hoạch.", // _draft
+      return_claim_busy: "Máy này có một lệnh trả lại phiếu đang chờ nhà máy xử lý; hãy chờ có kết quả rồi thao tác.", // _draft
+      return_claim_err_busy_retry: "Hệ thống nhà máy đang bận nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy chờ một chút rồi bấm lại.", // _draft
+      return_claim_err_internal_retry: "Nhà máy xử lý bị lỗi nên lần này chưa trả lại, phiếu vẫn ở máy này. Vài phút nữa hãy thử lại; nếu vẫn không được hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_outcome_unknown: "Chưa chắc kết quả ở nhà máy: phiếu này có thể đã được trả lại, cũng có thể vẫn ở máy này. Hãy tải lại màn hình để xem máy đang gắn phiếu nào; nếu không rõ hãy hỏi bộ phận kế hoạch.", // _draft
+      return_claim_err_factory_problem: "Hệ thống nhà máy có vấn đề nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy nhờ bộ phận kế hoạch xử lý.", // _draft
       return_claim_err_generic: "Chưa trả lại được. Hãy tải lại màn hình để kiểm tra phiếu của máy; nếu vẫn không đúng hãy báo bộ phận kế hoạch.", // _draft
     }
   };

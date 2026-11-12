@@ -23,6 +23,23 @@ const CONTRACT_CODES = ["AUTH_REQUIRED", "OPERATOR_REQUIRED", "APPLIER_CANNOT_SU
   "CLAIM_ALREADY_STARTED", "MACHINE_COMMAND_IN_FLIGHT",
   "LEGACY_STATE_INCONSISTENT", "POOL_ITEM_NOT_FOUND", "UNSUPPORTED_STATION", "FACTORY_RETURN_DISABLED", "STALE_COMMAND",
   "EXPIRED", "MANUAL_RELEASED"];
+// Factory 套用端對 return_claim 會回的每一個 reject_code（從原始碼列出，machtile softnet-mes feat/return-claim-applier）：
+//   StationReturnClaimApplier.cs  ValidateShape：FACTORY_RETURN_DISABLED、COMMAND_INVALID、UNSUPPORTED_STATION、OPERATOR_UNKNOWN、STALE_COMMAND
+//                                 Decide：POOL_ITEM_NOT_FOUND、STALE_COMMAND、LEGACY_STATE_INCONSISTENT、CLAIM_ALREADY_STARTED
+//                                 Replay／Apply／ApplyWithin：LEDGER_CONFLICT、OUTCOME_UNKNOWN、LOCK_TIMEOUT、INTERNAL_ERROR、
+//                                   FACTORY_RETURN_DISABLED、UNSUPPORTED_STATION、LEGACY_STATE_INCONSISTENT；Guard()：WRITE_TARGET_DENIED
+//   StationCommandProcessor.cs    COMMAND_INVALID（角色不認得／工廠旗標關＝不支援的指令種類／稽核表缺 ActorRole）、FACTORY_RETURN_DISABLED
+//   StationCommandMatcher.cs      COMMAND_INVALID（缺 command_uuid、角色、代報）
+//   StationCommandPoller.cs       OUTCOME_UNKNOWN／INTERNAL_ERROR（處理時例外）、LEGACY_APPLIED_LATE（applied 但雲端 finish 拒收）
+const FACTORY_CODES = ["FACTORY_RETURN_DISABLED", "COMMAND_INVALID", "UNSUPPORTED_STATION", "OPERATOR_UNKNOWN", "STALE_COMMAND",
+  "POOL_ITEM_NOT_FOUND", "LEGACY_STATE_INCONSISTENT", "CLAIM_ALREADY_STARTED", "LEDGER_CONFLICT", "OUTCOME_UNKNOWN", "LOCK_TIMEOUT",
+  "INTERNAL_ERROR", "WRITE_TARGET_DENIED", "LEGACY_APPLIED_LATE"];
+const ALL_CODES = [...new Set([...CONTRACT_CODES, ...FACTORY_CODES])];
+// 等一下再按有機會成功的碼（Factory 的訊息自己寫「請再按一次／稍後再按」的：LOCK_TIMEOUT、INTERNAL_ERROR、逾時的 STALE_COMMAND）
+const RETRYABLE_CODES = ["CLAIM_NOT_APPLIED", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND", "EXPIRED", "LOCK_TIMEOUT", "INTERNAL_ERROR"];
+const SESSION = { tenantId: "00000000-0000-4000-8000-000000000001", appUserId: "00000000-0000-4000-8000-000000000902" };
+const OTHER_USER = { tenantId: SESSION.tenantId, appUserId: "00000000-0000-4000-8000-000000000903" };
+const OTHER_TENANT = { tenantId: "00000000-0000-4000-8000-000000000002", appUserId: SESSION.appUserId };
 
 const claimedOrder = (extra) => Object.assign({ id: "TEST-WO-1", stationStep: 1, processId: PROCESS_ID, part: "測試軸", process: "CNC車床加工",
   dispatchPoolSourceKey: POOL_KEY, dispatchPoolStatus: "claimed", processStatus: "pending", done: 0, offStation: false }, extra);
@@ -35,11 +52,19 @@ test("poll select is exactly the contract list and the cloud fixture", () => {
   assert.equal(core.POLL_SELECT, CONTRACT_POLL_SELECT);
   assert.equal(core.pollPath(UUID), `station_commands?select=${CONTRACT_POLL_SELECT}&command_uuid=eq.${UUID}`);
   assert.throws(() => core.pollPath("not-a-uuid"), /BAD_COMMAND_UUID/);
-  // 雲端 repo 的 fixture 在這台機器上就逐字比對；不在（別台機器／CI）就只比合約那一串
-  const fixture = process.env.RETURN_CLAIM_POLL_FIXTURE
+  // 雲端 fixture 的複本放在這個 repo（fixtures/return_claim_poll_select.txt，檔頭註明來源檔與 commit）：任何機器都比得到。
+  const vendoredText = fs.readFileSync(path.join(__dirname, "fixtures/return_claim_poll_select.txt"), "utf8");
+  assert.match(vendoredText, /machtile-mini-mes/, "vendored fixture names its source repo");
+  assert.match(vendoredText, /d8ee0d18/, "vendored fixture names its source commit");
+  assert.match(vendoredText, /supabase\/tests\/pglite\/fixtures\/return_claim_poll_select\.txt/, "vendored fixture names its source file");
+  const vendored = vendoredText.split(/\r?\n/).filter((line) => line.trim() && !line.startsWith("#"));
+  assert.equal(vendored.length, 1, "vendored fixture holds exactly one select line");
+  assert.equal(core.POLL_SELECT, vendored[0], "core select == vendored cloud fixture");
+  // 雲端工作樹在這台機器上 → 複本必須跟它逐字相同（漂移就失敗）；不在＝上面的複本比對已經足夠
+  const sibling = process.env.RETURN_CLAIM_POLL_FIXTURE
     || "D:/04_SoftNet/wt-mini-return/supabase/tests/pglite/fixtures/return_claim_poll_select.txt";
-  if (fs.existsSync(fixture)) assert.equal(core.POLL_SELECT, fs.readFileSync(fixture, "utf8").trim(), "cloud fixture");
-  else console.log(`  (cloud fixture not on this machine: ${fixture}; compared with the contract literal only)`);
+  if (fs.existsSync(sibling)) assert.equal(vendored[0], fs.readFileSync(sibling, "utf8").trim(), "vendored copy drifted from the cloud fixture");
+  else console.log(`  (cloud worktree not on this machine: ${sibling}; compared with the vendored copy)`);
 });
 
 // ---------------------------------------------------------------- 按鈕什麼時候出現
@@ -145,13 +170,94 @@ test("every contract reject code maps to one sentence; unknown codes get the gen
     assert.match(info.messageKey, /^return_claim_/, code);
     assert.notEqual(info.messageKey, core.GENERIC_MESSAGE_KEY, code);
   }
-  assert.deepEqual(Object.keys(core.REJECT_MESSAGE_KEY).sort(), [...CONTRACT_CODES].sort(), "no code outside the contract list");
+  assert.deepEqual(Object.keys(core.REJECT_MESSAGE_KEY).sort(), [...ALL_CODES].sort(), "no code outside the contract + factory lists");
   assert.deepEqual(core.rejectInfo("SOMETHING_NEW"), { code: "SOMETHING_NEW", known: false, messageKey: "return_claim_err_generic", retryLater: false });
   assert.equal(core.rejectInfo("").messageKey, "return_claim_err_generic");
   assert.equal(core.rejectInfo(null).messageKey, "return_claim_err_generic");
   assert.equal(core.rejectInfo("constructor").messageKey, "return_claim_err_generic");
   assert.equal(core.rejectInfo("not_claim_owner").messageKey, "return_claim_err_not_owner");
-  assert.deepEqual([...core.RETRY_LATER_CODES], ["CLAIM_NOT_APPLIED", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND", "EXPIRED"]);
+  assert.deepEqual([...core.RETRY_LATER_CODES], RETRYABLE_CODES);
+});
+
+test("every factory reject code has its own correct sentence (uncertain ≠ failed, retry only where retrying can work)", () => {
+  const d = dictionaries();
+  const keyOf = (code) => core.rejectInfo(code).messageKey;
+  for (const code of FACTORY_CODES) {
+    assert.equal(core.rejectInfo(code).known, true, code);
+    assert.notEqual(keyOf(code), core.GENERIC_MESSAGE_KEY, `${code} must not fall to the generic "did not return" sentence`);
+    assert.equal(typeof d.zh[keyOf(code)], "string", code);
+    assert.equal(typeof d.vi[keyOf(code)], "string", code);
+  }
+  // 結果不確定：不可以說沒有退回；要說不確定、重新整理、問生管；不可以叫人再按
+  for (const code of ["OUTCOME_UNKNOWN", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED"]) {
+    const zh = d.zh[keyOf(code)], vi = d.vi[keyOf(code)];
+    assert.match(zh, /不確定/, code);
+    assert.match(zh, /重新整理/, code);
+    assert.match(zh, /生管/, code);
+    assert.doesNotMatch(zh, /沒有退回|沒退回|退回失敗|沒有成功/, `${code} zh-Hant must not claim the return failed`);
+    assert.match(vi, /[Cc]hưa chắc/, code);
+    assert.match(vi, /tải lại màn hình/, code);
+    assert.match(vi, /kế hoạch/, code);
+    assert.doesNotMatch(vi, /chưa trả lại|không trả lại được|thất bại/i, `${code} vi must not claim the return failed`);
+    assert.equal(core.rejectInfo(code).retryLater, false, code);
+    assert.equal(core.resultView({ status: "rejected", reject_code: code }).tone, "warn", `${code} is shown as a warning, not a failure`);
+    assert.ok(core.UNCERTAIN_CODES.includes(code), code);
+  }
+  assert.deepEqual([...core.UNCERTAIN_CODES], ["OUTCOME_UNKNOWN", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED"]);
+  assert.equal(core.resultView({ status: "rejected", reject_code: "CLAIM_ALREADY_STARTED" }).tone, "bad");
+  // 整筆取消、沒有寫入，等一下再按有機會成功
+  for (const code of ["LOCK_TIMEOUT", "INTERNAL_ERROR"]) {
+    assert.equal(core.rejectInfo(code).retryLater, true, code);
+    assert.match(d.zh[keyOf(code)], /沒有退回/, code);
+    assert.match(d.zh[keyOf(code)], /等一下再按一次|過幾分鐘再試一次/, code);
+    assert.match(d.vi[keyOf(code)], /bấm lại|thử lại/, code);
+  }
+  assert.equal(keyOf("LOCK_TIMEOUT"), "return_claim_err_busy_retry");
+  assert.equal(keyOf("INTERNAL_ERROR"), "return_claim_err_internal_retry");
+  // 工廠旗標關（當成不支援的指令種類）／指令欄位不合 → 還沒開放、找生管
+  assert.equal(keyOf("COMMAND_INVALID"), "return_claim_err_not_open");
+  assert.equal(keyOf("FACTORY_RETURN_DISABLED"), "return_claim_err_not_open");
+  assert.equal(d.zh.return_claim_err_not_open, "退回功能還沒開放，請找生管幫你處理。");
+  assert.equal(keyOf("OPERATOR_UNKNOWN"), "return_claim_err_account");
+  assert.match(d.zh.return_claim_err_account, /帳號/);
+  for (const code of ["LEDGER_CONFLICT", "WRITE_TARGET_DENIED"]) {
+    assert.equal(keyOf(code), "return_claim_err_factory_problem", code);
+    assert.equal(core.rejectInfo(code).retryLater, false, code);
+  }
+  assert.match(d.zh.return_claim_err_factory_problem, /生管/);
+  assert.match(d.vi.return_claim_err_factory_problem, /kế hoạch/);
+  assert.equal(keyOf("UNSUPPORTED_STATION"), "return_claim_err_station_not_open");
+  assert.equal(keyOf("POOL_ITEM_NOT_FOUND"), "return_claim_err_pool_missing");
+  assert.equal(keyOf("LEGACY_STATE_INCONSISTENT"), "return_claim_err_inconsistent");
+  assert.equal(keyOf("CLAIM_ALREADY_STARTED"), "return_claim_err_started");
+  assert.equal(keyOf("STALE_COMMAND"), "return_claim_err_stale_command");
+});
+
+test("factory source (when the sibling worktree is on this machine): every reject code the return-claim applier can send is mapped", (t) => {
+  const dir = process.env.RETURN_CLAIM_FACTORY_DIR || "D:/04_SoftNet/wt-return-factory/SoftNet/SoftNetWebII/Services/StationCommands";
+  const read = (name) => fs.readFileSync(path.join(dir, name), "utf8");
+  if (!fs.existsSync(path.join(dir, "StationReturnClaimApplier.cs"))) { t.skip(`factory worktree not on this machine: ${dir}`); return; }
+  const constants = new Map([...read("StationCommandModels.cs").matchAll(/public const string (\w+) = "([A-Z][A-Z0-9_]+)";/g)].map((m) => [m[1], m[2]]));
+  const codesIn = (source) => [...new Set([...source.matchAll(/StationCommandRejectCodes\.(\w+)/g)].map((m) => {
+    assert.ok(constants.has(m[1]), `unknown reject-code constant ${m[1]}`);
+    return constants.get(m[1]);
+  }))];
+  // 套用端整個檔＝全部都是 return_claim 的碼
+  const applier = codesIn(read("StationReturnClaimApplier.cs"));
+  assert.ok(applier.length >= 11, `expected the applier's codes, found ${applier.length}`);
+  // Processor 的 return_claim 分支＋旗標關時落到的「不支援的指令種類」那一行＋角色檢查
+  const processor = read("StationCommandProcessor.cs");
+  const branch = processor.slice(processor.indexOf("if (type == StationCommandMatcher.ReturnClaim"), processor.indexOf("// A disabled/non-pilot close"));
+  assert.ok(branch.includes("_applyReturnClaim(c)") && branch.includes("不支援的指令種類"), "return_claim branch of the processor located");
+  // Poller：處理時例外（OUTCOME_UNKNOWN／INTERNAL_ERROR）與 LEGACY_APPLIED_LATE
+  const poller = read("StationCommandPoller.cs");
+  const handle = poller.slice(poller.indexOf("private static async Task HandleAsync"), poller.indexOf("public static async Task<bool> SyncTakeoverOpenAsync"));
+  // Guard()：WRITE_TARGET_DENIED
+  const guardSource = read("LegacyStationStateApplier.cs");
+  const guard = guardSource.slice(guardSource.indexOf(" Guard(SqlConnection"));
+  const fromSource = [...new Set([...applier, ...codesIn(branch), ...codesIn(handle), ...codesIn(guard.slice(0, guard.indexOf("GetSessionLock")))])].sort();
+  assert.deepEqual(fromSource, [...FACTORY_CODES].sort(), "FACTORY_CODES in this test == the codes in the factory source");
+  for (const code of fromSource) assert.equal(core.rejectInfo(code).known, true, `${code} (factory source) has a sentence`);
 });
 
 test("every return_claim string exists in both languages, shows no raw code, and never says press-again for a dead end", () => {
@@ -263,6 +369,9 @@ function harness(options = {}) {
   const calls = { fetch: [], toasts: [], rerenders: 0, refresh: [], storageReads: 0 };
   const order = options.order === undefined ? claimedOrder() : options.order;
   const machine = { code: "A01", name: "A01", order, isUnassignedBucket: false };
+  // 目前登入的人（測試可以中途改：換人登入）
+  const session = Object.assign({}, options.session === undefined ? SESSION : options.session);
+  const batchState = { formError: "" };
   const context = {
     window: { MachTileReturnClaimCore: options.noCore ? null : core, crypto: { randomUUID: () => options.uuids ? options.uuids.shift() : UUID } },
     config: options.flag === undefined ? {} : { enableReturnClaim: options.flag },
@@ -274,6 +383,9 @@ function harness(options = {}) {
     machtileCardState: { todayStatus: "ok", todayRows: options.todayRows || [] },
     machtileDeferredLoadState: new Map([["card-details", { status: options.cardDetails || "ready" }]]),
     machtileDepartmentAccess: { role: options.role || "operator", is_bridge: false },
+    machtileAuthState: session,
+    machtileBatchState: batchState,
+    machtileRenderBatchReport: () => { calls.batchRenders = (calls.batchRenders || 0) + 1; },
     machtileActualRole: () => options.role || "operator",
     machtileCardActivityOf: () => null,
     machtileStationCmdMachineCode: (m) => String(m?.code || m?.name || "").trim().toUpperCase(),
@@ -305,7 +417,8 @@ function harness(options = {}) {
   const api = vm.runInNewContext(`${blockSource}
     ({ machtileReturnClaim, enabled: machtileReturnClaimEnabled, locks: machtileReturnClaimLocks, markup: machtileReturnClaimCardMarkup,
        restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry, submit: machtileReturnClaimSubmit,
-       dismiss: machtileReturnClaimDismiss, handleClick: machtileReturnClaimHandleClick, closeSheet: machtileReturnClaimCloseSheet })`, context);
+       dismiss: machtileReturnClaimDismiss, handleClick: machtileReturnClaimHandleClick, closeSheet: machtileReturnClaimCloseSheet,
+       blockMessage: machtileReturnClaimBlockMessage, batchBlock: machtileReturnClaimBatchBlock, save: machtileReturnClaimSave })`, context);
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
   // 跑下一個輪詢 timer（跳過送出逾時用的 20 秒 timer）
   const runPoll = async () => {
@@ -315,7 +428,7 @@ function harness(options = {}) {
     await timer.fn();
   };
   const pollTimers = () => timers.filter((timer) => timer.ms !== stationCore.SUBMIT_TIMEOUT_MS).length;
-  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, context };
+  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, context, session, batchState };
 }
 const freshRow = (extra) => [Object.assign({ id: PROCESS_ID, process_order: 1, process_name: "CNC車床加工", status: "pending", off_station_at: null, qty_completed: 0,
   work_orders: { work_order_no: "TEST-WO-1", part_no: "TEST-P1", part_name: "測試軸", status: "in_progress" }, machines: { machine_code: "A01" } }, extra)];
@@ -332,6 +445,9 @@ test("flag off (missing, false, or non-boolean): every hook is inert — no mark
     assert.equal(h.api.enabled(), false);
     assert.equal(h.api.markup(h.machine), "", `markup flag=${flag}`);
     assert.equal(h.api.locks("A01"), false);
+    assert.equal(h.api.blockMessage("A01"), "", "flag off: other entry points are never blocked");
+    assert.equal(h.api.batchBlock(["A01", "A02"]), false);
+    assert.equal(h.batchState.formError, "");
     h.api.restore();
     assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), []);
     assert.equal(h.api.handleClick({ target: { closest: () => ({ dataset: { returnClaimOpen: "A01" } }) } }), false);
@@ -561,7 +677,7 @@ test("uncertain submit that the server never saw: unlocks after 3 empty polls �
 
 test("reload with a pending return: restored from storage, polled with the same uuid, never resubmitted", async () => {
   const args = core.buildArgs({ commandUuid: UUID, machineCode: "A01", poolItemId: POOL_KEY, orderNo: "TEST-WO-1", step: 1, role: "operator" });
-  const stored = { [PENDING_KEY]: JSON.stringify({ A01: core.pendingRecord({ commandUuid: UUID, machineCode: "A01", orderNo: "TEST-WO-1", step: 1, args, startedAt: Date.now(), lastStatus: "pending" }) }) };
+  const stored = { [PENDING_KEY]: JSON.stringify({ A01: core.pendingRecord({ commandUuid: UUID, machineCode: "A01", orderNo: "TEST-WO-1", step: 1, args, startedAt: Date.now(), lastStatus: "pending", ...SESSION }) }) };
   const h = harness({ flag: true, storage: stored, backend: async (url) => {
     assert.ok(url.startsWith("station_commands?"), url);
     return [commandRow({ status: "applied", legacy_snapshot: { return_claim: { mode: "stale_assignment_reconciled", pool_status: "returned", station_cleared: false } } })];
@@ -571,6 +687,231 @@ test("reload with a pending return: restored from storage, polled with the same 
   await h.runPoll();
   assert.deepEqual(h.calls.toasts, ["已把這張單退回待做池；這台機台目前掛的工單沒有動。"]);
   assert.equal(h.calls.fetch.length, 1);
+});
+
+// ---------------------------------------------------------------- 審查修正（REVIEW-P2-app-opus：MAJOR 4、MINOR 7、MINOR 8）
+const UUID2 = "99999999-9999-4999-8999-999999999999";
+const BUSY_ZH = "這台有一筆「退回接單」還在等工廠處理，等它有結果再操作。";
+const acceptingBackend = (state) => async (url, init) => {
+  if (url.startsWith("work_order_processes?")) return state.fresh ? state.fresh() : freshRow();
+  if (url.startsWith("rpc/")) {
+    state.submits.push(JSON.parse(init.body));
+    if (state.fail) throw new TypeError("Failed to fetch");
+    state.row = commandRow({ command_uuid: JSON.parse(init.body).p_command_uuid });
+    return [state.row];
+  }
+  return state.row ? [state.row] : [];
+};
+
+test("pending return: other entry points for that machine get a sentence about the RETURN (batch start/stop, reports, pick order)", async () => {
+  const state = { submits: [], row: null };
+  const h = harness({ flag: true, backend: acceptingBackend(state) });
+  assert.equal(h.api.blockMessage("A01"), "", "nothing pending: not blocked");
+  assert.equal(h.api.batchBlock(["A01", "A02"]), false);
+  await h.api.open("A01", null);
+  await h.api.submit();
+  assert.equal(h.api.blockMessage("A01"), BUSY_ZH);
+  assert.equal(h.api.blockMessage(" a01 "), BUSY_ZH, "machine code is normalised");
+  assert.match(BUSY_ZH, /退回/);
+  assert.doesNotMatch(BUSY_ZH, /開工|停工/, "the sentence is about the return, not start/stop");
+  assert.equal(h.api.blockMessage("A02"), "", "other machines are not blocked");
+  assert.equal(h.api.batchBlock(["A02"]), false);
+  assert.equal(h.api.batchBlock(["A02", "A01"]), true, "a batch that contains the machine is stopped as a whole");
+  assert.equal(h.batchState.formError, `A01：${BUSY_ZH}`);
+  assert.equal(h.calls.toasts.at(-1), `A01：${BUSY_ZH}`);
+  assert.equal(h.calls.batchRenders, 1);
+  assert.equal(state.submits.length, 1, "blocking never sends anything");
+  state.row = commandRow({ status: "applied", legacy_snapshot: { return_claim: { mode: "unassigned", pool_status: "returned", station_cleared: true } } });
+  await h.runPoll();
+  assert.equal(h.api.blockMessage("A01"), "", "unblocked as soon as the server gives a result");
+  // 越南文
+  const vi = harness({ flag: true, language: "vi", backend: acceptingBackend({ submits: [], row: null }) });
+  await vi.api.open("A01", null);
+  await vi.api.submit();
+  assert.match(vi.api.blockMessage("A01"), /trả lại phiếu/);
+});
+
+test("lock release after 11 minutes: only when the last server status was pending; claimed keeps every entry point blocked", async () => {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    for (const [status, stillLocked] of [["pending", false], ["claimed", true]]) {
+      const state = { submits: [], row: null };
+      const h = harness({ flag: true, backend: acceptingBackend(state) });
+      await h.api.open("A01", null);
+      await h.api.submit();
+      state.row = commandRow({ status });
+      await h.runPoll();
+      assert.equal(h.api.locks("A01"), true, status);
+      now += 12 * 60 * 1000;
+      assert.equal(h.api.locks("A01"), stillLocked, `${status} after 12 minutes`);
+      assert.equal(h.api.blockMessage("A01"), stillLocked ? BUSY_ZH : "", status);
+    }
+  } finally { Date.now = realNow; }
+});
+
+test("a record never renders as 'this order' on a card that shows another order or step; a stale not-found record is dropped on the next return", async () => {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    const state = { submits: [], row: null, fail: true, fresh: null };
+    const h = harness({ flag: true, uuids: [UUID, UUID2], backend: acceptingBackend(state) });
+    await h.api.open("A01", null);
+    await h.api.submit();
+    h.api.closeSheet();
+    // 還在確認有沒有送到（鎖著）而卡片換成別張單 → 只說這台有一筆退回在處理，不給重送／不退了
+    const otherOrder = claimedOrder({ id: "TEST-WO-2" });
+    const lockedOther = h.api.markup({ code: "A01", name: "A01", order: otherOrder });
+    assert.equal(lockedOther, `<p class="station-cmd-status is-wait" data-no-detail data-return-claim-status="other-order" role="status">${BUSY_ZH}</p>`);
+    assert.equal(h.api.markup({ code: "A01", name: "A01", order: null }), lockedOther, "empty card: same machine-level line");
+    assert.equal(h.api.markup({ code: "A01", name: "A01", order: claimedOrder({ stationStep: 2 }) }), lockedOther, "same order, another step");
+    assert.equal(h.api.locks("A01"), true, "the machine stays locked");
+    // 連續查不到 → notFound（不鎖）
+    await h.runPoll(); await h.runPoll();
+    now += 31000;
+    await h.runPoll();
+    assert.equal(h.api.machtileReturnClaim.pending.A01.notFound, true);
+    assert.match(h.api.markup(h.machine), /data-return-claim-status="not-found"/, "same order: the not-found line with resend / dismiss is still offered");
+    // 卡片換單：不顯示「這張單還在這台」、沒有重送／不退了；新單照規則出按鈕
+    h.machine.order = otherOrder;
+    const html = h.api.markup(h.machine);
+    assert.doesNotMatch(html, /data-return-claim-status|data-return-claim-retry|data-return-claim-dismiss|這張單還在這台/);
+    assert.equal(html, '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="A01">接錯了，退回</button>');
+    h.api.openRetry("A01", null);
+    assert.equal(h.sheetHtml(), "", "resend is not offered for an order that is no longer on the card");
+    assert.equal(state.submits.length, 1);
+    // 對新單按退回：過時的那筆丟掉，用新的 uuid、新單的內容
+    state.fail = false;
+    state.fresh = () => freshRow({ work_orders: { work_order_no: "TEST-WO-2", part_no: "TEST-P2", part_name: "測試軸", status: "in_progress" } });
+    await h.api.open("A01", null);
+    assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), [], "stale record dropped");
+    assert.equal(h.storage.get(PENDING_KEY), "{}");
+    assert.match(h.sheetHtml(), /TEST-WO-2/);
+    await h.api.submit();
+    assert.equal(state.submits.length, 2);
+    assert.equal(state.submits[1].p_command_uuid, UUID2, "a new attempt, not the stale uuid");
+    assert.equal(state.submits[1].p_expected_order_no, "TEST-WO-2");
+    assert.equal(h.api.machtileReturnClaim.pending.A01.orderNo, "TEST-WO-2");
+  } finally { Date.now = realNow; }
+  // 純邏輯
+  const rec = core.pendingRecord({ commandUuid: UUID, machineCode: "A01", orderNo: "TEST-WO-1", step: 1, args: {}, startedAt: 1 });
+  assert.equal(core.recordMatchesOrder(rec, { id: "TEST-WO-1", stationStep: 1 }), true);
+  assert.equal(core.recordMatchesOrder(rec, { id: "TEST-WO-1", stationStep: "1" }), true);
+  assert.equal(core.recordMatchesOrder(rec, { id: "TEST-WO-1", stationStep: 2 }), false);
+  assert.equal(core.recordMatchesOrder(rec, { id: "TEST-WO-2", stationStep: 1 }), false);
+  assert.equal(core.recordMatchesOrder(rec, null), false);
+  assert.equal(core.recordMatchesOrder(null, { id: "TEST-WO-1", stationStep: 1 }), false);
+  assert.equal(core.cardRecordMode(null, null, false), "none");
+  assert.equal(core.cardRecordMode(rec, { id: "TEST-WO-1", stationStep: 1 }, false), "own");
+  assert.equal(core.cardRecordMode({ ...rec, notFound: true }, { id: "TEST-WO-1", stationStep: 1 }, false), "own");
+  assert.equal(core.cardRecordMode(rec, { id: "TEST-WO-2", stationStep: 1 }, false), "machine");
+  assert.equal(core.cardRecordMode({ ...rec, lastStatus: "claimed" }, null, true), "machine");
+  assert.equal(core.cardRecordMode({ ...rec, notFound: true }, { id: "TEST-WO-2", stationStep: 1 }, false), "none");
+  assert.equal(core.cardRecordMode({ ...rec, lastStatus: "pending" }, { id: "TEST-WO-2", stationStep: 1 }, true), "none");
+});
+
+test("resend does the same fresh re-read as the first submit: changed or unreadable → nothing is sent", async () => {
+  for (const reopenFromCard of [false, true]) {
+    const state = { submits: [], row: null, fail: true, fresh: null };
+    const h = harness({ flag: true, backend: acceptingBackend(state) });
+    await h.api.open("A01", null);
+    await h.api.submit();
+    assert.equal(state.submits.length, 1);
+    if (reopenFromCard) { h.api.closeSheet(); h.api.openRetry("A01", null); }
+    assert.match(h.sheetHtml(), /data-return-claim-confirm>用同一筆重送</);
+    state.fail = false;
+    // 這張單在等的時候已經開工
+    state.fresh = () => freshRow({ status: "running" });
+    const readsBefore = h.calls.fetch.filter((call) => call.url.startsWith("work_order_processes?")).length;
+    await h.api.submit();
+    assert.equal(h.calls.fetch.filter((call) => call.url.startsWith("work_order_processes?")).length, readsBefore + 1, "resend re-reads the process row");
+    assert.equal(h.calls.fetch.at(-1).url, h.calls.fetch[0].url, "the same re-read query as the first submit");
+    assert.equal(state.submits.length, 1, "started meanwhile: the resend is not sent");
+    assert.match(h.sheetHtml(), /這張單的狀況變了/);
+    // 讀不到
+    state.fresh = () => { throw new TypeError("Failed to fetch"); };
+    await h.api.submit();
+    assert.equal(state.submits.length, 1, "unreadable: the resend is not sent");
+    assert.match(h.sheetHtml(), /讀不到這張單的最新資料/);
+    // 重讀通過 → 同一個 uuid、同樣內容
+    state.fresh = null;
+    await h.api.submit();
+    assert.equal(state.submits.length, 2);
+    assert.deepEqual(state.submits[1], state.submits[0]);
+    assert.match(h.api.markup(h.machine), /data-return-claim-status="pending"/);
+  }
+});
+
+test("stored record carries tenant + app user; restore drops other sessions' records and never deletes them; re-login as someone else releases the card", async () => {
+  const args = (machineCode) => core.buildArgs({ commandUuid: UUID2, machineCode, poolItemId: POOL_KEY, orderNo: "TEST-WO-9", step: 1, role: "operator" });
+  const foreign = (machineCode, who) => core.pendingRecord({ commandUuid: UUID2, machineCode, orderNo: "TEST-WO-9", step: 1, args: args(machineCode), startedAt: Date.now(), lastStatus: "pending", ...who });
+  // 純邏輯
+  const raw = JSON.stringify({ A01: foreign("A01", SESSION), A02: foreign("A02", OTHER_USER), A03: foreign("A03", OTHER_TENANT), A04: foreign("A04", {}) });
+  assert.deepEqual(Object.keys(core.restoreForSession(raw, Date.now(), SESSION)), ["A01"]);
+  assert.deepEqual(Object.keys(core.restoreForSession(raw, Date.now(), OTHER_USER)), ["A02"]);
+  assert.deepEqual(Object.keys(core.restoreForSession(raw, Date.now(), OTHER_TENANT)), ["A03"]);
+  for (const unknown of [null, {}, { tenantId: SESSION.tenantId, appUserId: "" }, { tenantId: "", appUserId: SESSION.appUserId }]) {
+    assert.deepEqual(core.restoreForSession(raw, Date.now(), unknown), {}, "session not known → nothing is restored");
+  }
+  assert.equal(core.sameSession(foreign("A04", {}), { tenantId: "", appUserId: "" }), false, "empty never matches empty");
+  assert.deepEqual(Object.keys(core.mergeForSave(raw, {}, Date.now(), SESSION)).sort(), ["A02", "A03", "A04"], "own finished record removed, other sessions' kept");
+  assert.deepEqual(Object.keys(core.mergeForSave(raw, { A02: foreign("A02", SESSION) }, Date.now(), SESSION)).sort(), ["A02", "A03", "A04"]);
+  assert.equal(core.mergeForSave(raw, { A02: foreign("A02", SESSION) }, Date.now(), SESSION).A02.appUserId, SESSION.appUserId, "same machine: own record wins");
+  assert.deepEqual(core.mergeForSave(raw, {}, Date.now() + core.PENDING_KEEP_MS + 1000, SESSION), {}, "expired records are not kept");
+
+  // 別人（同租戶另一個人／另一個租戶／沒記是誰）的紀錄：不還原、不鎖、不輪詢、localStorage 不動
+  for (const who of [OTHER_USER, OTHER_TENANT, {}]) {
+    const stored = JSON.stringify({ A01: foreign("A01", who) });
+    const h = harness({ flag: true, storage: { [PENDING_KEY]: stored } });
+    h.api.restore();
+    assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), [], JSON.stringify(who));
+    assert.equal(h.api.locks("A01"), false);
+    assert.equal(h.pollTimers(), 0);
+    assert.equal(h.calls.fetch.length, 0);
+    assert.equal(h.storage.get(PENDING_KEY), stored);
+    assert.match(h.api.markup(h.machine), /^<button[^>]*data-return-claim-open="A01"/, "the card is not locked by someone else's record");
+  }
+  // 還不知道自己是誰（app_users 還沒查到）→ 不還原
+  const unknown = harness({ flag: true, session: { tenantId: SESSION.tenantId, appUserId: "" }, storage: { [PENDING_KEY]: JSON.stringify({ A01: foreign("A01", SESSION) }) } });
+  unknown.api.restore();
+  assert.deepEqual(Object.keys(unknown.api.machtileReturnClaim.pending), []);
+
+  // 自己送出：紀錄記下租戶＋app user＋工序；同一台平板上別人的紀錄（A02）原樣留著
+  const state = { submits: [], row: null };
+  const othersA02 = foreign("A02", OTHER_USER);
+  const h = harness({ flag: true, storage: { [PENDING_KEY]: JSON.stringify({ A02: othersA02 }) }, backend: acceptingBackend(state) });
+  h.api.restore();
+  assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), []);
+  await h.api.open("A01", null);
+  await h.api.submit();
+  let saved = JSON.parse(h.storage.get(PENDING_KEY));
+  assert.deepEqual(Object.keys(saved).sort(), ["A01", "A02"]);
+  assert.deepEqual({ tenantId: saved.A01.tenantId, appUserId: saved.A01.appUserId, processId: saved.A01.processId }, { ...SESSION, processId: PROCESS_ID });
+  assert.deepEqual(saved.A02, JSON.parse(JSON.stringify(othersA02)), "the other user's record is untouched");
+  assert.equal(h.api.locks("A01"), true);
+
+  // session 過期 → 換另一個人登入（沒有重新整理頁面）：記憶體裡前一個人的放掉，卡片不鎖；localStorage 那筆還在
+  h.session.appUserId = OTHER_USER.appUserId;
+  h.api.restore();
+  assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), ["A02"], "now only the new user's own record is in memory");
+  assert.equal(h.api.locks("A01"), false, "the previous user's return no longer locks the card");
+  assert.equal(h.api.blockMessage("A01"), "");
+  assert.equal(h.api.locks("A02"), true);
+  assert.ok(JSON.parse(h.storage.get(PENDING_KEY)).A01, "the previous user's record stays in storage");
+  // 原來的人重新登入（session 過期重登）：自己的那筆還原、繼續輪詢，不重送
+  h.session.appUserId = SESSION.appUserId;
+  h.api.restore();
+  assert.deepEqual(Object.keys(h.api.machtileReturnClaim.pending), ["A01"]);
+  assert.equal(h.api.locks("A01"), true);
+  assert.equal(h.api.machtileReturnClaim.pending.A01.commandUuid, state.submits[0].p_command_uuid);
+  assert.equal(state.submits.length, 1);
+  state.row = commandRow({ command_uuid: state.submits[0].p_command_uuid, status: "applied", legacy_snapshot: { return_claim: { mode: "unassigned", pool_status: "returned", station_cleared: true } } });
+  while (h.api.machtileReturnClaim.pending.A01 && h.pollTimers() > 0) await h.runPoll();
+  assert.equal(h.api.locks("A01"), false);
+  saved = JSON.parse(h.storage.get(PENDING_KEY));
+  assert.deepEqual(Object.keys(saved), ["A02"], "after my result only the other user's record is left");
 });
 
 // ---------------------------------------------------------------- 旗標關＝跟上線版逐字相同（原始碼層）
@@ -596,6 +937,24 @@ test("outside the return-claim block, app.js differs from the base only by the l
     ["machtileFinishButtonEnabled() && order && canReport && !returnClaimLocked\n", "machtileFinishButtonEnabled() && order && canReport\n"],
     ["${machtileReturnClaimCardMarkup(machine)}", ""],
     ["    if (machtileReturnClaimHandleClick(event)) return;\n", ""],
+    // ---- 審查修正加的掛點。旗標關時 machtileReturnClaimEnabled()＝false、machtileReturnClaimBlockMessage()＝""、
+    //      machtileReturnClaimBatchBlock()＝false（上面「flag off」那個測試逐一斷言），所以每一個都等於原字串。
+    // 舊的「退回池子」：新功能開著就不出、也不給按
+    ["machtileCanReturnDispatchPool() && isPendingClaim && !machtileReturnClaimEnabled()) {", "machtileCanReturnDispatchPool() && isPendingClaim) {"],
+    ["!machtileCanReturnDispatchPool() || machtileReturnClaimEnabled()) return;", "!machtileCanReturnDispatchPool()) return;"],
+    // 退回等待中：接單、選工單／待做池面板
+    ["  if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;\n  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), \"error\"); return; }\n",
+      "  if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;\n"],
+    ["  if (!machine) return;\n  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), \"error\"); return; }\n",
+      "  if (!machine) return;\n"],
+    // 退回等待中：智慧報工預覽／正式送出（單台報工面板與批次智慧報工共用）
+    ["  if (machtileReturnClaimBlockMessage(code)) { block(machtileReturnClaimBlockMessage(code)); return; }\n", ""],
+    ["  if (machtileReturnClaimBlockMessage(code)) { flow.error = machtileReturnClaimBlockMessage(code); machtileRenderStationReportSurfaces(); return; }\n", ""],
+    // 退回等待中：批次開工／停工
+    ["  if (machtileReturnClaimBlockMessage(code)) return { eligible: false, checked: false, reason: machtileReturnClaimBlockMessage(code) };\n", ""],
+    // 退回等待中：批次報工（直送 field_report_upsert 那條與智慧報工）、單台報工表單送出
+    ["  if (machtileReturnClaimBatchBlock(toSend.map(({ model }) => model.machineCode))) return;\n", ""],
+    ["    if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }\n", ""],
   ];
   for (const [now, before] of hooks) {
     assert.equal(current.split(now).length, 2, `hook must appear exactly once: ${now.slice(0, 60)}`);

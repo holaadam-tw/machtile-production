@@ -404,5 +404,10 @@
   "return_claim_err_stale_command": "工廠太晚處理，這次沒有退回，工單還在這台。需要的話請再按一次。",
   "return_claim_err_expired": "超過 10 分鐘工廠都沒有接手，這次沒有退回，工單還在這台。需要的話請再按一次。",
   "return_claim_err_released": "主管取消了這筆退回，有沒有退成不確定。請重新整理畫面看這台的工單，或問生管。",
+  "return_claim_busy": "這台有一筆「退回接單」還在等工廠處理，等它有結果再操作。",
+  "return_claim_err_busy_retry": "工廠系統剛好在忙，這次沒有退回，工單還在這台。請等一下再按一次。",
+  "return_claim_err_internal_retry": "工廠處理時出了問題，這次沒有退回，工單還在這台。請過幾分鐘再試一次；還是不行請找生管。",
+  "return_claim_err_outcome_unknown": "工廠那邊的結果不確定：這張單可能已經退回，也可能還在這台。請重新整理畫面看這台現在掛哪張單；看不出來請問生管。",
+  "return_claim_err_factory_problem": "工廠系統那邊有問題，這次沒有退回，工單還在這台。請找生管處理。",
   "return_claim_err_generic": "沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。"
 }

@@ -752,5 +752,10 @@
   "return_claim_err_stale_command": { "value": "Nhà máy xử lý quá muộn nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", "_draft": true },
   "return_claim_err_expired": { "value": "Quá 10 phút nhà máy vẫn chưa tiếp nhận nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", "_draft": true },
   "return_claim_err_released": { "value": "Quản lý đã hủy lệnh trả lại này, chưa chắc đã trả được hay chưa. Hãy tải lại màn hình để xem phiếu của máy, hoặc hỏi bộ phận kế hoạch.", "_draft": true },
+  "return_claim_busy": { "value": "Máy này có một lệnh trả lại phiếu đang chờ nhà máy xử lý; hãy chờ có kết quả rồi thao tác.", "_draft": true },
+  "return_claim_err_busy_retry": { "value": "Hệ thống nhà máy đang bận nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy chờ một chút rồi bấm lại.", "_draft": true },
+  "return_claim_err_internal_retry": { "value": "Nhà máy xử lý bị lỗi nên lần này chưa trả lại, phiếu vẫn ở máy này. Vài phút nữa hãy thử lại; nếu vẫn không được hãy báo bộ phận kế hoạch.", "_draft": true },
+  "return_claim_err_outcome_unknown": { "value": "Chưa chắc kết quả ở nhà máy: phiếu này có thể đã được trả lại, cũng có thể vẫn ở máy này. Hãy tải lại màn hình để xem máy đang gắn phiếu nào; nếu không rõ hãy hỏi bộ phận kế hoạch.", "_draft": true },
+  "return_claim_err_factory_problem": { "value": "Hệ thống nhà máy có vấn đề nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy nhờ bộ phận kế hoạch xử lý.", "_draft": true },
   "return_claim_err_generic": { "value": "Chưa trả lại được. Hãy tải lại màn hình để kiểm tra phiếu của máy; nếu vẫn không đúng hãy báo bộ phận kế hoạch.", "_draft": true }
 }
