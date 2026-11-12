@@ -30,8 +30,10 @@ const otherOrderRow = { ...poolRow(1), source_key: '01|TESTNEED0009|TEST-SIM-9',
 let fx;
 const reset = (extra = {}) => { fx = { returnFlag: true, flag: undefined, role: 'operator', held: 3, procStatus: 'pending', waiting: [1, 2], eligible: null, submitMode: 'accept', claimMode: 'accept', submits: [], claims: [], polls: [], poolReads: 0, events: [], command: null, afterPolls: null,
   // firstClaimed＝work_orders.external_ref 指的那一道（這張工單第一次被接的；雲端不會更新它）；
-  // heldRows＝待做池裡 claimed 的列（null＝機台上掛的那一道一列）；heldQueries＝App 查「機台上這一道是池裡哪一列」的紀錄
-  firstClaimed: 3, heldRows: null, heldQueries: [],
+  // 機台上這一道的池列鍵＝唯讀 RPC machtile_held_pool_claims()（接單帳本）。heldRows＝它回的列（null＝A05 上掛的那一道一列）；
+  // heldMode＝rows｜missing（正式環境還沒套 migration：404 PGRST202）｜error（500）；heldCalls＝App 叫了幾次、怎麼叫；
+  // heldPoolStatus＝機台上那一道的池列狀態：gone（Factory 已確認接單，正式環境的實況；RLS 不給 App 讀）｜claimed（還沒確認）
+  firstClaimed: 3, heldRows: null, heldMode: 'rows', heldCalls: [], heldPoolStatus: 'gone',
   // poolHang＝待做池清單的讀取不回應；claimMode 'hang'＝接單請求不回應；afterClaim＝接單成功之後第一次重讀畫面（v_work_order_cards）：'fail'＝500、'hang'＝不回應（都只一次）
   poolHang: false, afterClaim: null, cardReadsAfterClaim: 0, ...extra }; };
 // 不回應的請求先留著，情境結束時放掉（不會真的連到任何地方）
@@ -39,11 +41,11 @@ const hung = [];
 const hang = route => new Promise(resolve => { hung.push(() => { route.abort('failed').catch(() => {}); resolve(); }); });
 const releaseHung = () => { while (hung.length) hung.pop()(); };
 const tokenFor = (sub, role) => 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role }, role: 'authenticated' })).toString('base64url') + '.test';
-const HELD_SELECT = 'source_key,work_order_no,process_order,status';
-const claimedRow = (step, extra = {}) => ({ source_key: keyOf(step), work_order_no: ORDER_NO, process_order: step, status: 'claimed', ...extra });
+const HELD_RPC = '/rest/v1/rpc/machtile_held_pool_claims';
+const claimedRow = (step, extra = {}) => ({ machine_code: 'A05', work_order_no: ORDER_NO, process_order: step, source_key: keyOf(step), claimed_at: '2026-11-13T01:00:00+00:00', ...extra });
 const applyReturn = () => { const returned = fx.held || 3; fx.held = null; if (!fx.waiting.includes(returned)) fx.waiting.push(returned); fx.command = { ...fx.command, status: 'applied', claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(), legacy_snapshot: { return_claim: { mode: 'unassigned', pool_status: 'returned', station_cleared: true }, cloud_finalize: { claim_returned: true, process_detached: true, item_reopened: true } } }; };
 let checks = 0;
-const blocked = [], errors = [], writes = [];
+const blocked = [], errors = [], writes = [], poolClaimedSelects = [];
 const ok = (value, label) => { assert(value, label); checks++; console.log('PASS ' + label); };
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 const server = createServer(async (req, res) => { if (req.method !== 'GET') { res.writeHead(405); res.end(); return; } const u = new URL(req.url, 'http://localhost'); const file = path.resolve(root, '.' + (u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname))); if (!file.startsWith(root + path.sep)) { res.writeHead(403); res.end(); return; } try { res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' }); res.end(await readFile(file)); } catch { res.writeHead(404); res.end(); } });
@@ -105,6 +107,13 @@ async function openApp(language = 'zh-Hant') {
       if (fx.command && fx.afterPolls && fx.polls.length >= fx.afterPolls.count) { const apply = fx.afterPolls.apply; fx.afterPolls = null; apply(); fx.events.push('return_result'); }
       return json(200, fx.command && `eq.${fx.command.command_uuid}` === uuid ? [fx.command] : []);
     }
+    if (p === HELD_RPC) {
+      // 唯讀 RPC：不帶參數的 POST；不算寫入
+      fx.heldCalls.push({ method: req.method(), body: req.postData(), query: u.search });
+      if (fx.heldMode === 'missing') return json(404, { code: 'PGRST202', details: null, hint: null, message: 'Could not find the function public.machtile_held_pool_claims without parameters in the schema cache' });
+      if (fx.heldMode === 'error') return json(500, { code: 'XX000', message: 'boom' });
+      return json(200, fx.heldRows ? fx.heldRows() : (fx.held ? [claimedRow(fx.held)] : []));
+    }
     if (req.method() !== 'GET' && !['/rest/v1/rpc/batch_report_progress', '/rest/v1/rpc/machine_department_context'].includes(p) && !/_snapshot$|_list$/.test(p)) writes.push(p);
     if (p === '/auth/v1/user') return json(200, { id: auth, email: 'user@test.invalid' });
     if (p === '/rest/v1/app_users') return json(200, [{ id: actor, auth_user_id: auth, name: '測試使用者', legacy_user_id: 'TEST-001', role: fx.role, is_active: true }]);
@@ -116,15 +125,12 @@ async function openApp(language = 'zh-Hant') {
     const order = { ...orderBase, external_ref: keyOf(fx.firstClaimed) };
     if (p === '/rest/v1/dispatch_pool_items') {
       const select = u.searchParams.get('select') || '';
-      // 卡片明細：工單 external_ref 那個池列現在的狀態（掛在機台上＝claimed，退回後＝waiting）
-      if (select === 'source_key,status') return json(200, [{ source_key: keyOf(fx.firstClaimed), status: fx.held === fx.firstClaimed ? 'claimed' : fx.waiting.includes(fx.firstClaimed) ? 'waiting' : 'claimed' }]);
-      if (select === HELD_SELECT) {
-        // 機台上這一道是池裡哪一列：claimed、工單號在 in 清單裡的列
-        const query = { status: u.searchParams.get('status'), limit: u.searchParams.get('limit'), orders: u.searchParams.get('work_order_no') || '' };
-        fx.heldQueries.push(query);
-        const rows = fx.heldRows ? fx.heldRows() : (fx.held ? [claimedRow(fx.held)] : []);
-        return json(200, rows.filter(row => query.status === `eq.${row.status}` && query.orders.includes(`"${row.work_order_no}"`)));
+      // 卡片明細：工單 external_ref 那個池列現在的狀態（退回後＝waiting；掛在機台上＝heldPoolStatus，gone 的列 RLS 不給讀＝查不到）
+      if (select === 'source_key,status') {
+        const status = fx.waiting.includes(fx.firstClaimed) && fx.held !== fx.firstClaimed ? 'waiting' : fx.heldPoolStatus;
+        return json(200, ['waiting', 'claimed'].includes(status) ? [{ source_key: keyOf(fx.firstClaimed), status }] : []);
       }
+      if ((u.searchParams.get('status') || '') === 'eq.claimed') poolClaimedSelects.push(u.search);   // 舊的 claimed 列查詢：不可以再出現（下面會被當成 unexpected pool select）
       if (select !== POOL_SELECT || u.searchParams.get('status') !== 'eq.waiting') { blocked.push('unexpected pool select: ' + u.search); return json(400, {}); }
       fx.poolReads += 1; fx.events.push('pool_read');
       if (fx.poolHang) return hang(route);
@@ -168,7 +174,7 @@ const startSwitch = async (page, step, reason) => {
 try {
   // ---- 旗標：關（沒設、false、非布林，或退回功能沒開）＝卡片 HTML 逐字相同
   reset({ returnFlag: undefined }); const none = await openApp(); const htmlNone = await cardHtml(none.page); await none.ctx.close();
-  ok(fx.heldQueries.length === 0, 'both flags missing: the held-step pool lookup is never requested');
+  ok(fx.heldCalls.length === 0, 'both flags missing: the held-claims RPC is never requested');
   reset(); const returnOnly = await openApp(); const htmlReturnOnly = await cardHtml(returnOnly.page); await returnOnly.ctx.close();
   ok(htmlNone.includes(ORDER_NO) && htmlNone.includes('N3 精車') && !htmlNone.includes('data-return-claim-open') && !htmlNone.includes('switch-step'), 'both flags missing: A05 shows the claimed step 3 and neither button');
   ok(htmlReturnOnly.replace(RETURN_BUTTON, '') === htmlNone && htmlReturnOnly.split(RETURN_BUTTON).length === 2, 'return-claim on, switch flag missing: only 「接錯了，退回」 is added (the build before this change)');
@@ -308,7 +314,7 @@ try {
     const { ctx, page } = await openApp();
     const html = await cardHtml(page);
     ok(html.includes('N3 精車') && html.split(RETURN_BUTTON + SWITCH_BUTTON).length === 2, 'held step ≠ first-claimed step: both buttons show on the card');
-    ok(fx.heldQueries.length >= 1 && fx.heldQueries.every(q => q.status === 'eq.claimed' && q.limit === '1000' && q.orders === `in.("${ORDER_NO}")`), 'held step ≠ first-claimed step: the key comes from a claimed-rows lookup in the pool: ' + JSON.stringify(fx.heldQueries[0]));
+    ok(fx.heldCalls.length >= 1 && fx.heldCalls.every(c => c.method === 'POST' && c.body === '{}' && c.query === ''), 'held step ≠ first-claimed step: the key comes from the read-only RPC machtile_held_pool_claims (POST, no arguments): ' + JSON.stringify(fx.heldCalls[0]));
     await page.locator('[data-switch-step-open="A05"]').click();
     await page.waitForSelector('#machtileReturnClaimSheet [data-switch-step-choices]');
     const text = await sheet(page).innerText();
@@ -323,14 +329,20 @@ try {
     await ctx.close();
   }
   // ---- 查不到唯一的一列＝兩顆按鈕都不出
-  for (const [label, heldRows] of [
-    ['two claimed pool rows for the held step', () => [claimedRow(3), claimedRow(3, { source_key: '01|TESTNEED0003|TEST-SIM-DUP' })]],
-    ['no claimed pool row for the held step', () => []],
-    ['only another step of the order is claimed', () => [claimedRow(1)]],
+  for (const [label, extra] of [
+    ['two live claims for the held step on this machine', { heldRows: () => [claimedRow(3), claimedRow(3, { source_key: '01|TESTNEED0003|TEST-SIM-DUP' })] }],
+    ['no live claim for the held step', { heldRows: () => [] }],
+    ['only another step of the order is claimed', { heldRows: () => [claimedRow(1)] }],
+    ['the claim for this order/step belongs to another machine (A04)', { heldRows: () => [claimedRow(3, { machine_code: 'A04' })] }],
+    ['RPC answers with something that is not an array', { heldRows: () => ({ message: 'nope' }) }],
+    ['RPC not deployed (404 PGRST202)', { heldMode: 'missing' }],
+    ['RPC not deployed, pool row still readable as claimed', { heldMode: 'missing', heldPoolStatus: 'claimed' }],
+    ['RPC fails (500)', { heldMode: 'error' }],
   ]) {
-    reset({ flag: true, heldRows });
+    reset({ flag: true, ...extra });
     const { ctx, page } = await openApp();
-    ok(fx.heldQueries.length >= 1 && (await cardHtml(page)).includes(ORDER_NO) && await page.locator('[data-switch-step-open], [data-return-claim-open], #machtileReturnClaimSheet').count() === 0, `ambiguous lookup hides both buttons: ${label}`);
+    ok(await page.evaluate(() => document.getElementById('toast')?.textContent || '') === '', `failed lookup shows no message to the operator: ${label}`);
+    ok(fx.heldCalls.length >= 1 && (await cardHtml(page)).includes(ORDER_NO) && await page.locator('[data-switch-step-open], [data-return-claim-open], #machtileReturnClaimSheet').count() === 0, `ambiguous lookup hides both buttons: ${label}`);
     ok(await page.evaluate(async () => { await machtileReturnClaimOpen('A05', null, true); return document.getElementById('machtileReturnClaimSheet') === null; }) && fx.submits.length === 0 && fx.claims.length === 0, `ambiguous lookup: nothing can be opened or sent: ${label}`);
     await ctx.close();
   }
@@ -378,6 +390,28 @@ try {
     ok(await sheet(page).locator('[data-return-claim-confirm]').count() === 0 && fx.polls.length === 0 && fx.claims.length === 0, 'return refused at submit: no retry button, no polling, no claim');
     await sheet(page).locator('[data-return-claim-close]').click();
     ok(await page.locator('#workOrderGrid [data-switch-step-open="A05"]').count() === 1 && await page.evaluate(() => machtileReturnClaimLocks('A05')) === false, 'return refused at submit: the card is back to both buttons, not locked');
+    await ctx.close();
+  }
+  // RPC 會列出、但伺服器不給退的另外兩種列（別人接的／工廠還沒確認）：一樣停下來、一句白話說為什麼跟怎麼辦、不重試、不接單
+  for (const [code, sentence] of [['NOT_CLAIM_OWNER', '這張單不是你接的，你不能退回。請找接單的人或生管。'], ['CLAIM_NOT_APPLIED', '接單還沒被工廠確認，現在不能退回。請等一兩分鐘再試。']]) {
+    reset({ flag: true, submitMode: code, ...(code === 'CLAIM_NOT_APPLIED' ? { heldPoolStatus: 'claimed' } : {}) });
+    const { ctx, page } = await openApp();
+    await startSwitch(page, 2);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="return_rejected"]'));
+    const text = await sheet(page).innerText();
+    ok(text.includes('沒有換道次，這台還是原本的第 3 道。') && text.includes(sentence) && !text.includes(code), `${code}: 「換道次」 stops with the plain sentence, raw code not shown`);
+    await page.waitForTimeout(2500);
+    ok(await sheet(page).locator('[data-return-claim-confirm]').count() === 0 && fx.submits.length === 1 && fx.polls.length === 0 && fx.claims.length === 0, `${code}: sent once, no retry button, no polling, no automatic retry, no claim`);
+    await sheet(page).locator('[data-return-claim-close]').click();
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05')) === false, `${code}: the card is not left locked`);
+    await ctx.close();
+  }
+  // ---- 正式環境的實況：機台上那一道的池列是 gone（App 讀不到），帳本那一筆還在 → 兩顆按鈕都出現
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    ok(fx.heldPoolStatus === 'gone' && await page.evaluate(order => machtileMachineCardOrders().find(o => o.id === order && o.machine === 'A05')?.dispatchPoolStatus, ORDER_NO) === '', 'pool row gone: the app cannot see the pool row of the held step');
+    ok((await cardHtml(page)).split(RETURN_BUTTON + SWITCH_BUTTON).length === 2, 'pool row gone but ledger claim present: both buttons show');
     await ctx.close();
   }
 
@@ -627,6 +661,7 @@ try {
   }
 
   ok(writes.every(p => ['/rest/v1/rpc/machtile_submit_return_claim_command', '/rest/v1/rpc/dispatch_pool_claim'].includes(p)), 'the only writes in every scenario are the two existing RPCs: ' + [...new Set(writes)].join(','));
+  ok(poolClaimedSelects.length === 0, 'the old dispatch_pool_items claimed-row lookup is never requested in any scenario: ' + poolClaimedSelects.join(','));
   ok(blocked.length === 0, 'no real backend, no unexpected select, no non-GET local request: ' + blocked.join(','));
   ok(errors.length === 0, 'no JS errors: ' + errors.join(' | '));
   console.log(`${checks}/${checks} switch-step browser checks passed`);

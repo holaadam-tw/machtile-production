@@ -284,8 +284,9 @@ function backendOf(state) {
   Object.assign(state, { returns: [], claims: [], poolReads: 0, row: null, ...state });
   return async (url, init) => {
     if (url.startsWith("work_order_processes?")) return freshRow();
-    if (url.startsWith(returnCore.HELD_POOL_PATH_PREFIX)) {
-      // 卡片明細載入時查「機台上這一道是池裡哪一列」（returnClaimCore.heldPoolPath）
+    if (url === `rpc/${returnCore.HELD_CLAIMS_RPC}`) {
+      // 卡片明細載入時問「機台上這一道是帳本裡哪一筆接單」（唯讀 RPC machtile_held_pool_claims，不帶參數）
+      assert.deepEqual([init.method, init.body], ["POST", "{}"]);
       state.heldReads = (state.heldReads || 0) + 1;
       return state.held ? state.held() : [];
     }
@@ -712,6 +713,31 @@ test("return rejected (at submit or by the factory): nothing changed, the existi
   }
 });
 
+test("claims the held-claims RPC lists but the server will not return (not mine / not yet acknowledged / already started): 「換道次」 stops with one plain sentence, no claim, no retry", async () => {
+  const d = dictionaries();
+  for (const [code, sentence] of [["NOT_CLAIM_OWNER", "這張單不是你接的，你不能退回。請找接單的人或生管。"],
+    ["CLAIM_NOT_APPLIED", "接單還沒被工廠確認，現在不能退回。請等一兩分鐘再試。"],
+    ["CLAIM_ALREADY_STARTED", "這張單已經開工或已有報工，不能退回。要換單請找生管。"]]) {
+    assert.equal(d.zh[returnCore.REJECT_MESSAGE_KEY[code]], sentence, code);
+    for (const viaPoll of [false, true]) {
+      const label = `${code} ${viaPoll ? "from Factory (poll)" : "at submit"}`;
+      const state = viaPoll ? {} : { returnError: `400 {"code":"P0001","message":"${code}","details":null,"hint":null}` };
+      const h = harness({ returnFlag: true, flag: true, backend: backendOf(state) });
+      await startSwitch(h, 1);
+      if (viaPoll) { state.row = commandRow({ status: "rejected", reject_code: code, reject_message: "raw factory text" }); await h.runPoll(); }
+      await settle();
+      assert.ok(h.sheetHtml().includes('data-switch-step-result="return_rejected"'), label);
+      assert.ok(h.sheetHtml().includes("沒有換道次，這台還是原本的第 3 道。") && h.sheetHtml().includes(sentence), `${label}: nothing changed + why / what to do`);
+      assert.doesNotMatch(`${h.sheetHtml()}\n${h.calls.toasts.join("\n")}`, new RegExp(`${code}|raw factory text|MISSING:`), `${label}: no raw code`);
+      assert.doesNotMatch(h.sheetHtml(), /data-return-claim-confirm|data-switch-step-confirm/, `${label}: nothing to press again in the sheet`);
+      assert.deepEqual([state.returns.length, state.claims.length], [1, 0], `${label}: one return submit, no claim`);
+      assert.equal(h.pollTimers(), 0, `${label}: no further poll, no automatic retry`);
+      assert.equal(h.api.locks("A05"), false, label);
+      assert.deepEqual(JSON.parse(JSON.stringify(h.api.machtileSwitchStep)), { active: {}, claimPass: "" }, label);
+    }
+  }
+});
+
 test("return uncertain (network cut / timeout on submit): the switch stops there — a later applied result does NOT claim; resend is the plain same-uuid return", async () => {
   const state = { returnError: "Failed to fetch" };
   const h = harness({ returnFlag: true, flag: true, uuids: [UUID, UUID2], backend: backendOf(state) });
@@ -1132,13 +1158,14 @@ test("click delegation: the card button opens the switch sheet; choices are pick
 });
 
 // ---------------------------------------------------------------- 池列鍵從待做池自己查（不靠 work_orders.external_ref）
-const claimedRow = (step, extra) => Object.assign({ source_key: keyOf(step), work_order_no: "TEST-WO-1", process_order: step, status: "claimed" }, extra);
+// machtile_held_pool_claims() 回的列（接單帳本；沒有 status 欄——Factory 確認後池列是 gone，帳本列照樣在）
+const claimedRow = (step, extra) => Object.assign({ machine_code: "A05", work_order_no: "TEST-WO-1", process_order: step, source_key: keyOf(step), claimed_at: "2026-11-13T01:00:00+00:00" }, extra);
 
 test("after a switch (3 → 1) the new step's card shows both buttons again, and the next return/switch carries the NEW step's pool row", async () => {
   // 換完之後雲端的樣子：work_orders.external_ref 還是第 3 道（第一次接的那一道，on conflict 不更新）；機台上掛的是第 1 道；
   // 池裡第 1 道 claimed、第 3 道退回後 waiting、第 2 道一直 waiting。
   const after = heldOrder({ stationStep: 1, process: "CNC車床加工", processId: "00000000-0000-4000-8000-000000000301", heldPoolKey: undefined,
-    dispatchPoolSourceKey: keyOf(3), dispatchPoolStatus: "waiting" });
+    machine: "A05", dispatchPoolSourceKey: keyOf(3), dispatchPoolStatus: "waiting" });
   const state = { held: () => [claimedRow(1)], pool: () => [poolRow(2), poolRow(3, { source_status: "returned" }), OTHER_ORDER_ROW] };
   const backend = backendOf(state);
   const h = harness({ returnFlag: true, flag: true, order: after, assigned: [after], pool: [poolRow(2), poolRow(3, { source_status: "returned" }), OTHER_ORDER_ROW],
@@ -1164,7 +1191,7 @@ test("after a switch (3 → 1) the new step's card shows both buttons again, and
 
 test("held step ≠ first-claimed step, ambiguous or missing pool row: 「換道次」 follows the same fail-closed lookup as 「接錯了，退回」", async () => {
   const run = async (held) => {
-    const order = heldOrder({ heldPoolKey: undefined, dispatchPoolSourceKey: keyOf(1), dispatchPoolStatus: "waiting" });   // external_ref＝第 1 道；機台上是第 3 道
+    const order = heldOrder({ heldPoolKey: undefined, machine: "A05", dispatchPoolSourceKey: keyOf(1), dispatchPoolStatus: "waiting" });   // external_ref＝第 1 道；機台上是第 3 道
     const state = { held };
     const h = harness({ returnFlag: true, flag: true, order, assigned: [order], backend: backendOf(state) });
     await h.api.loadHeldKeys(7);
@@ -1178,7 +1205,10 @@ test("held step ≠ first-claimed step, ambiguous or missing pool row: 「換道
     ["no claimed row", () => []],
     ["two claimed rows for the held step", () => [claimedRow(3), claimedRow(3, { source_key: "01|TEST-WO-1|S3-DUP" })]],
     ["only another step is claimed", () => [claimedRow(1)]],
+    ["only another machine holds this order/step", () => [claimedRow(3, { machine_code: "A04" })]],
     ["read failed", () => { throw new TypeError("Failed to fetch"); }],
+    ["RPC not deployed (404 PGRST202)", () => { throw new Error('404 {"code":"PGRST202","message":"Could not find the function public.machtile_held_pool_claims without parameters in the schema cache"}'); }],
+    ["not an array", () => ({ message: "nope" })],
   ]) {
     const bad = await run(held);
     assert.equal(bad.order.heldPoolKey, "", label);
@@ -1187,6 +1217,8 @@ test("held step ≠ first-claimed step, ambiguous or missing pool row: 「換道
     await bad.h.api.open("A05", null, true);
     assert.equal(bad.h.sheetHtml(), "", `${label}: the sheet does not open`);
     assert.deepEqual([bad.state.returns.length, bad.state.claims.length], [0, 0]);
+    assert.equal(bad.state.heldReads, 1, `${label}: asked once, not retried`);
+    assert.deepEqual(bad.h.calls.toasts, [], `${label}: no message to the operator`);
   }
 });
 
@@ -1260,7 +1292,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     current = current.replace(now, () => before);
   }
   current = cut(current, "// 卡片明細載入時叫（旗標開才會進來）", "function machtileReturnClaimGate(machine) {");
-  assert.doesNotMatch(current, /heldPoolKey|HeldPoolKeys|heldPoolPath/, "no other held-key reference outside the switch-step section");
+  assert.doesNotMatch(current, /heldPoolKey|HeldPoolKeys|heldPoolPath|HELD_CLAIMS_RPC|machtile_held_pool_claims/, "no other held-key reference outside the switch-step section");
   assert.doesNotMatch(current, /machtileSwitchStep|enableSwitchStep|switch_step|switchStep/, "no other switch-step reference in app.js");
   assert.equal(current, baseApp, "with the section removed and the hooks reverted, app.js is byte-identical to the return-claim build");
   assert.doesNotMatch(appSource, /void machtileClaimDispatchPool\([^)]*\)[^;]*;[^\n]*\.ok/, "sanity");
@@ -1270,14 +1302,14 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   const read = (file) => norm(fs.readFileSync(path.join(__dirname, file), "utf8"));
   // returnClaimCore.js：只多了池列鍵那幾樣（同一個修正），其餘逐字相同
   let returnCoreNow = read("returnClaimCore.js");
-  returnCoreNow = cut(returnCoreNow, "  // 機台上這一道的池列鍵（source_key）＝從待做池自己查", "  const ROLES = Object.freeze(");
+  returnCoreNow = cut(returnCoreNow, "  // 機台上這一道的池列鍵（source_key）＝問雲端的唯讀 RPC machtile_held_pool_claims()", "  const ROLES = Object.freeze(");
   returnCoreNow = cut(returnCoreNow, "  // ---------------------------------------------------------------- 機台上這一道的池列鍵\n", "  // ---------------------------------------------------------------- 卡片要不要出現「接錯了，退回」");
   for (const [now, before] of [
-    ["  // 「接了、還沒開工」＝這一道在待做池裡剛好有一列 claimed（order.heldPoolKey，這次載入用 heldPoolKey 查到的）、\n",
+    ["  // 「接了、還沒開工」＝這台這一道在接單帳本裡剛好有一筆還沒退回的接單（order.heldPoolKey，這次載入用 heldPoolKey 查到的）、\n",
       "  // 「接了、還沒開工」＝這張單是從待做池接的（工單來源 dispatch_pool＋池列狀態 claimed，這次載入有核對到）、\n"],
     ["    if (cardDetailsReady !== true) return no(\"pool_status_unverified\");\n    const poolItemId = text(order.heldPoolKey);\n    if (poolItemId.length < 5 || poolItemId.length > 120) return no(\"pool_not_claimed\");\n",
       "    const poolItemId = text(order.dispatchPoolSourceKey);\n    if (poolItemId.length < 5 || poolItemId.length > 120) return no(\"not_from_pool\");\n    if (cardDetailsReady !== true) return no(\"pool_status_unverified\");\n    if (text(order.dispatchPoolStatus) !== \"claimed\") return no(\"pool_not_claimed\");\n"],
-    ["    HELD_POOL_PATH_PREFIX, HELD_POOL_ROW_LIMIT, heldPoolPath, heldPoolKey,\n", ""],
+    ["    HELD_CLAIMS_RPC, HELD_POOL_ROW_LIMIT, heldPoolKey,\n", ""],
   ]) {
     assert.equal(returnCoreNow.split(now).length, 2, `returnClaimCore.js change must appear exactly once: ${now.slice(0, 60)}`);
     returnCoreNow = returnCoreNow.replace(now, () => before);
@@ -1303,7 +1335,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   }
   // 沒有新的 station_commands select，也沒有新的資料表查詢
   assert.doesNotMatch(section, /\?select=/, "the switch-step section adds no select");
-  // app.js 也沒有多任何寫死的 select：新的那一個查詢路徑由 returnClaimCore.heldPoolPath 組（stationCommandPollColumns.test.js 逐欄核對）
+  // app.js 也沒有多任何寫死的 select：機台上這一道的池列鍵改問 RPC（returnClaimCore.HELD_CLAIMS_RPC，沒有 select；stationCommandPollColumns.test.js 核對回傳欄位）
   assert.equal([...norm(appSource).matchAll(/\?select=/g)].length, [...baseApp.matchAll(/\?select=/g)].length, "app.js gains no literal select");
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, "switchStepCore.js"), "utf8").replace(/^\s*\/\/.*$/gm, ""), /\?select=|fetch\(|localStorage|sessionStorage|document\.|window\./, "the core does no I/O");
   assert.doesNotMatch(section.replace(/^\s*\/\/.*$/gm, ""), /localStorage|sessionStorage|indexedDB/, "the switch-step section persists nothing (comments aside)");
