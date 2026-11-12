@@ -16500,24 +16500,32 @@ function machtileReturnClaimSession() {
   return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
 }
 
-// 卡片明細載入時叫（旗標開才會進來）：機台上每一道在待做池裡是哪一列。不看 work_orders.external_ref
-// （它停在這張工單第一次被接的那一道）；改查 dispatch_pool_items 裡「同工單、同道次、狀態 claimed」的列，剛好一列才把它的
-// source_key 記在這次載入的卡片物件上（order.heldPoolKey）。讀不到、沒有、不只一列＝空字串＝兩顆按鈕都不出。
+// 卡片明細載入時叫（旗標開才會進來）：機台上每一道是接單帳本裡哪一筆接單。問雲端唯讀 RPC machtile_held_pool_claims()
+// （一次，不帶參數；它回「還沒退回、工序還是 pending、還掛在那台」的接單）。不查 dispatch_pool_items（Factory 確認接單後
+// 池列變 gone，App 讀不到），也不看 work_orders.external_ref（它停在這張工單第一次被接的那一道）。
+// 同機台、同工單、同道次剛好一列才把它的 source_key 記在這次載入的卡片物件上（order.heldPoolKey）。
+// RPC 還沒上（404）、讀不到、等太久（沿用指令送出的逾時）、回來的不是陣列、沒有、不只一列＝空字串＝兩顆按鈕都不出，不跳訊息、不重試。
 // 這不是畫卡片的函式；除了 order.heldPoolKey 什麼都不寫。
 async function machtileReturnClaimLoadHeldPoolKeys(generation) {
   if (!machtileReturnClaimEnabled()) return;
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
-  const path = machtileReturnClaimCore.heldPoolPath(orders.filter((order) => order.processStatus === "pending").map((order) => order.id));
   let rows = null;
-  if (path) {
+  if (orders.some((order) => order.processStatus === "pending")) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
     try {
-      rows = await supabaseFetch(path);
+      rows = await supabaseFetch(`rpc/${machtileReturnClaimCore.HELD_CLAIMS_RPC}`, { method: "POST", body: "{}", signal: controller ? controller.signal : undefined });
     } catch (error) {
-      console.warn("return claim: held pool key lookup failed; hiding the buttons", error);
+      console.warn("return claim: held claim lookup unavailable; hiding the buttons", error);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   if (generation !== machtileDeferredLoadGeneration) return;
-  orders.forEach((order) => { order.heldPoolKey = machtileReturnClaimCore.heldPoolKey({ rows, orderNo: order.id, step: order.stationStep }); });
+  orders.forEach((order) => {
+    order.heldPoolKey = order.processStatus === "pending"
+      ? machtileReturnClaimCore.heldPoolKey({ rows, machineCode: order.machine, orderNo: order.id, step: order.stationStep }) : "";
+  });
 }
 
 function machtileReturnClaimGate(machine) {

@@ -18,11 +18,13 @@
   // 整串寫死（不要拆成變數組合）：stationCommandPollColumns.test.js 會掃這個檔的 select 逐欄核對正式庫欄位。
   const POLL_PATH_PREFIX = "station_commands?select=command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,legacy_snapshot&command_uuid=eq.";
   const POLL_SELECT = POLL_PATH_PREFIX.slice(POLL_PATH_PREFIX.indexOf("select=") + 7, POLL_PATH_PREFIX.indexOf("&"));
-  // 機台上這一道的池列鍵（source_key）＝從待做池自己查（dispatch_pool_items：同工單、同道次、狀態 claimed），不看 work_orders.external_ref
-  // （雲端 dispatch_pool_claim 的 on conflict 不更新 external_ref，它永遠停在這張工單第一次被接的那一道）。
-  // 整串寫死：stationCommandPollColumns.test.js 會掃這個 select 逐欄核對。
-  const HELD_POOL_PATH_PREFIX = "dispatch_pool_items?select=source_key,work_order_no,process_order,status&status=eq.claimed&limit=1000&work_order_no=in.";
-  const HELD_POOL_ROW_LIMIT = 1000;
+  // 機台上這一道的池列鍵（source_key）＝問雲端的唯讀 RPC machtile_held_pool_claims()（接單帳本裡還沒退回、工序還是 pending、
+  // 還掛在那台的接單；只回呼叫者租戶＋課別看得到的機台）。回來的列：machine_code, work_order_no, process_order, source_key, claimed_at。
+  // 不查 dispatch_pool_items（Factory 確認接單後池列變 gone，RLS 只給 waiting／claimed → 永遠查不到），
+  // 也不看 work_orders.external_ref（它永遠停在這張工單第一次被接的那一道）。RPC 也會列出伺服器不給退的列（別人接的
+  // NOT_CLAIM_OWNER、工廠還沒確認 CLAIM_NOT_APPLIED、已有數量／報工 CLAIM_ALREADY_STARTED）：按下去由伺服器擋，各有一句白話。
+  const HELD_CLAIMS_RPC = "machtile_held_pool_claims";
+  const HELD_POOL_ROW_LIMIT = 1000;   // PostgREST 一次最多回這麼多列；頂到＝可能沒讀完＝不猜
   const ROLES = Object.freeze(["operator", "admin", "planner"]);
   const REASON_ROLES = Object.freeze(["admin", "planner"]);
   const REASON_MAX = 500;
@@ -47,27 +49,22 @@
   }
 
   // ---------------------------------------------------------------- 機台上這一道的池列鍵
-  // 查詢路徑：這幾張工單在池裡 claimed 的列。沒有工單號＝空字串（不用查）。
-  function heldPoolPath(orderNos) {
-    const list = [...new Set((Array.isArray(orderNos) ? orderNos : []).map(text).filter((no) => no && no.length <= 100))];
-    if (!list.length) return "";
-    const quoted = list.map((no) => `"${no.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",");
-    return `${HELD_POOL_PATH_PREFIX}${encodeURIComponent(`(${quoted})`)}`;
-  }
-  // 從查回來的列裡找「這張工單、這一道、claimed」的那一列。剛好一列＝它的 source_key；0 列、超過 1 列、鍵長度不對、
-  // 回來的不是陣列、或筆數頂到上限（可能沒讀完）＝空字串（不猜；按鈕不出）。
-  function heldPoolKey({ rows, orderNo, step } = {}) {
+  // 從 RPC 回來的列裡找「這台機台、這張工單、這一道」的那一列。剛好一列＝它的 source_key；0 列、超過 1 列、鍵長度不對、
+  // 回來的不是陣列、或筆數頂到上限（可能沒讀完）＝空字串（不猜；按鈕不出）。別台機台接的同工單同道次不算這張卡片的。
+  function heldPoolKey({ rows, machineCode, orderNo, step } = {}) {
+    const code = normCode(machineCode);
     const order = text(orderNo);
     const index = positiveInt(step);
-    if (!Array.isArray(rows) || rows.length >= HELD_POOL_ROW_LIMIT || !order || index === null) return "";
-    const hits = rows.filter((row) => row && text(row.status) === "claimed" && text(row.work_order_no) === order && positiveInt(row.process_order) === index);
+    if (!Array.isArray(rows) || rows.length >= HELD_POOL_ROW_LIMIT || !code || !order || index === null) return "";
+    const hits = rows.filter((row) => row && typeof row === "object" && normCode(row.machine_code) === code
+      && text(row.work_order_no) === order && positiveInt(row.process_order) === index);
     if (hits.length !== 1) return "";
     const key = text(hits[0].source_key);
     return key.length >= 5 && key.length <= 120 ? key : "";
   }
 
   // ---------------------------------------------------------------- 卡片要不要出現「接錯了，退回」
-  // 「接了、還沒開工」＝這一道在待做池裡剛好有一列 claimed（order.heldPoolKey，這次載入用 heldPoolKey 查到的）、
+  // 「接了、還沒開工」＝這台這一道在接單帳本裡剛好有一筆還沒退回的接單（order.heldPoolKey，這次載入用 heldPoolKey 查到的）、
   // 工序 pending、已報 0、沒有開工時間、這台平板也沒看到今天的開工／報工、這台沒有別的指令在等。任何一項不確定＝不顯示。
   // 接單人是誰 App 讀不到（claims 在私有 schema）→ 作業員一律顯示，不是自己接的由伺服器回 NOT_CLAIM_OWNER。
   function visibility({ enabled, role, isBridge, cardDetailsReady, isUnassignedBucket, machineCode, order, actualStartAt,
@@ -391,7 +388,7 @@
   return Object.freeze({
     COMMAND_TYPE, SUBMIT_RPC, POLL_PATH_PREFIX, POLL_SELECT, ROLES, REASON_ROLES, REASON_MAX, PENDING_KEEP_MS, ARG_KEYS,
     REJECT_MESSAGE_KEY, GENERIC_MESSAGE_KEY, RETRY_LATER_CODES, UNCERTAIN_CODES,
-    HELD_POOL_PATH_PREFIX, HELD_POOL_ROW_LIMIT, heldPoolPath, heldPoolKey,
+    HELD_CLAIMS_RPC, HELD_POOL_ROW_LIMIT, heldPoolKey,
     isUuid, roleAllowed, needsReason, visibility, freshCheck, reasonCheck, buildArgs, rejectInfo, errorCodeOf, serverMessage,
     isMissingResourceError, isNetworkError, submitErrorInfo, legacySnapshot, resultView, rowIsThis, pollPath,
     pendingRecord, restorePending, restoreForSession, mergeForSave, sameSession, recordMatchesOrder, cardRecordMode, locks, lastResultVisible,
