@@ -16297,7 +16297,7 @@ function machtileStationCmdPoll(code) {
     const current = machtileStationCmd.pending[code];
     if (!current || current.commandUuid !== record.commandUuid) return;
     try {
-      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,preview,legacy_snapshot,applied_at&command_uuid=eq.${current.commandUuid}`);
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,status,requested_at,claimed_at,reject_code,reject_message,legacy_snapshot,applied_at&command_uuid=eq.${current.commandUuid}`);
       const row = Array.isArray(rows) ? rows[0] : null;
       if (machtileStationCmd.pending[code] !== current) return;
       if (row) {
