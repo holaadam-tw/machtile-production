@@ -105,9 +105,10 @@
       return_uncertain: "stopped_uncertain",    // 送出時斷線／逾時，不知道有沒有送到：不接
     }),
     verifying: Object.freeze({ verify_ok: "claiming", verify_failed: "returned_not_claimed" }),
-    claiming: Object.freeze({ claim_ok: "done", claim_failed: "returned_not_claimed", claim_uncertain: "claim_uncertain" }),
+    claiming: Object.freeze({ claim_ok: "done", claim_failed: "returned_not_claimed", claim_uncertain: "claim_uncertain",
+      claim_ok_unrefreshed: "claimed_refresh_failed" }),   // 接單 RPC 成功，但之後重讀畫面失敗／逾時：接到了，只是畫面沒更新
   });
-  const TERMINAL_STATES = Object.freeze(["closed", "return_rejected", "return_unsure", "stopped_uncertain", "returned_not_claimed", "claim_uncertain", "done"]);
+  const TERMINAL_STATES = Object.freeze(["closed", "return_rejected", "return_unsure", "stopped_uncertain", "returned_not_claimed", "claim_uncertain", "claimed_refresh_failed", "done"]);
   // 第二步進行中（退回的等待紀錄已經收掉）：這兩個狀態自己鎖住機台
   const HOLDING_STATES = Object.freeze(["verifying", "claiming"]);
 
@@ -150,7 +151,8 @@
   }
 
   // 既有接單函式（machtileClaimDispatchPool）的結果 → 狀態機事件。
-  //   { ok: true }＝接到了；{ ok: false, error }＝沒接到或不確定；其他（undefined）＝函式沒有送出（例：另一筆接單正在處理）。
+  //   { ok: true }＝接到了；{ ok: false, claimed: true, error }＝接單 RPC 成功、之後重讀畫面失敗（接到了，畫面沒更新）；
+  //   { ok: false, error }＝沒接到或不確定；其他（undefined）＝函式沒有送出（例：另一筆接單正在處理）。
   const CLAIM_REASON_KEY = Object.freeze({
     POOL_ITEM_NOT_WAITING: "switch_step_reason_taken",
     UNACKNOWLEDGED_CLAIM_EXISTS: "switch_step_reason_taken",
@@ -174,10 +176,12 @@
   function claimEvent(result) {
     if (!result || typeof result !== "object") return { event: "claim_failed", reasonKey: "switch_step_reason_busy" };
     if (result.ok === true) return { event: "claim_ok", reasonKey: "" };
+    // 只認嚴格的 true：RPC 已經成功回來，後面出什麼錯都不會改變「接到了」這件事
+    if (result.claimed === true) return { event: "claim_ok_unrefreshed", reasonKey: "" };
     const message = text((result.error && result.error.message) || result.error);
     const code = claimErrorCode(result.error);
     if (code && Object.prototype.hasOwnProperty.call(CLAIM_REASON_KEY, code)) return { event: "claim_failed", reasonKey: CLAIM_REASON_KEY[code] };
-    // 伺服器明確回 4xx＝確定沒接；斷線、逾時、5xx、或接到之後重讀畫面時出錯＝不知道有沒有接到
+    // 伺服器明確回 4xx＝確定沒接；斷線、逾時、5xx＝不知道有沒有接到
     if (/^4\d\d\b/.test(message)) return { event: "claim_failed", reasonKey: message.startsWith("401") ? "switch_step_reason_login" : "switch_step_reason_generic" };
     return { event: "claim_uncertain", reasonKey: "" };
   }
@@ -187,6 +191,7 @@
     const base = { switchStep: true, state, phase: "applied", terminal: true, mode: text(mode), code: "", params: { from: positiveInt(from), to: positiveInt(to) } };
     if (state === "done") return { ...base, tone: "ok", messageKey: "switch_step_done", reasonKey: "" };
     if (state === "claim_uncertain") return { ...base, tone: "warn", messageKey: "switch_step_claim_uncertain", reasonKey: "" };
+    if (state === "claimed_refresh_failed") return { ...base, tone: "warn", messageKey: "switch_step_claimed_refresh_failed", reasonKey: "" };
     // stale_assignment_reconciled＝工廠沒碰機台（機台掛的是別道）：不可以說「這台現在沒有工單」
     return { ...base, state: "returned_not_claimed", tone: "warn",
       messageKey: text(mode) === "stale_assignment_reconciled" ? "switch_step_claim_failed_reconciled" : "switch_step_claim_failed",

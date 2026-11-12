@@ -31,7 +31,14 @@ let fx;
 const reset = (extra = {}) => { fx = { returnFlag: true, flag: undefined, role: 'operator', held: 3, procStatus: 'pending', waiting: [1, 2], eligible: null, submitMode: 'accept', claimMode: 'accept', submits: [], claims: [], polls: [], poolReads: 0, events: [], command: null, afterPolls: null,
   // firstClaimed＝work_orders.external_ref 指的那一道（這張工單第一次被接的；雲端不會更新它）；
   // heldRows＝待做池裡 claimed 的列（null＝機台上掛的那一道一列）；heldQueries＝App 查「機台上這一道是池裡哪一列」的紀錄
-  firstClaimed: 3, heldRows: null, heldQueries: [], ...extra }; };
+  firstClaimed: 3, heldRows: null, heldQueries: [],
+  // poolHang＝待做池清單的讀取不回應；claimMode 'hang'＝接單請求不回應；afterClaim＝接單成功之後第一次重讀畫面（v_work_order_cards）：'fail'＝500、'hang'＝不回應（都只一次）
+  poolHang: false, afterClaim: null, cardReadsAfterClaim: 0, ...extra }; };
+// 不回應的請求先留著，情境結束時放掉（不會真的連到任何地方）
+const hung = [];
+const hang = route => new Promise(resolve => { hung.push(() => { route.abort('failed').catch(() => {}); resolve(); }); });
+const releaseHung = () => { while (hung.length) hung.pop()(); };
+const tokenFor = (sub, role) => 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600, app_metadata: { tenant_id: tenant, role }, role: 'authenticated' })).toString('base64url') + '.test';
 const HELD_SELECT = 'source_key,work_order_no,process_order,status';
 const claimedRow = (step, extra = {}) => ({ source_key: keyOf(step), work_order_no: ORDER_NO, process_order: step, status: 'claimed', ...extra });
 const applyReturn = () => { const returned = fx.held || 3; fx.held = null; if (!fx.waiting.includes(returned)) fx.waiting.push(returned); fx.command = { ...fx.command, status: 'applied', claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(), legacy_snapshot: { return_claim: { mode: 'unassigned', pool_status: 'returned', station_cleared: true }, cloud_finalize: { claim_returned: true, process_detached: true, item_reopened: true } } }; };
@@ -85,6 +92,7 @@ async function openApp(language = 'zh-Hant') {
     if (p === '/rest/v1/rpc/dispatch_pool_claim' && req.method() === 'POST') {
       const raw = req.postData() || ''; const body = JSON.parse(raw || '{}');
       fx.claims.push({ url: req.url(), method: req.method(), raw, contentType: req.headers()['content-type'] || '' }); writes.push(p); fx.events.push('claim');
+      if (fx.claimMode === 'hang') return hang(route);
       if (fx.claimMode !== 'accept') return json(400, { code: 'P0001', message: fx.claimMode, details: null, hint: null });
       const step = [1, 2, 3].find(n => keyOf(n) === body.p_source_key);
       fx.held = step; fx.waiting = fx.waiting.filter(n => n !== step);
@@ -119,6 +127,7 @@ async function openApp(language = 'zh-Hant') {
       }
       if (select !== POOL_SELECT || u.searchParams.get('status') !== 'eq.waiting') { blocked.push('unexpected pool select: ' + u.search); return json(400, {}); }
       fx.poolReads += 1; fx.events.push('pool_read');
+      if (fx.poolHang) return hang(route);
       return json(200, [...fx.waiting.map(step => ({ ...poolRow(step), ...(fx.eligible ? { eligible_machine_codes: fx.eligible } : {}) })), otherOrderRow]);
     }
     if (p === '/rest/v1/work_orders') return json(200, liveProc ? [{ ...order, work_order_processes: [liveProc] }] : []);
@@ -126,6 +135,12 @@ async function openApp(language = 'zh-Hant') {
       if (!liveProc) return json(200, []);
       if ((u.searchParams.get('select') || '').includes('work_orders!inner')) return json(200, [null, `eq.${liveProc.id}`].includes(u.searchParams.get('id')) ? [{ ...liveProc, off_station_at: null, work_orders: order, machines: machineRows[1] }] : []);
       return json(200, [liveProc]);
+    }
+    if (p === '/rest/v1/v_work_order_cards' && fx.claims.length && fx.claimMode === 'accept') {
+      fx.cardReadsAfterClaim += 1;
+      const mode = fx.afterClaim; fx.afterClaim = null;
+      if (mode === 'fail') return json(500, { message: 'fixture: reload failed' });
+      if (mode === 'hang') return hang(route);
     }
     if (p === '/rest/v1/v_work_order_cards') return json(200, liveProc ? [{ id: order.id, tenant_id: tenant, work_order_no: order.work_order_no, part_name: order.part_name, quantity: order.quantity, due_date: order.due_date, work_order_status: order.status, current_process_id: liveProc.id, current_process_name: liveProc.process_name, current_process_status: fx.procStatus, machine_name: 'A05', qty_completed: 0, qty_defect: 0, current_process_off_station: false }] : []);
     return json(200, []);
@@ -433,6 +448,151 @@ try {
     ok(fx.submits.length === 2 && JSON.stringify(fx.submits[1]) === JSON.stringify(fx.submits[0]), 'network cut: resend is the same return (same uuid, identical body)');
     ok(fx.claims.length === 0, 'network cut: even after the return is applied later, no claim is sent');
     await ctx.close();
+  }
+
+  // ================================================================ 審查修正（opus L3 @ c0e7af04）
+  const CLAIMED_STALE = '已換成第 1 道（原本的第 3 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。';
+  const shortLimit = page => page.evaluate(() => { window.MachTileStationCommandCore.SUBMIT_TIMEOUT_MS = 1500; });
+  const cardOf = (page, text) => page.waitForFunction(text => { const card = [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(c => c.querySelector('h2')?.textContent.trim().startsWith('A05')); return card && card.innerHTML.includes(text); }, text, { timeout: 15000 });
+  const toastLog = page => page.evaluate(() => { window.__toasts = []; const el = document.getElementById('toast'); new MutationObserver(() => { const text = el.textContent; if (text && window.__toasts.at(-1) !== text) window.__toasts.push(text); }).observe(el, { childList: true, characterData: true, subtree: true }); });
+
+  // ---- MEDIUM-1：接單 RPC 成功、之後重讀畫面失敗 → 「接到了，但畫面沒更新」，不是「沒接到」，提示只有一句
+  reset({ flag: true, afterClaim: 'fail' });
+  {
+    const { ctx, page } = await openApp();
+    await toastLog(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result]:not([data-switch-step-result="returning"]):not([data-switch-step-result="claiming"])'), null, { timeout: 20000 });
+    const text = await sheet(page).innerText();
+    ok(await sheet(page).locator('[data-switch-step-result="claimed_refresh_failed"]').count() === 1 && text.includes(CLAIMED_STALE), 'claim ok + reload failed: the sheet says the step WAS switched but the screen could not refresh — ' + CLAIMED_STALE);
+    ok(!text.includes('沒有接成功') && !text.includes('不確定有沒有接到') && !text.includes('fixture: reload failed') && await sheet(page).locator('[data-return-claim-confirm], [data-switch-step-choice]').count() === 0, 'claim ok + reload failed: not worded as a failure or as uncertain, no raw error, no retry button');
+    ok(fx.claims.length === 1 && fx.claims[0].raw === normalClaim.raw && fx.claims[0].url === normalClaim.url && fx.claims[0].contentType === normalClaim.contentType && fx.cardReadsAfterClaim >= 1, 'claim ok + reload failed: one claim, byte-identical to a normal claim; the reload was attempted');
+    const toasts = await page.evaluate(() => window.__toasts);
+    ok(await toastText(page) === CLAIMED_STALE && toasts.filter(t => !t.includes('換道次') && !t.includes('已換成')).length === 0 && toasts.filter(t => t === CLAIMED_STALE).length === 1, 'claim ok + reload failed: a single toast for the outcome (no separate claim-failed / claim-success toast): ' + JSON.stringify(toasts));
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === false && machtileReturnClaimBlockMessage('A05') === '' && Object.keys(machtileSwitchStep.active).length === 0 && machtileDispatchPoolState.claimBusy === '' && machtileDispatchPoolState.claimMessage === ''), 'claim ok + reload failed: nothing left locked, and no "claim failed" message is left for the pool panel');
+    await cardOf(page, 'N1 粗車');
+    const after = await cardHtml(page);
+    ok(after.includes(ORDER_NO) && after.includes('N1 粗車') && !after.includes('N3 精車'), 'claim ok + reload failed: the background re-read then shows the real state — A05 holds step 1');
+    await page.waitForTimeout(2500);
+    ok(fx.claims.length === 1 && fx.submits.length === 1, 'claim ok + reload failed: never retried');
+    await ctx.close();
+  }
+
+  // ---- MEDIUM-1：換成功的提示也只有一句（既有接單函式在換道次裡不另外跳「接單成功」）；一般接單照舊跳自己的那一句
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await toastLog(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="done"]'), null, { timeout: 20000 });
+    const toasts = await page.evaluate(() => window.__toasts);
+    ok(toasts.at(-1) === '已換成第 1 道。原本的第 3 道已退回待做池。' && !toasts.includes('接單成功，工單已進入這台機台。'), 'switch done: one outcome toast, the plain claim-success toast is not shown on top: ' + JSON.stringify(toasts));
+    await ctx.close();
+  }
+  reset({ held: null, waiting: [1, 2, 3], flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await page.locator('[data-card-pool-open="A05"]').click();
+    await page.waitForSelector(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]:not([disabled])`);
+    await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]`).click();
+    await cardOf(page, ORDER_NO);
+    await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '');
+    ok(await toastText(page) === '接單成功，工單已進入這台機台。' && fx.claims.length === 1 && fx.claims[0].raw === normalClaim.raw, 'normal claim from the pool panel (flags on): its own success toast and request are unchanged: ' + await toastText(page));
+    await ctx.close();
+  }
+
+  // ---- LOW-2：登入的人換了／登出 → 記憶體裡的換道次丟掉，之後退回成功也不會接
+  for (const how of ['another user signs in', 'logout']) {
+    reset({ flag: true });
+    const { ctx, page } = await openApp();
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    ok(await page.evaluate(() => Object.keys(machtileSwitchStep.active).length === 1 && machtileSwitchStep.active.A05.userId === machtileAuthState.userId && machtileAuthState.userId !== ''), `${how}: a switch is in flight and remembers who pressed it`);
+    if (how === 'logout') await page.evaluate(() => machtileClearSession());
+    else await page.evaluate(([token, sub]) => machtileSetSession({ access_token: token, user: { id: sub, email: 'other@test.invalid' } }, 'other@test.invalid'), [tokenFor(id(903), 'operator'), id(903)]);
+    ok(await page.evaluate(() => Object.keys(machtileSwitchStep.active).length === 0 && machtileSwitchStep.claimPass === '' && document.getElementById('machtileReturnClaimSheet') === null && machtileSwitchStepActive('A05') === null), `${how}: the in-memory switch is gone and its sheet is closed`);
+    applyReturn();
+    await page.waitForTimeout(6000);
+    ok(fx.claims.length === 0 && fx.submits.length === 1, `${how}: the return is applied afterwards and NO claim goes out`);
+    ok(await page.evaluate(() => Object.keys(machtileSwitchStep.active).length === 0 && machtileSwitchStepHolds('A05') === false), `${how}: nothing holds the machine for a switch`);
+    await ctx.close();
+  }
+  // 同一個人重新拿到登入（換 token、同一個 user id）不會丟掉進行中的換道次
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-return-claim-status="pending"]'));
+    await page.evaluate(([token, sub]) => machtileSetSession({ access_token: token, user: { id: sub, email: 'user@test.invalid' } }, 'user@test.invalid'), [tokenFor(auth, 'operator'), auth]);
+    ok(await page.evaluate(() => Object.keys(machtileSwitchStep.active).length === 1 && document.getElementById('machtileReturnClaimSheet') !== null), 'same user gets a fresh session: the switch in flight is kept');
+    fx.afterPolls = { count: fx.polls.length + 1, apply: applyReturn };
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="done"]'), null, { timeout: 20000 });
+    ok(fx.claims.length === 1, 'same user gets a fresh session: the switch completes with one claim');
+    await ctx.close();
+  }
+
+  // ---- LOW-4：每一個等待都有期限 → 鎖一定會放開（不用重新整理頁面）；逾時絕不接單
+  // (a) 開確認卡時待做池讀不回來
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await shortLimit(page);
+    fx.poolHang = true;
+    await page.locator('[data-switch-step-open="A05"]').click();
+    await page.waitForSelector('#machtileReturnClaimSheet [data-switch-step-pool-failed]', { timeout: 10000 });
+    ok((await sheet(page).innerText()).includes('讀不到最新的待做池，現在不能換道次。請檢查網路後重新整理畫面。') && await sheet(page).locator('[data-switch-step-confirm]').isDisabled() && await sheet(page).locator('[data-switch-step-choice]').count() === 0, 'pool read hangs while opening: after the time limit the sheet says the pool cannot be read; nothing can be confirmed');
+    ok(fx.submits.length === 0 && fx.claims.length === 0, 'pool read hangs while opening: nothing is sent');
+    releaseHung(); await ctx.close();
+  }
+  // (b) 退回成功之後重讀待做池卡住
+  reset({ flag: true });
+  {
+    const { ctx, page } = await openApp();
+    await shortLimit(page);
+    fx.afterPolls = { count: 2, apply: () => { applyReturn(); fx.poolHang = true; } };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => machtileSwitchStepHolds('A05'), null, { timeout: 20000 });
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === true && machtileReturnClaimBlockMessage('A05') !== ''), 'pool re-read hangs after the return: the machine is held while waiting');
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="returned_not_claimed"]'), null, { timeout: 10000 });
+    const sentence = '原本那一道已經退回待做池，這台現在沒有工單；第 1 道沒有接成功（讀不到最新的待做池）。請到「選工單」重新接。';
+    ok((await sheet(page).innerText()).includes(sentence) && await toastText(page) === sentence, 'pool re-read hangs after the return: time limit → the existing "pool unread" outcome');
+    ok(fx.claims.length === 0, 'pool re-read hangs after the return: NO claim is sent on a timeout');
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === false && machtileReturnClaimBlockMessage('A05') === '' && Object.keys(machtileSwitchStep.active).length === 0), 'pool re-read hangs after the return: the lock is released without a page reload');
+    fx.poolHang = false; releaseHung();
+    await page.waitForTimeout(2500);
+    ok(fx.claims.length === 0, 'pool re-read hangs after the return: still no claim once the network is back');
+    await ctx.close();
+  }
+  // (c) 接單送出後沒有回應
+  reset({ flag: true, claimMode: 'hang' });
+  {
+    const { ctx, page } = await openApp();
+    await shortLimit(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="claim_uncertain"]'), null, { timeout: 25000 });
+    const sentence = '原本那一道已經退回待做池；第 1 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。';
+    ok((await sheet(page).innerText()).includes(sentence) && await toastText(page) === sentence, 'claim request hangs: time limit → the existing "uncertain" outcome');
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === false && machtileReturnClaimBlockMessage('A05') === '' && Object.keys(machtileSwitchStep.active).length === 0), 'claim request hangs: the lock is released without a page reload');
+    await page.waitForTimeout(2500);
+    ok(fx.claims.length === 1 && fx.submits.length === 1, 'claim request hangs: one claim in total — a timeout never resends');
+    releaseHung(); await ctx.close();
+  }
+  // (d) 接單成功、之後重讀畫面卡住
+  reset({ flag: true, afterClaim: 'hang' });
+  {
+    const { ctx, page } = await openApp();
+    await shortLimit(page);
+    fx.afterPolls = { count: 2, apply: applyReturn };
+    await startSwitch(page, 1);
+    await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-switch-step-result="claimed_refresh_failed"]'), null, { timeout: 25000 });
+    ok((await sheet(page).innerText()).includes(CLAIMED_STALE) && await toastText(page) === CLAIMED_STALE, 'reload hangs after a successful claim: time limit → "switched, but the screen could not refresh"');
+    ok(await page.evaluate(() => machtileReturnClaimLocks('A05') === false && machtileReturnClaimBlockMessage('A05') === '' && Object.keys(machtileSwitchStep.active).length === 0), 'reload hangs after a successful claim: the lock is released without a page reload');
+    await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '', null, { timeout: 10000 });
+    ok(fx.claims.length === 1, 'reload hangs after a successful claim: the claim function is not left busy; one claim in total');
+    releaseHung(); await ctx.close();
   }
 
   // ---- 管理員／生管：原因必填（跟退回一樣）
