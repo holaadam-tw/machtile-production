@@ -366,6 +366,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       return json(200, []);
     }
     if (p === "/rest/v1/rpc/batch_report_progress" && be.progressDelayMs) await new Promise((resolve) => setTimeout(resolve, be.progressDelayMs));
+    if (p === "/rest/v1/rpc/batch_report_progress") be.progressReads = (be.progressReads || 0) + 1;
     if (p === "/rest/v1/rpc/batch_report_progress") return be.progressReadFail ? json(503, { message: "e2e: progress unavailable" }) : json(200, be.progressRows);
     const readRpc = /^\/rest\/v1\/rpc\/(batch_report_progress|[a-z_]+_snapshot|[a-z_]+_list)$/.test(p);
     if (method !== "GET" && method !== "HEAD" && !readRpc) be.otherWrites.push(`${method} ${p}`);
@@ -2887,6 +2888,250 @@ console.log("\n== 390px: finish applied then pool sync -> refresh card and picke
   ok(appeared, "finish applied bypasses throttle and shows post-finish pool item");
   ok(be.poolReads >= be.poolVisibleAfterRead, "empty post-finish pool automatically retries until the synced item appears", `${be.poolReads}/${be.poolVisibleAfterRead}`);
   ok(realErrors(errors).length === 0, "post-finish refresh has no JS error", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// 2026-11-13 A03 現場三件事：開工被擋要看得到原因、完工關站 applied 要自己關掉完工畫面、報工 applied 卡片馬上更新
+console.log("\n== 390px：開工被擋 STATION_NOT_SET → 卡片顯示原因（重新整理後也在），再按開工就收起 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"],' });
+  be.mode = "hold";
+  be.reject = { code: "STATION_NOT_SET", message: "A04 目前沒有掛工單（等待工單），請找生管設定。" };
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+  be.mode = "rejected";
+  await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+  const sheetText = (await sheet(page).locator("[data-station-cmd-result]").innerText()).replace(/\s+/g, " ");
+  ok(sheetText.includes("沒有開工") && sheetText.includes("這台還沒掛上工單，請找生管在 Factory 設定後再按開工。") && sheetText.includes("A04 目前沒有掛工單（等待工單）"),
+    "確認卡：沒有開工＋新白話＋工廠說明", sheetText);
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  const notice = cardOf(page, "A04").locator('[data-station-cmd-start-reject="STATION_NOT_SET"]');
+  await notice.waitFor({ timeout: 5000 });
+  const noticeText = (await notice.innerText()).replace(/\s+/g, " ");
+  ok(noticeText.includes("這台還沒掛上工單，請找生管在 Factory 設定後再按開工。") && noticeText.includes("工廠說明：A04 目前沒有掛工單（等待工單），請找生管設定。"),
+    "卡片：開工被擋的原因（白話＋工廠說明）", noticeText);
+  ok(await notice.getAttribute("role") === "alert", "卡片提示是 role=alert");
+  ok(await cardOf(page, "A04").locator('[data-station-cmd="start"]').isEnabled(), "被擋後開工鈕可再按");
+  await cardOf(page, "A04").scrollIntoViewIfNeeded();
+  await cardOf(page, "A04").screenshot({ path: path.join(outDir, "a03-start-rejected-card-390.png") });
+  // 重新整理（作業員現場按了 3–4 次）
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid .machine-tile-card").length > 0, null, { timeout: 20000 });
+  // 背景載入（卡片進度／開工紀錄）完成的時間不固定：等到卡片畫出提示（最多 10 秒），不靠固定 500ms
+  await page.waitForFunction(() => { deriveMachines(); renderWorkOrders();
+    return Boolean(document.querySelector('#workOrderGrid [data-station-cmd-start-reject="STATION_NOT_SET"]')); }, null, { timeout: 10000, polling: 250 }).catch(() => {});
+  const afterReload = cardOf(page, "A04").locator('[data-station-cmd-start-reject="STATION_NOT_SET"]');
+  ok(await afterReload.count() === 1 && (await afterReload.innerText()).includes("請找生管在 Factory 設定後再按開工"), "重新整理後卡片仍顯示原因");
+  // 越南文
+  await page.evaluate(() => { window.MachTileI18n?.setLanguage?.("vi"); renderWorkOrders(); });
+  const viText = await cardOf(page, "A04").locator("[data-station-cmd-start-reject]").innerText().catch(() => "");
+  ok(viText.includes("Máy này chưa được gán phiếu"), "越南文草稿", viText);
+  await page.evaluate(() => { window.MachTileI18n?.setLanguage?.("zh-Hant"); renderWorkOrders(); });
+  // 再按開工 → 舊原因收起；這次 applied
+  be.mode = "hold";
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
+  await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+  await sheet(page).locator("[data-station-cmd-confirm]").click();
+  await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+  await sheet(page).locator("[data-station-cmd-close]").click();
+  ok(await cardOf(page, "A04").locator("[data-station-cmd-start-reject]").count() === 0, "再按開工（等待中）→ 舊原因收起");
+  be.mode = "applied";
+  await page.waitForFunction(() => document.querySelector('#workOrderGrid [data-station-cmd-status]')?.textContent.includes("已開工"), null, { timeout: 15000 });
+  ok(await cardOf(page, "A04").locator("[data-station-cmd-start-reject]").count() === 0, "applied 後沒有被擋提示");
+  ok(await page.evaluate(() => !JSON.parse(localStorage.getItem("machtile.startRejectNotice.v1") || "{}").A04), "applied 後清掉這台的紀錄");
+  // 其他代碼：通用句＋工廠說明
+  be.mode = "hold"; be.reject = { code: "OPERATOR_NOT_SET", message: "Station operator empty" };
+  await page.evaluate(() => { machtileStationCmd.lastResult = {}; });
+  await cardOf(page, "A04").locator('[data-station-cmd="start"]').click({ force: true }).catch(() => {});
+  if (await sheet(page).count()) {
+    await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor({ timeout: 10000 });
+    await sheet(page).locator("[data-station-cmd-confirm]").click();
+    await sheet(page).locator('[data-station-cmd-result="pending"]').waitFor({ timeout: 10000 });
+    be.mode = "rejected";
+    await sheet(page).locator('[data-station-cmd-result="rejected"]').waitFor({ timeout: 15000 });
+    await sheet(page).locator("[data-station-cmd-close]").click();
+    const generic = (await cardOf(page, "A04").locator('[data-station-cmd-start-reject="OPERATOR_NOT_SET"]').innerText()).replace(/\s+/g, " ");
+    ok(generic.includes("沒有開工：舊 MES 這台還沒設定好作業員，請找生管。") && generic.includes("工廠說明：Station operator empty"), "其他代碼：通用句＋工廠說明", generic);
+  } else {
+    // 已開工今天不再出開工鈕（daily_applied）：直接用核心組出卡片
+    await page.evaluate(() => {
+      const view = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "OPERATOR_NOT_SET", reject_message: "Station operator empty" }, "start", 0);
+      machtileStartRejectWrite("A04", MachTileStationCommandCore.startRejectRecord({ machineCode: "A04", orderNo: "XX01202502050012", step: 5, view, rejectMessage: "Station operator empty", at: Date.now() }));
+      state.localStationStartRows = []; state.dailyStationStartRows = [];
+      renderWorkOrders();
+    });
+    const generic = (await cardOf(page, "A04").locator('[data-station-cmd-start-reject="OPERATOR_NOT_SET"]').innerText()).replace(/\s+/g, " ");
+    ok(generic.includes("沒有開工：舊 MES 這台還沒設定好作業員，請找生管。") && generic.includes("工廠說明：Station operator empty"), "其他代碼：通用句＋工廠說明", generic);
+  }
+  ok(realErrors(errors).length === 0, "開工被擋情境沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：沒有下一道 → 自己關掉；有下一道 → 留著顯示接下一道；被擋 → 留著並顯示原因；重開過的畫面不關 ==");
+{
+  const be = makeBackend();
+  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
+  // 跟正式 config.js 一樣：A 車床標準完工流程開著
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], enableStandardFinishFlow: true, standardFinishFlowMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],' });
+  const openFinish = async () => {
+    await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+    await page.locator("#finishSheet.is-open").waitFor({ timeout: 10000 });
+    // 正式流程是報工 applied 之後才送關站，那時畫面早已載入完成（machineCode 已設好）
+    await page.waitForFunction(() => machtileSingleStationReportState.machineCode === "A04", null, { timeout: 10000 });
+    await page.evaluate(() => {
+      machtileSingleStationReportState.loading = false;
+      machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    });
+  };
+  // 完工報工已 applied → 走正式關站送出（machtileFinishCloseAfterAppliedReport → machtile_submit_station_command），回傳關站 command_uuid
+  const sendCloseFromSheet = async (reportUuid) => {
+    be.mode = "hold";
+    const before = be.submits.length;
+    await page.evaluate(async ({ reportUuid }) => {
+      const flow = machtileStationReportState(machtileBatchRow("A04"));
+      flow.singleReport = { ...(flow.singleReport || {}), reportType: "finish" };
+      flow.result = { command_type: "report", command_uuid: reportUuid, status: "applied", applied_at: new Date().toISOString() };
+      flow.close = null;
+      await machtileFinishCloseAfterAppliedReport("A04", { p_expected_order_no: "XX01202502050012", p_expected_part_no: "HCG-06-01", p_expected_index_sn: 5,
+        p_manufacture_ii_id: "C011E0ZE2YZJ", p_expected_simulation_id: "SIM-E2E-A04" }, reportUuid);
+    }, { reportUuid });
+    ok(be.submits.length === before + 1 && be.submits.at(-1).p_command_type === "close", `完工後送出一筆關站（${reportUuid.slice(0, 4)}）`);
+    const uuid = be.submits.at(-1).p_command_uuid;
+    await page.waitForFunction((u) => machtileStationCmd.pending.A04?.commandUuid === u, uuid, { timeout: 10000 });
+    return uuid;
+  };
+  const pollTo = async (mode, uuid, snapshot) => {
+    if (snapshot) be.commands.get(uuid).legacy_snapshot = snapshot;
+    be.mode = mode;
+    await page.evaluate(() => machtileStationCmdPoll("A04"));
+    await page.waitForFunction(() => !machtileStationCmd.pending.A04, null, { timeout: 15000 });
+  };
+
+  // (1) applied、沒有下一道 → 自己關掉＋橫幅
+  await openFinish();
+  const plainUuid = await sendCloseFromSheet("a1111111-1111-4111-8111-111111111111");
+  const tokens = await page.evaluate(() => ({ record: machtileStationCmd.pending.A04?.finishCloseSheetToken, sheet: machtileReportSheetOpenToken,
+    machine: machtileSingleStationReportState.machineCode, finishOpen: document.getElementById("finishSheet")?.classList.contains("is-open"), type: activeReportType }));
+  ok(Boolean(tokens.record) && tokens.record === tokens.sheet, "關站紀錄記下送出時的完工畫面代號", JSON.stringify(tokens));
+  ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("關站中"), "等待中：完工畫面顯示關站中");
+  await pollTo("applied", plainUuid);
+  const closed = await page.waitForFunction(() => !document.querySelector("#finishSheet")?.classList.contains("is-open"), null, { timeout: 5000 }).then(() => true, () => false);
+  ok(closed, "關站 applied、沒有下一道（輪詢到）→ 完工畫面自己關掉");
+  const banner = await page.locator("#stationReportBackgroundStatus [data-station-report-background-message]").innerText().catch(() => "");
+  ok(banner.includes("A04") && banner.includes("已關站"), "橫幅說 A04 已關站", banner);
+  ok(await page.locator("#reportSheet.is-open").count() === 0, "報工畫面也沒有開著");
+
+  // (2) applied、有下一道（標準完工）→ 畫面留著，看得到「接下一道」卡和按鈕
+  await openFinish();
+  const nextUuid = await sendCloseFromSheet("a2222222-2222-4222-8222-222222222222");
+  await pollTo("applied", nextUuid, { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100, total_steps: 8 } });
+  await page.waitForTimeout(300);
+  ok(await page.locator("#finishSheet.is-open").count() === 1, "關站 applied＋有下一道 → 完工畫面留著（不自動關）");
+  const nextCard = page.locator('#finishSheet [data-standard-finish-case="same_class_here"]');
+  ok(await nextCard.count() === 1, "完工畫面立刻顯示下一道卡（不用等別的重畫）");
+  ok(await nextCard.locator("[data-standard-finish-claim]").isVisible(), "下一道卡有「接下一道」按鈕");
+  ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("已關站"), "同一畫面上寫已關站");
+  await page.screenshot({ path: path.join(outDir, "a03-finish-close-next-step-390.png") });
+  await page.evaluate(() => closeReport());
+
+  // (3) 被擋 → 留著並立刻顯示原因
+  await openFinish();
+  const rejectUuid = await sendCloseFromSheet("a3333333-3333-4333-8333-333333333333");
+  await pollTo("code:LOCK_TIMEOUT", rejectUuid);
+  await page.locator("#finishSheet .finish-close-result", { hasText: "這次沒有關成" }).waitFor({ timeout: 15000 });
+  ok(await page.locator("#finishSheet.is-open").count() === 1, "關站被擋 → 完工畫面留著");
+  ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("這次沒有關成（系統忙），可以再按一次"), "被擋原因立刻顯示（不用等別的重畫）");
+  await page.screenshot({ path: path.join(outDir, "a03-finish-close-rejected-390.png") });
+  await page.evaluate(() => closeReport());
+
+  // (4) 結果不確定 → 留著
+  await openFinish();
+  const unknownUuid = await sendCloseFromSheet("a4444444-4444-4444-8444-444444444444");
+  await pollTo("code:OUTCOME_UNKNOWN", unknownUuid);
+  await page.locator("#finishSheet .finish-close-result", { hasText: "關站未完成" }).waitFor({ timeout: 15000 });
+  ok(await page.locator("#finishSheet.is-open").count() === 1, "結果不確定 → 完工畫面留著");
+  await page.evaluate(() => closeReport());
+
+  // (5) 作業員關掉後同一台重新打開完工畫面（新的動作）→ 舊關站 applied 不會把新畫面關掉
+  await openFinish();
+  const reopenUuid = await sendCloseFromSheet("a5555555-5555-4555-8555-555555555555");
+  await page.evaluate(() => closeReport());
+  await openFinish();
+  ok(await page.evaluate(() => machtileStationCmd.pending.A04?.finishCloseSheetToken !== machtileReportSheetOpenToken), "重開後畫面代號換了");
+  await pollTo("applied", reopenUuid);
+  await page.waitForTimeout(300);
+  ok(await page.locator("#finishSheet.is-open").count() === 1, "重開過的完工畫面：舊關站 applied 不關它");
+  await page.evaluate(() => closeReport());
+
+  // (6) 完工畫面已關、別台的報工畫面開著 → A04 關站 applied 不會把它關掉
+  await openFinish();
+  const bgUuid = await sendCloseFromSheet("a6666666-6666-4666-8666-666666666666");
+  await page.evaluate(() => closeReport());
+  await page.evaluate(() => openReport("", { machine: "A01", reportType: "noon" }));
+  await pollTo("applied", bgUuid);
+  ok(await page.locator("#reportSheet.is-open").count() === 1, "別台的報工畫面開著：A04 關站 applied 不會把它關掉");
+  await page.evaluate(() => closeReport());
+  ok(realErrors(errors).length === 0, "完工關站情境沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：報工 applied → 重讀卡片進度（同一筆只讀一次；一批合併成最多 2 次；舊結果晚到丟掉；讀失敗不壞） ==");
+{
+  const be = makeBackend();
+  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], cardQtyInstantEnabled: true,' });
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight, null, { timeout: 5000 });
+  const reads = () => be.progressReads || 0;
+  let before = reads();
+  const doneBefore = await page.evaluate(() => machtileMachineCardOrders().find((o) => o.machine === "A04")?.done);
+  await page.evaluate(() => {
+    const order = machtileMachineCardOrders().find((o) => o.machine === "A04");
+    machtileCardQtyOverlayRecord(order, "A04", 260, "applied");
+    machtileRefreshCardAfterReportApplied("88888888-8888-4888-8888-888888888888");
+    machtileRefreshCardAfterReportApplied("88888888-8888-4888-8888-888888888888");
+  });
+  await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight && machtileMachineCardOrders().find((o) => o.machine === "A04")?.done === 260, null, { timeout: 5000 }).catch(() => {});
+  const doneAfter = await page.evaluate(() => machtileMachineCardOrders().find((o) => o.machine === "A04")?.done);
+  const cardProgress = await cardOf(page, "A04").locator(".machine-metrics strong").first().innerText();
+  ok(reads() - before === 1, `同一筆 applied 報工只多讀一次進度（${reads() - before}）`);
+  ok(doneAfter === 260 && cardProgress.startsWith("260/"), `卡片數字立刻跟上（${doneBefore} → ${doneAfter}，卡片 ${cardProgress}）`);
+
+  // 一批 6 筆 applied 同時回來（讀取很慢）→ 最多 1 個在讀＋1 個排隊＝2 次
+  be.progressDelayMs = 500;
+  before = reads();
+  await page.evaluate(() => { for (let i = 0; i < 6; i += 1) machtileRefreshCardAfterReportApplied(`b000000${i}-0000-4000-8000-00000000000${i}`); });
+  ok(await page.evaluate(() => machtileCardRefreshAfterReport.inFlight && machtileCardRefreshAfterReport.dirty), "讀取中又有新的 → 標記排隊");
+  await page.waitForTimeout(150);
+  await page.evaluate(() => machtileRefreshCardAfterReportApplied("b0000009-0000-4000-8000-000000000009"));
+  await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight, null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  ok(reads() - before === 2, `一批 7 筆 applied 報工 → 只讀 2 次進度（${reads() - before}）`);
+
+  // 舊結果晚到：慢的先發、快的後發 → 快的套上、慢的回來被丟掉
+  be.progressDelayMs = 800;
+  await page.evaluate(() => { window.__slowProgress = machtileLoadCardLegacyProgress(); });
+  await page.waitForTimeout(150);
+  be.progressDelayMs = 0;
+  const fast = await page.evaluate(() => machtileLoadCardLegacyProgress());
+  const slow = await page.evaluate(() => window.__slowProgress);
+  ok(fast === true && slow === false, `晚到的舊結果不蓋掉新結果（新=${fast}，舊=${slow}）`);
+
+  // 讀失敗：不出錯、狀態解開、下一筆照常
+  be.progressReadFail = true;
+  before = reads();
+  await page.evaluate(() => machtileRefreshCardAfterReportApplied("c1111111-1111-4111-8111-111111111111"));
+  await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight, null, { timeout: 5000 });
+  be.progressReadFail = false;
+  await page.evaluate(() => machtileRefreshCardAfterReportApplied("c2222222-2222-4222-8222-222222222222"));
+  await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight, null, { timeout: 5000 });
+  ok(reads() - before === 2, "讀失敗後下一筆照常讀");
+  ok(realErrors(errors).length === 0, "卡片更新情境沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 

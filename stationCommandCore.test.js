@@ -444,5 +444,37 @@ const claimTaken = c.statusView({ status: "rejected", reject_code: "ALREADY_CLAI
 eq("applier rejected 從 legacy_snapshot 帶回實際接走機台", [claimTaken.code, claimTaken.claimNext.claimedMachineCode], ["ALREADY_CLAIMED", "A05"]);
 eq("pendingRecord 保存 claim 冪等重試資料", c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true }).standardFinishClaim, true);
 
+console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET） ==");
+{
+  const notSet = c.statusView({ status: "rejected", reject_code: "STATION_NOT_SET", reject_message: "A03 目前沒有掛工單（等待工單），請找生管設定。" }, "start", 0);
+  eq("開工 STATION_NOT_SET → 新白話", [notSet.title, notSet.text], ["沒有開工", "這台還沒掛上工單，請找生管在 Factory 設定後再按開工。"]);
+  eq("停工 STATION_NOT_SET 文字不變", c.statusView({ status: "rejected", reject_code: "STATION_NOT_SET" }, "stop", 0).text, "舊 MES 這台還沒設定工單，請找生管。");
+  const at = Date.parse("2026-11-13T08:40:00Z");   // 台北 16:40
+  const rec = c.startRejectRecord({ machineCode: "a03", orderNo: "XX01202610210005", step: 2, view: notSet, rejectMessage: "A03 目前沒有掛工單（等待工單），請找生管設定。", at });
+  eq("紀錄：機台大寫、代碼、工廠說明", [rec.machineCode, rec.code, rec.step, rec.detail], ["A03", "STATION_NOT_SET", 2, "A03 目前沒有掛工單（等待工單），請找生管設定。"]);
+  const ctx = { machineCode: "A03", orderNo: "XX01202610210005", step: 2, commandRows: [], now: new Date(at + 60000) };
+  eq("同台同單同道 → 專用鍵", c.startRejectNotice(rec, ctx), { key: "start_reject_station_not_set", params: {}, code: "STATION_NOT_SET", detail: "A03 目前沒有掛工單（等待工單），請找生管設定。" });
+  eq("換道次 → 不顯示", c.startRejectNotice(rec, { ...ctx, step: 3 }), null);
+  eq("換單 → 不顯示", c.startRejectNotice(rec, { ...ctx, orderNo: "XX0" }), null);
+  eq("別台 → 不顯示", c.startRejectNotice(rec, { ...ctx, machineCode: "A04" }), null);
+  eq("隔天 → 不顯示", c.startRejectNotice(rec, { ...ctx, now: new Date(at + 24 * 3600000) }), null);
+  const appliedLater = [{ machine_code: "A03", command_type: "start", status: "applied", expected_order_no: "XX01202610210005", expected_index_sn: 2, applied_at: new Date(at + 30000).toISOString() }];
+  eq("之後開工 applied → 不顯示", c.startRejectNotice(rec, { ...ctx, commandRows: appliedLater }), null);
+  const appliedBefore = [{ ...appliedLater[0], applied_at: new Date(at - 3600000).toISOString() }];
+  eq("更早的 applied 不影響", c.startRejectNotice(rec, { ...ctx, commandRows: appliedBefore })?.key, "start_reject_station_not_set");
+  const other = c.statusView({ status: "rejected", reject_code: "OPERATOR_NOT_SET", reject_message: "no operator" }, "start", 0);
+  eq("其他代碼 → 通用：標題＋白話＋工廠說明", c.startRejectNotice(c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: other, rejectMessage: "no operator", at }), { machineCode: "A03", orderNo: "W", step: 1, now: new Date(at) }),
+    { key: "start_reject_generic", params: { title: "沒有開工", reason: "舊 MES 這台還沒設定好作業員，請找生管。" }, code: "OPERATOR_NOT_SET", detail: "no operator" });
+  const unknown = c.statusView({ status: "rejected", reject_code: "NEW_CODE_X", reject_message: "工廠新原因" }, "start", 0);
+  eq("未知代碼 → 保守標題＋工廠說明", c.startRejectNotice(c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: unknown, rejectMessage: "工廠新原因", at }), { machineCode: "A03", orderNo: "W", step: 1, now: new Date(at) }),
+    { key: "start_reject_generic", params: { title: "結果待核對", reason: "沒有完成，舊 MES 狀態請核對" }, code: "NEW_CODE_X", detail: "工廠新原因" });
+  eq("applied 不記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "applied" }, "start", 0), at }), null);
+  eq("expired 也記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "expired" }, "start", 0), at })?.code, "EXPIRED");
+  eq("壞紀錄 → 不顯示", c.startRejectNotice("x", ctx), null);
+}
+// 完工關站：pendingRecord 保留送出時的完工畫面代號（app.js 判斷要不要自動關畫面）
+eq("pendingRecord 保留完工畫面代號", c.pendingRecord({ ...rec, commandType: "close", finishCloseReportCommandUuid: UUID, finishCloseSheetToken: "abc-3" }).finishCloseSheetToken, "abc-3");
+eq("pendingRecord 沒有代號 → null（不自動關）", c.pendingRecord(rec).finishCloseSheetToken, null);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

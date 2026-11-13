@@ -537,7 +537,9 @@
       const special = REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
       const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
-      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: r.text, code: r.code, detail: r.detail,
+      // 開工被擋「這台沒掛單」：說清楚要生管在 Factory 設定後再按（其他指令照舊）
+      const plain = type === "start" && r.code === "STATION_NOT_SET" ? START_REJECT_STATION_NOT_SET_TEXT : r.text;
+      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: plain, code: r.code, detail: r.detail,
         ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "expired") {
@@ -588,6 +590,8 @@
       expectedSimulationId: text(rec.expectedSimulationId) || null,
       shortCompletion: rec.shortCompletion && typeof rec.shortCompletion === "object" ? rec.shortCompletion : null,
       finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
+      // 送出關站時開著的完工畫面代號（app.js 用來判斷結果回來時要不要自動關畫面）；沒有＝不自動關
+      finishCloseSheetToken: text(rec.finishCloseSheetToken) || null,
       poolItemId: text(rec.poolItemId) || null,
       standardFinishClaim: rec.standardFinishClaim === true,
       startedAt: Number(rec.startedAt) || Date.now(),
@@ -863,6 +867,33 @@
     const done = latest?.type === "start";
     return { visible: !done, overtime: false, reason: stopped ? "stopped" : done ? "daily_applied" : (samePending ? "pending_timeout" : "daily_due") };
   }
+  // ---------------------------------------------------------------- 開工被擋下的卡片提示
+  // 2026-11-13 A03 現場：開工被工廠退回（STATION_NOT_SET），卡片只剩「開工」鈕、作業員重新整理 3–4 次都不知道為什麼。
+  // 退回的那一筆記成一筆小紀錄（機台＋工單＋道次＋代碼），卡片照這筆顯示，直到：同一台同一道之後有 applied 的開工／停工、
+  // 換了單或道次、隔天。這裡只做判斷；存取由 app.js 處理。
+  const START_REJECT_SPECIFIC = Object.freeze({ STATION_NOT_SET: "start_reject_station_not_set" });
+  const START_REJECT_STATION_NOT_SET_TEXT = "這台還沒掛上工單，請找生管在 Factory 設定後再按開工。";
+  function startRejectRecord({ machineCode, orderNo, step, view, rejectMessage, at } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), when = Number(at);
+    if (!machine || !order || !Number.isFinite(when) || !view || !["rejected", "expired"].includes(view.phase) || view.needsConfirmation) return null;
+    return { machineCode: machine, orderNo: order, step: Number.isInteger(Number(step)) ? Number(step) : null,
+      code: text(view.code).toUpperCase(), title: text(view.title), text: text(view.text),
+      detail: text(rejectMessage) && text(rejectMessage) !== text(view.text) ? text(rejectMessage) : "", at: when };
+  }
+  // 回傳 { key, params, detail } 或 null（不顯示）。key＝i18n 鍵；STATION_NOT_SET 有專用白話，其他用伺服器原因
+  function startRejectNotice(record, { machineCode, orderNo, step, commandRows, now = new Date() } = {}) {
+    if (!record || typeof record !== "object") return null;
+    if (normCode(record.machineCode) !== normCode(machineCode) || text(record.orderNo) !== text(orderNo)) return null;
+    if (record.step != null && step != null && Number(record.step) !== Number(step)) return null;
+    const at = Number(record.at);
+    if (!Number.isFinite(at) || taiwanParts(new Date(at))?.day !== taiwanParts(now)?.day) return null;
+    const later = latestAppliedAction(commandRows, { machineCode, orderNo, step, now });
+    if (later && later.at >= at) return null;
+    const code = text(record.code).toUpperCase();
+    if (START_REJECT_SPECIFIC[code]) return { key: START_REJECT_SPECIFIC[code], params: {}, code, detail: text(record.detail) };
+    return { key: "start_reject_generic", params: { title: text(record.title) || "沒有開工", reason: text(record.text) || text(record.detail) || UNKNOWN_CODE_TEXT },
+      code, detail: text(record.detail) };
+  }
   function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
     if (commandType !== "start") return false;
     if (normRole(role) !== "operator" || isBridge === true) return false;
@@ -883,5 +914,6 @@
     dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startAppliedInWindow, startButtonState, startedToday,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
+    START_REJECT_STATION_NOT_SET_TEXT, startRejectRecord, startRejectNotice,
   };
 });
