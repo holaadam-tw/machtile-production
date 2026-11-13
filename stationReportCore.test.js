@@ -502,6 +502,80 @@ check("report limit hint requires the complete additive field set and distinguis
     "old Factory payload without the additive field set stays unchanged");
 });
 
+// Real shadow preview (2026-11-13 A03 XX01202610210005 第 1 道, order 161, report 163, Factory flag
+// StationCommands:ReportFirstStepOverrunAllowedEnabled on): ops/codex-inbox/20261113-1010-a03-first-step-overrun/
+// r2-a-preview-163-flag-on.log, preview_result trimmed to the fields the App reads.
+const OVERRUN_PREVIEW_ROW = {
+  command_uuid: "85e5ea7b-572c-4a2c-8f64-40c8e80e1a23", command_type: "report_preview", status: "previewed",
+  preview_result: {
+    status: "previewed", allowed: true, guard_code: null, hard: false, message: "可送出",
+    legacy_snapshot: { report: { station: "A03", order_no: "XX01202610210005", index_sn: 1, order_qty: 161, available: 161, good: 163, fail: 0,
+      guard: { code: "", hard: false, message: "可送出", Details: {
+        prev_kind: "SELF_PART_FIRST_INPUT", prev_index_sn: 1, previous_station_code: "", previous_step_name: "", previous_reported_good: 0,
+        supply: 161, done_c: 0, available: 161, tol: 0, requested: 163, predicted_ac03_qty: 0, order_start: "2026-11-12T15:41:07",
+        effective_need: 161, acks: [], self_part_first_input: true,
+        first_step_overrun: true, over_available_qty: 2, overrun_order_qty: 161, reported_after: 163, over_order_qty: 2, over_effective_need_qty: 2,
+        notices: [{ Code: "FIRST_STEP_OVERRUN", Message: "第一道超過工單數量報工：本次 163 件、報完累計 163 件，工單 161 件（多 2 件）。請生管核對。" }],
+      } } } },
+    notices: [{ code: "FIRST_STEP_OVERRUN", message: "第一道超過工單數量報工：本次 163 件、報完累計 163 件，工單 161 件（多 2 件）。請生管核對。" }],
+    command_uuid: "85e5ea7b-572c-4a2c-8f64-40c8e80e1a23", available: 161, supply: 161, done_c: 0, prev_index_sn: 1, prev_kind: "SELF_PART_FIRST_INPUT",
+    previous_station_code: "", previous_step_name: "", previous_reported_good: 0, predicted_ac03_qty: 0,
+    order_qty: 161, order_start: "2026-11-12T15:41:07", shown_at: "2026-11-13T10:25:36.7222233+08:00",
+  },
+};
+function withoutOverrunKeys(row) {
+  const copy = structuredClone(row);
+  const details = copy.preview_result.legacy_snapshot.report.guard.Details;
+  ["first_step_overrun", "over_available_qty", "overrun_order_qty", "reported_after", "over_order_qty", "over_effective_need_qty", "notices"].forEach((key) => delete details[key]);
+  delete copy.preview_result.notices;
+  return copy;
+}
+
+check("first-step overrun: real shadow preview → one non-blocking reminder, nothing else changes", () => {
+  const card = core.resultCard(OVERRUN_PREVIEW_ROW);
+  assert.equal(card.kind, "previewed", "still an allowed preview (no confirm, no soft state)");
+  assert.equal(card.allowed, true);
+  assert.equal(card.guardCode, "");
+  assert.deepEqual(card.overrunNotice, { key: "report_first_step_overrun", params: { n: 2, order: 161 } });
+  assert.deepEqual(core.firstStepOverrunNotice(OVERRUN_PREVIEW_ROW.preview_result), card.overrunNotice);
+  // What is sent is unchanged: the guard snapshot is identical with and without the new keys.
+  const plain = withoutOverrunKeys(OVERRUN_PREVIEW_ROW);
+  assert.deepEqual(core.buildClientGuardSnapshot(OVERRUN_PREVIEW_ROW), core.buildClientGuardSnapshot(plain));
+  const plainCard = core.resultCard(plain);
+  assert.equal(plainCard.overrunNotice, null, "today's Factory (no keys) → no reminder");
+  const { overrunNotice: _a, values: _v1, preview: _p1, ...rest } = card;
+  const { overrunNotice: _b, values: _v2, preview: _p2, ...plainRest } = plainCard;
+  assert.deepEqual(rest, plainRest, "every other card field is identical");
+});
+
+check("first-step overrun reminder needs first_step_overrun=true, over_order_qty>0 and an allowed preview", () => {
+  const result = OVERRUN_PREVIEW_ROW.preview_result;
+  const patch = (fields, top = {}) => {
+    const copy = structuredClone(result);
+    Object.assign(copy.legacy_snapshot.report.guard.Details, fields);
+    return Object.assign(copy, top);
+  };
+  assert.equal(core.firstStepOverrunNotice(patch({ over_order_qty: 0 })), null, "over available but not over the order → no reminder");
+  assert.equal(core.firstStepOverrunNotice(patch({ first_step_overrun: false })), null);
+  assert.equal(core.firstStepOverrunNotice(patch({ first_step_overrun: "true" })), null, "must be boolean true");
+  assert.equal(core.firstStepOverrunNotice(patch({ over_order_qty: "2" })), null, "must be an integer");
+  assert.equal(core.firstStepOverrunNotice(patch({ overrun_order_qty: undefined })), null);
+  assert.equal(core.firstStepOverrunNotice(patch({}, { allowed: false, hard: false, guard_code: "EXCEEDS_ORDER_QTY" })), null, "blocked / soft previews keep their own message");
+  assert.equal(core.firstStepOverrunNotice(null), null);
+  assert.equal(core.firstStepOverrunNotice({ allowed: true }), null);
+  assert.deepEqual(core.firstStepOverrunNotice(patch({ over_order_qty: 40, overrun_order_qty: 1000 })), { key: "report_first_step_overrun", params: { n: 40, order: 1000 } });
+  assert.equal(core.resultCard({ command_type: "report", status: "applied", good_qty: 163 }).overrunNotice, undefined, "final results carry no reminder");
+});
+
+check("first-step overrun reminder text (zh-Hant exact, vi draft)", () => {
+  const i18n = require("./i18n.js");
+  i18n.setLanguage("zh-Hant");
+  assert.equal(i18n.t("report_first_step_overrun", { n: 2, order: 161 }), "這次比開單數量多 2 件（開單 161 件）。第一道不限數量，可以直接送出。");
+  i18n.setLanguage("vi");
+  assert.match(i18n.t("report_first_step_overrun", { n: 2, order: 161 }), /2 sản phẩm.*161 sản phẩm/);
+  i18n.setLanguage("zh-Hant");
+});
+
 check("Factory uppercase DOC4 fingerprint is sent lowercase: cloud RPC only accepts ^[0-9a-f]{64}$", () => {
   const upper = "96157502FE7B0374C0811BA38272BE11CD6368DE3631B0FE58FFFC5F11390B3B";
   const lower = upper.toLowerCase();
@@ -509,6 +583,83 @@ check("Factory uppercase DOC4 fingerprint is sent lowercase: cloud RPC only acce
   const next = core.withOutsourceReceipt(prev, 3400, upper, "22222222-2222-4222-8222-222222222222");
   assert.equal(next.p_expected_doc4_fingerprint, lower);
   assert.match(next.p_expected_doc4_fingerprint, /^[0-9a-f]{64}$/);
+});
+
+// Real shadow preview (2026-11-13 A03 XX01202610210005 第 1 道, order 161, report 163, overrun flag OFF):
+// ops/codex-inbox/20261113-1010-a03-first-step-overrun/r2-a-preview-163-flag-off.log, trimmed to read fields.
+const QTY_BLOCK_PREVIEW_ROW = {
+  command_uuid: "61acc77f-923a-46b9-a14c-d6764c0c9311", command_type: "report_preview", status: "previewed",
+  preview_result: {
+    status: "previewed", allowed: false, guard_code: "QTY_EXCEEDS_AVAILABLE", hard: true,
+    message: "第 1 道只夠再報 161 件，請先報前一道或找生管。",
+    legacy_snapshot: { report: { station: "A03", order_no: "XX01202610210005", index_sn: 1, order_qty: 161, available: 161, good: 163, fail: 0,
+      guard: { code: "QTY_EXCEEDS_AVAILABLE", hard: true, message: "第 1 道只夠再報 161 件，請先報前一道或找生管。", Details: {
+        prev_kind: "SELF_PART_FIRST_INPUT", prev_index_sn: 1, previous_station_code: "", previous_step_name: "", previous_reported_good: 0,
+        supply: 161, done_c: 0, available: 161, tol: 0, requested: 163, effective_need: 161, acks: [], self_part_first_input: true,
+      } } } },
+    command_uuid: "61acc77f-923a-46b9-a14c-d6764c0c9311", available: 161, supply: 161, done_c: 0, prev_index_sn: 1, prev_kind: "SELF_PART_FIRST_INPUT",
+    previous_station_code: "", previous_step_name: "", previous_reported_good: 0, predicted_ac03_qty: 0, order_qty: 161,
+  },
+};
+
+check("hard QTY_EXCEEDS_AVAILABLE (real shadow 163 vs 161) → max field value 161", () => {
+  const card = core.resultCard(QTY_BLOCK_PREVIEW_ROW);
+  assert.equal(card.kind, "preview-blocked");
+  assert.equal(card.reportLimitHint, null, "first step has no previous station/step → old hint stays silent (the field bug)");
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: "163", requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 161, entered: 163 });
+  // Machine-total field with 100 already reported: 263 entered → 163 requested, only 161 left → field max 261.
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: 263, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 261, entered: 263 });
+  // Tolerance from the guard details widens the limit.
+  const tol = structuredClone(QTY_BLOCK_PREVIEW_ROW); tol.preview_result.legacy_snapshot.report.guard.Details.tol = 1;
+  assert.equal(core.quantityLimitBlock(tol, { enteredQty: 163, requestedQty: 163 }).max, 162);
+  // Number only in the guard details (no top-level available) still works.
+  const detailsOnly = structuredClone(QTY_BLOCK_PREVIEW_ROW); delete detailsOnly.preview_result.available;
+  assert.equal(core.quantityLimitBlock(detailsOnly, { enteredQty: 163, requestedQty: 163 }).max, 161);
+  // Final (non-preview) hard reject with the guard snapshot.
+  const finalRow = { command_type: "report", status: "rejected", reject_code: "QTY_EXCEEDS_AVAILABLE", reject_message: "x",
+    legacy_snapshot: QTY_BLOCK_PREVIEW_ROW.preview_result.legacy_snapshot };
+  assert.equal(core.resultCard(finalRow).kind, "hard");
+  assert.deepEqual(core.quantityLimitBlock(finalRow, { enteredQty: 163, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 161, entered: 163 });
+  // Nothing left (previous step not reported yet) or already over: no suggested number; today's sentence stays.
+  for (const avail of [0, -5]) {
+    const none = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+    none.preview_result.available = avail; none.preview_result.legacy_snapshot.report.guard.Details.available = avail;
+    assert.deepEqual(core.quantityLimitBlock(none, { enteredQty: 100, requestedQty: 10 }), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null }, `available ${avail}`);
+  }
+});
+
+check("quantity limit: missing number → max null (keep today's sentence); other codes → null", () => {
+  const noNumber = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+  delete noNumber.preview_result.available; delete noNumber.preview_result.legacy_snapshot;
+  assert.deepEqual(core.quantityLimitBlock(noNumber, { enteredQty: 163, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null });
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, {}), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null }, "no field value → no number");
+  assert.equal(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: "abc", requestedQty: 163 }).max, null);
+  assert.equal(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: 1, requestedQty: 163 }).max, null, "negative max → no number");
+  assert.equal(core.quantityLimitBlock({ command_type: "report_preview", status: "rejected", reject_code: "QTY_EXCEEDS_AVAILABLE" }, { enteredQty: 163, requestedQty: 163 }).max, null);
+  assert.deepEqual(core.quantityLimitBlock({ command_type: "report", status: "rejected", reject_code: "INVALID_REPORT_QTY" }, { enteredQty: 5, requestedQty: 5 }),
+    { code: "INVALID_REPORT_QTY", max: null, entered: null }, "INVALID_REPORT_QTY is a quantity fix without a number");
+  for (const code of ["STALE_COMMAND", "ORDER_MISMATCH", "GUARD_STATE_CHANGED", "AUTO_PULL_WOULD_GO_NEGATIVE", "STATION_NOT_STARTED", "EXCEEDS_ORDER_QTY"]) {
+    assert.equal(core.quantityLimitBlock({ command_type: "report", status: "rejected", reject_code: code }, { enteredQty: 163, requestedQty: 163 }), null, code);
+  }
+  assert.equal(core.quantityLimitBlock(OVERRUN_PREVIEW_ROW, { enteredQty: 163, requestedQty: 163 }), null, "allowed preview → null");
+  const soft = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+  Object.assign(soft.preview_result, { guard_code: "EXCEEDS_ORDER_QTY", hard: false });
+  assert.equal(core.resultCard(soft).kind, "preview-soft");
+  assert.equal(core.quantityLimitBlock(soft, { enteredQty: 163, requestedQty: 163 }), null, "soft confirm unchanged");
+  assert.equal(core.quantityLimitBlock(null), null);
+  assert.deepEqual([...core.QTY_FIX_CODES], ["QTY_EXCEEDS_AVAILABLE", "INVALID_REPORT_QTY"]);
+});
+
+check("quantity limit texts (zh-Hant exact, vi draft) and the 改數量 label", () => {
+  const i18n = require("./i18n.js");
+  i18n.setLanguage("zh-Hant");
+  assert.equal(i18n.t("simple_block_qty_max", { n: 161, entered: 163 }), "這一道最多只能報 161 件（目前填 163 件）。請改成 161 件以內再送出；機台上真的做比較多，請告訴生管。");
+  assert.equal(i18n.t("simple_report_fix_qty"), "改數量");
+  assert.equal(i18n.t("simple_report_resubmit"), "重新送出");
+  i18n.setLanguage("vi");
+  assert.match(i18n.t("simple_block_qty_max", { n: 161, entered: 163 }), /tối đa 161 .*163 .*161/);
+  assert.equal(i18n.t("simple_report_fix_qty"), "Sửa số lượng");
+  i18n.setLanguage("zh-Hant");
 });
 
 console.log("STATION_REPORT_CONTRACT PASS");

@@ -24324,9 +24324,41 @@ function machtileSimpleReportStatus(flow, card) {
   const core = machtileStationReportCore();
   if (card.kind === "preview-soft" || card.kind === "soft") return { tone: "warning", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code, true)) };
   if (["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card.kind)) {
+    const limit = machtileSimpleReportQtyLimit(flow);
+    if (limit && limit.max !== null) return { tone: "error", qtyMax: true, text: machtileTranslate("simple_block_qty_max", { n: limit.max, entered: limit.entered }) };
     return { tone: "error", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code)) };
   }
   return null;
+}
+
+// Owner 2026-11-13（A03 填 163、只能報 161）：硬擋的數量類拒絕（stationReportCore.QTY_FIX_CODES）再按也一樣，
+// 要改數字。讀畫面上的機台數字與這次良品＋不良算出「這一格最多能填幾件」；讀不到 → max null（沿用原本那句）。唯讀。
+function machtileSimpleReportQtyLimit(flow) {
+  const core = machtileStationReportCore();
+  if (!flow?.result || !core?.quantityLimitBlock) return null;
+  const counter = reportCounterCalculation();
+  const defect = Math.max(0, Number(document.getElementById("defectQty")?.value || 0));
+  const requested = counter?.valid && Number.isInteger(Number(counter.delta)) ? Number(counter.delta) + defect : null;
+  return core.quantityLimitBlock(flow.result, { enteredQty: document.getElementById("completedQty")?.value, requestedQty: requested });
+}
+
+// 「改數量」狀態：數量類硬擋，而且畫面上的數字還是被擋的那一筆（沒改過）。這時主按鈕只把游標帶回數量欄，
+// 不送任何東西；改過數字就回到原本的「重新送出」。網路逾時／錯誤／取消收貨等可重試情況不進這裡。唯讀。
+function machtileSimpleReportFixQtyMode(flow) {
+  if (!flow?.result || !flow.args || flow.error || flow.receiptCancelled || machtileStationReportFlowBusy(flow)) return false;
+  if (["preview-timeout", "blocked"].includes(flow.phase)) return false;
+  if (!machtileSimpleReportQtyLimit(flow)) return false;
+  const counter = reportCounterCalculation();
+  const defect = Math.max(0, Number(document.getElementById("defectQty")?.value || 0));
+  return Boolean(counter?.valid) && Number(counter.delta) === Number(flow.args.p_good_qty) && defect === Number(flow.args.p_fail_qty || 0);
+}
+
+function machtileSimpleReportFocusQty() {
+  const input = document.getElementById("completedQty");
+  if (!input) return;
+  input.focus();
+  try { input.select?.(); } catch { /* number inputs on some browsers */ }
+  input.scrollIntoView?.({ behavior: "smooth", block: "center" });
 }
 
 function machtileSimpleReportNeedsNote(row, card) {
@@ -24419,8 +24451,11 @@ function machtileApplySimpleReportChrome() {
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
   const card = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = card?.reportLimitHint
-    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "";
+  // 新句子「這一道最多只能報 N 件」出現時，舊的「目前最多可報…（上一道…）」不再顯示：作業員只看到一個要填的數字。
+  const qtyMaxShown = Boolean(card && machtileSimpleReportStatus(flow, card)?.qtyMax);
+  const reportLimitHtml = (card?.reportLimitHint && !qtyMaxShown
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "")
+    + machtileFirstStepOverrunHtml(card);
   const busy = machtileStationReportFlowBusy(flow);
   const defectQty = Number(document.getElementById("defectQty")?.value || 0);
   const defectOpen = st.defectOpen || defectQty > 0;
@@ -24497,7 +24532,9 @@ function machtileApplySimpleReportChrome() {
     const retry = flow.receiptCancelled || flow.phase === "blocked" || flow.phase === "preview-timeout"
       || ["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card?.kind) || Boolean(flow.error);
     const ack = card?.kind === "preview-soft" && flow.phase === "previewed" && !flow.error;
-    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
+    const fixQty = !busy && !inFlight && machtileSimpleReportFixQtyMode(flow);
+    submit.toggleAttribute("data-simple-report-fix-qty", fixQty);
+    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : fixQty ? "simple_report_fix_qty" : retry ? "simple_report_resubmit" : "submit_report");
   }
 }
 
@@ -24753,8 +24790,13 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = result?.reportLimitHint
-    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "";
+  // Same sheet/card already shows 「這一道最多只能報 N 件」 → drop the old per-report hint (one number only).
+  const qtyMaxShown = Boolean(result) && (simple
+    ? Boolean(machtileSimpleReportStatus(flow, result)?.qtyMax)
+    : batch && machtileBatchQtyLimit(row, flow)?.max != null);
+  const reportLimitHtml = (result?.reportLimitHint && !qtyMaxShown
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "")
+    + machtileFirstStepOverrunHtml(result);
   const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
   const rateCheck = result && ["previewed", "preview-soft"].includes(result.kind)
     ? core.rateReasonableness({
@@ -24850,6 +24892,26 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || previewWaiting || flow.phase === "preview-timeout" ? " disabled" : ""}>先預覽，不寫入舊 MES</button>
     ${resultHtml}
   </section>`;
+}
+
+// Owner 2026-11-13: first-step overrun is accepted by the Factory without confirmation; the
+// tablet only shows one non-blocking reminder line. Read-only; "" when the preview has no such keys.
+function machtileFirstStepOverrunHtml(card) {
+  const notice = card?.overrunNotice;
+  return notice
+    ? `<p class="report-limit-hint first-step-overrun-notice" role="note" data-first-step-overrun-notice>${escapeHtml(machtileTranslate(notice.key, notice.params))}</p>` : "";
+}
+
+// Same reminder for the background banner: the one-button single report and the batch report
+// close/collapse right after an allowed preview, so the sheet line alone would flash by unseen.
+// Only when the final being sent was built from this exact preview. Read-only.
+function machtileFirstStepOverrunText(flow, args) {
+  const core = machtileStationReportCore();
+  const preview = flow?.preview;
+  if (!core?.firstStepOverrunNotice || !preview || preview.command_type !== "report_preview") return "";
+  if (args?.p_client_guard_snapshot?.preview_command_uuid !== preview.command_uuid) return "";
+  const notice = core.firstStepOverrunNotice(preview.preview_result);
+  return notice ? machtileTranslate(notice.key, notice.params) : "";
 }
 
 async function machtileStationReportWait(code, commandUuid, kind) {
@@ -25147,7 +25209,7 @@ window.addEventListener("online", () => {
 });
 
 let machtileStationReportBackgroundTimer = null;
-function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0 } = {}) {
+function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0, note = "" } = {}) {
   const notice = document.getElementById("stationReportBackgroundStatus");
   if (!notice) return;
   if (machtileStationReportBackgroundTimer) clearTimeout(machtileStationReportBackgroundTimer);
@@ -25155,6 +25217,18 @@ function machtileSetStationReportBackgroundStatus(message, { error = false, auto
   const text = notice.querySelector("[data-station-report-background-message]");
   const dismiss = notice.querySelector("[data-station-report-background-dismiss]");
   if (text) text.textContent = message;
+  // Optional second line (first-step overrun reminder). No note → the element is removed, so the
+  // banner DOM is exactly what it was before this reminder existed.
+  let noteEl = notice.querySelector("[data-station-report-background-note]");
+  if (note && message) {
+    if (!noteEl) {
+      noteEl = document.createElement("span");
+      noteEl.className = "station-report-background-note";
+      noteEl.setAttribute("data-station-report-background-note", "");
+      text ? text.after(noteEl) : notice.prepend(noteEl);
+    }
+    noteEl.textContent = note;
+  } else if (noteEl) noteEl.remove();
   notice.classList.toggle("is-error", error);
   if (dismiss) dismiss.hidden = !error;
   notice.hidden = !message;
@@ -25222,7 +25296,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
       reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
-  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");
+  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中", { note: machtileFirstStepOverrunText(flow, args) });
   closeReport();
   showToast("已送出，工廠寫入中");
   return machtileStationReportSendFinal(code, args, { background: true, order }).catch((error) => {
@@ -25293,7 +25367,7 @@ async function machtileStationReportFinalizeApplied(code, args, options = {}) {
       flow.appliedFollowUpPendingUuid = null;
     }
     if (!failed) {
-      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, args) });
       if (options.background) showToast("工廠已完成寫入");
     } else {
       machtileSetStationReportBackgroundStatus(flow.error, { error: true });
@@ -25353,7 +25427,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     if (options.background) {
       const background = document.getElementById("stationReportBackgroundStatus");
       if (applied && !followUpFailed) {
-        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, resultArgs) });
         showToast("工廠已完成寫入");
       } else if (background) {
         machtileSetStationReportBackgroundStatus(
@@ -26068,6 +26142,13 @@ function machtileApplyMachineTime(processId, seconds) {
   });
 }
 
+// Batch card: the max machine total for a hard quantity reject, from the row values that were sent. Read-only.
+function machtileBatchQtyLimit(row, flow) {
+  if (!row || !flow?.result || flow.error) return null;
+  return machtileStationReportCore()?.quantityLimitBlock?.(flow.result,
+    { enteredQty: row.current, requestedQty: Number(row.good) + Number(row.bad || 0) }) || null;
+}
+
 async function machtileBatchSendSmartReport(item) {
   const code = item.model.machineCode;
   const row = machtileBatchRow(code);
@@ -26106,7 +26187,9 @@ async function machtileBatchSendSmartReport(item) {
 
   flow.expanded = true;
   const card = machtileStationReportCore()?.resultCard(flow.result);
-  row.error = flow.error || (card?.kind === "preview-soft"
+  // 數量類硬擋：直接講這一格最多能填幾件（機台總數），讀不到數字就沿用原本訊息。
+  const qtyLimit = machtileBatchQtyLimit(row, flow);
+  row.error = flow.error || (qtyLimit?.max != null ? machtileTranslate("simple_block_qty_max", { n: qtyLimit.max, entered: qtyLimit.entered }) : card?.kind === "preview-soft"
     ? `需要確認：${card.message || card.guardLabel || "預覽要求確認"}`
     : card?.message || "智慧報工預覽失敗，請在下方確認。 ");
   machtileRenderBatchReport();
@@ -27276,6 +27359,13 @@ function bindEvents() {
     event.preventDefault();
     if (!machtileSimpleReportActive()) { await machtileReportFormSubmit(event); return; }
     if (machtileSimpleReportSubmitInFlight) return;
+    // 「改數量」：數量類硬擋、數字沒改 → 只把游標帶回數量欄，不預覽、不送出、不重讀。
+    const fixQtyCode = machtileSingleStationReportState.machineCode;
+    if (fixQtyCode && !machtileSimpleReportPrimaryInFlight
+      && machtileSimpleReportFixQtyMode(machtileStationReportState(machtileBatchRow(fixQtyCode)))) {
+      machtileSimpleReportFocusQty();
+      return;
+    }
     machtileSimpleReportSubmitInFlight = true;
     const submitButton = document.querySelector("#reportForm .submit-report");
     if (submitButton) submitButton.disabled = true;
