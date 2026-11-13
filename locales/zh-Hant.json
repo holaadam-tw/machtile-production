@@ -466,6 +466,7 @@
   "switch_step_started_fresh_changed": "這台的工單或道次已經變了，不能換。請重新整理畫面。",
   "switch_step_started_fresh_failed": "讀不到這台最新的資料，現在不能換道次。請檢查網路後重新整理畫面。",
   "switch_step_started_list_failed": "讀不到這張單的其他道次，現在不能換。請檢查網路後重新整理畫面。",
+  "switch_step_started_read_failed": "讀取失敗，請再試一次。",
   "switch_step_started_no_other": "這張單現在沒有可以換過去的道次（都做完了、在別台，或不在待做池）。請找生管。",
   "switch_step_started_on_behalf": "你是用管理員／生管身分代換道次，這筆會記成你按的。",
   "switch_step_started_reason_label": "換道次原因（必填）",

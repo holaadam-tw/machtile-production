@@ -16511,7 +16511,8 @@ function machtileSwitchStartedGate(machine) {
     startedToday: Boolean(order) && machtileStationCmdCore.startedToday({
       commandRows: [...state.dailyStationStartRows, ...state.localStationStartRows], reportRows: todayRows,
       machineCode: code, orderNo: order.id, step: order.stationStep, processId: order.processId }),
-    hasTodayReport: Boolean(order) && todayRows.some((row) => row && String(row.process_id || "") === String(order.processId || "")),
+    // 開工確認卡會寫一筆 0／0 的「今日開工」（dailyStart）：那不算報工（雲端 submit 也放行 workStart／dailyStart／pause 的 0 件列）
+    hasTodayReport: Boolean(order) && machtileSwitchStepCore.todayReportBlocks(todayRows, order.processId),
     commandInFlight: Boolean(machtileStationCmd.pending[code] || machtileInstantStartPending[code] || machtileSwitchStarted.pending[code]) || machtileReturnClaimLocks(code),
     unsureHold: Boolean(order) && machtileSwitchStepCore.startedUnsureHold(machtileSwitchStarted.lastResult[code], { orderNo: order.id, step: order.stationStep, nowMs: Date.now() }),
   });
@@ -16714,6 +16715,8 @@ async function machtileSwitchStartedLoadSheet(sheet) {
   sheet.listReady = found.ready;
   sheet.choices = found.choices;
   sheet.targetId = found.choices.length === 1 ? found.choices[0].id : "";
+  // 池列鍵的兩個來源有一個讀失敗（網路／HTTP 錯誤，不是「沒有」）＝不知道該送哪一筆 → 不送 null、不給送，請他再試一次
+  sheet.keyReadFailed = !Array.isArray(heldRows) || !Array.isArray(historyRows);
   const heldKey = machtileReturnClaimCore.heldPoolKey({ rows: heldRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step });
   sheet.fields.poolItemId = machtileSwitchStepCore.sourcePoolKey({ heldKey, historyRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step }).key;
 }
@@ -16776,7 +16779,7 @@ async function machtileSwitchStartedSubmit() {
   if (existing && existing.commandUuid !== sheet.uuid) return;   // 同一台另一筆還在等：不送第二筆
   if (sheet.phase === "confirm") {
     const target = machtileSwitchStartedTarget(sheet);
-    if (!sheet.freshOk || !sheet.listReady || !target) return;
+    if (!sheet.freshOk || !sheet.listReady || sheet.keyReadFailed || !target) return;
     const checked = machtileSwitchStepCore.startedReasonCheck(sheet.role, sheet.reason);
     if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileSwitchStartedRenderSheet(); return; }
     sheet.reasonError = "";
@@ -16924,7 +16927,7 @@ function machtileSwitchStartedRenderSheet(focus) {
   if (sheet.phase === "confirm" || sheet.phase === "sending") {
     const sending = sheet.phase === "sending";
     const listed = !sheet.loading && sheet.freshOk && sheet.listReady && sheet.choices.length > 0;
-    const canSend = !sending && listed && Boolean(target);
+    const canSend = !sending && listed && !sheet.keyReadFailed && Boolean(target);
     const choices = sheet.choices.map((choice) => {
       const label = [stepLine(choice.step, choice.name), choice.quantity === null ? "" : t("switch_step_quantity", { quantity: choice.quantity }),
         t(choice.pooled ? "switch_step_started_tag_pool" : "switch_step_started_tag_unpooled")].filter(Boolean).join(" · ");
@@ -16935,6 +16938,7 @@ function machtileSwitchStartedRenderSheet(focus) {
       ${sheet.loading ? `<p data-switch-step-started-checking role="status">${escapeHtml(t("switch_step_started_checking"))}</p>` : ""}
       ${!sheet.loading && !sheet.freshOk ? notice("bad", "data-switch-step-started-stale", t(sheet.freshKey || "switch_step_started_fresh_failed", steps)) : ""}
       ${!sheet.loading && sheet.freshOk && !sheet.listReady ? notice("bad", "data-switch-step-started-list-failed", t("switch_step_started_list_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.keyReadFailed ? notice("bad", "data-switch-step-started-read-failed", t("switch_step_started_read_failed")) : ""}
       ${!sheet.loading && sheet.freshOk && sheet.listReady && !sheet.choices.length ? notice("warn", "data-switch-step-started-no-other", t("switch_step_started_no_other")) : ""}
       ${listed ? `<p data-switch-step-started-choose>${escapeHtml(t("switch_step_started_choose"))}</p><div class="switch-step-choices" role="radiogroup" data-switch-step-started-choices>${choices}</div>` : ""}
       ${target ? `<p class="station-cmd-notice is-warn" data-switch-step-started-confirm-text>${escapeHtml(t("switch_step_started_confirm_text", steps))}</p>` : ""}
