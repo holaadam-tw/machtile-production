@@ -505,6 +505,9 @@
     const available = [result?.available, details?.available, report?.available].find((value) => Number.isInteger(value));
     if (available === undefined) return out;
     const tol = Number.isInteger(details?.tol) && details.tol > 0 ? details.tol : 0;
+    // Nothing left to report (previous step not reported yet, or already over): a smaller number cannot
+    // fix it, so keep today's sentence and hint instead of suggesting a number.
+    if (available + tol <= 0) return out;
     const entered = wholeNumber(enteredQty);
     const requested = wholeNumber(requestedQty);
     if (entered === null || requested === null || requested <= 0) return out;

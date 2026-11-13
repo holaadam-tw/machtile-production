@@ -620,6 +620,12 @@ check("hard QTY_EXCEEDS_AVAILABLE (real shadow 163 vs 161) → max field value 1
     legacy_snapshot: QTY_BLOCK_PREVIEW_ROW.preview_result.legacy_snapshot };
   assert.equal(core.resultCard(finalRow).kind, "hard");
   assert.deepEqual(core.quantityLimitBlock(finalRow, { enteredQty: 163, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 161, entered: 163 });
+  // Nothing left (previous step not reported yet) or already over: no suggested number; today's sentence stays.
+  for (const avail of [0, -5]) {
+    const none = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+    none.preview_result.available = avail; none.preview_result.legacy_snapshot.report.guard.Details.available = avail;
+    assert.deepEqual(core.quantityLimitBlock(none, { enteredQty: 100, requestedQty: 10 }), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null }, `available ${avail}`);
+  }
 });
 
 check("quantity limit: missing number → max null (keep today's sentence); other codes → null", () => {
