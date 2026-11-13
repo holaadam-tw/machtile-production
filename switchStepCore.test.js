@@ -2363,3 +2363,23 @@ test("phase 2 'reported today' ignores the 0/0 dailyStart the start confirm shee
   const reported = harness({ started: true, order: runningOrder(), todayRows: [row(), row({ report_type: "noon", completed_qty: 5, created_at: "x" })] });
   assert.equal(reported.api.started.gate(reported.machine).reason, "has_reports");
 });
+
+test("return-claim (退回) gate keeps hiding on ANY report row of the step, 0/0 dailyStart included: that is the cloud return_claim rule (CLAIM_ALREADY_STARTED)", () => {
+  // 雲端 20261112200000 machtile_submit_return_claim_command：帳本接單那條路
+  //   `or exists(select 1 from public.production_reports r where r.process_id=v_claim.process_id)` → CLAIM_ALREADY_STARTED
+  // 不看種類、不看數量、不限今天。今日開工（0／0 dailyStart）只在開工 applied 之後才寫，所以那一道一定已經開工、不能退回。
+  // App 只讀得到今天的 dailyStart／noon／finish：「今天有任何一列就不出」是雲端規則的子集，不能放寬成 todayReportBlocks。
+  const RETURN_SQL = process.env.RETURN_CLAIM_CLOUD_SQL || "D:/04_SoftNet/wt-switch-cloud/supabase/migrations/20261112200000_station_return_claim_commands.sql";
+  let sql = "";
+  try { sql = fs.readFileSync(RETURN_SQL, "utf8"); } catch { /* not on this machine */ }
+  if (sql) {
+    const submit = sql.slice(sql.indexOf("create function public.machtile_submit_return_claim_command"), sql.indexOf("create function public.machtile_finish_return_claim_command"));
+    assert.match(submit, /or exists\(select 1 from public\.production_reports r where r\.process_id=v_claim\.process_id\) then\s+raise exception 'CLAIM_ALREADY_STARTED';/,
+      "cloud return_claim: any production_reports row (no type / qty filter) refuses the return");
+  }
+  const dailyStart = { process_id: PROCESS_ID, report_type: "dailyStart", completed_qty: 0, defect_qty: 0 };
+  const h = harness({ returnFlag: true, todayRows: [dailyStart] });
+  assert.equal(h.api.markup(h.machine), "", "a 0/0 dailyStart today hides 「接錯了，退回」");
+  const clean = harness({ returnFlag: true, todayRows: [Object.assign({}, dailyStart, { process_id: "other-step" })] });
+  assert.equal(clean.api.markup(clean.machine), RETURN_BUTTON, "another step's row does not");
+});
