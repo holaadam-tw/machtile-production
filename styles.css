@@ -13153,6 +13153,9 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .station-cmd-status.is-ok { color: var(--green-strong); }
 .station-cmd-status.is-bad { color: #b42318; }
 .station-cmd-status.is-warn { color: #9a5b00; }
+/* 開工被工廠擋下：卡片上要一眼看得到（2026-11-13 A03） */
+.station-cmd-status.station-cmd-start-reject { flex: 1 1 100%; padding: 8px 10px; border-radius: 8px; background: #fdecea; border: 1px solid #f5c2bd; font-size: 15px; line-height: 1.4; }
+.station-cmd-start-reject small { display: block; margin-top: 4px; font-size: 13px; font-weight: 600; color: #7a271a; }
 .station-cmd-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 12px; background: rgba(0, 0, 0, .55); }
 .station-cmd-panel { width: min(640px, 100%); max-height: 92dvh; overflow: auto; border-radius: var(--radius-lg); padding: 18px; background: var(--surface); color: var(--text); border-top: 8px solid var(--green-strong); box-shadow: var(--shadow); }
 .station-cmd-panel.is-stop { border-top-color: #b42318; }

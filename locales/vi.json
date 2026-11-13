@@ -83,6 +83,9 @@
   "start_backfill_rejected": { "value": "Lệnh bắt đầu không được áp dụng nên chưa báo bù; hãy dùng nút báo sản lượng.", "_draft": true },
   "start_backfill_blocked": { "value": "Báo bù khi bắt đầu bị hệ thống chặn, đã hủy báo bù tự động; hãy bấm nút báo sản lượng và làm theo hướng dẫn trên màn hình.", "_draft": true },
   "start_backfill_failed": { "value": "Đã bắt đầu nhưng chưa hoàn tất báo bù; hãy báo sản lượng và báo quản lý.", "_draft": true },
+  "start_reject_station_not_set": { "value": "Máy này chưa được gán phiếu, hãy nhờ quản lý sản xuất cài đặt trên Factory rồi mới bấm Bắt đầu.", "_draft": true },
+  "start_reject_generic": { "value": "{{title}}: {{reason}}", "_draft": true },
+  "start_reject_detail": { "value": "Nhà máy ghi chú: {{detail}}", "_draft": true },
   "hmc_pallet_report_title_draft": {
     "value": "Báo cáo sản lượng nhiều pallet",
     "_draft": true
