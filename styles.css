@@ -13424,3 +13424,4 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .switch-step-choice { min-height: 56px; padding: 10px 14px; border: 2px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 19px; font-weight: 700; text-align: left; cursor: pointer; }
 .switch-step-choice[aria-checked="true"] { border-color: var(--green-strong); background: var(--green-soft); }
 .switch-step-choice:disabled { opacity: 0.6; cursor: default; }
+.switch-step-started-notice { border-left: 4px solid #d97706; padding-left: 8px; font-weight: 700; }

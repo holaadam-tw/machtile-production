@@ -9464,6 +9464,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.status = "signedIn";
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
+  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStartedForgetUser();
   if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStepForgetUser();
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
   const signedTenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || "";
@@ -9499,6 +9500,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.status = "signedOut";
   machtileAuthState.accessToken = "";
   machtileAuthState.email = "";
+  machtileSwitchStartedForgetUser();
   machtileSwitchStepForgetUser();
   machtileAuthState.userId = "";
   machtileAuthState.tenantId = "";
@@ -15127,6 +15129,7 @@ function machtileStationCmdRestorePending() {
 // 否則探測完成前按鈕若可按，會在已有 unconfirmed pending 時另產生新 command_uuid。
 function machtileStationCmdRestorePendingEarly() {
   machtileReturnClaimRestore();   // 「接錯了，退回」等結果中的那筆也一起還原（旗標關＝什麼都不做）
+  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
   machtileStationCmdRestorePending();
 }
@@ -16445,6 +16448,570 @@ document.addEventListener("keydown", (event) => {
   else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
 });
 
+// ==== 換道次（已開工、還沒報工；第 2 階段） ==================================================
+// 設計：ops/codex-inbox/20261113-2230-switchstep-phase2/DESIGN.md §3／§4；快照合約 r2（CONTRACT-r2.md）。
+//   決策在 switchStepCore.js（started* 開頭的函式）。旗標 config.enableSwitchStepStarted 預設 false：
+//   關＝下面每個函式都回空字串／false／直接 return，不讀任何東西、不存任何東西，卡片 HTML 跟以前逐字相同。
+//   跟第 1 階段（enableSwitchStep：退回＋接單兩步）分開，也不需要 enableReturnClaim。
+//   按鈕（已開工、0 件）→ 確認卡（重讀這一道、待做池、這張單的各道、這一道的池列鍵）→ 選目標道次 →
+//   rpc/machtile_submit_switch_step_command（command_uuid 由 App 產生；不確定有沒有送到＝同一個 uuid＋同樣內容重送）→
+//   既有指令輪詢（returnClaimCore.pollPath，同一串 select）看到 applied／rejected／expired。工廠一個交易做完，不會有「退了、沒接到」。
+//   applied 的快照 source_unpooled===true＝原本那一道現在不在任何機台、也不在待做池 → 確認卡、卡片上都留一句「請生管用『設定到這台』重新安排」，
+//   而且管理員／生管從雲端讀最近的這種換道次（換到哪一台平板都看得到）。
+//   畫卡片的函式（Locks／Gate／CardMarkup／NoticesMarkup）只讀不寫。
+// ============================================================================================
+const MACHTILE_SWITCH_STARTED_PENDING_KEY = "machtile.switchStepStartedPending.v1";
+const MACHTILE_SWITCH_STARTED_DISMISSED_KEY = "machtile.switchStepUnpooledDismissed.v1";
+const machtileSwitchStarted = {
+  pending: {},      // 機台代號 → switchStepCore.startedPendingRecord（等伺服器結果中／不確定有沒有送到）
+  timers: {},       // 機台代號 → 輪詢 timer
+  lastResult: {},   // 機台代號 → { view, at, orderNo, step }
+  sheet: null,      // 目前開著的確認卡
+  notices: [],      // 雲端讀到的「第 N 道不在任何機台、也不在待做池」（switchStepCore.unpooledNotices）
+  localNotices: [], // 這台平板剛換好的（雲端還沒讀回來之前也要看得到）
+  noticesLoading: null,
+  sessionKey: "",
+};
+
+function machtileSwitchStartedEnabled() {
+  return Boolean(machtileSwitchStepCore) && machtileSwitchStepCore.startedEnabled({ flag: config.enableSwitchStepStarted })
+    && Boolean(machtileReturnClaimCore) && Boolean(machtileStationCmdCore) && Boolean(machtileDispatchPoolCore) && state.source === "supabase";
+}
+
+function machtileSwitchStartedReleased(rec) {
+  return Boolean(rec && machtileStationCmdCore?.lockReleased(rec.startedAt, Date.now()));
+}
+
+// 這台有一筆換道次在等結果 → 開工／停工／報工／完工／選工單／批次都先鎖住（接在 machtileReturnClaimLocks／BlockMessage 最前面）。旗標關＝永遠 false。
+function machtileSwitchStartedLocks(code) {
+  if (!machtileSwitchStartedEnabled()) return false;
+  const rec = machtileSwitchStarted.pending[String(code || "").trim().toUpperCase()];
+  return machtileSwitchStepCore.startedLocks(rec, machtileSwitchStartedReleased(rec));
+}
+
+function machtileSwitchStartedSession() {
+  return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
+}
+
+function machtileSwitchStartedGate(machine) {
+  if (!machtileSwitchStartedEnabled() || !machine) return { show: false, reason: "flag_off", needsReason: false };
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine.order || null;
+  const local = machtilePickStartLocal[code];
+  const startedLocally = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
+  const todayRows = machtileCardState.todayStatus === "ok" && Array.isArray(machtileCardState.todayRows) ? machtileCardState.todayRows : [];
+  return machtileSwitchStepCore.startedVisibility({
+    enabled: true, role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    cardDetailsReady: machtileDeferredLoadState.get("card-details")?.status === "ready",
+    isUnassignedBucket: machine.isUnassignedBucket === true, machineCode: code, order,
+    multiStation: (Array.isArray(config.multiStationMachines) ? config.multiStationMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    actualStartAt: order ? (machtileCardActivityOf(order)?.actualStartAt || order.actualStartAt || null) : null,
+    startedLocally,
+    startedToday: Boolean(order) && machtileStationCmdCore.startedToday({
+      commandRows: [...state.dailyStationStartRows, ...state.localStationStartRows], reportRows: todayRows,
+      machineCode: code, orderNo: order.id, step: order.stationStep, processId: order.processId }),
+    hasTodayReport: Boolean(order) && todayRows.some((row) => row && String(row.process_id || "") === String(order.processId || "")),
+    commandInFlight: Boolean(machtileStationCmd.pending[code] || machtileInstantStartPending[code] || machtileSwitchStarted.pending[code]) || machtileReturnClaimLocks(code),
+    unsureHold: Boolean(order) && machtileSwitchStepCore.startedUnsureHold(machtileSwitchStarted.lastResult[code], { orderNo: order.id, step: order.stationStep, nowMs: Date.now() }),
+  });
+}
+
+function machtileSwitchStartedText(view) {
+  return machtileTranslate(view.messageKey, view.params || {});
+}
+
+function machtileSwitchStartedDismissed() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MACHTILE_SWITCH_STARTED_DISMISSED_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item).toLowerCase()) : []);
+  } catch { return new Set(); }
+}
+
+// 這台機台的「第 N 道不在任何機台、也不在待做池」提醒（雲端讀到的＋這台平板剛換好的）。只讀。
+function machtileSwitchStartedNoticesFor(code) {
+  if (!machtileSwitchStarted.notices.length && !machtileSwitchStarted.localNotices.length) return [];
+  const dismissed = machtileSwitchStartedDismissed();
+  const role = machtileActualRole();
+  const local = machtileSwitchStepCore.unpooledNotices({ rows: machtileSwitchStarted.localNotices, nowMs: Date.now(), role, dismissed });
+  const seen = new Set();
+  return [...machtileSwitchStarted.notices, ...local].filter((notice) => {
+    if (notice.machineCode !== code || seen.has(notice.commandUuid) || dismissed.has(notice.commandUuid)) return false;
+    seen.add(notice.commandUuid);
+    return true;
+  });
+}
+
+function machtileSwitchStartedNoticesMarkup(code) {
+  const canDismiss = machtileSwitchStepCore.startedNeedsReason(machtileActualRole());
+  return machtileSwitchStartedNoticesFor(code).map((notice) => `<p class="station-cmd-status is-warn switch-step-started-notice" data-no-detail data-switch-step-unpooled="${escapeHtml(notice.commandUuid)}" role="alert">${escapeHtml(machtileTranslate("switch_step_started_unpooled_card", { order: notice.orderNo, from: notice.from ?? "—", to: notice.to ?? "—", machine: notice.machineCode }))}</p>${canDismiss
+    ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-unpooled-dismiss="${escapeHtml(notice.commandUuid)}">${escapeHtml(machtileTranslate("switch_step_started_unpooled_dismiss"))}</button>` : ""}`).join("");
+}
+
+// 卡片上的那一段：提醒、等待中的一行字（＋重送）、最後一次結果、或按鈕。只讀。旗標關＝空字串。
+function machtileSwitchStartedCardMarkup(machine) {
+  if (!machtileSwitchStartedEnabled() || !machine) return "";
+  const code = machtileStationCmdMachineCode(machine);
+  const notices = machtileSwitchStartedNoticesMarkup(code);
+  const rec = machtileSwitchStarted.pending[code];
+  if (rec) {
+    if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, machine.order || null)) {
+      return notices + (machtileSwitchStartedLocks(code)
+        ? `<p class="station-cmd-status is-wait" data-no-detail data-switch-step-started-status="other-order" role="status">${escapeHtml(machtileTranslate("switch_step_started_busy"))}</p>` : "");
+    }
+    const uncertain = rec.unconfirmed === true;
+    const key = rec.notFound ? "switch_step_started_not_found" : uncertain ? "switch_step_started_uncertain" : "switch_step_started_card_pending";
+    return `${notices}<p class="station-cmd-status is-${uncertain || rec.notFound ? "warn" : "wait"}" data-no-detail data-switch-step-started-status="${rec.notFound ? "not-found" : uncertain ? "uncertain" : "pending"}" role="status">${escapeHtml(machtileTranslate(key, { from: rec.step, to: rec.targetStep }))}</p>${uncertain || rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-started-retry="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_resend"))}</button>` : ""}${rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-started-dismiss="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_dismiss"))}</button>` : ""}`;
+  }
+  const order = machine.order || null;
+  const last = machtileSwitchStarted.lastResult[code];
+  const note = machtileSwitchStepCore.startedLastResultVisible(last, { orderNo: order?.id, step: order?.stationStep, nowMs: Date.now() })
+    ? `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-no-detail data-switch-step-started-status="${escapeHtml(last.view.phase)}" role="status">${escapeHtml(machtileSwitchStartedText(last.view))}</p>` : "";
+  const button = machtileSwitchStartedGate(machine).show
+    ? `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-started-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_button"))}</button>` : "";
+  return notices + note + button;
+}
+
+function machtileSwitchStartedSave() {
+  const own = {};
+  Object.keys(machtileSwitchStarted.pending).forEach((code) => {
+    const { emptyPolls, releasedShown, ...rest } = machtileSwitchStarted.pending[code];
+    own[code] = rest;
+  });
+  try {
+    const plain = machtileSwitchStepCore.startedMergeForSave(localStorage.getItem(MACHTILE_SWITCH_STARTED_PENDING_KEY), own, Date.now(), machtileSwitchStartedSession());
+    localStorage.setItem(MACHTILE_SWITCH_STARTED_PENDING_KEY, JSON.stringify(plain));
+  } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+}
+
+// 載入資料時呼叫（machtileStationCmdRestorePendingEarly，第一次畫卡片之前）：把目前登入的這個人上次還沒有結果的換道次放回記憶體、繼續輪詢；
+// 順便（不等）讀一次雲端的「不在待做池」提醒。換了人＝記憶體裡前一個人的先放掉（localStorage 那筆不動）。
+function machtileSwitchStartedRestore() {
+  if (!machtileSwitchStartedEnabled()) return;
+  const session = machtileSwitchStartedSession();
+  const sessionKey = `${session.tenantId}|${session.appUserId}`;
+  if (sessionKey !== machtileSwitchStarted.sessionKey) {
+    machtileSwitchStarted.sessionKey = sessionKey;
+    machtileSwitchStarted.lastResult = {};
+    machtileSwitchStarted.localNotices = [];
+  }
+  Object.keys(machtileSwitchStarted.pending).forEach((code) => {
+    if (machtileSwitchStepCore.startedSameSession(machtileSwitchStarted.pending[code], session)) return;
+    clearTimeout(machtileSwitchStarted.timers[code]);
+    delete machtileSwitchStarted.timers[code];
+    delete machtileSwitchStarted.pending[code];
+  });
+  let raw = null;
+  try { raw = localStorage.getItem(MACHTILE_SWITCH_STARTED_PENDING_KEY); } catch { raw = null; }
+  const restored = machtileSwitchStepCore.startedRestoreForSession(raw, Date.now(), session);
+  Object.keys(restored).forEach((code) => {
+    if (machtileSwitchStarted.pending[code]) return;
+    machtileSwitchStarted.pending[code] = restored[code];
+    if (!restored[code].notFound) machtileSwitchStartedPoll(code);
+  });
+  void machtileSwitchStartedLoadNotices();
+}
+
+// 雲端最近 72 小時 applied 的 switch_step（只看快照 source_unpooled===true 的）。讀不到＝保留上次的，不跳訊息。
+async function machtileSwitchStartedLoadNotices() {
+  if (!machtileSwitchStartedEnabled()) return;
+  if (machtileSwitchStarted.noticesLoading) return machtileSwitchStarted.noticesLoading;
+  const since = new Date(Date.now() - machtileSwitchStepCore.UNPOOLED_NOTICE_ADMIN_MS).toISOString();
+  machtileSwitchStarted.noticesLoading = (async () => {
+    try {
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,status,requested_at,applied_at,legacy_snapshot&command_type=eq.switch_step&status=eq.applied&applied_at=gte.${encodeURIComponent(since)}&order=applied_at.desc&limit=200`);
+      if (!Array.isArray(rows)) return;
+      machtileSwitchStarted.notices = machtileSwitchStepCore.unpooledNotices({ rows, nowMs: Date.now(), role: machtileActualRole(), dismissed: machtileSwitchStartedDismissed() });
+      machtileStationCmdRerender();
+    } catch (error) {
+      console.warn("switch step (started): unpooled notices unavailable", error);
+    } finally {
+      machtileSwitchStarted.noticesLoading = null;
+    }
+  })();
+  return machtileSwitchStarted.noticesLoading;
+}
+
+// 管理員／生管按「已安排」：只在這台平板收起（雲端的換道次紀錄不動）
+function machtileSwitchStartedDismissNotice(uuid) {
+  if (!machtileSwitchStepCore.startedNeedsReason(machtileActualRole())) return;
+  const set = machtileSwitchStartedDismissed();
+  set.add(String(uuid || "").toLowerCase());
+  try { localStorage.setItem(MACHTILE_SWITCH_STARTED_DISMISSED_KEY, JSON.stringify([...set].slice(-200))); } catch { /* ignore */ }
+  machtileStationCmdRerender();
+}
+
+function machtileSwitchStartedForgetUser() {
+  try {
+    if (machtileSwitchStarted.sheet) { machtileSwitchStarted.sheet.phase = "closing"; machtileSwitchStartedCloseSheet(); }
+    machtileSwitchStarted.lastResult = {};
+    machtileSwitchStarted.localNotices = [];
+  } catch { /* still loading: nothing to forget */ }
+}
+
+function machtileSwitchStartedCloseSheet() {
+  const sheet = machtileSwitchStarted.sheet;
+  if (sheet && sheet.phase === "sending") return;
+  document.getElementById("machtileSwitchStartedSheet")?.remove();
+  machtileSwitchStarted.sheet = null;
+  if (!sheet) return;
+  const target = sheet.returnFocus && sheet.returnFocus.isConnected ? sheet.returnFocus
+    : document.querySelector(`#workOrderGrid [data-switch-step-started-open="${sheet.code}"], #workOrderGrid [data-switch-step-started-retry="${sheet.code}"]`);
+  try { target?.focus(); } catch { /* ignore */ }
+}
+
+function machtileSwitchStartedNewSheet(sheet) {
+  machtileSwitchStartedCloseSheet();
+  if (machtileSwitchStarted.sheet) return false;
+  machtileSwitchStarted.sheet = sheet;
+  const holder = document.createElement("div");
+  holder.id = "machtileSwitchStartedSheet";
+  holder.className = "station-cmd-overlay";
+  document.body.appendChild(holder);
+  machtileSwitchStartedRenderSheet(true);
+  return true;
+}
+
+function machtileSwitchStartedTarget(sheet) {
+  return sheet ? sheet.choices.find((choice) => choice.id === sheet.targetId) || null : null;
+}
+
+// 開確認卡時的四個讀取（都只是讀）：這一道（還在這台、0 件）、待做池、這張單的各道、這一道的池列鍵。
+async function machtileSwitchStartedLoadSheet(sheet) {
+  const code = sheet.code;
+  let fresh = { ok: false, reason: "read_failed", partNo: null, workOrderId: "" };
+  try {
+    const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,qty_defect,work_orders!inner(id,work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(sheet.fields.processId)}`);
+    fresh = machtileSwitchStepCore.startedFreshCheck({ machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step, row: Array.isArray(rows) ? rows[0] : null });
+  } catch (error) {
+    console.warn("switch step (started): work_order_processes re-read failed", error);
+  }
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  sheet.freshOk = fresh.ok;
+  sheet.freshKey = fresh.ok ? "" : fresh.reason === "read_failed" ? "switch_step_started_fresh_failed" : fresh.reason === "has_reports" ? "switch_step_started_err_reported" : "switch_step_started_fresh_changed";
+  sheet.fields.partNo = fresh.partNo;
+  if (!fresh.ok) return;
+  const workOrderId = fresh.workOrderId;
+  const processesRead = workOrderId
+    ? supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,machines!work_order_processes_machine_id_fkey(machine_code)&work_order_id=eq.${encodeURIComponent(workOrderId)}&order=process_order.asc`)
+      .then((rows) => (Array.isArray(rows) ? rows : null)).catch((error) => { console.warn("switch step (started): steps of the order unavailable", error); return null; })
+    : Promise.resolve(null);
+  const heldRead = supabaseFetch(`rpc/${machtileReturnClaimCore.HELD_CLAIMS_RPC}`, { method: "POST", body: "{}" })
+    .catch((error) => { console.warn("switch step (started): held claim lookup unavailable", error); return null; });
+  const historyRead = supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,legacy_snapshot&machine_code=eq.${encodeURIComponent(code)}&expected_order_no=eq.${encodeURIComponent(sheet.fields.orderNo)}&command_type=in.(claim_next,return_claim,switch_step)&status=eq.applied&order=requested_at.desc&limit=200`)
+    .catch((error) => { console.warn("switch step (started): command history unavailable", error); return null; });
+  const [poolOk, processes, heldRows, historyRows] = await Promise.all([machtileSwitchStepReadPool(), processesRead, heldRead, historyRead]);
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const found = machtileSwitchStepCore.startedTargets({
+    orderNo: sheet.fields.orderNo, currentStep: sheet.fields.step,
+    poolReady: poolOk && machtileDispatchPoolState.status === "ready", poolItems: machtileDispatchPoolState.items,
+    processesReady: Array.isArray(processes), processes,
+    machine: machtileSwitchStepMachineInfo(machine, code), allowUnpooled: config.switchStepStartedAllowUnpooled === true,
+  });
+  sheet.listReady = found.ready;
+  sheet.choices = found.choices;
+  sheet.targetId = found.choices.length === 1 ? found.choices[0].id : "";
+  const heldKey = machtileReturnClaimCore.heldPoolKey({ rows: heldRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step });
+  sheet.fields.poolItemId = machtileSwitchStepCore.sourcePoolKey({ heldKey, historyRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step }).key;
+}
+
+async function machtileSwitchStartedOpen(code, returnFocus) {
+  if (!machtileSwitchStartedEnabled()) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machine ? machtileSwitchStartedGate(machine) : { show: false };
+  if (!gate.show || machtileSwitchStarted.pending[code]) return;
+  let uuid;
+  try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast(machtileTranslate("switch_step_started_old_tablet")); return; }
+  const order = machine.order;
+  const sheet = {
+    code, uuid, role: machtileActualRole(), phase: "confirm", loading: true, freshOk: false, freshKey: "", needsReason: gate.needsReason, reason: "", reasonError: "",
+    returnFocus: returnFocus || null, args: null, messageKey: "", view: null, listReady: false, choices: [], targetId: "",
+    fields: { poolItemId: "", orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "", targetStep: null },
+  };
+  if (!machtileSwitchStartedNewSheet(sheet)) return;
+  await machtileSwitchStartedLoadSheet(sheet);
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  sheet.loading = false;
+  machtileSwitchStartedRenderSheet();
+}
+
+function machtileSwitchStartedChoose(id) {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!sheet || sheet.phase !== "confirm" || sheet.loading || !sheet.choices.some((choice) => choice.id === id)) return;
+  sheet.targetId = id;
+  machtileSwitchStartedRenderSheet();
+}
+
+// 「不確定有沒有送到」的那一筆 → 從卡片再打開，用同一個 uuid＋同樣內容重送（伺服器看到同一個 uuid＝回原本那一列，不會換兩次）
+function machtileSwitchStartedOpenRetry(code, returnFocus) {
+  if (!machtileSwitchStartedEnabled()) return;
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec || !(rec.unconfirmed || rec.notFound)) return;
+  const cardOrder = machtileStationCmdMachineByCode(code)?.order || null;
+  if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, cardOrder)) return;
+  machtileSwitchStartedNewSheet({
+    code, uuid: rec.commandUuid, role: machtileActualRole(), phase: "uncertain", loading: false, freshOk: true, freshKey: "", needsReason: false,
+    reason: "", reasonError: "", returnFocus: returnFocus || null, args: rec.args, view: null, listReady: false, choices: [], targetId: "",
+    messageKey: rec.notFound ? "switch_step_started_not_found" : "switch_step_started_uncertain",
+    fields: { poolItemId: rec.args.p_pool_item_id || "", orderNo: rec.orderNo, step: rec.step, processId: rec.processId, partNo: rec.args.p_expected_part_no, part: "", process: "", targetStep: rec.targetStep },
+  });
+}
+
+function machtileSwitchStartedDismiss(code) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec || !rec.notFound) return;
+  delete machtileSwitchStarted.pending[code];
+  machtileSwitchStartedSave();
+  machtileStationCmdRerender();
+}
+
+async function machtileSwitchStartedSubmit() {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!machtileSwitchStartedEnabled() || !sheet || sheet.loading || !["confirm", "uncertain"].includes(sheet.phase)) return;
+  const code = sheet.code;
+  const existing = machtileSwitchStarted.pending[code];
+  if (existing && existing.commandUuid !== sheet.uuid) return;   // 同一台另一筆還在等：不送第二筆
+  if (sheet.phase === "confirm") {
+    const target = machtileSwitchStartedTarget(sheet);
+    if (!sheet.freshOk || !sheet.listReady || !target) return;
+    const checked = machtileSwitchStepCore.startedReasonCheck(sheet.role, sheet.reason);
+    if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileSwitchStartedRenderSheet(); return; }
+    sheet.reasonError = "";
+    try {
+      sheet.args = machtileSwitchStepCore.startedBuildArgs({ commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
+        step: sheet.fields.step, targetStep: target.step, targetPoolItemId: target.sourceKey, partNo: sheet.fields.partNo, reason: checked.value, role: sheet.role });
+    } catch (error) {
+      console.warn("switch step (started): cannot build args", error);
+      sheet.phase = "failed"; sheet.messageKey = "switch_step_started_err_card_data"; machtileSwitchStartedRenderSheet(); return;
+    }
+    sheet.fields.targetStep = target.step;
+  }
+  if (!sheet.args) return;
+  sheet.phase = "sending";
+  machtileSwitchStartedRenderSheet();
+  // 同一次嘗試沿用第一次按下的時間；之前查不到（notFound）才重送的，從現在重新算
+  const startedAt = existing && !existing.notFound ? existing.startedAt : Date.now();
+  const record = (extra) => machtileSwitchStepCore.startedPendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+    targetStep: sheet.fields.targetStep, processId: sheet.fields.processId, ...machtileSwitchStartedSession(), args: sheet.args, startedAt, ...extra });
+  const uncertain = () => {
+    machtileSwitchStarted.pending[code] = record({ unconfirmed: true });
+    machtileSwitchStartedSave();
+    machtileSwitchStartedPoll(code);
+    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "uncertain"; sheet.messageKey = "switch_step_started_uncertain"; machtileSwitchStartedRenderSheet(); }
+    machtileStationCmdRerender();
+  };
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.STARTED_SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = machtileSwitchStepCore.startedSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error));
+    if (info.kind === "uncertain") { uncertain(); return; }
+    console.warn("switch step (started): submit refused", info.code || info.kind, error);
+    if (machtileSwitchStarted.pending[code]?.commandUuid === sheet.uuid) { delete machtileSwitchStarted.pending[code]; machtileSwitchStartedSave(); }
+    clearTimeout(machtileSwitchStarted.timers[code]);
+    delete machtileSwitchStarted.timers[code];
+    const params = { from: sheet.fields.step, to: sheet.fields.targetStep };
+    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "failed"; sheet.messageKey = info.messageKey; machtileSwitchStartedRenderSheet(); }
+    else showToast(machtileTranslate(info.messageKey, params));
+    machtileStationCmdRerender();
+    return;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // 伺服器沒有回這一筆 → 不當成功也不當失敗：照「不確定」處理，輪詢去查
+  if (!machtileReturnClaimCore.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
+  const view = machtileSwitchStepCore.startedResultView(row, { from: sheet.fields.step, to: sheet.fields.targetStep });
+  machtileSwitchStarted.pending[code] = record({ unconfirmed: false, lastStatus: view.status });
+  delete machtileSwitchStarted.lastResult[code];
+  machtileSwitchStartedSave();
+  if (view.terminal) { machtileSwitchStartedFinish(code, view, row); return; }
+  if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+  machtileSwitchStartedPoll(code);
+  machtileStationCmdRerender();
+}
+
+// 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
+function machtileSwitchStartedFinish(code, view, row) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec) return;
+  clearTimeout(machtileSwitchStarted.timers[code]);
+  delete machtileSwitchStarted.timers[code];
+  delete machtileSwitchStarted.pending[code];
+  machtileSwitchStartedSave();
+  machtileSwitchStarted.lastResult[code] = { view, at: Date.now(), orderNo: rec.orderNo, step: rec.step };
+  if (view.phase === "applied") {
+    delete machtilePickStartLocal[code];
+    // 原本那一道現在不在任何機台、也不在待做池：這台平板馬上看得到（雲端那份下面重讀）
+    if (view.sourceUnpooled && row) machtileSwitchStarted.localNotices = [...machtileSwitchStarted.localNotices.filter((item) => item.command_uuid !== row.command_uuid), row];
+  } else console.warn("switch step (started): not applied", view.phase, view.code);
+  const sheet = machtileSwitchStarted.sheet;
+  if (sheet && sheet.code === code && sheet.uuid === rec.commandUuid) { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+  machtileStationCmdRerender();
+  showToast(view.noticeKey ? `${machtileSwitchStartedText(view)} ${machtileTranslate(view.noticeKey, view.params)}` : machtileSwitchStartedText(view));
+  // 成功＝機台換了道次；沒成功＝卡片資料多半已經過時。兩種都重讀一次（卡片＋待做池）。
+  void machtileRefreshAfterApplied(code, machtileSwitchStepCore.STARTED_COMMAND_TYPE);
+  if (view.sourceUnpooled) void machtileSwitchStartedLoadNotices();
+}
+
+function machtileSwitchStartedPoll(code) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!machtileSwitchStepCore || !machtileStationCmdCore || !rec) return;
+  clearTimeout(machtileSwitchStarted.timers[code]);
+  machtileSwitchStarted.timers[code] = setTimeout(async () => {
+    const current = machtileSwitchStarted.pending[code];
+    if (!current || current.commandUuid !== rec.commandUuid) return;
+    try {
+      const rows = await supabaseFetch(machtileReturnClaimCore.pollPath(current.commandUuid));
+      if (machtileSwitchStarted.pending[code] !== current) return;
+      const row = Array.isArray(rows) ? rows[0] : null;
+      const sheet = machtileSwitchStarted.sheet;
+      const sheetIsThis = Boolean(sheet) && sheet.code === code && sheet.uuid === current.commandUuid;
+      if (row) {
+        const view = machtileSwitchStepCore.startedResultView(row, { from: current.step, to: current.targetStep });
+        if (view.terminal) { current.unconfirmed = false; machtileSwitchStartedFinish(code, view, row); return; }
+        if (current.unconfirmed || current.notFound || current.lastStatus !== view.status) {
+          current.unconfirmed = false; current.notFound = false; current.lastStatus = view.status;
+          machtileSwitchStartedSave();
+          if (sheetIsThis && sheet.phase !== "sending") { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+          machtileStationCmdRerender();
+        }
+      } else if (current.unconfirmed) {
+        current.emptyPolls = (current.emptyPolls || 0) + 1;
+        if (machtileStationCmdCore.unconfirmedNotSent(current, Date.now())) {
+          // 送出時網路斷、之後連續查不到＝沒送到：停止輪詢、解開這台；紀錄留著，重送仍是同一個 uuid
+          current.notFound = true;
+          delete machtileSwitchStarted.timers[code];
+          machtileSwitchStartedSave();
+          if (sheetIsThis && sheet.phase === "uncertain") { sheet.messageKey = "switch_step_started_not_found"; machtileSwitchStartedRenderSheet(); }
+          machtileStationCmdRerender();
+          return;
+        }
+      }
+    } catch (error) {
+      if (machtileReturnClaimCore.isMissingResourceError(error)) {
+        delete machtileSwitchStarted.timers[code];
+        delete machtileSwitchStarted.pending[code];
+        machtileSwitchStartedSave();
+        machtileStationCmdRerender();
+        return;
+      }
+      console.warn("switch step (started) poll failed; will retry", error);
+    }
+    if (!current.releasedShown && machtileSwitchStartedReleased(current)) { current.releasedShown = true; machtileStationCmdRerender(); }
+    machtileSwitchStartedPoll(code);
+  }, machtileStationCmdCore.pollDelay(Date.now() - rec.startedAt));
+}
+
+function machtileSwitchStartedRenderSheet(focus) {
+  const sheet = machtileSwitchStarted.sheet;
+  const holder = document.getElementById("machtileSwitchStartedSheet");
+  if (!sheet || !holder) return;
+  const t = machtileTranslate;
+  const target = machtileSwitchStartedTarget(sheet);
+  const toStep = target ? target.step : sheet.fields.targetStep;
+  const steps = { from: sheet.fields.step, to: toStep ?? "—", order: sheet.fields.orderNo };
+  const stepLine = (step, name) => [t("return_claim_step_value", { step }), name].filter(Boolean).join(" · ");
+  const notice = (tone, name, message) => `<p class="station-cmd-notice is-${tone}" role="alert" ${name}>${escapeHtml(message)}</p>`;
+  const head = `<p class="station-cmd-notice" data-switch-step-started-current>${escapeHtml(t("switch_step_started_current", { step: stepLine(sheet.fields.step, sheet.fields.process) }))}</p>`;
+  let body = "";
+  let actions = "";
+  if (sheet.phase === "confirm" || sheet.phase === "sending") {
+    const sending = sheet.phase === "sending";
+    const listed = !sheet.loading && sheet.freshOk && sheet.listReady && sheet.choices.length > 0;
+    const canSend = !sending && listed && Boolean(target);
+    const choices = sheet.choices.map((choice) => {
+      const label = [stepLine(choice.step, choice.name), choice.quantity === null ? "" : t("switch_step_quantity", { quantity: choice.quantity }),
+        t(choice.pooled ? "switch_step_started_tag_pool" : "switch_step_started_tag_unpooled")].filter(Boolean).join(" · ");
+      return `<button type="button" class="switch-step-choice" role="radio" aria-checked="${choice.id === sheet.targetId ? "true" : "false"}" data-switch-step-started-choice="${escapeHtml(choice.id)}" data-switch-step-started-pooled="${choice.pooled ? "1" : "0"}"${sending ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+    }).join("");
+    body = `${head}
+      ${sheet.needsReason ? `<p class="station-cmd-notice is-warn" role="note" data-switch-step-started-on-behalf>${escapeHtml(t("switch_step_started_on_behalf"))}</p>` : ""}
+      ${sheet.loading ? `<p data-switch-step-started-checking role="status">${escapeHtml(t("switch_step_started_checking"))}</p>` : ""}
+      ${!sheet.loading && !sheet.freshOk ? notice("bad", "data-switch-step-started-stale", t(sheet.freshKey || "switch_step_started_fresh_failed", steps)) : ""}
+      ${!sheet.loading && sheet.freshOk && !sheet.listReady ? notice("bad", "data-switch-step-started-list-failed", t("switch_step_started_list_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.listReady && !sheet.choices.length ? notice("warn", "data-switch-step-started-no-other", t("switch_step_started_no_other")) : ""}
+      ${listed ? `<p data-switch-step-started-choose>${escapeHtml(t("switch_step_started_choose"))}</p><div class="switch-step-choices" role="radiogroup" data-switch-step-started-choices>${choices}</div>` : ""}
+      ${target ? `<p class="station-cmd-notice is-warn" data-switch-step-started-confirm-text>${escapeHtml(t("switch_step_started_confirm_text", steps))}</p>` : ""}
+      <ul class="station-cmd-legacy" data-switch-step-started-explain>
+        <li>${escapeHtml(t("switch_step_started_explain_stop", steps))}</li>
+        <li>${escapeHtml(t("switch_step_started_explain_set"))}</li>
+      </ul>
+      ${sheet.needsReason ? `<label class="station-cmd-daily" for="switchStartedReason">${escapeHtml(t("switch_step_started_reason_label"))}
+        <textarea id="switchStartedReason" data-switch-step-started-reason maxlength="${machtileSwitchStepCore.STARTED_REASON_MAX}" rows="3" required aria-required="true"${sheet.reasonError ? ' aria-invalid="true"' : ""}${sending ? " readonly" : ""}>${escapeHtml(sheet.reason)}</textarea></label>` : ""}
+      ${sheet.reasonError ? `<p class="station-cmd-notice is-bad" role="alert" data-switch-step-started-reason-error>${escapeHtml(t(sheet.reasonError))}</p>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-started-confirm ${canSend ? "" : "disabled"}>${escapeHtml(sending ? t("switch_step_started_sending") : target ? t("switch_step_started_confirm", { to: target.step }) : t("switch_step_started_confirm_none"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-started-close ${sending ? "disabled" : ""}>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "uncertain") {
+    body = `${head}${notice("warn", 'data-switch-step-started-result="uncertain"', t(sheet.messageKey || "switch_step_started_uncertain", steps))}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-started-confirm>${escapeHtml(t("switch_step_started_resend"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
+  } else if (sheet.phase === "failed") {
+    body = `${head}${notice("bad", 'data-switch-step-started-result="failed"', t(sheet.messageKey || "switch_step_started_err_generic", steps))}`;
+    actions = `<button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close"))}</button>`;
+  } else {
+    const view = sheet.view || machtileSwitchStepCore.startedResultView({ status: "pending" }, steps);
+    const lines = [view.terminal ? machtileSwitchStartedText(view) : t("switch_step_started_progress")];
+    body = `${head}<section class="station-cmd-result is-${escapeHtml(view.tone)}" data-switch-step-started-result="${escapeHtml(view.phase)}" role="status">${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</section>
+      ${view.noticeKey ? notice("warn", "data-switch-step-started-unpooled", t(view.noticeKey, view.params)) : ""}`;
+    actions = `<button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t(view.terminal ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  const reasonHadFocus = Boolean(document.activeElement?.matches?.("[data-switch-step-started-reason]"));
+  const order = [sheet.fields.orderNo, [sheet.fields.partNo, sheet.fields.part].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-stop" role="dialog" aria-modal="true" aria-labelledby="switchStartedTitle" data-switch-step-started-sheet="${escapeHtml(sheet.code)}">
+      <header><h2 id="switchStartedTitle">${escapeHtml(t("switch_step_started_title", { order }))}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  if (focus || hadFocusInside) {
+    const focusTarget = (reasonHadFocus ? holder.querySelector("[data-switch-step-started-reason]") : null)
+      || holder.querySelector("[data-switch-step-started-close]:not([disabled])") || holder.querySelector("h2");
+    try { focusTarget?.focus(); } catch { /* ignore */ }
+  }
+}
+
+// 卡片按鈕與確認卡的點擊（document 層代理，接在「接錯了，退回」前面）。旗標關時畫面上沒有這些元素，一律回 false。
+function machtileSwitchStartedHandleClick(event) {
+  if (!machtileSwitchStartedEnabled()) return false;
+  const target = event.target;
+  const open = target.closest("[data-switch-step-started-open]");
+  if (open) { void machtileSwitchStartedOpen(open.dataset.switchStepStartedOpen, open); return true; }
+  const retry = target.closest("[data-switch-step-started-retry]");
+  if (retry) { machtileSwitchStartedOpenRetry(retry.dataset.switchStepStartedRetry, retry); return true; }
+  const dismiss = target.closest("[data-switch-step-started-dismiss]");
+  if (dismiss) { machtileSwitchStartedDismiss(dismiss.dataset.switchStepStartedDismiss); return true; }
+  const noticeDismiss = target.closest("[data-switch-step-unpooled-dismiss]");
+  if (noticeDismiss) { machtileSwitchStartedDismissNotice(noticeDismiss.dataset.switchStepUnpooledDismiss); return true; }
+  if (!target.closest("#machtileSwitchStartedSheet")) return false;
+  const choice = target.closest("[data-switch-step-started-choice]");
+  if (choice) { machtileSwitchStartedChoose(choice.dataset.switchStepStartedChoice); return true; }
+  if (target.closest("[data-switch-step-started-confirm]")) { void machtileSwitchStartedSubmit(); return true; }
+  if (target.closest("[data-switch-step-started-close]")) { machtileSwitchStartedCloseSheet(); return true; }
+  return true;
+}
+
+document.addEventListener("input", (event) => {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!sheet || !event.target?.matches?.("#machtileSwitchStartedSheet [data-switch-step-started-reason]")) return;
+  sheet.reason = event.target.value;
+  if (sheet.reasonError) {
+    sheet.reasonError = "";
+    document.querySelector("#machtileSwitchStartedSheet [data-switch-step-started-reason-error]")?.remove();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !machtileSwitchStarted.sheet || !document.getElementById("machtileSwitchStartedSheet")) return;
+  event.preventDefault();
+  machtileSwitchStartedCloseSheet();
+});
+// ==== 換道次（已開工）到此 ====
+
 // ============================================================================================
 // 機台卡片「接錯了，退回」（作業員退回自己接、還沒開工的單；P2，owner 2026-11-12 Q4／Q5）。
 //   合約與決策在 returnClaimCore.js 檔頭（CONTRACT-P2 r1）。旗標 config.enableReturnClaim 預設 false：
@@ -16472,6 +17039,7 @@ function machtileReturnClaimReleased(rec) {
 
 // 這台有一筆退回在等結果 → 開工／報工／完工先鎖住（合約 §5）。旗標關＝永遠 false。
 function machtileReturnClaimLocks(code) {
+  if (machtileSwitchStartedLocks(code)) return true;
   if (!machtileReturnClaimEnabled()) return false;
   if (machtileSwitchStepHolds(code)) return true;
   const rec = machtileReturnClaim.pending[String(code || "").trim().toUpperCase()];
@@ -16481,6 +17049,7 @@ function machtileReturnClaimLocks(code) {
 // 卡片以外的入口（批次開工／停工、批次與單台報工、選工單／接單）：這台的退回還鎖著就用這一句擋下來。
 // 沒鎖、旗標關＝空字串＝照舊。只讀。
 function machtileReturnClaimBlockMessage(code) {
+  if (machtileSwitchStartedLocks(code)) return machtileTranslate("switch_step_started_busy");
   if (machtileSwitchStepClaimPass(code)) return "";
   return machtileReturnClaimLocks(code) ? machtileTranslate(machtileSwitchStepActive(code) ? "switch_step_busy" : "return_claim_busy") : "";
 }
@@ -17430,7 +17999,7 @@ function renderMachineCard(machine) {
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}${machtileSwitchStartedCardMarkup(machine)}
       ${!pickActions || pickActions.includes("select") ? machtileCardPoolEntryMarkup(machine) : ""}
 
       ${order ? `
@@ -28096,6 +28665,7 @@ function bindEvents() {
       return;
     }
 
+    if (machtileSwitchStartedHandleClick(event)) return;
     if (machtileReturnClaimHandleClick(event)) return;
     if (machtileStationCmdHandleClick(event)) return;
 

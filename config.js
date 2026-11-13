@@ -129,4 +129,9 @@ window.MACHTILE_CONFIG = {
   // 機台卡片「換道次」（同一張工單換成待做池裡另一道：先退回現在這一道，再接選的那一道）。預設關。
   // enableReturnClaim 也要開才有效；開之前還要先有：工廠把同一張工單沒做完的道次都放進待做池。
   enableSwitchStep: false,
+  // 換道次（已開工、還沒報工；第 2 階段 switch_step 指令，工廠一個交易做完）。預設關；跟上面的 enableSwitchStep 分開，也不需要 enableReturnClaim。
+  // 換道次 第 2 階段開之前要先有：雲端 migration 20261114090000 已套＋switch_step_enabled=true、工廠 SwitchStepApplierEnabled＋機台名單。
+  enableSwitchStepStarted: false,
+  // 換道次（已開工）：不在待做池的道次也列出來（標「不在待做池」）。預設關；要跟工廠 SwitchStepAllowUnpooledTarget 一起開。
+  switchStepStartedAllowUnpooled: false,
 };
