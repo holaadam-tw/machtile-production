@@ -243,8 +243,8 @@ test("every switch_step string exists in both languages, vi is draft, no raw cod
     assert.equal(d.viFile[key]._draft, true, `${key} vi is marked draft`);
     assert.notEqual(d.vi[key], d.zh[key], `${key} is translated`);
     assert.deepEqual([...d.vi[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), [...d.zh[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), `${key} same placeholders`);
-    // 除了「等一下、不要重按」那一句，沒有任何一句叫人再按一次
-    if (key !== "switch_step_progress_return") assert.doesNotMatch(d.zh[key], /再按|重按|重送|再試|重試/, `${key} zh-Hant`);
+    // 第 1 階段：除了「等一下、不要重按」那一句，沒有任何一句叫人再按一次（第 2 階段的規則在它自己的測試裡）
+    if (key !== "switch_step_progress_return" && !key.startsWith("switch_step_started_")) assert.doesNotMatch(d.zh[key], /再按|重按|重送|再試|重試/, `${key} zh-Hant`);
   }
   assert.equal(d.zh.switch_step_button, "換道次");
   assert.match(d.zh.switch_step_busy, /換道次/);
@@ -262,6 +262,18 @@ function slice(from, to) {
 }
 const blockSource = slice("// ============================================================================================\n// 機台卡片「接錯了，退回」", "function renderMachineCard(machine) {");
 const switchSource = slice("// ---- 換道次 ----", "function renderMachineCard(machine) {");
+// 第 2 階段（已開工）那一段：緊接在「接錯了，退回」block 前面，Locks 掛在 machtileReturnClaimLocks／BlockMessage 第一行，vm 裡也要有它
+const startedSource = slice("// ==== 換道次（已開工、還沒報工；第 2 階段）", `// ============================================================================================${NL}// 機台卡片「接錯了，退回」`);
+// 第 2 階段掛進既有程式的每一個地方：[現在的字串, 旗標關時等價的原字串]（換行已正規化成 \n）
+const STARTED_HOOKS = [
+  ["function machtileReturnClaimLocks(code) {\n  if (machtileSwitchStartedLocks(code)) return true;\n", "function machtileReturnClaimLocks(code) {\n"],
+  ["function machtileReturnClaimBlockMessage(code) {\n  if (machtileSwitchStartedLocks(code)) return machtileTranslate(\"switch_step_started_busy\");\n", "function machtileReturnClaimBlockMessage(code) {\n"],
+  ["  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）\n", ""],
+  ["${machtileSwitchStartedCardMarkup(machine)}", ""],
+  ["    if (machtileSwitchStartedHandleClick(event)) return;\n", ""],
+  ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStartedForgetUser();\n", ""],
+  ["  machtileSwitchStartedForgetUser();\n  machtileSwitchStepForgetUser();\n", "  machtileSwitchStepForgetUser();\n"],
+];
 const poolSource = slice("const machtileDispatchPoolState = {", "function machtileDispatchPoolOpenRefreshState(machine) {");
 const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {");
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -332,6 +344,8 @@ function harness(options = {}) {
   const config = { dispatchPoolMachines: ["A03", "A05"] };
   if (options.returnFlag !== undefined) config.enableReturnClaim = options.returnFlag;
   if (options.flag !== undefined) config.enableSwitchStep = options.flag;
+  if (options.started !== undefined) config.enableSwitchStepStarted = options.started;
+  if (options.allowUnpooled !== undefined) config.switchStepStartedAllowUnpooled = options.allowUnpooled;
   const context = {
     window: { MachTileReturnClaimCore: returnCore, MachTileSwitchStepCore: options.noCore ? undefined : core, crypto: { randomUUID: () => (options.uuids ? options.uuids.shift() : UUID) } },
     config,
@@ -386,13 +400,18 @@ function harness(options = {}) {
   };
   const api = vm.runInNewContext(`${poolSource}
     ${claimSource}
+    ${startedSource}
     ${blockSource}
     ({ machtileReturnClaim, machtileSwitchStep, poolState: machtileDispatchPoolState, claim: machtileClaimDispatchPool,
        returnEnabled: machtileReturnClaimEnabled, enabled: machtileSwitchStepEnabled, locks: machtileReturnClaimLocks, blockMessage: machtileReturnClaimBlockMessage,
        markup: machtileReturnClaimCardMarkup, buttonMarkup: machtileSwitchStepButtonMarkup, gate: machtileSwitchStepGate, active: machtileSwitchStepActive,
        holds: machtileSwitchStepHolds, restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry,
        choose: machtileSwitchStepChoose, submit: machtileReturnClaimSubmit, handleClick: machtileReturnClaimHandleClick, switchClick: machtileSwitchStepHandleClick,
-       closeSheet: machtileReturnClaimCloseSheet, loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys, forgetUser: machtileSwitchStepForgetUser })`, context);
+       closeSheet: machtileReturnClaimCloseSheet, loadHeldKeys: machtileReturnClaimLoadHeldPoolKeys, forgetUser: machtileSwitchStepForgetUser,
+       started: { state: machtileSwitchStarted, enabled: machtileSwitchStartedEnabled, gate: machtileSwitchStartedGate, markup: machtileSwitchStartedCardMarkup,
+         locks: machtileSwitchStartedLocks, open: machtileSwitchStartedOpen, choose: machtileSwitchStartedChoose, submit: machtileSwitchStartedSubmit,
+         openRetry: machtileSwitchStartedOpenRetry, restore: machtileSwitchStartedRestore, handleClick: machtileSwitchStartedHandleClick,
+         loadNotices: machtileSwitchStartedLoadNotices, forgetUser: machtileSwitchStartedForgetUser, closeSheet: machtileSwitchStartedCloseSheet } })`, context);
   // 待做池：畫面載入時已經讀到的那一份
   if (options.pool !== null) Object.assign(api.poolState, { status: options.poolStatus || "ready", items: options.pool || [poolRow(1), poolRow(2), OTHER_ORDER_ROW] });
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
@@ -414,7 +433,8 @@ function harness(options = {}) {
     timer.fn();
     await settle();
   };
-  return { api, calls, machine, storage, sheetHtml, runPoll, pollTimers, urls, context, timeouts, expire, holders, selectionUpdates };
+  const startedSheetHtml = () => holders.machtileSwitchStartedSheet?.innerHTML || "";
+  return { api, calls, machine, storage, sheetHtml, startedSheetHtml, runPoll, pollTimers, urls, context, timeouts, expire, holders, selectionUpdates };
 }
 const RETURN_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="A05">接錯了，退回</button>';
 const SWITCH_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-open="A05">換道次</button>';
@@ -1447,6 +1467,16 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   baseApp = norm(baseApp);
   assert.doesNotMatch(baseApp, /machtileSwitchStep/, "the base has no switch-step code");
   let current = norm(appSource);
+  // 第 2 階段（已開工，enableSwitchStepStarted 預設關）先整段拿掉、掛點還原；它旗標關時每一個掛點都等於原字串
+  // （Locks()＝false、Restore／HandleClick 直接 return／回 false、CardMarkup()＝""、ForgetUser 沒有東西可丟；下面第 2 階段的「flag off」測試逐一斷言）。
+  const startedSection = norm(startedSource);
+  assert.equal(current.split(startedSection).length, 2);
+  current = current.replace(startedSection, () => "");
+  for (const [now, before] of STARTED_HOOKS) {
+    assert.equal(current.split(now).length, 2, `started hook must appear exactly once: ${now.slice(0, 70)}`);
+    current = current.replace(now, () => before);
+  }
+  assert.doesNotMatch(current, /machtileSwitchStarted|enableSwitchStepStarted|switch_step_started_/, "no other started switch-step reference in app.js");
   const section = norm(switchSource);
   assert.equal(current.split(section).length, 2);
   current = current.replace(section, () => "");
@@ -1539,13 +1569,18 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     returnCoreNow = returnCoreNow.replace(now, () => before);
   }
   assert.equal(returnCoreNow, show("returnClaimCore.js"), "returnClaimCore.js: only the held-pool-key lookup and the visibility lines that use it");
-  for (const file of ["dispatchPoolCore.js", "stationCommandCore.js", "fixtures/return_claim_poll_select.txt", "version.json", "sw.js"]) {
+  for (const file of ["dispatchPoolCore.js", "stationCommandCore.js", "fixtures/return_claim_poll_select.txt", "sw.js"]) {
     assert.equal(read(file), show(file), `${file} is unchanged`);
   }
+  // 版號：第 2 階段那一包 bump 了快取版號（version.json＋index.html 的 meta／?v=，全部同一個字串）；除了版號字串之外逐字相同
+  const deployed = JSON.parse(read("version.json")).version;
+  const baseDeployed = JSON.parse(show("version.json")).version;
+  const unversion = (text, version) => text.split(version).join("<VERSION>");
+  assert.match(read("version.json"), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
   const config = read("config.js");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
-  assert.equal(read("index.html").split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), show("index.html"), "index.html: only the new core script tag (same version string)");
+  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
   assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
     const removed = [], added = [];
@@ -1560,8 +1595,650 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   // 沒有新的 station_commands select，也沒有新的資料表查詢
   assert.doesNotMatch(section, /\?select=/, "the switch-step section adds no select");
   // app.js 也沒有多任何寫死的 select：機台上這一道的池列鍵改問 RPC（returnClaimCore.HELD_CLAIMS_RPC，沒有 select；stationCommandPollColumns.test.js 核對回傳欄位）
-  assert.equal([...norm(appSource).matchAll(/\?select=/g)].length, [...baseApp.matchAll(/\?select=/g)].length, "app.js gains no literal select");
+  // （第 2 階段那一段另外有自己的 select：這一道、這張單的各道、指令歷史、不在待做池提醒；欄位由 stationCommandPollColumns.test.js 核對）
+  assert.equal([...norm(appSource).matchAll(/\?select=/g)].length, [...baseApp.matchAll(/\?select=/g)].length + [...startedSection.matchAll(/\?select=/g)].length,
+    "app.js gains no literal select outside the started section");
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, "switchStepCore.js"), "utf8").replace(/^\s*\/\/.*$/gm, ""), /\?select=|fetch\(|localStorage|sessionStorage|document\.|window\./, "the core does no I/O");
   assert.doesNotMatch(section.replace(/^\s*\/\/.*$/gm, ""), /localStorage|sessionStorage|indexedDB/, "the switch-step section persists nothing (comments aside)");
   assert.doesNotMatch(section, /(?:const|let|var)\s+\w+\s*=\s*machtile\w*Core\s*[;,]/, "no core aliases (coreExportsUsed must see every member)");
+});
+
+// ================================================================================================
+// 第 2 階段：已開工、還沒報工 → 一筆 switch_step 指令（config.enableSwitchStepStarted）
+//   合約：雲端 20261114090000_station_switch_step_commands.sql（submit RPC 九個參數）、快照合約 r2（CONTRACT-r2.md）。
+//   三個 applied 快照樣本＝ops/codex-inbox/20261114-0000-switchstep-reviews/sample-applied-snapshot.json（工廠由真的 AppliedSnapshotJson 產生，
+//   雲端 pglite 也用同一份）。這裡用 vendored 副本 fixtures/switch_step_applied_snapshot_samples.json；原檔在這台電腦上時逐字比對。
+// ================================================================================================
+const SAMPLES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "switch_step_applied_snapshot_samples.json"), "utf8"));
+const SAMPLE_NAMES = ["pooled_to_pooled", "planner_source_unpooled_to_pooled", "pooled_to_unpooled_target"];
+const OPS_SAMPLE_FILE = process.env.SWITCH_STEP_SAMPLE_FILE || "D:/04_SoftNet/ops/codex-inbox/20261114-0000-switchstep-reviews/sample-applied-snapshot.json";
+const CLOUD_SWITCH_SQL = process.env.SWITCH_STEP_CLOUD_SQL || "D:/04_SoftNet/wt-switch-cloud/supabase/migrations/20261114090000_station_switch_step_commands.sql";
+const FACTORY_SWITCH_DIR = process.env.SWITCH_STEP_FACTORY_DIR || "D:/04_SoftNet/wt-switch-factory/SoftNet/SoftNetWebII/Services/StationCommands";
+// 雲端 submit 會 raise 的每一個碼（20261114090000 的 machtile_submit_switch_step_command；檔案在這台電腦上時從原始碼重抓比對）
+const CLOUD_SUBMIT_CODES = ["ACTIVE_CLAIM_NOT_FOUND", "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED", "APPLIER_CANNOT_SUBMIT", "APP_USER_REQUIRED", "AUTH_REQUIRED",
+  "CLAIM_NOT_APPLIED", "COMMAND_UUID_CONFLICT", "COMMAND_UUID_REQUIRED", "FORBIDDEN", "INVALID_MACHINE_CODE", "INVALID_POOL_ITEM_ID", "INVALID_SWITCH_REASON",
+  "INVALID_TARGET_POOL_ITEM_ID", "INVALID_TARGET_STEP", "MACHINE_COMMAND_IN_FLIGHT", "MACHINE_NOT_ALLOWED", "NOT_CLAIM_OWNER", "OPERATOR_LEGACY_ID_INVALID",
+  "OPERATOR_LEGACY_ID_MISSING", "OPERATOR_REQUIRED", "POOL_ITEM_REQUIRED", "SAME_STEP", "SOURCE_STEP_NOT_SWITCHABLE", "STALE", "SWITCH_REASON_REQUIRED",
+  "SWITCH_STEP_DISABLED", "SWITCH_STEP_HAS_REPORTS", "TARGET_NOT_ELIGIBLE", "TARGET_NOT_SAME_WORK_ORDER", "TARGET_POOL_ITEM_NOT_FOUND", "TARGET_STEP_CLOSED",
+  "TARGET_STEP_MISMATCH", "TARGET_STEP_NOT_FOUND", "TARGET_TAKEN", "TENANT_INACTIVE"];
+// 工廠套用端 switch_step 會回的每一個 reject_code（StationSwitchStepApplier.cs＋Processor 的 switch_step 分支＋Poller）
+const FACTORY_SWITCH_CODES = ["COMMAND_INVALID", "FACTORY_SWITCH_DISABLED", "INTERNAL_ERROR", "LEDGER_CONFLICT", "LEGACY_APPLIED_LATE", "LEGACY_STATE_INCONSISTENT",
+  "LOCK_TIMEOUT", "OPERATOR_UNKNOWN", "OUTCOME_UNKNOWN", "POOL_ITEM_NOT_FOUND", "STALE_COMMAND", "SWITCH_STEP_HAS_REPORTS", "SWITCH_STEP_NOT_OPERATOR",
+  "SWITCH_STEP_SOURCE_NOT_POOLED", "SWITCH_STEP_STARTED_BEFORE_CLAIM", "SWITCH_STEP_STATE_UNSUPPORTED", "SWITCH_STEP_TARGET_CLOSED", "SWITCH_STEP_TARGET_NOT_HERE",
+  "SWITCH_STEP_TARGET_NOT_POOLED", "SWITCH_STEP_TARGET_TAKEN", "UNSUPPORTED_STATION", "WRITE_TARGET_DENIED"];
+const S_UUID = "5b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40";
+const S_UUID2 = "6c2d3e4f-5061-4b72-8c83-0d9e8f7a6b51";
+const WO_ID = "00000000-0000-4000-8000-000000000201";
+const sampleOf = (name, extra) => {
+  const snap = JSON.parse(JSON.stringify(SAMPLES[name]));
+  Object.assign(snap.switch_step, extra);
+  return snap;
+};
+// 雲端 finish 寫回去的那一列：工廠的快照 || cloud_finalize（雲端只加 cloud_finalize，switch_step 原樣）
+const switchRow = (extra) => Object.assign({ command_uuid: S_UUID, command_type: "switch_step", machine_code: "A05", pool_item_id: null, expected_order_no: "WO1",
+  expected_index_sn: 3, status: "pending", requested_at: new Date().toISOString(), claimed_at: null, applied_at: null, reject_code: null, reject_message: null, legacy_snapshot: null }, extra);
+const appliedSwitchRow = (name, extra, snapExtra) => switchRow(Object.assign({ status: "applied", claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(),
+  legacy_snapshot: Object.assign(sampleOf(name, snapExtra), { cloud_finalize: { old_claim_returned: name !== "planner_source_unpooled_to_pooled", old_process_reset: true,
+    old_item_reopened: name !== "planner_source_unpooled_to_pooled", target_attached: true, target_item_claimed: name !== "pooled_to_unpooled_target", moved_qty: 0 } }) }, extra));
+const runningOrder = (extra) => heldOrder(Object.assign({ processStatus: "running", heldPoolKey: "", workOrderId: WO_ID }, extra));
+const MACHINE_LATHE = { machineCode: "A05", departmentCode: "LATHE" };
+const procRow = (step, status, machineCode, extra) => Object.assign({ id: `00000000-0000-4000-8000-0000000004${String(step).padStart(2, "0")}`, process_order: step,
+  process_name: ["", "粗車", "車牙", "精車", "銑削", "鑽孔", "研磨"][step] || `S${step}`, status, off_station_at: null, machines: machineCode ? { machine_code: machineCode } : null }, extra);
+// 雲端這張單的各道：1／2 在池裡（waiting）、3＝A05 正在做、4 做完了、5 在 A03 做、6 沒進池
+const STEPS = () => [procRow(1, "pending", null), procRow(2, "pending", null), procRow(3, "running", "A05"), procRow(4, "completed", "A05", { off_station_at: "2026-11-12T08:00:00Z" }),
+  procRow(5, "running", "A03"), procRow(6, "pending", null)];
+
+test("phase 2 fixtures: the vendored applied-snapshot samples are the shared contract file (3 cases), each carries the r2 contract keys", () => {
+  assert.deepEqual(Object.keys(SAMPLES), SAMPLE_NAMES);
+  let original = null;
+  try { original = fs.readFileSync(OPS_SAMPLE_FILE, "utf8"); } catch { /* ops folder not on this machine */ }
+  if (original) assert.deepEqual(SAMPLES, JSON.parse(original), "fixtures/switch_step_applied_snapshot_samples.json == ops sample-applied-snapshot.json");
+  for (const name of SAMPLE_NAMES) {
+    const ss = SAMPLES[name].switch_step;
+    assert.ok(["switched", "already_switched"].includes(ss.mode), name);
+    for (const key of ["source_pool_status", "target_pool_status"]) assert.equal(typeof ss[key], "string", `${name}.${key}`);
+    assert.equal(ss.moved_qty, 0, name);
+    assert.equal(typeof ss.source_unpooled, "boolean", name);
+  }
+  assert.deepEqual(SAMPLE_NAMES.map((name) => SAMPLES[name].switch_step.source_unpooled), [false, true, false], "only the planner-assigned source ends up unpooled");
+});
+
+test("phase 2 flags: enableSwitchStepStarted / switchStepStartedAllowUnpooled default false; only a strict true turns phase 2 on (independent of phase 1)", () => {
+  assert.equal(core.startedEnabled({ flag: true }), true);
+  for (const flag of [undefined, false, "true", 1, null]) assert.equal(core.startedEnabled({ flag }), false, String(flag));
+  assert.equal(core.startedEnabled(), false);
+  const config = fs.readFileSync(path.join(__dirname, "config.js"), "utf8");
+  assert.match(config, /\n\s*enableSwitchStepStarted: false,\r?\n/);
+  assert.match(config, /\n\s*switchStepStartedAllowUnpooled: false,\r?\n/);
+  assert.equal(core.STARTED_SUBMIT_RPC, "machtile_submit_switch_step_command");
+  assert.equal(core.STARTED_COMMAND_TYPE, "switch_step");
+});
+
+test("phase 2 visibility: only a STARTED step (running / paused, or pending with a start) with zero quantity, single-station, nothing in flight", () => {
+  const order = runningOrder();
+  const see2 = (extra) => core.startedVisibility(Object.assign({ enabled: true, role: "operator", cardDetailsReady: true, machineCode: "A05", order }, extra));
+  assert.deepEqual(see2(), { show: true, reason: "", needsReason: false });
+  assert.equal(see2({ order: runningOrder({ processStatus: "paused" }) }).show, true, "stopped (paused) counts as started");
+  assert.equal(see2({ role: "admin" }).needsReason, true);
+  assert.equal(see2({ role: "planner" }).needsReason, true);
+  // 還沒開工（第 1 階段的範圍）→ 這一顆不出；pending 但有開工證據 → 出
+  assert.equal(see2({ order: runningOrder({ processStatus: "pending" }) }).reason, "not_started");
+  for (const evidence of [{ actualStartAt: "2026-11-13T08:05:00Z" }, { startedLocally: true }, { startedToday: true }]) {
+    assert.equal(see2(Object.assign({ order: runningOrder({ processStatus: "pending" }) }, evidence)).show, true, JSON.stringify(evidence));
+  }
+  for (const status of ["completed", "waiting_inspection", "", undefined]) assert.equal(see2({ order: runningOrder({ processStatus: status }) }).reason, "not_started", String(status));
+  // 有數量（任何地方）→ 不出（找生管：第 3 階段）
+  assert.equal(see2({ order: runningOrder({ done: 5 }) }).reason, "has_reports");
+  assert.equal(see2({ hasTodayReport: true }).reason, "has_reports");
+  assert.equal(see2({ enabled: false }).reason, "flag_off");
+  assert.equal(see2({ enabled: "true" }).reason, "flag_off");
+  assert.equal(see2({ role: "viewer" }).reason, "role");
+  assert.equal(see2({ isBridge: true }).reason, "role");
+  assert.equal(see2({ multiStation: true }).reason, "multi_station");
+  assert.equal(see2({ isUnassignedBucket: true }).reason, "no_machine");
+  assert.equal(see2({ order: null }).reason, "no_order");
+  assert.equal(see2({ order: runningOrder({ offStation: true }) }).reason, "off_station");
+  assert.equal(see2({ order: runningOrder({ stationStep: 0 }) }).reason, "no_step");
+  assert.equal(see2({ order: runningOrder({ processId: "x" }) }).reason, "no_process");
+  assert.equal(see2({ cardDetailsReady: false }).reason, "card_not_ready");
+  assert.equal(see2({ commandInFlight: true }).reason, "command_in_flight");
+  assert.equal(see2({ unsureHold: true }).reason, "unsure_hold");
+});
+
+test("phase 2 fresh read: still this machine, same order + step, started or not, zero quantity", () => {
+  const row = (extra) => Object.assign({ id: PROCESS_ID, process_order: 3, status: "running", off_station_at: null, qty_completed: 0, qty_defect: 0,
+    work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", part_no: "TEST-P1", status: "in_progress" }, machines: { machine_code: "A05" } }, extra);
+  const check = (extra, args) => core.startedFreshCheck(Object.assign({ machineCode: "A05", orderNo: "TEST-WO-1", step: 3, row: row(extra) }, args));
+  assert.deepEqual(check(), { ok: true, reason: "", partNo: "TEST-P1", workOrderId: WO_ID });
+  for (const status of ["running", "paused", "pending"]) assert.equal(check({ status }).ok, true, status);
+  assert.equal(check({ status: "completed" }).reason, "not_switchable");
+  assert.equal(check({ qty_completed: 1 }).reason, "has_reports");
+  assert.equal(check({ qty_defect: 2 }).reason, "has_reports");
+  assert.equal(check({ off_station_at: "2026-11-13T09:00:00Z" }).reason, "off_station");
+  assert.equal(check({ machines: { machine_code: "A04" } }).reason, "machine_changed");
+  assert.equal(check({ process_order: 1 }).reason, "step_changed");
+  assert.equal(check({ work_orders: { id: WO_ID, work_order_no: "X", status: "in_progress" } }).reason, "order_changed");
+  assert.equal(check({ work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", status: "cancelled" } }).reason, "order_closed");
+  assert.equal(core.startedFreshCheck({ machineCode: "A05", orderNo: "TEST-WO-1", step: 3, row: null }).reason, "process_not_found");
+});
+
+test("phase 2 source pool key: held-claims RPC first; else the last applied claim/return/switch event of this step on this machine; else null (planner-assigned)", () => {
+  const at = (minutes) => new Date(Date.UTC(2026, 10, 13, 8, minutes)).toISOString();
+  const ev = (type, step, extra) => Object.assign({ command_uuid: UUID, command_type: type, machine_code: "A05", pool_item_id: keyOf(step), expected_order_no: "TEST-WO-1",
+    expected_index_sn: step, status: "applied", requested_at: at(0), legacy_snapshot: null }, extra);
+  const key = (rows, step = 3) => core.historyPoolKey({ rows, machineCode: "A05", orderNo: "TEST-WO-1", step });
+  assert.equal(key([ev("claim_next", 3)]), keyOf(3), "claimed through claim_next");
+  assert.equal(key([ev("claim_next", 3, { requested_at: at(1) }), ev("return_claim", 3, { requested_at: at(2) })]), "", "returned afterwards");
+  assert.equal(key([ev("claim_next", 3, { requested_at: at(1) }), ev("return_claim", 3, { requested_at: at(2) }), ev("claim_next", 3, { requested_at: at(3), pool_item_id: keyOf(3) + "b" })]), keyOf(3) + "b", "claimed again");
+  assert.equal(key([ev("claim_next", 3, { status: "rejected" })]), "", "only applied rows count");
+  assert.equal(key([ev("claim_next", 3, { machine_code: "A04" })]), "", "another machine's claim is not this card's");
+  assert.equal(key([ev("claim_next", 3, { expected_order_no: "TEST-WO-9" })]), "");
+  assert.equal(key([ev("claim_next", 2)]), "", "another step");
+  // 換道次換進來的那一道：雲端記了接單（cloud_finalize.target_claim_id）才算池裡接的；之後再從它換走＝放掉
+  const switchedIn = (finalize) => ev("switch_step", 1, { requested_at: at(5), pool_item_id: keyOf(1),
+    legacy_snapshot: { switch_step: { from_index_sn: 1, to_index_sn: 3, target_pool_item_id: keyOf(3), target_pool_status: "assigned" }, cloud_finalize: finalize } });
+  assert.equal(key([switchedIn({ target_claim_id: "c1" })]), keyOf(3));
+  assert.equal(key([switchedIn({ target_attached: true })]), "", "no ledger claim recorded → not pooled");
+  assert.equal(key([switchedIn({ target_claim_id: "c1" }), ev("switch_step", 3, { requested_at: at(9) })]), "", "switched away again");
+  assert.equal(key(null), "");
+  assert.equal(key([ev("claim_next", 3, { requested_at: "nonsense" })]), "");
+  // 優先順序
+  const pick = (heldKey, historyRows) => core.sourcePoolKey({ heldKey, historyRows, machineCode: "A05", orderNo: "TEST-WO-1", step: 3 });
+  assert.deepEqual(pick(keyOf(3), [ev("claim_next", 3, { pool_item_id: "01|OTHER|S3" })]), { key: keyOf(3), source: "held" });
+  assert.deepEqual(pick("", [ev("claim_next", 3)]), { key: keyOf(3), source: "history" });
+  assert.deepEqual(pick("abc", []), { key: "", source: "none" }, "a malformed held key is ignored");
+});
+
+test("phase 2 targets: same order, not this step, not done, not on another machine; pooled ones labeled; unpooled only with switchStepStartedAllowUnpooled", () => {
+  const pool = [poolRow(1), poolRow(2), poolRow(4, { source_key: keyOf(4) }), poolRow(5), OTHER_ORDER_ROW, poolRow(3)];
+  const found = (extra) => core.startedTargets(Object.assign({ orderNo: "TEST-WO-1", currentStep: 3, poolReady: true, poolItems: pool, processesReady: true,
+    processes: STEPS(), machine: MACHINE_LATHE, allowUnpooled: false }, extra));
+  const ids = (result) => result.choices.map((c) => [c.step, c.pooled, c.sourceKey]);
+  assert.deepEqual(ids(found()), [[1, true, keyOf(1)], [2, true, keyOf(2)]], "step 4 done, step 5 on A03, step 3 is the current one, other orders ignored");
+  assert.equal(found().choices[0].name, "CNC車床加工");
+  assert.equal(found().choices[0].quantity, 120);
+  assert.deepEqual(ids(found({ allowUnpooled: true })), [[1, true, keyOf(1)], [2, true, keyOf(2)], [6, false, ""]], "step 6 is not pooled: listed only with the flag");
+  assert.equal(found({ allowUnpooled: true }).choices[2].id, "step:6");
+  assert.equal(found({ allowUnpooled: true }).choices[2].name, "研磨");
+  // 這台不能做的池列（別課、不在可做機台清單、不是 waiting）→ 不列、記數
+  const notMine = found({ poolItems: [poolRow(1, { department_code: "MILL" }), poolRow(2, { eligible_machine_codes: ["A03"] }), poolRow(6, { status: "claimed" })] });
+  assert.deepEqual(notMine.choices, []);
+  assert.equal(notMine.notEligible, 3);
+  // 讀不到各道：池裡的照列（伺服器會再驗），不在池裡的不列
+  assert.deepEqual(ids(found({ processesReady: false, processes: null, allowUnpooled: true })), [[1, true, keyOf(1)], [2, true, keyOf(2)], [4, true, keyOf(4)], [5, true, keyOf(5)]]);
+  // 待做池讀不到：旗標關＝沒有清單；旗標開＝只列不在池裡的（池裡那幾道也列成不在池裡會送錯 → 不列）
+  assert.equal(found({ poolReady: false }).ready, false);
+  assert.deepEqual(ids(found({ poolReady: false, allowUnpooled: true })), [[1, false, ""], [2, false, ""], [6, false, ""]]);
+  assert.equal(found({ orderNo: "" }).choices.length, 0);
+  assert.equal(found({ machine: {} }).choices.length, 0);
+});
+
+test("phase 2 submit args: exactly the nine RPC parameter names, nullable pools, admin reason mandatory", () => {
+  const args = core.startedBuildArgs({ commandUuid: S_UUID, machineCode: " a05 ", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 1,
+    targetPoolItemId: keyOf(1), partNo: "TEST-P1", reason: "", role: "operator" });
+  assert.deepEqual(Object.keys(args), [...core.STARTED_ARG_KEYS]);
+  assert.deepEqual(args, { p_command_uuid: S_UUID, p_machine_code: "A05", p_pool_item_id: keyOf(3), p_expected_order_no: "TEST-WO-1", p_expected_index_sn: 3,
+    p_target_index_sn: 1, p_target_pool_item_id: keyOf(1), p_expected_part_no: "TEST-P1", p_reason: null });
+  // 雲端函式簽章（檔案在這台電腦上時）：參數名稱與順序逐字相同
+  let sql = "";
+  try { sql = fs.readFileSync(CLOUD_SWITCH_SQL, "utf8"); } catch { /* cloud worktree not on this machine */ }
+  if (sql) {
+    const sig = /create function public\.machtile_submit_switch_step_command\(([\s\S]*?)\)\s*returns/.exec(sql);
+    assert.ok(sig, "cloud migration declares the submit RPC");
+    assert.deepEqual(sig[1].split(",").map((part) => part.trim().split(/\s+/)[0]), [...core.STARTED_ARG_KEYS], "parameter names == cloud signature");
+  }
+  const plain = core.startedBuildArgs({ commandUuid: S_UUID, machineCode: "A05", poolItemId: "", orderNo: "TEST-WO-1", step: 3, targetStep: 6, targetPoolItemId: "", role: "admin", reason: " 生管代換 " });
+  assert.equal(plain.p_pool_item_id, null, "planner-assigned source → null");
+  assert.equal(plain.p_target_pool_item_id, null, "unpooled target → null");
+  assert.equal(plain.p_reason, "生管代換");
+  assert.equal(plain.p_expected_part_no, null);
+  const bad = (extra) => () => core.startedBuildArgs(Object.assign({ commandUuid: S_UUID, machineCode: "A05", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 1, role: "operator" }, extra));
+  assert.throws(bad({ commandUuid: "x" }), /BAD_COMMAND_UUID/);
+  assert.throws(bad({ targetStep: 3 }), /SAME_STEP/);
+  assert.throws(bad({ targetStep: 0 }), /NO_TARGET_STEP/);
+  assert.throws(bad({ targetPoolItemId: keyOf(3) }), /BAD_TARGET_POOL_ITEM_ID/, "target pool row must differ from the source pool row");
+  assert.throws(bad({ poolItemId: "abc" }), /BAD_POOL_ITEM_ID/);
+  assert.throws(bad({ role: "admin", reason: "" }), /REASON_REQUIRED/);
+  assert.throws(bad({ reason: "x".repeat(501) }), /REASON_TOO_LONG/);
+  assert.throws(bad({ role: "viewer" }), /BAD_ROLE/);
+  assert.throws(bad({ orderNo: "" }), /NO_ORDER/);
+});
+
+test("phase 2 error codes: every cloud submit raise and every Factory reject_code has its own plain sentence; reports → 找生管; unsure ≠ 'not switched'", () => {
+  const d = dictionaries();
+  // 原始碼在這台電腦上時：清單＝原始碼（不多不少）
+  let sql = "";
+  try { sql = fs.readFileSync(CLOUD_SWITCH_SQL, "utf8"); } catch { /* not on this machine */ }
+  if (sql) {
+    const body = sql.slice(sql.indexOf("create function public.machtile_submit_switch_step_command"), sql.indexOf("create function public.machtile_finish_switch_step_command"));
+    assert.deepEqual([...new Set([...body.matchAll(/raise exception '([A-Z_]+)'/g)].map((m) => m[1]))].sort(), [...CLOUD_SUBMIT_CODES].sort(), "vendored cloud code list == the submit RPC");
+  }
+  let applier = "", models = "", processor = "";
+  try {
+    applier = fs.readFileSync(path.join(FACTORY_SWITCH_DIR, "StationSwitchStepApplier.cs"), "utf8");
+    models = fs.readFileSync(path.join(FACTORY_SWITCH_DIR, "StationCommandModels.cs"), "utf8");
+    processor = fs.readFileSync(path.join(FACTORY_SWITCH_DIR, "StationCommandProcessor.cs"), "utf8");
+  } catch { /* factory worktree not on this machine */ }
+  if (applier && models && processor) {
+    const value = new Map([...models.matchAll(/public const string (\w+) = "([A-Z0-9_]+)";/g)].map((m) => [m[1], m[2]]));
+    const branch = processor.slice(processor.indexOf("if (type == StationCommandMatcher.SwitchStep"), processor.indexOf("if (type != StationCommandMatcher.Start"));
+    const names = new Set([...`${applier}\n${branch}`.matchAll(/StationCommandRejectCodes\.(\w+)/g)].map((m) => m[1]));
+    const fromSource = [...names].map((name) => value.get(name)).filter(Boolean);
+    for (const code of fromSource) assert.ok(FACTORY_SWITCH_CODES.includes(code), `factory code ${code} is in the vendored list`);
+  }
+  for (const code of [...CLOUD_SUBMIT_CODES, ...FACTORY_SWITCH_CODES, "HAS_REPORTS", "EXPIRED", "MANUAL_RELEASED"]) {
+    const info = core.startedRejectInfo(code);
+    assert.equal(info.known, true, `${code} is mapped`);
+    assert.notEqual(info.messageKey, core.STARTED_GENERIC_MESSAGE_KEY, `${code} has its own sentence`);
+    assert.equal(typeof d.zh[info.messageKey], "string", `${code} → ${info.messageKey} exists`);
+    assert.doesNotMatch(fill(d.zh[info.messageKey], { from: 3, to: 1 }), /[A-Z][A-Z0-9]*_[A-Z0-9_]+|\{\{/, `${code}: no raw code, no unfilled placeholder`);
+  }
+  for (const code of ["HAS_REPORTS", "SWITCH_STEP_HAS_REPORTS"]) {
+    const text = fill(d.zh[core.startedRejectInfo(code).messageKey], { from: 3, to: 1 });
+    assert.match(text, /找生管/, `${code} tells them to find the planner`);
+    assert.match(text, /第 3 道已經有報工數量/);
+  }
+  assert.equal(fill(d.zh[core.startedRejectInfo("SWITCH_STEP_HAS_REPORTS").messageKey], { from: 3 }), "第 3 道已經有報工數量，不能直接換道次。請找生管處理（報工修正）。");
+  // 結果不確定：不說「沒有換」，叫他重新整理、不要重按
+  for (const code of core.STARTED_UNCERTAIN_CODES) {
+    const info = core.startedRejectInfo(code);
+    assert.equal(info.uncertain, true);
+    assert.doesNotMatch(d.zh[info.messageKey], /沒有換/, code);
+    assert.match(d.zh[info.messageKey], /不要重按/, code);
+  }
+  // 「等一下再按」有機會成功的才叫人再按；其他確定沒換的都說「這台沒有變／還是第 N 道」或叫他找生管
+  for (const code of core.STARTED_RETRY_LATER_CODES) assert.match(d.zh[core.startedRejectInfo(code).messageKey], /再按|再試/, code);
+  assert.equal(core.startedRejectInfo("SOMETHING_NEW").messageKey, core.STARTED_GENERIC_MESSAGE_KEY);
+  assert.equal(core.startedRejectInfo("SOMETHING_NEW").known, false);
+  // 送出失敗（returnClaimCore.submitErrorInfo 先分 missing／uncertain／rejected）
+  const via = (error) => core.startedSubmitErrorInfo(returnCore.submitErrorInfo(error));
+  assert.deepEqual(via(new Error('400 {"code":"P0001","message":"SWITCH_STEP_HAS_REPORTS"}')), { kind: "rejected", code: "SWITCH_STEP_HAS_REPORTS", messageKey: "switch_step_started_err_reported" });
+  assert.deepEqual(via(new Error('400 {"code":"P0001","message":"TARGET_TAKEN","details":"{\\"claimed_machine_code\\":\\"A04\\"}"}')).messageKey, "switch_step_started_err_target_taken");
+  assert.equal(via(Object.assign(new TypeError("Failed to fetch"))).kind, "uncertain");
+  assert.equal(via(new Error("503 upstream")).kind, "uncertain");
+  assert.equal(via(new Error('404 {"code":"PGRST202"}')).messageKey, "switch_step_started_err_not_open", "RPC not deployed yet");
+  assert.equal(via(new Error("401 jwt expired")).messageKey, "switch_step_started_err_login");
+  assert.equal(via(new Error('400 {"message":"WHATEVER_ELSE"}')).messageKey, "switch_step_started_err_generic");
+});
+
+test("phase 2 result view from the three contract samples: done sentence, and source_unpooled → the 'not on any machine, not in the pool' notice", () => {
+  const d = dictionaries();
+  const say = (view) => fill(d.zh[view.messageKey], view.params);
+  const pooled = core.startedResultView(appliedSwitchRow("pooled_to_pooled"), { from: 3, to: 1 });
+  assert.equal(pooled.phase, "applied");
+  assert.equal(pooled.tone, "ok");
+  assert.equal(pooled.sourceUnpooled, false);
+  assert.equal(pooled.noticeKey, undefined);
+  assert.equal(say(pooled), "已換成第 1 道，請按「開工」開始做。第 3 道已退回待做池，沒有記任何數量。");
+  const planner = core.startedResultView(appliedSwitchRow("planner_source_unpooled_to_pooled"), { from: 3, to: 1 });
+  assert.equal(planner.sourceUnpooled, true);
+  assert.equal(planner.noticeKey, "switch_step_started_unpooled_notice");
+  assert.equal(say(planner), "已換成第 1 道，請按「開工」開始做。第 3 道沒有記任何數量。", "never claims the old step went back to the pool");
+  assert.equal(fill(d.zh[planner.noticeKey], planner.params), "注意：第 3 道現在不在任何機台、也不在待做池。請生管用「設定到這台」重新安排。");
+  const unpooledTarget = core.startedResultView(appliedSwitchRow("pooled_to_unpooled_target"), { from: 3, to: 1 });
+  assert.equal(unpooledTarget.sourceUnpooled, false);
+  assert.equal(say(unpooledTarget), say(pooled), "unpooled target: same sentence (the old step went back to the pool)");
+  // 快照為準（from／to／order 從 switch_step 讀；輪詢沒有 target_index_sn 時用送出時記下的）
+  assert.deepEqual(core.appliedInfo(appliedSwitchRow("pooled_to_pooled")), { mode: "switched", from: 3, to: 1, orderNo: "WO1", machineCode: "A05",
+    sourcePoolStatus: "returned", targetPoolStatus: "assigned", sourceUnpooled: false, returnedToPool: true });
+  assert.equal(core.startedResultView(appliedSwitchRow("pooled_to_pooled", {}, { to_index_sn: undefined }), { from: 3, to: 2 }).params.to, 2);
+  // 快照是字串（PostgREST 有時回 text）也讀得到；source_unpooled 只認嚴格的 true
+  assert.equal(core.startedResultView(Object.assign(appliedSwitchRow("planner_source_unpooled_to_pooled"), { legacy_snapshot: JSON.stringify(sampleOf("planner_source_unpooled_to_pooled")) })).sourceUnpooled, true);
+  assert.equal(core.startedResultView(appliedSwitchRow("planner_source_unpooled_to_pooled", {}, { source_unpooled: "true" })).sourceUnpooled, false);
+  assert.equal(core.startedResultView(appliedSwitchRow("pooled_to_pooled", {}, { mode: "already_switched" })).messageKey, "switch_step_started_done", "already_switched = success");
+  // 其他狀態
+  assert.deepEqual([core.startedResultView(switchRow()).phase, core.startedResultView(switchRow()).terminal], ["pending", false]);
+  assert.equal(core.startedResultView(switchRow({ status: "claimed" })).messageKey, "switch_step_started_processing");
+  const rejected = core.startedResultView(switchRow({ status: "rejected", reject_code: "SWITCH_STEP_TARGET_TAKEN" }), { from: 3, to: 1 });
+  assert.deepEqual([rejected.tone, rejected.code, say(rejected)], ["bad", "SWITCH_STEP_TARGET_TAKEN", "第 1 道已經在別台機台上或被別台接走，沒有換。這台還是第 3 道，狀態沒有變。"]);
+  const unsure = core.startedResultView(switchRow({ status: "rejected", reject_code: "OUTCOME_UNKNOWN" }), { from: 3, to: 1 });
+  assert.deepEqual([unsure.tone, core.startedIsUnsure(unsure)], ["warn", true]);
+  assert.equal(core.startedResultView(switchRow({ status: "expired", reject_code: "EXPIRED" }), { from: 3 }).messageKey, "switch_step_started_err_expired");
+});
+
+test("phase 2 unpooled notices: only source_unpooled samples; operators 24 h, admins / planners 72 h unless dismissed on this tablet", () => {
+  const now = Date.parse("2026-11-14T08:00:00Z");
+  const rows = SAMPLE_NAMES.map((name, i) => appliedSwitchRow(name, { command_uuid: [S_UUID, S_UUID2, UUID][i], applied_at: "2026-11-14T07:00:00Z" }));
+  const op = core.unpooledNotices({ rows, nowMs: now, role: "operator" });
+  assert.deepEqual(op, [{ commandUuid: S_UUID2, machineCode: "A05", orderNo: "WO1", from: 3, to: 1, at: Date.parse("2026-11-14T07:00:00Z") }], "only the planner-assigned sample");
+  const old = rows.map((row) => Object.assign({}, row, { applied_at: "2026-11-12T09:00:00Z" }));   // 47 小時前
+  assert.deepEqual(core.unpooledNotices({ rows: old, nowMs: now, role: "operator" }), []);
+  assert.equal(core.unpooledNotices({ rows: old, nowMs: now, role: "admin" }).length, 1);
+  assert.equal(core.unpooledNotices({ rows: old, nowMs: now, role: "planner" }).length, 1);
+  assert.deepEqual(core.unpooledNotices({ rows: old, nowMs: now + 30 * 3600 * 1000, role: "admin" }), [], "older than 72 h");
+  assert.deepEqual(core.unpooledNotices({ rows, nowMs: now, role: "admin", dismissed: new Set([S_UUID2]) }), []);
+  assert.deepEqual(core.unpooledNotices({ rows: rows.map((row) => Object.assign({}, row, { status: "rejected" })), nowMs: now, role: "admin" }), []);
+  assert.deepEqual(core.unpooledNotices({ rows: rows.map((row) => Object.assign({}, row, { command_type: "return_claim" })), nowMs: now, role: "admin" }), []);
+  assert.deepEqual(core.unpooledNotices({ rows: null, nowMs: now }), []);
+});
+
+test("phase 2 strings: zh-Hant + vi draft for every key, same placeholders; retry wording only where pressing again can help", () => {
+  const d = dictionaries();
+  const keys = Object.keys(d.zh).filter((key) => key.startsWith("switch_step_started_"));
+  assert.ok(keys.length >= 60, `found ${keys.length}`);
+  const retryAllowed = new Set(["switch_step_started_progress", "switch_step_started_uncertain", "switch_step_started_not_found", "switch_step_started_resend",
+    "switch_step_started_unsure", "switch_step_started_err_busy", "switch_step_started_err_claim_not_applied", "switch_step_started_err_busy_retry",
+    "switch_step_started_err_internal_retry", "switch_step_started_err_expired", "switch_step_started_err_released"]);
+  for (const key of keys) {
+    assert.equal(d.vi[key], d.viFile[key]?.value, `${key} vi i18n.js == locales`);
+    assert.equal(d.viFile[key]._draft, true, `${key} vi draft`);
+    assert.equal(d.zh[key], d.zhFile[key], `${key} zh i18n.js == locales`);
+    if (/再按|重按|重送|再試|重試/.test(d.zh[key].replace(/再按「開工」/g, ""))) assert.ok(retryAllowed.has(key), `${key} must not tell the operator to press again`);
+  }
+  assert.equal(d.zh.switch_step_started_button, "換道次");
+  assert.match(d.zh.switch_step_started_unpooled_card, /不在任何機台、也不在待做池/);
+  assert.match(d.zh.switch_step_started_unpooled_card, /請生管用「設定到這台」重新安排/);
+  assert.equal(d.zh.switch_step_started_tag_pool, "待做池");
+});
+
+test("phase 2 pending record: nine args kept, session-scoped restore, lock rules, unsure hold", () => {
+  const args = core.startedBuildArgs({ commandUuid: S_UUID, machineCode: "A05", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 1, targetPoolItemId: keyOf(1), role: "operator" });
+  const rec = core.startedPendingRecord({ commandUuid: S_UUID, machineCode: "a05", orderNo: "TEST-WO-1", step: 3, targetStep: 1, processId: PROCESS_ID, ...SESSION, args, startedAt: 1000 });
+  assert.deepEqual(rec.args, args);
+  assert.equal(rec.machineCode, "A05");
+  const raw = JSON.stringify({ A05: rec, A03: Object.assign({}, rec, { machineCode: "A03" }) });
+  assert.deepEqual(Object.keys(core.startedRestoreForSession(raw, 2000, SESSION)), ["A05"], "the A03 record names machine A05 in its args → dropped");
+  assert.deepEqual(core.startedRestoreForSession(raw, 2000, { tenantId: SESSION.tenantId, appUserId: "someone-else" }), {});
+  assert.deepEqual(core.startedRestoreForSession(raw, 1000 + core.STARTED_PENDING_KEEP_MS + 1, SESSION), {}, "older than 24 h");
+  assert.deepEqual(core.startedRestoreForSession("{bad", 2000, SESSION), {});
+  const merged = core.startedMergeForSave(JSON.stringify({ A03: Object.assign({}, rec, { appUserId: "other", args: Object.assign({}, args, { p_machine_code: "A03" }) }) }), { A05: rec }, 2000, SESSION);
+  assert.deepEqual(Object.keys(merged).sort(), ["A03", "A05"], "another user's record on this tablet is kept");
+  assert.equal(core.startedLocks(rec, false), true);
+  assert.equal(core.startedLocks(Object.assign({}, rec, { notFound: true }), false), false);
+  assert.equal(core.startedLocks(Object.assign({}, rec, { lastStatus: "pending" }), true), false);
+  assert.equal(core.startedLocks(Object.assign({}, rec, { lastStatus: "claimed" }), true), true);
+  const unsureView = core.startedResultView(switchRow({ status: "rejected", reject_code: "OUTCOME_UNKNOWN" }));
+  const last = { view: unsureView, at: 0, orderNo: "TEST-WO-1", step: 3 };
+  assert.equal(core.startedUnsureHold(last, { orderNo: "TEST-WO-1", step: 3, nowMs: 60000 }), true);
+  assert.equal(core.startedUnsureHold(last, { orderNo: "TEST-WO-1", step: 1, nowMs: 60000 }), false, "the card moved on");
+  assert.equal(core.startedUnsureHold(last, { orderNo: "TEST-WO-1", step: 3, nowMs: core.STARTED_UNSURE_HOLD_MS + 1 }), false);
+  assert.equal(core.startedUnsureHold(Object.assign({}, last, { view: core.startedResultView(switchRow({ status: "rejected", reject_code: "STALE" })) }), { orderNo: "TEST-WO-1", step: 3, nowMs: 1 }), false);
+});
+
+// ---------------------------------------------------------------- 第 2 階段 app.js 接線
+function startedBackendOf(state) {
+  Object.assign(state, { submits: [], polls: 0, reads: [], row: null, ...state });
+  return async (url, init) => {
+    if (url.startsWith("work_order_processes?") && url.includes("&id=eq.")) {
+      state.reads.push("fresh");
+      if (state.freshFail) throw new TypeError("Failed to fetch");
+      return state.fresh ? state.fresh() : freshRow({ status: "running", qty_defect: 0, work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", part_no: "TEST-P1", part_name: "測試軸", status: "in_progress" } });
+    }
+    if (url.startsWith("work_order_processes?") && url.includes("&work_order_id=eq.")) {
+      state.reads.push("steps");
+      assert.match(url, new RegExp(`&work_order_id=eq\\.${WO_ID}&`), "the order's steps are read by the work order id from the fresh read");
+      return state.steps ? state.steps() : STEPS();
+    }
+    if (url === `rpc/${returnCore.HELD_CLAIMS_RPC}`) { state.reads.push("held"); assert.deepEqual([init.method, init.body], ["POST", "{}"]); return state.held ? state.held() : []; }
+    if (url.startsWith("station_commands?") && url.includes("&command_type=in.(claim_next,return_claim,switch_step)&")) {
+      state.reads.push("history");
+      assert.match(url, /&machine_code=eq\.A05&expected_order_no=eq\.TEST-WO-1&/);
+      return state.history ? state.history() : [];
+    }
+    if (url.startsWith("station_commands?") && url.includes("&command_type=eq.switch_step&")) { state.reads.push("notices"); return state.noticeRows ? state.noticeRows() : []; }
+    if (url.startsWith("dispatch_pool_items?")) { state.reads.push("pool"); return state.pool ? state.pool() : [poolRow(1), poolRow(2), OTHER_ORDER_ROW]; }
+    if (url === `rpc/${core.STARTED_SUBMIT_RPC}`) {
+      const body = JSON.parse(init.body);
+      state.submits.push({ body, raw: init.body });
+      if (state.submitError) throw state.submitError;
+      state.row = switchRow({ command_uuid: body.p_command_uuid, pool_item_id: body.p_pool_item_id, expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn });
+      return [state.row];
+    }
+    if (url.startsWith(returnCore.POLL_PATH_PREFIX)) { state.polls += 1; return state.row ? [state.row] : []; }
+    throw new Error(`unexpected ${url} ${init?.method || ""}`);
+  };
+}
+// 工廠做完之後雲端那一列（快照照樣本，工單號換成這裡的 TEST-WO-1）
+const finishedAs = (state, name, extra) => {
+  state.row = appliedSwitchRow(name, { command_uuid: state.row.command_uuid, expected_order_no: "TEST-WO-1", pool_item_id: state.row.pool_item_id }, Object.assign({ order_no: "TEST-WO-1" }, extra));
+};
+const STARTED_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-started-open="A05">換道次</button>';
+const clickOf = (attr, value) => ({ target: { closest: (selector) => (selector.includes(attr) ? { dataset: value } : null) } });
+
+test("phase 2 flag off (missing / false / non-boolean): no button, no lock, no fetch, no storage — the card is what it was", async () => {
+  for (const started of [undefined, false, "true", 1, null]) {
+    const h = harness({ started, order: runningOrder(), backend: startedBackendOf({}) });
+    assert.equal(h.api.started.enabled(), false, String(started));
+    assert.equal(h.api.started.markup(h.machine), "");
+    assert.equal(h.api.started.locks("A05"), false);
+    assert.equal(h.api.locks("A05"), false);
+    assert.equal(h.api.blockMessage("A05"), "");
+    assert.equal(h.api.started.handleClick(clickOf("data-switch-step-started-open", { switchStepStartedOpen: "A05" })), false);
+    await h.api.started.open("A05", null);
+    h.api.started.restore();
+    await h.api.started.loadNotices();
+    assert.equal(h.startedSheetHtml(), "");
+    assert.deepEqual(h.calls, { fetch: [], toasts: [], rerenders: 0, refresh: [], storageReads: 0, reloads: 0, closedSelection: 0 });
+  }
+  // 核心檔沒載到（舊快取）＝當作關
+  const noCore = harness({ started: true, noCore: true, order: runningOrder() });
+  assert.equal(noCore.api.started.enabled(), false);
+  assert.equal(noCore.api.started.markup(noCore.machine), "");
+});
+
+test("phase 2 flag on: 「換道次」 only on a started, zero-quantity card; never together with the phase-1 buttons; rendering is read-only", () => {
+  const h = harness({ started: true, order: runningOrder() });
+  assert.equal(h.api.started.markup(h.machine), STARTED_BUTTON);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.started.gate(h.machine))), { show: true, reason: "", needsReason: false });
+  assert.equal(h.calls.fetch.length, 0, "drawing the card fetches nothing");
+  assert.equal(h.calls.storageReads, 0, "no notices → drawing the card does not even read the dismissed-notice list");
+  // 還沒開工 → 第 1 階段的範圍，這一顆不出
+  const notStarted = harness({ started: true, returnFlag: true, flag: true });
+  assert.equal(notStarted.api.started.markup(notStarted.machine), "");
+  assert.match(notStarted.api.markup(notStarted.machine), /data-switch-step-open="A05"/, "phase 1 button stays as it was");
+  // 已開工 → 第 1 階段的按鈕不出，只有這一顆
+  const both = harness({ started: true, returnFlag: true, flag: true, order: runningOrder({ heldPoolKey: CURRENT_KEY }) });
+  assert.equal(both.api.markup(both.machine), "");
+  assert.equal(both.api.started.markup(both.machine), STARTED_BUTTON);
+  for (const order of [runningOrder({ done: 2 }), runningOrder({ processStatus: "completed" }), null]) {
+    const hidden = harness({ started: true, order });
+    assert.equal(hidden.api.started.markup(hidden.machine), "", JSON.stringify(order && order.processStatus));
+  }
+  const busy = harness({ started: true, order: runningOrder(), stationPending: { A05: { commandUuid: UUID2, commandType: "stop" } } });
+  assert.equal(busy.api.started.markup(busy.machine), "", "another station command in flight");
+  const reported = harness({ started: true, order: runningOrder(), todayRows: [{ process_id: PROCESS_ID }] });
+  assert.equal(reported.api.started.markup(reported.machine), "", "reported today");
+});
+
+test("phase 2 happy path (A05 running step 3 → step 1, pooled → pooled sample): four reads, one submit with the nine args, existing poll, done sentence", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  h.api.started.handleClick(clickOf("data-switch-step-started-open", { switchStepStartedOpen: "A05" }));
+  await settle();
+  await settle();
+  assert.deepEqual([...state.reads].sort(), ["fresh", "held", "history", "pool", "steps"].sort());
+  const html = h.startedSheetHtml();
+  assert.match(html, /換道次：TEST-WO-1 · TEST-P1 測試軸/);
+  assert.match(html, /現在掛的：第 3 道 · 精車（已開工、還沒報工）/);
+  assert.match(html, /data-switch-step-started-choice="01\|TEST-WO-1\|S1"[^>]*>第 1 道 · CNC車床加工 · 120 件 · 待做池</);
+  assert.match(html, /data-switch-step-started-choice="01\|TEST-WO-1\|S2"[^>]*>第 2 道 · 車牙 · 120 件 · 待做池</);
+  assert.doesNotMatch(html, /step:6/, "unpooled steps are not listed with the flag off");
+  assert.match(html, /data-switch-step-started-confirm disabled/, "nothing picked yet (two choices)");
+  h.api.started.handleClick({ target: { closest: (selector) => (selector === "#machtileSwitchStartedSheet" ? {} : selector === "[data-switch-step-started-choice]" ? { dataset: { switchStepStartedChoice: keyOf(1) } } : null) } });
+  assert.match(h.startedSheetHtml(), /這台現在做的是 TEST-WO-1 第 3 道（已開工、還沒報工）。要換成第 1 道嗎？/);
+  assert.match(h.startedSheetHtml(), />換成第 1 道</);
+  await h.api.started.submit();
+  assert.equal(state.submits.length, 1);
+  assert.deepEqual(state.submits[0].body, { p_command_uuid: S_UUID, p_machine_code: "A05", p_pool_item_id: CURRENT_KEY, p_expected_order_no: "TEST-WO-1", p_expected_index_sn: 3,
+    p_target_index_sn: 1, p_target_pool_item_id: keyOf(1), p_expected_part_no: "TEST-P1", p_reason: null });
+  // 等結果中：這台全部鎖住，按鈕換成一行字，另一次開卡不會有第二筆
+  assert.equal(h.api.locks("A05"), true);
+  assert.equal(h.api.blockMessage("A05"), "這台正在「換道次」，等它有結果再操作。");
+  assert.match(h.api.started.markup(h.machine), /data-switch-step-started-status="pending"[^>]*>換道次處理中（第 3 道 → 第 1 道），等工廠處理…</);
+  assert.match(h.startedSheetHtml(), /換道次處理中，等工廠處理（約 10–30 秒）。請不要重按。/);
+  assert.ok(h.storage.get("machtile.switchStepStartedPending.v1").includes(S_UUID), "kept across a reload");
+  await h.api.started.open("A05", null);
+  assert.equal(state.submits.length, 1);
+  finishedAs(state, "pooled_to_pooled");
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["已換成第 1 道，請按「開工」開始做。第 3 道已退回待做池，沒有記任何數量。"]);
+  assert.deepEqual(h.calls.refresh, [["A05", "switch_step"]]);
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-result="applied"/);
+  assert.doesNotMatch(h.startedSheetHtml(), /data-switch-step-started-unpooled/);
+  assert.equal(h.api.locks("A05"), false);
+  assert.equal(JSON.parse(h.storage.get("machtile.switchStepStartedPending.v1")).A05, undefined);
+  assert.equal(state.submits.length, 1, "never resubmitted");
+});
+
+test("phase 2 planner-assigned source (sample 2): p_pool_item_id null, admin reason; applied with source_unpooled → persistent notice on the sheet and card, visible to admins everywhere", async () => {
+  const state = {};
+  const h = harness({ started: true, role: "admin", order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-on-behalf/);
+  h.api.started.choose(keyOf(1));
+  await h.api.started.submit();
+  assert.equal(state.submits.length, 0, "admin without a reason: not sent");
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-reason-error[^>]*>請寫換道次的原因。</);
+  h.api.started.state.sheet.reason = "生管代換：接錯道次";
+  await h.api.started.submit();
+  assert.equal(state.submits[0].body.p_pool_item_id, null, "no held claim, no claim history → planner-assigned");
+  assert.equal(state.submits[0].body.p_reason, "生管代換：接錯道次");
+  finishedAs(state, "planner_source_unpooled_to_pooled");
+  state.noticeRows = () => [state.row];
+  await h.runPoll();
+  await settle();
+  const notice = "注意：第 3 道現在不在任何機台、也不在待做池。請生管用「設定到這台」重新安排。";
+  assert.deepEqual(h.calls.toasts, [`已換成第 1 道，請按「開工」開始做。第 3 道沒有記任何數量。 ${notice}`]);
+  assert.match(h.startedSheetHtml(), new RegExp(`data-switch-step-started-unpooled>${notice}<`));
+  const cardLine = "待安排：TEST-WO-1 第 3 道現在不在任何機台、也不在待做池（A05 換成第 1 道時撤下）。請生管用「設定到這台」重新安排。";
+  const card = h.api.started.markup(h.machine);
+  assert.ok(card.includes(cardLine), card);
+  assert.match(card, new RegExp(`data-switch-step-unpooled-dismiss="${S_UUID}"`), "admins get 已安排，收起");
+  assert.ok(state.reads.includes("notices"), "the cloud list is re-read after an unpooled switch");
+  // 收起只在這台平板；收起後卡片上不再顯示
+  h.api.started.handleClick(clickOf("data-switch-step-unpooled-dismiss", { switchStepUnpooledDismiss: S_UUID }));
+  assert.ok(!h.api.started.markup(h.machine).includes(cardLine));
+  // 另一台平板的生管：開機時從雲端讀到（不用是自己按的）
+  const planner = harness({ started: true, role: "planner", order: runningOrder({ id: "TEST-WO-2" }), backend: startedBackendOf({ noticeRows: () => [state.row] }) });
+  planner.api.started.restore();
+  await settle();
+  assert.ok(planner.api.started.markup(planner.machine).includes(cardLine), "visible to a planner on another tablet");
+  // 作業員：看得到，但沒有「收起」
+  const operator = harness({ started: true, order: runningOrder({ id: "TEST-WO-2" }), backend: startedBackendOf({ noticeRows: () => [state.row] }) });
+  operator.api.started.restore();
+  await settle();
+  const opCard = operator.api.started.markup(operator.machine);
+  assert.ok(opCard.includes(cardLine));
+  assert.doesNotMatch(opCard, /data-switch-step-unpooled-dismiss/);
+  operator.api.started.handleClick(clickOf("data-switch-step-unpooled-dismiss", { switchStepUnpooledDismiss: S_UUID }));
+  assert.ok(operator.api.started.markup(operator.machine).includes(cardLine), "an operator cannot dismiss it");
+});
+
+test("phase 2 pooled → unpooled target (sample 3): listed only with switchStepStartedAllowUnpooled, labeled 不在待做池, sent with p_target_pool_item_id null", async () => {
+  const state = { history: () => [{ command_uuid: UUID, command_type: "claim_next", machine_code: "A05", pool_item_id: CURRENT_KEY, expected_order_no: "TEST-WO-1",
+    expected_index_sn: 3, status: "applied", requested_at: "2026-11-13T00:00:00Z", legacy_snapshot: null }] };
+  const off = harness({ started: true, order: runningOrder(), backend: startedBackendOf({}) });
+  await off.api.started.open("A05", null);
+  assert.doesNotMatch(off.startedSheetHtml(), /step:6|不在待做池/);
+  const h = harness({ started: true, allowUnpooled: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-choice="step:6" data-switch-step-started-pooled="0"[^>]*>第 6 道 · 研磨 · 不在待做池</);
+  h.api.started.choose("step:6");
+  await h.api.started.submit();
+  assert.equal(state.submits[0].body.p_target_index_sn, 6);
+  assert.equal(state.submits[0].body.p_target_pool_item_id, null);
+  assert.equal(state.submits[0].body.p_pool_item_id, CURRENT_KEY, "held-claims RPC empty (started step) → the claim_next history gives the pool key");
+  finishedAs(state, "pooled_to_unpooled_target", { to_index_sn: 6 });
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["已換成第 6 道，請按「開工」開始做。第 3 道已退回待做池，沒有記任何數量。"]);
+  assert.doesNotMatch(h.api.started.markup(h.machine), /待安排/);
+});
+
+test("phase 2 refusals: HAS_REPORTS at submit and SWITCH_STEP_HAS_REPORTS from the Factory both say 找生管; nothing left pending; no raw code", async () => {
+  for (const code of ["SWITCH_STEP_HAS_REPORTS", "HAS_REPORTS"]) {
+    const state = { submitError: new Error(`400 {"code":"P0001","message":"${code}"}`) };
+    const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+    await h.api.started.open("A05", null);
+    h.api.started.choose(keyOf(1));
+    await h.api.started.submit();
+    assert.match(h.startedSheetHtml(), /data-switch-step-started-result="failed"[^>]*>第 3 道已經有報工數量，不能直接換道次。請找生管處理（報工修正）。</);
+    assert.doesNotMatch(h.startedSheetHtml(), /HAS_REPORTS/);
+    assert.equal(h.api.locks("A05"), false);
+    assert.equal(h.pollTimers(), 0);
+  }
+  const state = {};
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  h.api.started.choose(keyOf(2));
+  await h.api.started.submit();
+  state.row = Object.assign({}, state.row, { status: "rejected", claimed_at: new Date().toISOString(), reject_code: "SWITCH_STEP_HAS_REPORTS", reject_message: "Factory: SFC qty" });
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["第 3 道已經有報工數量，不能直接換道次。請找生管處理（報工修正）。"]);
+  assert.deepEqual(h.calls.refresh, [["A05", "switch_step"]]);
+  assert.equal(h.api.started.markup(h.machine).includes(STARTED_BUTTON), true, "definitely not switched: the card is usable again");
+});
+
+test("phase 2 OUTCOME_UNKNOWN: 'not sure' (never 'not switched'), and the button stays hidden for that step — no second command", async () => {
+  const state = {};
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID, S_UUID2] });
+  await h.api.started.open("A05", null);
+  h.api.started.choose(keyOf(1));
+  await h.api.started.submit();
+  state.row = Object.assign({}, state.row, { status: "rejected", claimed_at: new Date().toISOString(), reject_code: "OUTCOME_UNKNOWN" });
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["換道次結果還不確定。請重新整理，看這台現在掛第幾道；不要重按。"]);
+  const card = h.api.started.markup(h.machine);
+  assert.match(card, /data-switch-step-started-status="rejected"[^>]*>換道次結果還不確定/);
+  assert.doesNotMatch(card, /data-switch-step-started-open/, "no button while the outcome is unknown");
+  assert.equal(h.api.started.gate(h.machine).reason, "unsure_hold");
+  await h.api.started.open("A05", null);
+  assert.equal(h.startedSheetHtml().includes("data-switch-step-started-choice"), false);
+  assert.equal(state.submits.length, 1);
+});
+
+test("phase 2 network cut on submit: 'not sure it was sent', polled with the same uuid; resend reuses the same uuid and byte-identical args; a reload never resubmits", async () => {
+  const state = { submitError: new TypeError("Failed to fetch") };
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID, S_UUID2] });
+  await h.api.started.open("A05", null);
+  h.api.started.choose(keyOf(1));
+  await h.api.started.submit();
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-result="uncertain"/);
+  assert.match(h.api.started.markup(h.machine), /data-switch-step-started-retry="A05"/);
+  assert.equal(h.api.locks("A05"), true, "locked until the poll knows");
+  // 卡片上再按「換道次」：不會開新的一筆
+  await h.api.started.open("A05", null);
+  assert.equal(state.submits.length, 1);
+  // 用同一筆重送
+  delete state.submitError;
+  h.api.started.handleClick(clickOf("data-switch-step-started-retry", { switchStepStartedRetry: "A05" }));
+  assert.match(h.startedSheetHtml(), />用同一筆重送</);
+  await h.api.started.submit();
+  assert.equal(state.submits.length, 2);
+  assert.equal(state.submits[1].raw, state.submits[0].raw, "same uuid, same nine args");
+  assert.equal(state.submits[1].body.p_command_uuid, S_UUID);
+  // 重新整理：只還原、輪詢，不送
+  const stored = h.storage.get("machtile.switchStepStartedPending.v1");
+  const reloaded = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), storage: { "machtile.switchStepStartedPending.v1": stored } });
+  reloaded.api.started.restore();
+  assert.match(reloaded.api.started.markup(reloaded.machine), /data-switch-step-started-status="pending"/);
+  finishedAs(state, "pooled_to_pooled");
+  await reloaded.runPoll();
+  assert.equal(state.submits.length, 2, "restore polls, never submits");
+  assert.equal(reloaded.calls.toasts.length, 1);
+  // 換了人登入：別人的紀錄不還原
+  const other = harness({ started: true, order: runningOrder(), backend: startedBackendOf({}), storage: { "machtile.switchStepStartedPending.v1": stored }, userId: "x" });
+  other.context.machtileAuthState.appUserId = "00000000-0000-4000-8000-000000000999";
+  other.api.started.restore();
+  assert.equal(other.api.started.locks("A05"), false);
+});
+
+test("phase 2 open-time reads fail closed: fresh read changed / reported / unreadable → no list, no send", async () => {
+  for (const [fresh, text] of [
+    [() => freshRow({ status: "running", qty_completed: 4, work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", status: "in_progress" } }), "第 3 道已經有報工數量"],
+    [() => freshRow({ status: "running", process_order: 2, work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", status: "in_progress" } }), "這台的工單或道次已經變了"],
+    [null, "讀不到這台最新的資料"],
+  ]) {
+    const state = fresh ? { fresh } : { freshFail: true };
+    const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state) });
+    await h.api.started.open("A05", null);
+    assert.ok(h.startedSheetHtml().includes(text), text);
+    assert.doesNotMatch(h.startedSheetHtml(), /data-switch-step-started-choice/);
+    assert.deepEqual(state.reads, ["fresh"], "nothing else read");
+    await h.api.started.submit();
+    assert.equal(state.submits.length, 0);
+  }
+  const noOther = { steps: () => [procRow(3, "running", "A05")], pool: () => [] };
+  const h = harness({ started: true, allowUnpooled: true, order: runningOrder(), backend: startedBackendOf(noOther) });
+  await h.api.started.open("A05", null);
+  assert.match(h.startedSheetHtml(), /這張單現在沒有可以換過去的道次/);
 });

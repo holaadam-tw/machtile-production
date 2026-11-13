@@ -78,7 +78,22 @@ const heldFields = [...new Set([...heldFn.matchAll(/\b(?:row|hits\[0\])\.([a-z_]
 assert.deepEqual(heldFields, ["machine_code", "process_order", "source_key", "work_order_no"], "row fields the held-step resolver reads");
 for (const field of heldFields) assert.ok(HELD_RPC_COLUMNS.includes(field), `machtile_held_pool_claims() returns no column "${field}"`);
 const appSourceForRpc = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
-assert.equal([...appSourceForRpc.matchAll(/machtileReturnClaimCore\.HELD_CLAIMS_RPC/g)].length, 1, "app.js calls the held-step RPC in exactly one place, by the core's constant");
+// Two call sites, both by the core's constant: the card-details loader (return claim / switch step phase 1) and the started
+// switch-step sheet (phase 2, enableSwitchStepStarted), which reads the same row fields through returnClaimCore.heldPoolKey.
+assert.equal([...appSourceForRpc.matchAll(/machtileReturnClaimCore\.HELD_CLAIMS_RPC/g)].length, 2, "app.js calls the held-step RPC in exactly two places, by the core's constant");
+assert.equal([...appSourceForRpc.matchAll(/machtileReturnClaimCore\.heldPoolKey\(/g)].length, 2, "both read the RPC rows through the same resolver");
+// switch_step phase 2 (started): the result is polled through returnClaimCore.pollPath (the same literal select as return_claim).
+// The new columns station_commands.target_index_sn / target_pool_item_id (cloud 20261114090000) are never selected: they are not in
+// the production column list above until that migration is applied, and selecting them would 400 every poll (the #176 incident).
+const startedSection = appSourceForRpc.slice(appSourceForRpc.indexOf("// ==== 換道次（已開工、還沒報工；第 2 階段）"), appSourceForRpc.indexOf("// ==== 換道次（已開工）到此 ===="));
+assert.ok(startedSection.length > 1000, "app.js has the started switch-step section");
+assert.equal([...startedSection.matchAll(/machtileReturnClaimCore\.pollPath\(/g)].length, 1, "the started switch-step poll uses returnClaimCore.pollPath");
+assert.ok(!COLUMNS.has("target_index_sn") && !COLUMNS.has("target_pool_item_id"), "the switch_step columns are not in the production list yet");
+for (const { name, list } of selects) {
+  assert.doesNotMatch(list, /(?:^|,)target_(?:index_sn|pool_item_id)(?:,|$)/, `${name}: no select reads the switch_step-only columns`);
+}
+const startedStationSelects = [...startedSection.matchAll(/station_commands\?select=([A-Za-z0-9_,:]+)/g)].map((m) => m[1]);
+assert.equal(startedStationSelects.length, 2, "the started section reads station_commands twice (command history for the pool key, unpooled notices)");
 assert.doesNotMatch(appSourceForRpc, /machtile_held_pool_claims\?|HELD_CLAIMS_RPC\}\?/, "the RPC is called without a query string (no select to cover)");
 const cloudRepo = process.env.HELD_POOL_CLAIMS_CLOUD_REPO || "D:/04_SoftNet/wt-mini-return";
 let cloudSql = "";

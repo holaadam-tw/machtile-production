@@ -358,6 +358,12 @@ const blockFrom = appSource.indexOf(BLOCK_START.replace(/\r\n/g, appSource.inclu
 const blockTo = appSource.indexOf("function renderMachineCard(machine) {", blockFrom);
 assert.ok(blockFrom >= 0 && blockTo > blockFrom, "app.js must contain the return-claim block right before renderMachineCard");
 const blockSource = appSource.slice(blockFrom, blockTo);
+// 「換道次（已開工）」那一段（enableSwitchStepStarted）緊接在這個 block 前面；它的 Locks 接在 machtileReturnClaimLocks／BlockMessage 最前面，
+// 所以 vm 裡也要有它（這個 harness 沒有 MachTileSwitchStepCore → 它一律是關的＝回 false／空字串）。
+const STARTED_START = "// ==== 換道次（已開工、還沒報工；第 2 階段）";
+const startedFrom = appSource.indexOf(STARTED_START);
+assert.ok(startedFrom >= 0 && startedFrom < blockFrom, "the started switch-step section sits right before the return-claim block");
+const startedSource = appSource.slice(startedFrom, blockFrom);
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 function harness(options = {}) {
@@ -415,7 +421,8 @@ function harness(options = {}) {
     clearTimeout: () => {},
     AbortController, console: { warn() {}, log() {} }, Date, JSON, Object, Array, Number, String, Boolean, Error,
   };
-  const api = vm.runInNewContext(`${blockSource}
+  const api = vm.runInNewContext(`${startedSource}
+    ${blockSource}
     ({ machtileReturnClaim, enabled: machtileReturnClaimEnabled, locks: machtileReturnClaimLocks, markup: machtileReturnClaimCardMarkup,
        restore: machtileReturnClaimRestore, open: machtileReturnClaimOpen, openRetry: machtileReturnClaimOpenRetry, submit: machtileReturnClaimSubmit,
        dismiss: machtileReturnClaimDismiss, handleClick: machtileReturnClaimHandleClick, closeSheet: machtileReturnClaimCloseSheet,
@@ -1377,6 +1384,22 @@ test("outside the return-claim block, app.js differs from the base only by the l
   const block = norm(blockSource);
   assert.equal(current.split(block).length, 2);
   current = current.replace(block, () => "");
+  // 「換道次（已開工）」（enableSwitchStepStarted，預設關）：整段拿掉、掛點還原（旗標關時每一個都等於原字串：Restore／HandleClick 直接 return、
+  // CardMarkup 回 ""、ForgetUser 沒有東西可丟）。它在 return-claim block 裡的兩個掛點（Locks／BlockMessage 第一行）跟著 block 一起拿掉了。
+  const started = norm(startedSource);
+  assert.equal(current.split(started).length, 2);
+  current = current.replace(started, () => "");
+  for (const [now, before] of [
+    ["  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）\n", ""],
+    ["${machtileSwitchStartedCardMarkup(machine)}", ""],
+    ["    if (machtileSwitchStartedHandleClick(event)) return;\n", ""],
+    ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStartedForgetUser();\n", ""],
+    ["  machtileSwitchStartedForgetUser();\n  machtileSwitchStepForgetUser();\n", "  machtileSwitchStepForgetUser();\n"],
+  ]) {
+    assert.equal(current.split(now).length, 2, `started hook must appear exactly once: ${now.slice(0, 60)}`);
+    current = current.replace(now, () => before);
+  }
+  assert.doesNotMatch(current, /machtileSwitchStarted|enableSwitchStepStarted/, "no other started switch-step reference");
   // 每一個掛進既有程式的地方：[現在的字串, 旗標關時等價的原字串]
   const hooks = [
     ["function machtileStationCmdRestorePendingEarly() {\n  machtileReturnClaimRestore();   // 「接錯了，退回」等結果中的那筆也一起還原（旗標關＝什麼都不做）\n", "function machtileStationCmdRestorePendingEarly() {\n"],
@@ -1443,5 +1466,5 @@ test("outside the return-claim block, app.js differs from the base only by the l
   const baseConfig = norm(git(["show", `${base}:config.js`]));
   const config = norm(fs.readFileSync(path.join(__dirname, "config.js"), "utf8"));
   assert.match(config, /\n  enableReturnClaim: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableReturnClaim|接錯了，退回|return_claim|enableSwitchStep|換道次/.test(line)).join("\n"), baseConfig);
+  assert.equal(config.split("\n").filter((line) => !/enableReturnClaim|接錯了，退回|return_claim|enableSwitchStep|switchStepStarted|換道次/.test(line)).join("\n"), baseConfig);
 });

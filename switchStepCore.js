@@ -198,9 +198,485 @@
       reasonKey: text(reasonKey) || "switch_step_reason_generic" };
   }
 
+  // ================================================================ 第 2 階段：已開工、還沒報工（DESIGN 20261113-2230 §3／§4）
+  // 一筆新的指令 switch_step（rpc/machtile_submit_switch_step_command，九個參數），工廠一個交易做完「停工（0 件）→ 舊道次退回
+  // → 新道次設到這台」，所以只有 choosing → submitting → done｜rejected｜unsure，沒有第 1 階段的「退了、沒接到」。
+  // 結果用既有的指令輪詢看（returnClaimCore.pollPath：同一串 select，不多讀新欄位）。
+  // 旗標：config.enableSwitchStepStarted（預設 false，跟第 1 階段的 enableSwitchStep 分開，也不需要 enableReturnClaim）；
+  //       config.switchStepStartedAllowUnpooled（預設 false）＝不在待做池的道次也列出來（要跟工廠 SwitchStepAllowUnpooledTarget 一起開）。
+  const STARTED_COMMAND_TYPE = "switch_step";
+  const STARTED_SUBMIT_RPC = "machtile_submit_switch_step_command";
+  // 雲端 RPC 的參數名稱，逐字（20261114090000_station_switch_step_commands.sql）
+  const STARTED_ARG_KEYS = Object.freeze(["p_command_uuid", "p_machine_code", "p_pool_item_id", "p_expected_order_no", "p_expected_index_sn",
+    "p_target_index_sn", "p_target_pool_item_id", "p_expected_part_no", "p_reason"]);
+  const STARTED_ROLES = Object.freeze(["operator", "admin", "planner"]);
+  const STARTED_REASON_ROLES = Object.freeze(["admin", "planner"]);
+  const STARTED_REASON_MAX = 500;
+  const STARTED_PENDING_KEEP_MS = 24 * 60 * 60 * 1000;
+  // 雲端 process 狀態：running／paused＝已開工；pending 但有開工時間（或這台平板今天看到開工）也算
+  const STARTED_STATUSES = Object.freeze(["running", "paused"]);
+  // 目標清單排除：做完的、跳過的、待檢的（雲端 TARGET_STEP_CLOSED 擋 completed／skipped；待檢也不給換過去）
+  const STARTED_CLOSED_STEP = Object.freeze(["completed", "skipped", "waiting_inspection"]);
+  const STARTED_CLOSED_ORDER = Object.freeze(["completed", "shipped", "cancelled"]);
+  // 「第 N 道現在不在任何機台、也不在待做池」提醒：作業員在那台卡片上看 24 小時；管理員／生管看 72 小時（或在這台平板按「已安排」）
+  const UNPOOLED_NOTICE_OPERATOR_MS = 24 * 60 * 60 * 1000;
+  const UNPOOLED_NOTICE_ADMIN_MS = 72 * 60 * 60 * 1000;
+  // 結果不確定之後，同一張單同一道這麼久之內不再出「換道次」（不重複送；請他重新整理看結果）
+  const STARTED_UNSURE_HOLD_MS = 10 * 60 * 1000;
+
+  const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+  const normRole = (value) => text(value).toLowerCase();
+  const validKey = (value) => { const key = text(value); return key.length >= 5 && key.length <= 120 ? key : ""; };
+
+  function startedEnabled({ flag } = {}) { return flag === true; }
+  function startedRoleAllowed(role, isBridge) { return STARTED_ROLES.includes(normRole(role)) && isBridge !== true; }
+  function startedNeedsReason(role) { return STARTED_REASON_ROLES.includes(normRole(role)); }
+
+  // ---------------------------------------------------------------- 卡片要不要出現「換道次」（已開工）
+  // 第 1 階段的按鈕只在「接了、還沒開工」出現；這一顆只在「已開工、還沒報工」出現，兩者不會同時成立。
+  // 單工站（A 機）才有；多工站（B 機）不出（工廠只做 A01–A05 單工站）。任何一項不確定＝不顯示。
+  function startedVisibility({ enabled: on, role, isBridge, cardDetailsReady, isUnassignedBucket, multiStation, machineCode, order, actualStartAt,
+    startedLocally, startedToday, hasTodayReport, commandInFlight, unsureHold } = {}) {
+    const no = (reason) => ({ show: false, reason, needsReason: false });
+    if (on !== true) return no("flag_off");
+    if (!startedRoleAllowed(role, isBridge)) return no("role");
+    if (isUnassignedBucket === true) return no("no_machine");
+    const code = normCode(machineCode);
+    if (!code || code.length > 30) return no("no_machine");
+    if (multiStation === true) return no("multi_station");
+    if (!order) return no("no_order");
+    if (order.offStation === true) return no("off_station");
+    const orderNo = text(order.id);
+    if (!orderNo || orderNo.length > 100) return no("no_order_no");
+    if (positiveInt(order.stationStep) === null) return no("no_step");
+    if (!isUuid(order.processId)) return no("no_process");
+    if (cardDetailsReady !== true) return no("card_not_ready");
+    if (Number(order.done) !== 0 || hasTodayReport === true) return no("has_reports");
+    const status = text(order.processStatus);
+    const started = STARTED_STATUSES.includes(status)
+      || (status === "pending" && (Boolean(text(actualStartAt)) || startedLocally === true || startedToday === true));
+    if (!started) return no("not_started");
+    if (commandInFlight === true) return no("command_in_flight");
+    if (unsureHold === true) return no("unsure_hold");
+    return { show: true, reason: "", needsReason: startedNeedsReason(role) };
+  }
+
+  // 開確認卡時重讀的這一道（work_order_processes＋work_orders＋machines）：還在這台、同一張單同一道、已開工或還沒開工但沒有數量。
+  function startedFreshCheck({ machineCode, orderNo, step, row } = {}) {
+    const bad = (reason) => ({ ok: false, reason, partNo: null, workOrderId: "" });
+    if (!row) return bad("process_not_found");
+    const wo = row.work_orders || {};
+    const machine = row.machines || {};
+    if (row.off_station_at) return bad("off_station");
+    if (normCode(machine.machine_code) !== normCode(machineCode)) return bad("machine_changed");
+    if (positiveInt(row.process_order) !== positiveInt(step)) return bad("step_changed");
+    if (text(wo.work_order_no) !== text(orderNo)) return bad("order_changed");
+    if (STARTED_CLOSED_ORDER.includes(text(wo.status))) return bad("order_closed");
+    if (!["pending", "running", "paused"].includes(text(row.status))) return bad("not_switchable");
+    if (Number(row.qty_completed || 0) !== 0 || Number(row.qty_defect || 0) !== 0) return bad("has_reports");
+    return { ok: true, reason: "", partNo: text(wo.part_no) || null, workOrderId: isUuid(wo.id) ? String(wo.id) : "" };
+  }
+
+  // ---------------------------------------------------------------- 現在這一道的池列鍵（p_pool_item_id）
+  // 先用 machtile_held_pool_claims()（returnClaimCore.heldPoolKey 算好的 heldKey；但那支 RPC 只回「工序還是 pending」的接單，
+  // 已開工的多半查不到）；查不到再看這台這張單的 station_commands 歷史（applied 的 claim_next／return_claim／switch_step）：
+  // 這一道最後一件事是「接到」（claim_next，或換道次換進來而且雲端記了接單）就用那個鍵；最後一件事是「放掉」或什麼都沒有＝空字串
+  // （送 null＝當成生管設定的；伺服器若發現它其實是從池裡接的，回 POOL_ITEM_REQUIRED → 叫他找生管）。不猜。
+  function historyPoolKey({ rows, machineCode, orderNo, step } = {}) {
+    const code = normCode(machineCode);
+    const order = text(orderNo);
+    const index = positiveInt(step);
+    if (!Array.isArray(rows) || !code || !order || index === null) return "";
+    const events = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || text(row.status) !== "applied") continue;
+      if (normCode(row.machine_code) !== code || text(row.expected_order_no) !== order) continue;
+      const at = Date.parse(row.requested_at);
+      if (!Number.isFinite(at)) continue;
+      const type = text(row.command_type);
+      const from = positiveInt(row.expected_index_sn);
+      if ((type === "return_claim" || type === "switch_step") && from === index) events.push({ at, key: "" });
+      if (type === "claim_next" && from === index) events.push({ at, key: validKey(row.pool_item_id) });
+      if (type === "switch_step") {
+        const snap = snapshotOf(row);
+        const info = snap.switch_step && typeof snap.switch_step === "object" ? snap.switch_step : {};
+        const finalize = snap.cloud_finalize && typeof snap.cloud_finalize === "object" ? snap.cloud_finalize : {};
+        // 換進來的那一道：雲端有記一筆接單（target_claim_id）才算「從池裡接的」
+        if (positiveInt(info.to_index_sn) === index && finalize.target_claim_id) events.push({ at: at + 1, key: validKey(info.target_pool_item_id) });
+      }
+    }
+    if (!events.length) return "";
+    events.sort((a, b) => a.at - b.at);
+    return events[events.length - 1].key;
+  }
+  function sourcePoolKey({ heldKey, historyRows, machineCode, orderNo, step } = {}) {
+    const held = validKey(heldKey);
+    if (held) return { key: held, source: "held" };
+    const fromHistory = historyPoolKey({ rows: historyRows, machineCode, orderNo, step });
+    return fromHistory ? { key: fromHistory, source: "history" } : { key: "", source: "none" };
+  }
+
+  // ---------------------------------------------------------------- 目標清單
+  // 同一張工單、不是現在這一道、沒做完、沒有掛在別台。在待做池（waiting）的標「待做池」；不在池裡的只有 allowUnpooled 才列。
+  // machine＝{ machineCode, departmentCode }：池列要同課、而且這台在可做機台清單裡（機台忙不忙不看：換道次時它本來就在做）。
+  // processes＝雲端 work_order_processes（這張單的每一道；processesReady＝這次有讀到）。讀不到時只列池裡的（伺服器會再驗）。
+  function targetEligible(item, machine) {
+    const code = normCode(machine && machine.machineCode);
+    const department = text(machine && machine.departmentCode);
+    if (!code || !department || !item) return false;
+    if (item.status !== undefined && item.status !== null && text(item.status) !== "waiting") return false;
+    if (text(item.department_code) !== department) return false;
+    return (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).map(normCode).includes(code);
+  }
+  function startedTargets({ orderNo, currentStep, poolReady, poolItems, processesReady, processes, machine, allowUnpooled } = {}) {
+    const order = text(orderNo);
+    const current = positiveInt(currentStep);
+    const code = normCode(machine && machine.machineCode);
+    const unpooledOn = allowUnpooled === true;
+    const ready = (poolReady === true && Array.isArray(poolItems)) || (unpooledOn && processesReady === true && Array.isArray(processes));
+    const result = { ready, choices: [], notEligible: 0 };
+    if (!ready || !order || current === null || !code) return result;
+    // 雲端各道的狀態：同一道有任何一列做完＝做完；任何一列掛在別台而且還在站上＝在別台
+    const steps = new Map();
+    if (processesReady === true && Array.isArray(processes)) {
+      for (const row of processes) {
+        const step = positiveInt(row && row.process_order);
+        if (step === null) continue;
+        const info = steps.get(step) || { closed: false, elsewhere: false, name: "" };
+        if (STARTED_CLOSED_STEP.includes(text(row.status))) info.closed = true;
+        const on = normCode(row.machines && row.machines.machine_code);
+        if (!row.off_station_at && on && on !== code) info.elsewhere = true;
+        if (!info.name) info.name = text(row.process_name);
+        steps.set(step, info);
+      }
+    }
+    const blocked = (step) => { const info = steps.get(step); return Boolean(info && (info.closed || info.elsewhere)); };
+    const pooledSteps = new Set();
+    const seen = new Set();
+    if (poolReady === true && Array.isArray(poolItems)) {
+      for (const item of poolItems) {
+        if (!item || text(item.work_order_no) !== order) continue;
+        const sourceKey = validKey(item.source_key);
+        const step = positiveInt(item.process_order);
+        if (!sourceKey || step === null || step === current || seen.has(sourceKey)) continue;
+        seen.add(sourceKey);
+        if (!targetEligible(item, machine)) { result.notEligible += 1; continue; }
+        pooledSteps.add(step);
+        if (blocked(step)) continue;
+        result.choices.push({ id: sourceKey, step, sourceKey, pooled: true, name: text(item.operation_name), quantity: positiveInt(item.quantity) });
+      }
+    }
+    if (unpooledOn && processesReady === true && Array.isArray(processes)) {
+      for (const [step, info] of steps) {
+        if (step === current || pooledSteps.has(step) || info.closed || info.elsewhere) continue;
+        result.choices.push({ id: `step:${step}`, step, sourceKey: "", pooled: false, name: info.name, quantity: null });
+      }
+    }
+    result.choices.sort((a, b) => a.step - b.step || a.id.localeCompare(b.id));
+    return result;
+  }
+
+  // ---------------------------------------------------------------- 送出參數（九個鍵、名稱逐字）
+  function startedReasonCheck(role, reason) {
+    const value = text(reason);
+    if (value.length > STARTED_REASON_MAX) return { ok: false, messageKey: "switch_step_started_reason_too_long", value };
+    if (startedNeedsReason(role) && !value) return { ok: false, messageKey: "switch_step_started_reason_required", value };
+    return { ok: true, messageKey: "", value };
+  }
+  function startedBuildArgs({ commandUuid, machineCode, poolItemId, orderNo, step, targetStep, targetPoolItemId, partNo, reason, role } = {}) {
+    if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
+    const code = normCode(machineCode);
+    if (!code || code.length > 30) throw new Error("NO_MACHINE");
+    const pool = text(poolItemId);
+    if (pool && !validKey(pool)) throw new Error("BAD_POOL_ITEM_ID");
+    const order = text(orderNo);
+    if (!order || order.length > 100) throw new Error("NO_ORDER");
+    const index = positiveInt(step);
+    if (index === null) throw new Error("NO_STEP");
+    const target = positiveInt(targetStep);
+    if (target === null) throw new Error("NO_TARGET_STEP");
+    if (target === index) throw new Error("SAME_STEP");
+    const targetPool = text(targetPoolItemId);
+    if (targetPool && (!validKey(targetPool) || targetPool === pool)) throw new Error("BAD_TARGET_POOL_ITEM_ID");
+    if (!STARTED_ROLES.includes(normRole(role))) throw new Error("BAD_ROLE");
+    const checked = startedReasonCheck(role, reason);
+    if (!checked.ok) throw new Error(checked.messageKey === "switch_step_started_reason_required" ? "REASON_REQUIRED" : "REASON_TOO_LONG");
+    const part = text(partNo);
+    return {
+      p_command_uuid: commandUuid,
+      p_machine_code: code,
+      // 生管設定的（不是從池裡接的）＝null
+      p_pool_item_id: pool || null,
+      p_expected_order_no: order,
+      p_expected_index_sn: index,
+      p_target_index_sn: target,
+      // 目標不在池裡＝null
+      p_target_pool_item_id: targetPool || null,
+      p_expected_part_no: part && part.length <= 200 ? part : null,
+      // 作業員不填 → null，伺服器存 operator_switch_step；管理員／生管必填
+      p_reason: checked.value || null,
+    };
+  }
+
+  // ---------------------------------------------------------------- 拒絕碼 → 一句白話（i18n key）
+  // 雲端 submit 的 raise（machtile_submit_switch_step_command）＋工廠套用端的 reject_code（StationSwitchStepApplier.cs、
+  // StationSwitchStepRules.ValidateShape、StationCommandProcessor／Poller）共用一張表。畫面絕不顯示代碼本身。
+  const STARTED_REJECT_MESSAGE_KEY = Object.freeze({
+    // ---- 雲端 submit
+    AUTH_REQUIRED: "switch_step_started_err_login",
+    OPERATOR_REQUIRED: "switch_step_started_err_role",
+    APPLIER_CANNOT_SUBMIT: "switch_step_started_err_role",
+    TENANT_INACTIVE: "switch_step_started_err_account",
+    APP_USER_REQUIRED: "switch_step_started_err_account",
+    OPERATOR_LEGACY_ID_MISSING: "switch_step_started_err_account",
+    OPERATOR_LEGACY_ID_INVALID: "switch_step_started_err_account",
+    ADMIN_LEGACY_ID_MISSING: "switch_step_started_err_account",
+    FORBIDDEN: "switch_step_started_err_account",
+    ADMIN_SUBMIT_DISABLED: "switch_step_started_err_admin_disabled",
+    COMMAND_UUID_REQUIRED: "switch_step_started_err_card_data",
+    INVALID_MACHINE_CODE: "switch_step_started_err_card_data",
+    INVALID_POOL_ITEM_ID: "switch_step_started_err_card_data",
+    INVALID_TARGET_POOL_ITEM_ID: "switch_step_started_err_card_data",
+    INVALID_TARGET_STEP: "switch_step_started_err_card_data",
+    SAME_STEP: "switch_step_started_err_card_data",
+    TARGET_STEP_MISMATCH: "switch_step_started_err_card_data",
+    TARGET_NOT_SAME_WORK_ORDER: "switch_step_started_err_card_data",
+    COMMAND_UUID_CONFLICT: "switch_step_started_err_conflict",
+    SWITCH_STEP_DISABLED: "switch_step_started_err_not_open",
+    STALE: "switch_step_started_err_stale",
+    SWITCH_REASON_REQUIRED: "switch_step_started_reason_required",
+    INVALID_SWITCH_REASON: "switch_step_started_reason_too_long",
+    MACHINE_NOT_ALLOWED: "switch_step_started_err_machine_not_allowed",
+    NOT_CLAIM_OWNER: "switch_step_started_err_not_owner",
+    CLAIM_NOT_APPLIED: "switch_step_started_err_claim_not_applied",
+    ACTIVE_CLAIM_NOT_FOUND: "switch_step_started_err_no_pool_record",
+    POOL_ITEM_REQUIRED: "switch_step_started_err_no_pool_record",
+    SWITCH_STEP_HAS_REPORTS: "switch_step_started_err_reported",
+    HAS_REPORTS: "switch_step_started_err_reported",
+    SOURCE_STEP_NOT_SWITCHABLE: "switch_step_started_err_source_state",
+    TARGET_POOL_ITEM_NOT_FOUND: "switch_step_started_err_target_gone",
+    TARGET_STEP_NOT_FOUND: "switch_step_started_err_target_gone",
+    TARGET_TAKEN: "switch_step_started_err_target_taken",
+    TARGET_NOT_ELIGIBLE: "switch_step_started_err_target_not_here",
+    TARGET_STEP_CLOSED: "switch_step_started_err_target_closed",
+    MACHINE_COMMAND_IN_FLIGHT: "switch_step_started_err_busy",
+    // ---- 工廠套用端
+    FACTORY_SWITCH_DISABLED: "switch_step_started_err_not_open",
+    UNSUPPORTED_STATION: "switch_step_started_err_not_open",
+    STATION_NOT_ENABLED: "switch_step_started_err_not_open",
+    COMMAND_INVALID: "switch_step_started_err_not_open",   // 工廠旗標關＝當成不認得的指令種類（同 return_claim）
+    OPERATOR_UNKNOWN: "switch_step_started_err_account",
+    POOL_ITEM_NOT_FOUND: "switch_step_started_err_no_pool_record",
+    SWITCH_STEP_STARTED_BEFORE_CLAIM: "switch_step_started_err_before_claim",
+    SWITCH_STEP_NOT_OPERATOR: "switch_step_started_err_not_operator",
+    SWITCH_STEP_STATE_UNSUPPORTED: "switch_step_started_err_state",
+    SWITCH_STEP_TARGET_TAKEN: "switch_step_started_err_target_taken",
+    SWITCH_STEP_TARGET_NOT_HERE: "switch_step_started_err_target_not_here",
+    SWITCH_STEP_TARGET_CLOSED: "switch_step_started_err_target_closed",
+    SWITCH_STEP_TARGET_NOT_POOLED: "switch_step_started_err_target_not_pooled",
+    SWITCH_STEP_SOURCE_NOT_POOLED: "switch_step_started_err_source_not_pooled",
+    LEGACY_STATE_INCONSISTENT: "switch_step_started_err_inconsistent",
+    LOCK_TIMEOUT: "switch_step_started_err_busy_retry",
+    INTERNAL_ERROR: "switch_step_started_err_internal_retry",
+    LEDGER_CONFLICT: "switch_step_started_err_factory_problem",
+    WRITE_TARGET_DENIED: "switch_step_started_err_factory_problem",
+    STALE_COMMAND: "switch_step_started_err_expired",
+    EXPIRED: "switch_step_started_err_expired",
+    // 結果不確定：不可以說「沒有換」
+    OUTCOME_UNKNOWN: "switch_step_started_unsure",
+    LEGACY_APPLIED_LATE: "switch_step_started_unsure",
+    MANUAL_RELEASED: "switch_step_started_err_released",
+  });
+  const STARTED_GENERIC_MESSAGE_KEY = "switch_step_started_err_generic";
+  const STARTED_UNCERTAIN_CODES = Object.freeze(["OUTCOME_UNKNOWN", "LEGACY_APPLIED_LATE", "MANUAL_RELEASED"]);
+  // 只有這幾個「等一下再按」有機會成功
+  const STARTED_RETRY_LATER_CODES = Object.freeze(["CLAIM_NOT_APPLIED", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND", "EXPIRED", "LOCK_TIMEOUT", "INTERNAL_ERROR"]);
+
+  function startedRejectInfo(code) {
+    const key = normCode(code);
+    const known = Object.prototype.hasOwnProperty.call(STARTED_REJECT_MESSAGE_KEY, key);
+    return { code: key, known, messageKey: known ? STARTED_REJECT_MESSAGE_KEY[key] : STARTED_GENERIC_MESSAGE_KEY,
+      uncertain: STARTED_UNCERTAIN_CODES.includes(key), retryLater: known && STARTED_RETRY_LATER_CODES.includes(key) };
+  }
+
+  // 送出失敗：base＝returnClaimCore.submitErrorInfo(error) 的 { kind, code }（同一套 missing／uncertain／rejected 判斷），換成這裡的文字。
+  function startedSubmitErrorInfo(base) {
+    const kind = text(base && base.kind);
+    const code = normCode(base && base.code);
+    if (kind === "missing") return { kind, code: "", messageKey: "switch_step_started_err_not_open" };
+    if (kind === "uncertain") return { kind, code, messageKey: "switch_step_started_uncertain" };
+    if (code === "AUTH_REQUIRED" || (!code && text(base && base.messageKey) === "return_claim_err_login")) return { kind: "rejected", code, messageKey: "switch_step_started_err_login" };
+    return { kind: "rejected", code, messageKey: startedRejectInfo(code).messageKey };
+  }
+
+  // ---------------------------------------------------------------- 伺服器那一列 → 畫面狀態
+  function snapshotOf(row) {
+    const raw = row && row.legacy_snapshot;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    if (typeof raw !== "string" || !raw.trim()) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  }
+  // 合約 r2（CONTRACT-r2.md）：legacy_snapshot.switch_step = { mode, source_pool_status, target_pool_status, moved_qty, source_unpooled, ... }
+  function appliedInfo(row) {
+    const snap = snapshotOf(row);
+    const info = snap.switch_step && typeof snap.switch_step === "object" && !Array.isArray(snap.switch_step) ? snap.switch_step : {};
+    const sourcePool = text(info.source_pool_status).toLowerCase();
+    return {
+      mode: text(info.mode),
+      from: positiveInt(info.from_index_sn) ?? positiveInt(row && row.expected_index_sn),
+      to: positiveInt(info.to_index_sn),
+      orderNo: text(info.order_no) || text(row && row.expected_order_no),
+      machineCode: normCode(info.station) || normCode(row && row.machine_code),
+      sourcePoolStatus: sourcePool,
+      targetPoolStatus: text(info.target_pool_status).toLowerCase(),
+      // 只認嚴格的 true（合約：舊道次換完後不在任何機台、也不在待做池）
+      sourceUnpooled: info.source_unpooled === true,
+      returnedToPool: ["returned", "pending"].includes(sourcePool),
+    };
+  }
+
+  // known＝{ from, to }：送出時記下的（輪詢的 select 不含 target_index_sn；applied 時以快照為準）
+  function startedResultView(row, known = {}) {
+    const status = text(row && row.status).toLowerCase();
+    const params = { from: positiveInt(known.from) ?? positiveInt(row && row.expected_index_sn), to: positiveInt(known.to) };
+    const base = { switchStarted: true, status, mode: "", code: "", sourceUnpooled: false, params };
+    if (status === "applied") {
+      const info = appliedInfo(row);
+      const view = { ...base, phase: "applied", terminal: true, tone: "ok", mode: info.mode, sourceUnpooled: info.sourceUnpooled,
+        params: { from: info.from ?? params.from, to: info.to ?? params.to, order: info.orderNo },
+        messageKey: info.returnedToPool && !info.sourceUnpooled ? "switch_step_started_done" : "switch_step_started_done_plain" };
+      if (info.sourceUnpooled) view.noticeKey = "switch_step_started_unpooled_notice";
+      return view;
+    }
+    if (status === "rejected") {
+      const info = startedRejectInfo(row.reject_code);
+      return { ...base, phase: "rejected", terminal: true, tone: info.uncertain ? "warn" : "bad", code: info.code, messageKey: info.messageKey };
+    }
+    if (status === "expired") return { ...base, phase: "expired", terminal: true, tone: "warn", code: "EXPIRED", messageKey: STARTED_REJECT_MESSAGE_KEY.EXPIRED };
+    if (status === "claimed") return { ...base, phase: "pending", terminal: false, tone: "wait", messageKey: "switch_step_started_processing" };
+    return { ...base, phase: "pending", status: "pending", terminal: false, tone: "wait", messageKey: "switch_step_started_waiting" };
+  }
+  function startedIsUnsure(view) {
+    return Boolean(view) && view.phase === "rejected" && STARTED_UNCERTAIN_CODES.includes(text(view.code));
+  }
+
+  // ---------------------------------------------------------------- 「第 N 道不在任何機台、也不在待做池」提醒
+  // rows＝station_commands（applied 的 switch_step）。只有快照 source_unpooled===true 才算。dismissed＝這台平板按過「已安排」的 command_uuid。
+  function unpooledNotices({ rows, nowMs, role, dismissed } = {}) {
+    const keep = startedNeedsReason(role) ? UNPOOLED_NOTICE_ADMIN_MS : UNPOOLED_NOTICE_OPERATOR_MS;
+    const hidden = dismissed instanceof Set ? dismissed : new Set(Array.isArray(dismissed) ? dismissed : []);
+    const out = [];
+    const seen = new Set();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!row || text(row.command_type) !== STARTED_COMMAND_TYPE || text(row.status) !== "applied") continue;
+      const uuid = text(row.command_uuid).toLowerCase();
+      if (!isUuid(uuid) || seen.has(uuid) || hidden.has(uuid)) continue;
+      const info = appliedInfo(row);
+      if (!info.sourceUnpooled) continue;
+      const at = Date.parse(row.applied_at || row.requested_at);
+      const age = Number(nowMs) - at;
+      if (!Number.isFinite(at) || !(age >= -5 * 60 * 1000) || age > keep) continue;
+      seen.add(uuid);
+      out.push({ commandUuid: uuid, machineCode: info.machineCode, orderNo: info.orderNo, from: info.from, to: info.to, at });
+    }
+    return out.sort((a, b) => b.at - a.at);
+  }
+
+  // ---------------------------------------------------------------- 等結果中的紀錄（重新整理後也記得；只屬於送出的那個人）
+  function startedPendingRecord(rec = {}) {
+    const args = {};
+    STARTED_ARG_KEYS.forEach((key) => { args[key] = rec.args && rec.args[key] !== undefined ? rec.args[key] : null; });
+    return {
+      commandUuid: text(rec.commandUuid),
+      machineCode: normCode(rec.machineCode),
+      orderNo: text(rec.orderNo),
+      step: positiveInt(rec.step),
+      targetStep: positiveInt(rec.targetStep),
+      processId: isUuid(rec.processId) ? String(rec.processId) : "",
+      tenantId: text(rec.tenantId),
+      appUserId: text(rec.appUserId),
+      args,
+      startedAt: Number(rec.startedAt) || Date.now(),
+      unconfirmed: rec.unconfirmed === true,
+      notFound: rec.notFound === true,
+      lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
+    };
+  }
+  function startedSameSession(rec, session) {
+    const tenantId = text(session && session.tenantId);
+    const appUserId = text(session && session.appUserId);
+    return Boolean(rec) && tenantId !== "" && appUserId !== "" && text(rec.tenantId) === tenantId && text(rec.appUserId) === appUserId;
+  }
+  function startedRestoreAll(raw, nowMs) {
+    let obj = raw;
+    if (typeof raw === "string") { try { obj = JSON.parse(raw); } catch { return {}; } }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    const out = {};
+    Object.keys(obj).forEach((code) => {
+      const rec = obj[code];
+      if (!rec || !isUuid(rec.commandUuid) || !rec.args || rec.args.p_command_uuid !== rec.commandUuid) return;
+      if (Number(nowMs) - Number(rec.startedAt) > STARTED_PENDING_KEEP_MS) return;
+      if (normCode(rec.args.p_machine_code) !== normCode(code)) return;
+      if (positiveInt(rec.args.p_target_index_sn) === null) return;
+      out[normCode(code)] = startedPendingRecord(rec);
+    });
+    return out;
+  }
+  function startedRestoreForSession(raw, nowMs, session) {
+    const all = startedRestoreAll(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (startedSameSession(all[code], session)) out[code] = all[code]; });
+    return out;
+  }
+  function startedMergeForSave(raw, own, nowMs, session) {
+    const all = startedRestoreAll(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (!startedSameSession(all[code], session)) out[code] = all[code]; });
+    Object.keys(own || {}).forEach((code) => { out[normCode(code)] = own[code]; });
+    return out;
+  }
+  // 這筆紀錄是不是卡片現在這張單這一道（不是＝只說「這台有一筆換道次在處理」，不給重送）
+  function startedRecordMatchesOrder(rec, order) {
+    return Boolean(rec) && Boolean(order) && text(rec.orderNo) !== "" && text(rec.orderNo) === text(order.id)
+      && positiveInt(rec.step) !== null && positiveInt(rec.step) === positiveInt(order.stationStep);
+  }
+  // 鎖不鎖這台（開工／報工／完工／選工單／批次）：查了幾次都查不到（notFound）＝沒送到，不鎖；
+  // released＝本機等超過解鎖時間而且最後看到的不是 claimed。
+  function startedLocks(record, released) {
+    if (!record) return false;
+    if (record.notFound === true) return false;
+    if (released === true && record.lastStatus !== "claimed") return false;
+    return true;
+  }
+  // 最後一次結果在卡片上留多久：成功 2 分鐘（有「不在待做池」提醒的另外顯示，不靠這個）；沒成功 10 分鐘而且卡片還是同一張單同一道。
+  function startedLastResultVisible(last, { orderNo, step, nowMs } = {}) {
+    if (!last || !last.view) return false;
+    const age = Number(nowMs) - Number(last.at);
+    if (!(age >= 0)) return false;
+    if (last.view.phase === "applied") return age <= 2 * 60 * 1000;
+    return age <= 10 * 60 * 1000 && text(last.orderNo) === text(orderNo) && Number(last.step) === Number(step);
+  }
+  // 結果不確定（OUTCOME_UNKNOWN 等）之後：同一張單同一道 10 分鐘內不再出按鈕（不重複送；請他重新整理看這台掛第幾道）
+  function startedUnsureHold(last, { orderNo, step, nowMs } = {}) {
+    if (!last || !startedIsUnsure(last.view)) return false;
+    const age = Number(nowMs) - Number(last.at);
+    return age >= 0 && age <= STARTED_UNSURE_HOLD_MS && text(last.orderNo) === text(orderNo) && Number(last.step) === Number(step);
+  }
+
   return Object.freeze({
     APPLIED_MODES, CONTINUE_MAX_MS, POOL_READ_ATTEMPTS, TRANSITIONS, TERMINAL_STATES, HOLDING_STATES, CLAIM_REASON_KEY,
     enabled, machineMayTake, otherSteps, visibility, next, isTerminal, holds, claimAllowed, returnEvent, verifyTarget,
     claimErrorCode, claimEvent, outcome,
+    // 第 2 階段（已開工）
+    STARTED_COMMAND_TYPE, STARTED_SUBMIT_RPC, STARTED_ARG_KEYS, STARTED_ROLES, STARTED_REASON_ROLES, STARTED_REASON_MAX, STARTED_PENDING_KEEP_MS,
+    STARTED_REJECT_MESSAGE_KEY, STARTED_GENERIC_MESSAGE_KEY, STARTED_UNCERTAIN_CODES, STARTED_RETRY_LATER_CODES,
+    UNPOOLED_NOTICE_OPERATOR_MS, UNPOOLED_NOTICE_ADMIN_MS, STARTED_UNSURE_HOLD_MS,
+    startedEnabled, startedRoleAllowed, startedNeedsReason, startedVisibility, startedFreshCheck, historyPoolKey, sourcePoolKey,
+    targetEligible, startedTargets, startedReasonCheck, startedBuildArgs, startedRejectInfo, startedSubmitErrorInfo, appliedInfo,
+    startedResultView, startedIsUnsure, unpooledNotices, startedPendingRecord, startedSameSession, startedRestoreForSession,
+    startedMergeForSave, startedRecordMatchesOrder, startedLocks, startedLastResultVisible, startedUnsureHold,
   });
 });
