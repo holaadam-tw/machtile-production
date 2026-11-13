@@ -503,6 +503,7 @@
   "switch_step_started_err_source_state": "第 {{from}} 道現在的狀態不能換（例如已完工或待檢），沒有換。請找生管。",
   "switch_step_started_err_target_gone": "第 {{to}} 道已經不在待做池或找不到，沒有換。這台還是第 {{from}} 道。請重新整理畫面再選。",
   "switch_step_started_err_target_taken": "第 {{to}} 道已經在別台機台上或被別台接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
+  "switch_step_started_err_target_taken_on": "第 {{to}} 道已經在 {{machine}} 上或被 {{machine}} 接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
   "switch_step_started_err_target_not_here": "第 {{to}} 道不能設到這台（排程或機台不符），沒有換。這台還是第 {{from}} 道。",
   "switch_step_started_err_target_closed": "第 {{to}} 道已經關站，沒有換。這台還是第 {{from}} 道。",
   "switch_step_started_err_busy": "這台正在處理另一筆指令，請稍後再試。",

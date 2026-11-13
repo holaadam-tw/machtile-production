@@ -345,6 +345,7 @@ function harness(options = {}) {
   if (options.returnFlag !== undefined) config.enableReturnClaim = options.returnFlag;
   if (options.flag !== undefined) config.enableSwitchStep = options.flag;
   if (options.started !== undefined) config.enableSwitchStepStarted = options.started;
+  if (options.started !== undefined) config.switchStepStartedMachines = options.startedMachines === undefined ? ["A05"] : options.startedMachines;
   if (options.allowUnpooled !== undefined) config.switchStepStartedAllowUnpooled = options.allowUnpooled;
   const context = {
     window: { MachTileReturnClaimCore: returnCore, MachTileSwitchStepCore: options.noCore ? undefined : core, crypto: { randomUUID: () => (options.uuids ? options.uuids.shift() : UUID) } },
@@ -1676,7 +1677,9 @@ test("phase 2 flags: enableSwitchStepStarted / switchStepStartedAllowUnpooled de
 
 test("phase 2 visibility: only a STARTED step (running / paused, or pending with a start) with zero quantity, single-station, nothing in flight", () => {
   const order = runningOrder();
-  const see2 = (extra) => core.startedVisibility(Object.assign({ enabled: true, role: "operator", cardDetailsReady: true, machineCode: "A05", order }, extra));
+  const see2 = (extra) => core.startedVisibility(Object.assign({ enabled: true, role: "operator", cardDetailsReady: true, machineCode: "A05", order, machineAllowed: true }, extra));
+  assert.equal(see2({ machineAllowed: false }).reason, "machine_not_listed");
+  assert.equal(see2({ machineAllowed: undefined }).reason, "machine_not_listed", "not in switchStepStartedMachines = hidden");
   assert.deepEqual(see2(), { show: true, reason: "", needsReason: false });
   assert.equal(see2({ order: runningOrder({ processStatus: "paused" }) }).show, true, "stopped (paused) counts as started");
   assert.equal(see2({ role: "admin" }).needsReason, true);
@@ -1852,7 +1855,7 @@ test("phase 2 error codes: every cloud submit raise and every Factory reject_cod
   assert.equal(core.startedRejectInfo("SOMETHING_NEW").known, false);
   // 送出失敗（returnClaimCore.submitErrorInfo 先分 missing／uncertain／rejected）
   const via = (error) => core.startedSubmitErrorInfo(returnCore.submitErrorInfo(error));
-  assert.deepEqual(via(new Error('400 {"code":"P0001","message":"SWITCH_STEP_HAS_REPORTS"}')), { kind: "rejected", code: "SWITCH_STEP_HAS_REPORTS", messageKey: "switch_step_started_err_reported" });
+  assert.deepEqual(via(new Error('400 {"code":"P0001","message":"SWITCH_STEP_HAS_REPORTS"}')), { kind: "rejected", code: "SWITCH_STEP_HAS_REPORTS", messageKey: "switch_step_started_err_reported", params: {} });
   assert.deepEqual(via(new Error('400 {"code":"P0001","message":"TARGET_TAKEN","details":"{\\"claimed_machine_code\\":\\"A04\\"}"}')).messageKey, "switch_step_started_err_target_taken");
   assert.equal(via(Object.assign(new TypeError("Failed to fetch"))).kind, "uncertain");
   assert.equal(via(new Error("503 upstream")).kind, "uncertain");
@@ -2241,4 +2244,70 @@ test("phase 2 open-time reads fail closed: fresh read changed / reported / unrea
   const h = harness({ started: true, allowUnpooled: true, order: runningOrder(), backend: startedBackendOf(noOther) });
   await h.api.started.open("A05", null);
   assert.match(h.startedSheetHtml(), /這張單現在沒有可以換過去的道次/);
+});
+
+test("phase 2 machine allowlist: switchStepStartedMachines default [] (no machine); the button only for listed machines AND the flag", async () => {
+  assert.match(fs.readFileSync(path.join(__dirname, "config.js"), "utf8"), /\n\s*switchStepStartedMachines: \[\],\r?\n/, "config.js default is an empty list");
+  for (const startedMachines of [[], ["A04"], undefined === 1 ? [] : null, "A05"]) {
+    const h = harness({ started: true, startedMachines, order: runningOrder(), backend: startedBackendOf({}) });
+    assert.equal(h.api.started.markup(h.machine), "", JSON.stringify(startedMachines));
+    assert.equal(h.api.started.gate(h.machine).reason, "machine_not_listed");
+    await h.api.started.open("A05", null);
+    assert.equal(h.startedSheetHtml(), "", "not listed: the sheet does not open either");
+    assert.deepEqual(h.calls.fetch, []);
+  }
+  for (const startedMachines of [["A05"], ["a05 "], ["A03", "A05"]]) {
+    const h = harness({ started: true, startedMachines, order: runningOrder() });
+    assert.equal(h.api.started.markup(h.machine), STARTED_BUTTON, JSON.stringify(startedMachines));
+  }
+  // 名單有、旗標關 → 還是不出
+  const off = harness({ started: false, startedMachines: ["A05"], order: runningOrder() });
+  assert.equal(off.api.started.markup(off.machine), "");
+});
+
+test("phase 2 TARGET_TAKEN: the machine code from the cloud DETAIL (jsonb claimed_machine_code) is named; unparsable / null detail keeps the generic sentence", async () => {
+  // 雲端原始碼：raise exception 'TARGET_TAKEN' using detail=jsonb_build_object('claimed_machine_code',v_taken)::text（檔案在這台電腦上時確認格式沒變）
+  let sql = "";
+  try { sql = fs.readFileSync(CLOUD_SWITCH_SQL, "utf8"); } catch { /* not on this machine */ }
+  if (sql) {
+    const raises = [...sql.matchAll(/raise exception 'TARGET_TAKEN'([^;]*);/g)].map((m) => m[1].trim());
+    assert.ok(raises.length >= 1);
+    for (const tail of raises) assert.equal(tail, "using detail=jsonb_build_object('claimed_machine_code',v_taken)::text", "every TARGET_TAKEN carries the same DETAIL shape");
+  }
+  const err = (details) => new Error(`400 ${JSON.stringify({ code: "P0001", details, hint: null, message: "TARGET_TAKEN" })}`);
+  assert.equal(core.takenMachineOf(err(JSON.stringify({ claimed_machine_code: "A04" }))), "A04");
+  assert.equal(core.takenMachineOf(err('{"claimed_machine_code": "a03"}')), "A03", "jsonb::text spacing");
+  for (const bad of ['{"claimed_machine_code": null}', "not json", null, '{"x":"A04"}', '{"claimed_machine_code": "<b>"}']) assert.equal(core.takenMachineOf(err(bad)), "", String(bad));
+  assert.equal(core.takenMachineOf(new Error('400 {"message":"STALE","details":"{\\"claimed_machine_code\\":\\"A04\\"}"}')), "", "only for TARGET_TAKEN");
+  assert.equal(core.takenMachineOf(new TypeError("Failed to fetch")), "");
+  const d = dictionaries();
+  const via = (error) => core.startedSubmitErrorInfo(returnCore.submitErrorInfo(error), error);
+  const named = via(err('{"claimed_machine_code": "A04"}'));
+  assert.deepEqual(JSON.parse(JSON.stringify(named)), { kind: "rejected", code: "TARGET_TAKEN", messageKey: "switch_step_started_err_target_taken_on", params: { machine: "A04" } });
+  assert.equal(fill(d.zh[named.messageKey], { from: 3, to: 1, ...named.params }), "第 1 道已經在 A04 上或被 A04 接走，沒有換。這台還是第 3 道，狀態沒有變。");
+  assert.equal(via(err('{"claimed_machine_code": null}')).messageKey, "switch_step_started_err_target_taken");
+  // 畫面：送出被擋 → 確認卡上那一句帶機台代號
+  const state = { submitError: err('{"claimed_machine_code": "A04"}') };
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  h.api.started.choose(keyOf(1));
+  await h.api.started.submit();
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-result="failed"[^>]*>第 1 道已經在 A04 上或被 A04 接走，沒有換。這台還是第 3 道，狀態沒有變。</);
+  assert.equal(h.api.locks("A05"), false);
+  // 工廠回的 SWITCH_STEP_TARGET_TAKEN 沒有 DETAIL：照原本那一句
+  assert.equal(core.startedRejectInfo("SWITCH_STEP_TARGET_TAKEN").messageKey, "switch_step_started_err_target_taken");
+});
+
+test("phase 2 pool key unknown: no pre-block — sent with p_pool_item_id null (the cloud resolves it from the ledger); POOL_ITEM_REQUIRED still says 找生管", async () => {
+  const state = { submitError: new Error('400 {"code":"P0001","message":"POOL_ITEM_REQUIRED"}') };
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  assert.match(h.startedSheetHtml(), /data-switch-step-started-confirm disabled/, "two choices: nothing picked yet");
+  assert.doesNotMatch(h.startedSheetHtml(), /找不到第|data-switch-step-started-stale/, "an unknown pool key is not a reason to block the sheet");
+  h.api.started.choose(keyOf(1));
+  assert.doesNotMatch(h.startedSheetHtml(), /data-switch-step-started-confirm disabled/, "the confirm button is enabled");
+  await h.api.started.submit();
+  assert.equal(state.submits.length, 1, "sent");
+  assert.equal(state.submits[0].body.p_pool_item_id, null);
+  assert.match(h.startedSheetHtml(), />系統找不到第 3 道是從待做池哪一筆接的，不能直接換。這台還是第 3 道。請找生管。</);
 });

@@ -16505,6 +16505,7 @@ function machtileSwitchStartedGate(machine) {
     cardDetailsReady: machtileDeferredLoadState.get("card-details")?.status === "ready",
     isUnassignedBucket: machine.isUnassignedBucket === true, machineCode: code, order,
     multiStation: (Array.isArray(config.multiStationMachines) ? config.multiStationMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    machineAllowed: (Array.isArray(config.switchStepStartedMachines) ? config.switchStepStartedMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
     actualStartAt: order ? (machtileCardActivityOf(order)?.actualStartAt || order.actualStartAt || null) : null,
     startedLocally,
     startedToday: Boolean(order) && machtileStationCmdCore.startedToday({
@@ -16809,14 +16810,14 @@ async function machtileSwitchStartedSubmit() {
     const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.STARTED_SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
-    const info = machtileSwitchStepCore.startedSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error));
+    const info = machtileSwitchStepCore.startedSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error), error);
     if (info.kind === "uncertain") { uncertain(); return; }
     console.warn("switch step (started): submit refused", info.code || info.kind, error);
     if (machtileSwitchStarted.pending[code]?.commandUuid === sheet.uuid) { delete machtileSwitchStarted.pending[code]; machtileSwitchStartedSave(); }
     clearTimeout(machtileSwitchStarted.timers[code]);
     delete machtileSwitchStarted.timers[code];
-    const params = { from: sheet.fields.step, to: sheet.fields.targetStep };
-    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "failed"; sheet.messageKey = info.messageKey; machtileSwitchStartedRenderSheet(); }
+    const params = { from: sheet.fields.step, to: sheet.fields.targetStep, ...info.params };
+    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "failed"; sheet.messageKey = info.messageKey; sheet.messageParams = info.params; machtileSwitchStartedRenderSheet(); }
     else showToast(machtileTranslate(info.messageKey, params));
     machtileStationCmdRerender();
     return;
@@ -16951,7 +16952,7 @@ function machtileSwitchStartedRenderSheet(focus) {
     actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-started-confirm>${escapeHtml(t("switch_step_started_resend"))}</button>
       <button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
   } else if (sheet.phase === "failed") {
-    body = `${head}${notice("bad", 'data-switch-step-started-result="failed"', t(sheet.messageKey || "switch_step_started_err_generic", steps))}`;
+    body = `${head}${notice("bad", 'data-switch-step-started-result="failed"', t(sheet.messageKey || "switch_step_started_err_generic", { ...steps, ...(sheet.messageParams || {}) }))}`;
     actions = `<button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close"))}</button>`;
   } else {
     const view = sheet.view || machtileSwitchStepCore.startedResultView({ status: "pending" }, steps);

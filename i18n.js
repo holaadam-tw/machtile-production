@@ -498,6 +498,7 @@
       switch_step_started_err_source_state: "第 {{from}} 道現在的狀態不能換（例如已完工或待檢），沒有換。請找生管。",
       switch_step_started_err_target_gone: "第 {{to}} 道已經不在待做池或找不到，沒有換。這台還是第 {{from}} 道。請重新整理畫面再選。",
       switch_step_started_err_target_taken: "第 {{to}} 道已經在別台機台上或被別台接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
+      switch_step_started_err_target_taken_on: "第 {{to}} 道已經在 {{machine}} 上或被 {{machine}} 接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
       switch_step_started_err_target_not_here: "第 {{to}} 道不能設到這台（排程或機台不符），沒有換。這台還是第 {{from}} 道。",
       switch_step_started_err_target_closed: "第 {{to}} 道已經關站，沒有換。這台還是第 {{from}} 道。",
       switch_step_started_err_busy: "這台正在處理另一筆指令，請稍後再試。",
@@ -999,6 +1000,7 @@
       switch_step_started_err_source_state: "Trạng thái hiện tại của công đoạn {{from}} không cho đổi (ví dụ đã hoàn thành hoặc chờ kiểm), chưa đổi. Hãy báo bộ phận kế hoạch.", // _draft
       switch_step_started_err_target_gone: "Công đoạn {{to}} không còn trong kho chờ làm hoặc không tìm thấy nên chưa đổi. Máy vẫn ở công đoạn {{from}}. Hãy tải lại màn hình rồi chọn lại.", // _draft
       switch_step_started_err_target_taken: "Công đoạn {{to}} đã ở máy khác hoặc đã bị máy khác nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", // _draft
+      switch_step_started_err_target_taken_on: "Công đoạn {{to}} đã ở máy {{machine}} hoặc đã bị máy {{machine}} nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", // _draft
       switch_step_started_err_target_not_here: "Không thể gán công đoạn {{to}} vào máy này (lịch hoặc máy không khớp) nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", // _draft
       switch_step_started_err_target_closed: "Công đoạn {{to}} đã đóng trạm nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", // _draft
       switch_step_started_err_busy: "Máy này đang xử lý một lệnh khác, hãy thử lại sau.", // _draft
