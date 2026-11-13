@@ -854,6 +854,7 @@
   "switch_step_started_err_source_state": { "value": "Trạng thái hiện tại của công đoạn {{from}} không cho đổi (ví dụ đã hoàn thành hoặc chờ kiểm), chưa đổi. Hãy báo bộ phận kế hoạch.", "_draft": true },
   "switch_step_started_err_target_gone": { "value": "Công đoạn {{to}} không còn trong kho chờ làm hoặc không tìm thấy nên chưa đổi. Máy vẫn ở công đoạn {{from}}. Hãy tải lại màn hình rồi chọn lại.", "_draft": true },
   "switch_step_started_err_target_taken": { "value": "Công đoạn {{to}} đã ở máy khác hoặc đã bị máy khác nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", "_draft": true },
+  "switch_step_started_err_target_taken_on": { "value": "Công đoạn {{to}} đã ở máy {{machine}} hoặc đã bị máy {{machine}} nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", "_draft": true },
   "switch_step_started_err_target_not_here": { "value": "Không thể gán công đoạn {{to}} vào máy này (lịch hoặc máy không khớp) nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", "_draft": true },
   "switch_step_started_err_target_closed": { "value": "Công đoạn {{to}} đã đóng trạm nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", "_draft": true },
   "switch_step_started_err_busy": { "value": "Máy này đang xử lý một lệnh khác, hãy thử lại sau.", "_draft": true },

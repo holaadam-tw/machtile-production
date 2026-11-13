@@ -236,13 +236,15 @@
   // 第 1 階段的按鈕只在「接了、還沒開工」出現；這一顆只在「已開工、還沒報工」出現，兩者不會同時成立。
   // 單工站（A 機）才有；多工站（B 機）不出（工廠只做 A01–A05 單工站）。任何一項不確定＝不顯示。
   function startedVisibility({ enabled: on, role, isBridge, cardDetailsReady, isUnassignedBucket, multiStation, machineCode, order, actualStartAt,
-    startedLocally, startedToday, hasTodayReport, commandInFlight, unsureHold } = {}) {
+    startedLocally, startedToday, hasTodayReport, commandInFlight, unsureHold, machineAllowed } = {}) {
     const no = (reason) => ({ show: false, reason, needsReason: false });
     if (on !== true) return no("flag_off");
     if (!startedRoleAllowed(role, isBridge)) return no("role");
     if (isUnassignedBucket === true) return no("no_machine");
     const code = normCode(machineCode);
     if (!code || code.length > 30) return no("no_machine");
+    // config.switchStepStartedMachines（預設 []＝一台都沒有）：機台要在名單裡才出
+    if (machineAllowed !== true) return no("machine_not_listed");
     if (multiStation === true) return no("multi_station");
     if (!order) return no("no_order");
     if (order.offStation === true) return no("off_station");
@@ -500,13 +502,34 @@
   }
 
   // 送出失敗：base＝returnClaimCore.submitErrorInfo(error) 的 { kind, code }（同一套 missing／uncertain／rejected 判斷），換成這裡的文字。
-  function startedSubmitErrorInfo(base) {
+  // error＝原本的錯誤（可省略）：只用來從 TARGET_TAKEN 的 DETAIL 拿機台代號。
+  function startedSubmitErrorInfo(base, error) {
     const kind = text(base && base.kind);
     const code = normCode(base && base.code);
-    if (kind === "missing") return { kind, code: "", messageKey: "switch_step_started_err_not_open" };
-    if (kind === "uncertain") return { kind, code, messageKey: "switch_step_started_uncertain" };
-    if (code === "AUTH_REQUIRED" || (!code && text(base && base.messageKey) === "return_claim_err_login")) return { kind: "rejected", code, messageKey: "switch_step_started_err_login" };
-    return { kind: "rejected", code, messageKey: startedRejectInfo(code).messageKey };
+    if (kind === "missing") return { kind, code: "", messageKey: "switch_step_started_err_not_open", params: {} };
+    if (kind === "uncertain") return { kind, code, messageKey: "switch_step_started_uncertain", params: {} };
+    if (code === "AUTH_REQUIRED" || (!code && text(base && base.messageKey) === "return_claim_err_login")) return { kind: "rejected", code, messageKey: "switch_step_started_err_login", params: {} };
+    if (code === "TARGET_TAKEN") {
+      const machine = takenMachineOf(error);
+      if (machine) return { kind: "rejected", code, messageKey: "switch_step_started_err_target_taken_on", params: { machine } };
+    }
+    return { kind: "rejected", code, messageKey: startedRejectInfo(code).messageKey, params: {} };
+  }
+
+  // 雲端 submit：raise exception 'TARGET_TAKEN' using detail=jsonb_build_object('claimed_machine_code',v_taken)::text
+  // → supabaseFetch 的錯誤訊息＝`400 {"code":"P0001","details":"{\"claimed_machine_code\": \"A04\"}","hint":null,"message":"TARGET_TAKEN"}`。
+  // details 是一段 JSON 文字；拆不出來、是 null、或不像機台代號＝空字串（照原本那一句，不猜）。
+  function takenMachineOf(error) {
+    const msg = String((error && error.message) || error || "");
+    const start = msg.indexOf("{");
+    if (start < 0) return "";
+    try {
+      const body = JSON.parse(msg.slice(start));
+      if (!body || normCode(body.message) !== "TARGET_TAKEN" || typeof body.details !== "string") return "";
+      const detail = JSON.parse(body.details);
+      const machine = normCode(detail && typeof detail === "object" ? detail.claimed_machine_code : "");
+      return /^[A-Z0-9][A-Z0-9_-]{0,29}$/.test(machine) ? machine : "";
+    } catch { return ""; }
   }
 
   // ---------------------------------------------------------------- 伺服器那一列 → 畫面狀態
@@ -675,7 +698,7 @@
     STARTED_REJECT_MESSAGE_KEY, STARTED_GENERIC_MESSAGE_KEY, STARTED_UNCERTAIN_CODES, STARTED_RETRY_LATER_CODES,
     UNPOOLED_NOTICE_OPERATOR_MS, UNPOOLED_NOTICE_ADMIN_MS, STARTED_UNSURE_HOLD_MS,
     startedEnabled, startedRoleAllowed, startedNeedsReason, startedVisibility, startedFreshCheck, historyPoolKey, sourcePoolKey,
-    targetEligible, startedTargets, startedReasonCheck, startedBuildArgs, startedRejectInfo, startedSubmitErrorInfo, appliedInfo,
+    targetEligible, startedTargets, startedReasonCheck, startedBuildArgs, startedRejectInfo, startedSubmitErrorInfo, takenMachineOf, appliedInfo,
     startedResultView, startedIsUnsure, unpooledNotices, startedPendingRecord, startedSameSession, startedRestoreForSession,
     startedMergeForSave, startedRecordMatchesOrder, startedLocks, startedLastResultVisible, startedUnsureHold,
   });
