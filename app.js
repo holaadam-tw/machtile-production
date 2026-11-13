@@ -24324,9 +24324,41 @@ function machtileSimpleReportStatus(flow, card) {
   const core = machtileStationReportCore();
   if (card.kind === "preview-soft" || card.kind === "soft") return { tone: "warning", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code, true)) };
   if (["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card.kind)) {
+    const limit = machtileSimpleReportQtyLimit(flow);
+    if (limit && limit.max !== null) return { tone: "error", text: machtileTranslate("simple_block_qty_max", { n: limit.max, entered: limit.entered }) };
     return { tone: "error", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code)) };
   }
   return null;
+}
+
+// Owner 2026-11-13（A03 填 163、只能報 161）：硬擋的數量類拒絕（stationReportCore.QTY_FIX_CODES）再按也一樣，
+// 要改數字。讀畫面上的機台數字與這次良品＋不良算出「這一格最多能填幾件」；讀不到 → max null（沿用原本那句）。唯讀。
+function machtileSimpleReportQtyLimit(flow) {
+  const core = machtileStationReportCore();
+  if (!flow?.result || !core?.quantityLimitBlock) return null;
+  const counter = reportCounterCalculation();
+  const defect = Math.max(0, Number(document.getElementById("defectQty")?.value || 0));
+  const requested = counter?.valid && Number.isInteger(Number(counter.delta)) ? Number(counter.delta) + defect : null;
+  return core.quantityLimitBlock(flow.result, { enteredQty: document.getElementById("completedQty")?.value, requestedQty: requested });
+}
+
+// 「改數量」狀態：數量類硬擋，而且畫面上的數字還是被擋的那一筆（沒改過）。這時主按鈕只把游標帶回數量欄，
+// 不送任何東西；改過數字就回到原本的「重新送出」。網路逾時／錯誤／取消收貨等可重試情況不進這裡。唯讀。
+function machtileSimpleReportFixQtyMode(flow) {
+  if (!flow?.result || !flow.args || flow.error || flow.receiptCancelled || machtileStationReportFlowBusy(flow)) return false;
+  if (["preview-timeout", "blocked"].includes(flow.phase)) return false;
+  if (!machtileSimpleReportQtyLimit(flow)) return false;
+  const counter = reportCounterCalculation();
+  const defect = Math.max(0, Number(document.getElementById("defectQty")?.value || 0));
+  return Boolean(counter?.valid) && Number(counter.delta) === Number(flow.args.p_good_qty) && defect === Number(flow.args.p_fail_qty || 0);
+}
+
+function machtileSimpleReportFocusQty() {
+  const input = document.getElementById("completedQty");
+  if (!input) return;
+  input.focus();
+  try { input.select?.(); } catch { /* number inputs on some browsers */ }
+  input.scrollIntoView?.({ behavior: "smooth", block: "center" });
 }
 
 function machtileSimpleReportNeedsNote(row, card) {
@@ -24498,7 +24530,9 @@ function machtileApplySimpleReportChrome() {
     const retry = flow.receiptCancelled || flow.phase === "blocked" || flow.phase === "preview-timeout"
       || ["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card?.kind) || Boolean(flow.error);
     const ack = card?.kind === "preview-soft" && flow.phase === "previewed" && !flow.error;
-    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : retry ? "simple_report_resubmit" : "submit_report");
+    const fixQty = !busy && !inFlight && machtileSimpleReportFixQtyMode(flow);
+    submit.toggleAttribute("data-simple-report-fix-qty", fixQty);
+    machtileSetReportSubmitLabel(busy || inFlight ? "simple_report_sending_button" : ack ? "simple_report_ack_submit" : fixQty ? "simple_report_fix_qty" : retry ? "simple_report_resubmit" : "submit_report");
   }
 }
 
@@ -26140,7 +26174,10 @@ async function machtileBatchSendSmartReport(item) {
 
   flow.expanded = true;
   const card = machtileStationReportCore()?.resultCard(flow.result);
-  row.error = flow.error || (card?.kind === "preview-soft"
+  // 數量類硬擋：直接講這一格最多能填幾件（機台總數），讀不到數字就沿用原本訊息。
+  const qtyLimit = !flow.error && flow.result ? machtileStationReportCore()?.quantityLimitBlock?.(flow.result,
+    { enteredQty: row.current, requestedQty: Number(row.good) + Number(row.bad || 0) }) : null;
+  row.error = flow.error || (qtyLimit?.max != null ? machtileTranslate("simple_block_qty_max", { n: qtyLimit.max, entered: qtyLimit.entered }) : card?.kind === "preview-soft"
     ? `需要確認：${card.message || card.guardLabel || "預覽要求確認"}`
     : card?.message || "智慧報工預覽失敗，請在下方確認。 ");
   machtileRenderBatchReport();
@@ -27310,6 +27347,13 @@ function bindEvents() {
     event.preventDefault();
     if (!machtileSimpleReportActive()) { await machtileReportFormSubmit(event); return; }
     if (machtileSimpleReportSubmitInFlight) return;
+    // 「改數量」：數量類硬擋、數字沒改 → 只把游標帶回數量欄，不預覽、不送出、不重讀。
+    const fixQtyCode = machtileSingleStationReportState.machineCode;
+    if (fixQtyCode && !machtileSimpleReportPrimaryInFlight
+      && machtileSimpleReportFixQtyMode(machtileStationReportState(machtileBatchRow(fixQtyCode)))) {
+      machtileSimpleReportFocusQty();
+      return;
+    }
     machtileSimpleReportSubmitInFlight = true;
     const submitButton = document.querySelector("#reportForm .submit-report");
     if (submitButton) submitButton.disabled = true;

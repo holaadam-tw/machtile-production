@@ -585,4 +585,75 @@ check("Factory uppercase DOC4 fingerprint is sent lowercase: cloud RPC only acce
   assert.match(next.p_expected_doc4_fingerprint, /^[0-9a-f]{64}$/);
 });
 
+// Real shadow preview (2026-11-13 A03 XX01202610210005 第 1 道, order 161, report 163, overrun flag OFF):
+// ops/codex-inbox/20261113-1010-a03-first-step-overrun/r2-a-preview-163-flag-off.log, trimmed to read fields.
+const QTY_BLOCK_PREVIEW_ROW = {
+  command_uuid: "61acc77f-923a-46b9-a14c-d6764c0c9311", command_type: "report_preview", status: "previewed",
+  preview_result: {
+    status: "previewed", allowed: false, guard_code: "QTY_EXCEEDS_AVAILABLE", hard: true,
+    message: "第 1 道只夠再報 161 件，請先報前一道或找生管。",
+    legacy_snapshot: { report: { station: "A03", order_no: "XX01202610210005", index_sn: 1, order_qty: 161, available: 161, good: 163, fail: 0,
+      guard: { code: "QTY_EXCEEDS_AVAILABLE", hard: true, message: "第 1 道只夠再報 161 件，請先報前一道或找生管。", Details: {
+        prev_kind: "SELF_PART_FIRST_INPUT", prev_index_sn: 1, previous_station_code: "", previous_step_name: "", previous_reported_good: 0,
+        supply: 161, done_c: 0, available: 161, tol: 0, requested: 163, effective_need: 161, acks: [], self_part_first_input: true,
+      } } } },
+    command_uuid: "61acc77f-923a-46b9-a14c-d6764c0c9311", available: 161, supply: 161, done_c: 0, prev_index_sn: 1, prev_kind: "SELF_PART_FIRST_INPUT",
+    previous_station_code: "", previous_step_name: "", previous_reported_good: 0, predicted_ac03_qty: 0, order_qty: 161,
+  },
+};
+
+check("hard QTY_EXCEEDS_AVAILABLE (real shadow 163 vs 161) → max field value 161", () => {
+  const card = core.resultCard(QTY_BLOCK_PREVIEW_ROW);
+  assert.equal(card.kind, "preview-blocked");
+  assert.equal(card.reportLimitHint, null, "first step has no previous station/step → old hint stays silent (the field bug)");
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: "163", requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 161, entered: 163 });
+  // Machine-total field with 100 already reported: 263 entered → 163 requested, only 161 left → field max 261.
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: 263, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 261, entered: 263 });
+  // Tolerance from the guard details widens the limit.
+  const tol = structuredClone(QTY_BLOCK_PREVIEW_ROW); tol.preview_result.legacy_snapshot.report.guard.Details.tol = 1;
+  assert.equal(core.quantityLimitBlock(tol, { enteredQty: 163, requestedQty: 163 }).max, 162);
+  // Number only in the guard details (no top-level available) still works.
+  const detailsOnly = structuredClone(QTY_BLOCK_PREVIEW_ROW); delete detailsOnly.preview_result.available;
+  assert.equal(core.quantityLimitBlock(detailsOnly, { enteredQty: 163, requestedQty: 163 }).max, 161);
+  // Final (non-preview) hard reject with the guard snapshot.
+  const finalRow = { command_type: "report", status: "rejected", reject_code: "QTY_EXCEEDS_AVAILABLE", reject_message: "x",
+    legacy_snapshot: QTY_BLOCK_PREVIEW_ROW.preview_result.legacy_snapshot };
+  assert.equal(core.resultCard(finalRow).kind, "hard");
+  assert.deepEqual(core.quantityLimitBlock(finalRow, { enteredQty: 163, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: 161, entered: 163 });
+});
+
+check("quantity limit: missing number → max null (keep today's sentence); other codes → null", () => {
+  const noNumber = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+  delete noNumber.preview_result.available; delete noNumber.preview_result.legacy_snapshot;
+  assert.deepEqual(core.quantityLimitBlock(noNumber, { enteredQty: 163, requestedQty: 163 }), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null });
+  assert.deepEqual(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, {}), { code: "QTY_EXCEEDS_AVAILABLE", max: null, entered: null }, "no field value → no number");
+  assert.equal(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: "abc", requestedQty: 163 }).max, null);
+  assert.equal(core.quantityLimitBlock(QTY_BLOCK_PREVIEW_ROW, { enteredQty: 1, requestedQty: 163 }).max, null, "negative max → no number");
+  assert.equal(core.quantityLimitBlock({ command_type: "report_preview", status: "rejected", reject_code: "QTY_EXCEEDS_AVAILABLE" }, { enteredQty: 163, requestedQty: 163 }).max, null);
+  assert.deepEqual(core.quantityLimitBlock({ command_type: "report", status: "rejected", reject_code: "INVALID_REPORT_QTY" }, { enteredQty: 5, requestedQty: 5 }),
+    { code: "INVALID_REPORT_QTY", max: null, entered: null }, "INVALID_REPORT_QTY is a quantity fix without a number");
+  for (const code of ["STALE_COMMAND", "ORDER_MISMATCH", "GUARD_STATE_CHANGED", "AUTO_PULL_WOULD_GO_NEGATIVE", "STATION_NOT_STARTED", "EXCEEDS_ORDER_QTY"]) {
+    assert.equal(core.quantityLimitBlock({ command_type: "report", status: "rejected", reject_code: code }, { enteredQty: 163, requestedQty: 163 }), null, code);
+  }
+  assert.equal(core.quantityLimitBlock(OVERRUN_PREVIEW_ROW, { enteredQty: 163, requestedQty: 163 }), null, "allowed preview → null");
+  const soft = structuredClone(QTY_BLOCK_PREVIEW_ROW);
+  Object.assign(soft.preview_result, { guard_code: "EXCEEDS_ORDER_QTY", hard: false });
+  assert.equal(core.resultCard(soft).kind, "preview-soft");
+  assert.equal(core.quantityLimitBlock(soft, { enteredQty: 163, requestedQty: 163 }), null, "soft confirm unchanged");
+  assert.equal(core.quantityLimitBlock(null), null);
+  assert.deepEqual([...core.QTY_FIX_CODES], ["QTY_EXCEEDS_AVAILABLE", "INVALID_REPORT_QTY"]);
+});
+
+check("quantity limit texts (zh-Hant exact, vi draft) and the 改數量 label", () => {
+  const i18n = require("./i18n.js");
+  i18n.setLanguage("zh-Hant");
+  assert.equal(i18n.t("simple_block_qty_max", { n: 161, entered: 163 }), "這一道最多只能報 161 件（目前填 163 件）。請改成 161 件以內再送出；機台上真的做比較多，請告訴生管。");
+  assert.equal(i18n.t("simple_report_fix_qty"), "改數量");
+  assert.equal(i18n.t("simple_report_resubmit"), "重新送出");
+  i18n.setLanguage("vi");
+  assert.match(i18n.t("simple_block_qty_max", { n: 161, entered: 163 }), /tối đa 161 .*163 .*161/);
+  assert.equal(i18n.t("simple_report_fix_qty"), "Sửa số lượng");
+  i18n.setLanguage("zh-Hant");
+});
+
 console.log("STATION_REPORT_CONTRACT PASS");

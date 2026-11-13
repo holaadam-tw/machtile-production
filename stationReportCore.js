@@ -479,6 +479,40 @@
     return { key: "report_first_step_overrun", params: { n: over, order } };
   }
 
+  // Owner 2026-11-13 (A03 163 vs 161): a HARD quantity reject cannot be fixed by sending again;
+  // the operator must change the number. QTY_FIX_CODES = hard rejects whose only fix is the
+  // quantity field. For QTY_EXCEEDS_AVAILABLE the preview carries the remaining quantity
+  // (preview_result.available, also legacy_snapshot.report.guard.Details.available/tol); the
+  // field shows a machine total, so the largest value the field may hold is
+  // entered - requested + (available + tol), with requested = good + fail derived from the same
+  // field. Missing/odd numbers → max null (caller keeps today's sentence). Read-only.
+  const QTY_FIX_CODES = Object.freeze(["QTY_EXCEEDS_AVAILABLE", "INVALID_REPORT_QTY"]);
+  function wholeNumber(value) {
+    if (typeof value === "number") return Number.isInteger(value) ? value : null;
+    const text = typeof value === "string" ? value.trim() : "";
+    return /^\d+$/.test(text) ? Number(text) : null;
+  }
+  function quantityLimitBlock(row, { enteredQty, requestedQty } = {}) {
+    if (!row || typeof row !== "object") return null;
+    const card = resultCard(row);
+    const code = card.guardCode || card.code || "";
+    if (!["preview-blocked", "hard"].includes(card.kind) || !QTY_FIX_CODES.includes(code)) return null;
+    const out = { code, max: null, entered: null };
+    if (code !== "QTY_EXCEEDS_AVAILABLE") return out;
+    const result = isPlainObject(row.preview_result) ? row.preview_result : null;
+    const report = (result?.legacy_snapshot || row.legacy_snapshot)?.report;
+    const details = report?.guard?.Details || report?.guard?.details;
+    const available = [result?.available, details?.available, report?.available].find((value) => Number.isInteger(value));
+    if (available === undefined) return out;
+    const tol = Number.isInteger(details?.tol) && details.tol > 0 ? details.tol : 0;
+    const entered = wholeNumber(enteredQty);
+    const requested = wholeNumber(requestedQty);
+    if (entered === null || requested === null || requested <= 0) return out;
+    const max = entered - requested + available + tol;
+    if (max < 0) return out;
+    return { code, max, entered };
+  }
+
   function retryWithAck(previousArgs, ack, nextCommandUuid) {
     if (!UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs?.p_command_uuid) {
       throw new ContractError("COMMAND_UUID_REQUIRED", "再次確認必須使用新的報工識別碼。");
@@ -583,6 +617,7 @@
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, firstStepOverrunNotice, retryWithAck, retryPreviewWithAck,
+    QTY_FIX_CODES, quantityLimitBlock,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
     refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient, operatorMessageKey,
   });

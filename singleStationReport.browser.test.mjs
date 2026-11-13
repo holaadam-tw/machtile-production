@@ -59,6 +59,7 @@ let finalStaleOnce = false;
 let finalRequiredOnce = false;
 let starterUserId = null;
 let previewBlockedCode = "";
+let previewBlockedNoNumber = false;
 let previewSoftCode = "";
 let previewFirstStepOverrun = false;
 const browser = await chromium.launch();
@@ -129,10 +130,13 @@ await context.route("**/*", async route => {
             legacy_snapshot: { report: { guard } } } });
       }
       if (body.p_preview && previewBlockedCode) {
-        const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30 } };
+        const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30, tol: 0, requested: body.p_good_qty + body.p_fail_qty } };
+        const blocked = { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
+          legacy_snapshot: { report: { guard } } };
+        // Older/odd Factory payload: no remaining-quantity field anywhere → App keeps today's sentence.
+        if (previewBlockedNoNumber) { delete blocked.available; delete guard.Details.available; }
         return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
-          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
-            legacy_snapshot: { report: { guard } } } });
+          preview_result: blocked });
       }
       // Real shape (shadow 2026-11-13 r2-a-preview-163-flag-on.log): allowed preview, guard.Details carries the
       // first-step overrun keys (StationReportGuard.cs), top-level preview_result.notices has FIRST_STEP_OVERRUN.
@@ -1022,20 +1026,47 @@ await ov2.waitForFunction(() => {
 await ov2.close();
 console.log("PASS first-step overrun: one non-blocking reminder (sheet + banner), same button, same payload");
 
-// ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
+// ④ 被擋：只有一句白話（說出這一格最多填幾件）、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
+// Owner 2026-11-13（A03 163 vs 161）：硬擋數量 → 主按鈕「改數量」只帶回數量欄、不送任何東西。
 previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";
 const bl = await openOperatorPage();
 const blBefore = calls.commands.length;
 await bl.locator("#reportForm .submit-report").click();
 await bl.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
 assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0, "blocked preview never sends a final");
-assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。");
+// 958 on the machine, 920 already reported → 38 this time, only 30 left → the field may hold at most 950.
+const qtyMaxText = "這一道最多只能報 950 件（目前填 958 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。";
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText);
 assert.equal(await bl.locator("[data-report-limit-hint]:visible").innerText(), "目前最多可報 30 件（上一道 A01 已報 100 件）", "single-station card shows one visible structured preview limit");
 const blText = await bl.locator("#singleStationReportPanel").innerText();
 assert.doesNotMatch(blText, /可報|先領|guard|QTY_EXCEEDS|30/, `no technical numbers for operators: ${blText}`);
 assert.equal(await bl.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 1, "exactly one red sentence");
-assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "重新送出");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "改數量", "hard quantity reject: no resubmission button");
 await sheetShot(bl, "05-operator-blocked.png");
+const blRequests = requestUrls.length;
+const blCommands = calls.commands.length;
+await bl.locator("#completedQty").blur();
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForTimeout(400);
+await bl.locator("#reportForm .submit-report").press("Enter");
+await bl.waitForTimeout(400);
+assert.equal(calls.commands.length, blCommands, "改數量 sends no command");
+assert.equal(requestUrls.length, blRequests, `改數量 makes no request at all: ${requestUrls.slice(blRequests).join(" | ")}`);
+assert.equal(await bl.evaluate(() => document.activeElement?.id), "completedQty", "改數量 returns focus to the quantity field");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "改數量");
+// Operator changes the number → the button is a normal retry again and the sentence follows the field.
+await bl.locator("#completedQty").fill("950");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "重新送出", "after editing the quantity the retry is back");
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(),
+  "這一道最多只能報 950 件（目前填 950 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。");
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForFunction((n) => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed"
+  && machtileStationReportState(machtileBatchRow("A04")).args?.p_good_qty === 30, null, { timeout: 8000 });
+assert.deepEqual(calls.commands.slice(blCommands).map(c => [c.p_preview, c.p_good_qty]), [[true, 30]], "edited quantity → one new preview, nothing else");
+await bl.locator("#completedQty").fill("958");
+await bl.evaluate(() => { machtileStationReportState(machtileBatchRow("A04")).phase = "idle"; machtileStationReportState(machtileBatchRow("A04")).result = null; machtileRenderSingleStationReport(); });
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForFunction(() => document.querySelector("#reportForm .submit-report")?.textContent === "改數量");
 await bl.evaluate(() => { machtileAuthState.role = "admin"; machtileRenderSingleStationReport(); });
 assert.equal(await bl.locator("[data-station-report-tech]").count(), 1, "admin keeps 技術細節");
 await bl.locator("[data-station-report-tech] > summary").click();
@@ -1043,10 +1074,25 @@ const adminText = await bl.locator("[data-station-report-tech]").innerText();
 assert.match(adminText, /目前可報 30 件/, "admin sees the technical available quantity");
 assert.match(adminText, /預估先領 38 件/);
 assert.equal(await bl.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isVisible(), true, "admin keeps 先預覽");
-assert.match(await bl.locator('[data-simple-report-status="error"]').innerText(), /這次數量比可以報的還多/, "admin still gets the same plain sentence on top");
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText, "admin still gets the same plain sentence on top");
 await sheetShot(bl, "06-admin-view.png");
 await bl.locator("[data-station-report-tech]").screenshot({ path: path.join(implShots, "07-admin-tech-details.png") });
 await bl.close();
+// Missing number in the preview → today's sentence, but still 改數量 and still no resubmission.
+previewBlockedNoNumber = true;
+const bn = await openOperatorPage();
+await bn.locator("#reportForm .submit-report").click();
+await bn.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(await bn.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。", "no number → fallback sentence");
+assert.equal(await bn.locator("#reportForm .submit-report").innerText(), "改數量");
+const bnCommands = calls.commands.length;
+await bn.locator("#reportForm .submit-report").click();
+await bn.waitForTimeout(400);
+assert.equal(calls.commands.length, bnCommands, "fallback 改數量 also sends nothing");
+assert.equal(await bn.evaluate(() => document.activeElement?.id), "completedQty");
+await bn.close();
+previewBlockedNoNumber = false;
+console.log("PASS hard QTY_EXCEEDS_AVAILABLE: max number + 改數量 (no send), edit → 重新送出, missing number → fallback");
 previewBlockedCode = ""; starterUserId = null;
 console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
 
