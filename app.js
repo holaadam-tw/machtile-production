@@ -24325,7 +24325,7 @@ function machtileSimpleReportStatus(flow, card) {
   if (card.kind === "preview-soft" || card.kind === "soft") return { tone: "warning", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code, true)) };
   if (["preview-blocked", "preview-invalid", "hard", "rejected", "blocked"].includes(card.kind)) {
     const limit = machtileSimpleReportQtyLimit(flow);
-    if (limit && limit.max !== null) return { tone: "error", text: machtileTranslate("simple_block_qty_max", { n: limit.max, entered: limit.entered }) };
+    if (limit && limit.max !== null) return { tone: "error", qtyMax: true, text: machtileTranslate("simple_block_qty_max", { n: limit.max, entered: limit.entered }) };
     return { tone: "error", text: machtileTranslate(core.operatorMessageKey(card.guardCode || card.code)) };
   }
   return null;
@@ -24451,7 +24451,9 @@ function machtileApplySimpleReportChrome() {
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
   const card = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = (card?.reportLimitHint
+  // 新句子「這一道最多只能報 N 件」出現時，舊的「目前最多可報…（上一道…）」不再顯示：作業員只看到一個要填的數字。
+  const qtyMaxShown = Boolean(card && machtileSimpleReportStatus(flow, card)?.qtyMax);
+  const reportLimitHtml = (card?.reportLimitHint && !qtyMaxShown
     ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "")
     + machtileFirstStepOverrunHtml(card);
   const busy = machtileStationReportFlowBusy(flow);
@@ -24788,7 +24790,11 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = (result?.reportLimitHint
+  // Same sheet/card already shows 「這一道最多只能報 N 件」 → drop the old per-report hint (one number only).
+  const qtyMaxShown = Boolean(result) && (simple
+    ? Boolean(machtileSimpleReportStatus(flow, result)?.qtyMax)
+    : batch && machtileBatchQtyLimit(row, flow)?.max != null);
+  const reportLimitHtml = (result?.reportLimitHint && !qtyMaxShown
     ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "")
     + machtileFirstStepOverrunHtml(result);
   const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
@@ -26136,6 +26142,13 @@ function machtileApplyMachineTime(processId, seconds) {
   });
 }
 
+// Batch card: the max machine total for a hard quantity reject, from the row values that were sent. Read-only.
+function machtileBatchQtyLimit(row, flow) {
+  if (!row || !flow?.result || flow.error) return null;
+  return machtileStationReportCore()?.quantityLimitBlock?.(flow.result,
+    { enteredQty: row.current, requestedQty: Number(row.good) + Number(row.bad || 0) }) || null;
+}
+
 async function machtileBatchSendSmartReport(item) {
   const code = item.model.machineCode;
   const row = machtileBatchRow(code);
@@ -26175,8 +26188,7 @@ async function machtileBatchSendSmartReport(item) {
   flow.expanded = true;
   const card = machtileStationReportCore()?.resultCard(flow.result);
   // 數量類硬擋：直接講這一格最多能填幾件（機台總數），讀不到數字就沿用原本訊息。
-  const qtyLimit = !flow.error && flow.result ? machtileStationReportCore()?.quantityLimitBlock?.(flow.result,
-    { enteredQty: row.current, requestedQty: Number(row.good) + Number(row.bad || 0) }) : null;
+  const qtyLimit = machtileBatchQtyLimit(row, flow);
   row.error = flow.error || (qtyLimit?.max != null ? machtileTranslate("simple_block_qty_max", { n: qtyLimit.max, entered: qtyLimit.entered }) : card?.kind === "preview-soft"
     ? `需要確認：${card.message || card.guardLabel || "預覽要求確認"}`
     : card?.message || "智慧報工預覽失敗，請在下方確認。 ");

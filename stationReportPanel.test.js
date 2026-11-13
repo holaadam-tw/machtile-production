@@ -77,6 +77,32 @@ const plainHtml = render("A04", order, row(allowedPreview()), false);
 assert.doesNotMatch(plainHtml, /data-first-step-overrun-notice/);
 assert.equal(html.replace(/<p class="report-limit-hint first-step-overrun-notice"[^>]*>[^<]*<\/p>/, ""), plainHtml, "only the reminder line differs");
 
+// Coordinator 2026-11-13: non-first step with a previous station. Batch card: when the hard-quantity
+// max sentence applies, the old 「目前最多可報…（上一道…）」 hint is not rendered; otherwise it stays.
+const qtyStart = source.indexOf("function machtileBatchQtyLimit(");
+const qtyEnd = source.indexOf("async function machtileBatchSendSmartReport(", qtyStart);
+assert(qtyStart >= 0 && qtyEnd > qtyStart, "batch qty limit helper exists");
+const batchContext = { ...context, machtileTranslate: (key, params = {}) => key === "report_limit_available_station"
+  ? `目前最多可報 ${params.available} 件（上一道 ${params.station} 已報 ${params.reported} 件）` : key };
+const renderBatch = vm.runInNewContext(`${source.slice(qtyStart, qtyEnd)}
+${panelSource}
+ machtileRenderStationReportPanel`, batchContext);
+const prevFields = { available: 30, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 100 };
+const qtyBlocked = { command_type: "report_preview", status: "previewed",
+  preview_result: { allowed: false, hard: true, guard_code: "QTY_EXCEEDS_AVAILABLE", message: "x", ...prevFields,
+    legacy_snapshot: { report: { guard: { code: "QTY_EXCEEDS_AVAILABLE", hard: true, Details: { available: 30, tol: 0, requested: 38 } } } } } };
+const batchRow = (result) => ({ operatorId: "u1", current: "958", good: "38", bad: "0", reportNote: "", stationReport: { phase: "previewed", result, preview: result, args: {}, error: "" } });
+html = renderBatch("A04", order, batchRow(qtyBlocked), false, { batch: true });
+assert.doesNotMatch(html, /data-report-limit-hint|目前最多可報/, "blocked with max sentence → old hint hidden");
+const noField = batchRow(qtyBlocked); noField.current = "";
+html = renderBatch("A04", order, noField, false, { batch: true });
+assert.match(html, /data-report-limit-hint[^>]*>目前最多可報 30 件（上一道 A01 已報 100 件）/, "no max sentence (fallback) → old hint exactly as today");
+const allowed = { command_type: "report_preview", status: "previewed",
+  preview_result: { allowed: true, hard: false, guard_code: null, message: "可送出", ...prevFields,
+    legacy_snapshot: { report: { guard: { code: "", hard: false, Details: { available: 30 } } } } } };
+html = renderBatch("A04", order, batchRow(allowed), false, { batch: true });
+assert.match(html, /data-report-limit-hint[^>]*>目前最多可報 30 件（上一道 A01 已報 100 件）/, "unblocked preview → old hint unchanged");
+
 if (process.env.PANEL_HTML_OUT) fs.writeFileSync(process.env.PANEL_HTML_OUT,
   `<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${pathToFileURL(require("node:path").resolve("styles.css"))}"><body style="max-width:680px;margin:24px auto">${panels.join("<hr>")}</body></html>`, "utf8");
 

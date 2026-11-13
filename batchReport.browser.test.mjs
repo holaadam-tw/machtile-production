@@ -115,7 +115,7 @@ async function fake(route) {
       const message = `第 1 道只夠再報 ${available} 件，請先報前一道或找生管。`;
       return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
         preview_result: { status: "previewed", allowed: false, hard: true, guard_code: code, message, available,
-          previous_station_code: "", previous_step_name: "", previous_reported_good: 0,
+          previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 140,
           legacy_snapshot: { report: { guard: { code, hard: true, message, Details: { available, tol: 0, requested } } } } } }]);
     }
     if (body.p_preview) {
@@ -388,6 +388,8 @@ ok(qtySent[0].p_good_qty + qtySent[0].p_fail_qty >= 2, "fixture sends at least t
 const qtyText = (await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).trim();
 ok(qtyText === `這一道最多只能報 ${qtyMax} 件（目前填 180 件）。請改成 ${qtyMax} 件以內再送出；機台上真的做比較多，請告訴生管。`, `batch card names the max machine total: ${qtyText}`);
 ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-ack="A04"], [data-batch-row="A04"] [data-station-report-preview-ack="A04"]').count() === 0, "hard quantity reject offers no confirm/resend");
+ok(await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').count() === 0, "non-first step blocked: old 目前最多可報 hint hidden, only the max sentence");
+ok(!/目前最多可報/.test(await rootView.locator('[data-batch-row="A04"]').innerText()), "no second number on the card");
 stationScenario = "clean";
 
 await page.evaluate(() => { for (const code of ["A04", "A05"]) { const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.current = ""; row.good = ""; row.bad = ""; row.failReasonCode = ""; row.reportNote = ""; row.defectOpen = false; } machtileRenderBatchReport(); });

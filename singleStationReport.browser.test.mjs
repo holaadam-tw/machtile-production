@@ -275,6 +275,8 @@ await page.locator('#singleStationReportPanel [data-station-report-preview="A04"
 await page.waitForTimeout(500);
 assert.equal(await page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').count(), 1, `${await page.locator("#singleStationReportPanel").innerText()} calls=${JSON.stringify(calls.commands)}`);
 assert.equal(calls.commands.length, 1, "preview creates one command");
+assert.equal(await page.locator("#simpleReportSummary [data-report-limit-hint]").innerText(), "目前最多可報 80 件（上一道 A01 已報 100 件）", "unblocked preview keeps the old hint in the sheet");
+assert.equal(await page.locator("[data-station-report-tech] [data-report-limit-hint]").innerText(), "目前最多可報 80 件（上一道 A01 已報 100 件）", "unblocked preview keeps the old hint in the tech panel");
 assert.equal(calls.commands[0].p_preview, true);
 assert.equal(calls.commands[0].p_good_qty, 38);
 assert.equal(calls.commands[0].p_fail_qty, 2);
@@ -1037,7 +1039,11 @@ assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0,
 // 958 on the machine, 920 already reported → 38 this time, only 30 left → the field may hold at most 950.
 const qtyMaxText = "這一道最多只能報 950 件（目前填 958 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。";
 assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText);
-assert.equal(await bl.locator("[data-report-limit-hint]:visible").innerText(), "目前最多可報 30 件（上一道 A01 已報 100 件）", "single-station card shows one visible structured preview limit");
+// Coordinator 2026-11-13: non-first step with a previous station — when the max sentence shows, the old
+// 「目前最多可報 30 件（上一道 A01 已報 100 件）」 hint is hidden so the operator sees one number only.
+assert.equal(await bl.locator("#reportSheet [data-report-limit-hint]").count(), 0, "blocked + max sentence → old per-report hint hidden in the sheet");
+assert.equal(await bl.locator("[data-report-limit-hint]:visible").count(), 0, "and nowhere visible");
+assert.equal(await bl.locator("#reportSheet").innerText().then(t => /目前最多可報/.test(t)), false, "no 目前最多可報 anywhere in the sheet");
 const blText = await bl.locator("#singleStationReportPanel").innerText();
 assert.doesNotMatch(blText, /可報|先領|guard|QTY_EXCEEDS|30/, `no technical numbers for operators: ${blText}`);
 assert.equal(await bl.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 1, "exactly one red sentence");
@@ -1070,6 +1076,7 @@ await bl.waitForFunction(() => document.querySelector("#reportForm .submit-repor
 await bl.evaluate(() => { machtileAuthState.role = "admin"; machtileRenderSingleStationReport(); });
 assert.equal(await bl.locator("[data-station-report-tech]").count(), 1, "admin keeps 技術細節");
 await bl.locator("[data-station-report-tech] > summary").click();
+assert.equal(await bl.locator("#reportSheet [data-report-limit-hint]").count(), 0, "admin tech panel also drops the old hint while the max sentence shows");
 const adminText = await bl.locator("[data-station-report-tech]").innerText();
 assert.match(adminText, /目前可報 30 件/, "admin sees the technical available quantity");
 assert.match(adminText, /預估先領 38 件/);
