@@ -279,6 +279,18 @@
     return { ok: true, reason: "", partNo: text(wo.part_no) || null, workOrderId: isUuid(wo.id) ? String(wo.id) : "" };
   }
 
+  // ---------------------------------------------------------------- 今天這一道有沒有「報工」
+  // 卡片的 todayRows（production_reports：dailyStart／noon／finish）。開工確認卡會在開工 applied 後寫一筆 0／0 的 dailyStart
+  // （app.js machtileDailyStartSubmit → submitReport(0, 0, …, "dailyStart")）：那不是報工。規則跟雲端 submit 的 SWITCH_STEP_HAS_REPORTS
+  // 一樣：有數量，或 report_type 不是 workStart／dailyStart／pause → 算有報工。
+  const NON_REPORT_TYPES = Object.freeze(["workStart", "dailyStart", "pause"]);
+  function todayReportBlocks(rows, processId) {
+    const pid = text(processId);
+    if (!pid || !Array.isArray(rows)) return false;
+    return rows.some((row) => row && text(row.process_id) === pid
+      && (Number(row.completed_qty || 0) > 0 || Number(row.defect_qty || 0) > 0 || !NON_REPORT_TYPES.includes(text(row.report_type))));
+  }
+
   // ---------------------------------------------------------------- 現在這一道的池列鍵（p_pool_item_id）
   // 先用 machtile_held_pool_claims()（returnClaimCore.heldPoolKey 算好的 heldKey；但那支 RPC 只回「工序還是 pending」的接單，
   // 已開工的多半查不到）；查不到再看這台這張單的 station_commands 歷史（applied 的 claim_next／return_claim／switch_step）：
@@ -453,6 +465,7 @@
     CLAIM_NOT_APPLIED: "switch_step_started_err_claim_not_applied",
     ACTIVE_CLAIM_NOT_FOUND: "switch_step_started_err_no_pool_record",
     POOL_ITEM_REQUIRED: "switch_step_started_err_no_pool_record",
+    POOL_ITEM_AMBIGUOUS: "switch_step_started_err_no_pool_record",   // 沒送池列鍵、帳本裡這台這一道有不只一筆（雲端 95129ab6）
     SWITCH_STEP_HAS_REPORTS: "switch_step_started_err_reported",
     HAS_REPORTS: "switch_step_started_err_reported",
     SOURCE_STEP_NOT_SWITCHABLE: "switch_step_started_err_source_state",
@@ -697,7 +710,7 @@
     STARTED_COMMAND_TYPE, STARTED_SUBMIT_RPC, STARTED_ARG_KEYS, STARTED_ROLES, STARTED_REASON_ROLES, STARTED_REASON_MAX, STARTED_PENDING_KEEP_MS,
     STARTED_REJECT_MESSAGE_KEY, STARTED_GENERIC_MESSAGE_KEY, STARTED_UNCERTAIN_CODES, STARTED_RETRY_LATER_CODES,
     UNPOOLED_NOTICE_OPERATOR_MS, UNPOOLED_NOTICE_ADMIN_MS, STARTED_UNSURE_HOLD_MS,
-    startedEnabled, startedRoleAllowed, startedNeedsReason, startedVisibility, startedFreshCheck, historyPoolKey, sourcePoolKey,
+    startedEnabled, startedRoleAllowed, startedNeedsReason, startedVisibility, todayReportBlocks, startedFreshCheck, historyPoolKey, sourcePoolKey,
     targetEligible, startedTargets, startedReasonCheck, startedBuildArgs, startedRejectInfo, startedSubmitErrorInfo, takenMachineOf, appliedInfo,
     startedResultView, startedIsUnsure, unpooledNotices, startedPendingRecord, startedSameSession, startedRestoreForSession,
     startedMergeForSave, startedRecordMatchesOrder, startedLocks, startedLastResultVisible, startedUnsureHold,

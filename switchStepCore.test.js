@@ -1619,7 +1619,7 @@ const FACTORY_SWITCH_DIR = process.env.SWITCH_STEP_FACTORY_DIR || "D:/04_SoftNet
 const CLOUD_SUBMIT_CODES = ["ACTIVE_CLAIM_NOT_FOUND", "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED", "APPLIER_CANNOT_SUBMIT", "APP_USER_REQUIRED", "AUTH_REQUIRED",
   "CLAIM_NOT_APPLIED", "COMMAND_UUID_CONFLICT", "COMMAND_UUID_REQUIRED", "FORBIDDEN", "INVALID_MACHINE_CODE", "INVALID_POOL_ITEM_ID", "INVALID_SWITCH_REASON",
   "INVALID_TARGET_POOL_ITEM_ID", "INVALID_TARGET_STEP", "MACHINE_COMMAND_IN_FLIGHT", "MACHINE_NOT_ALLOWED", "NOT_CLAIM_OWNER", "OPERATOR_LEGACY_ID_INVALID",
-  "OPERATOR_LEGACY_ID_MISSING", "OPERATOR_REQUIRED", "POOL_ITEM_REQUIRED", "SAME_STEP", "SOURCE_STEP_NOT_SWITCHABLE", "STALE", "SWITCH_REASON_REQUIRED",
+  "OPERATOR_LEGACY_ID_MISSING", "OPERATOR_REQUIRED", "POOL_ITEM_AMBIGUOUS", "POOL_ITEM_REQUIRED", "SAME_STEP", "SOURCE_STEP_NOT_SWITCHABLE", "STALE", "SWITCH_REASON_REQUIRED",
   "SWITCH_STEP_DISABLED", "SWITCH_STEP_HAS_REPORTS", "TARGET_NOT_ELIGIBLE", "TARGET_NOT_SAME_WORK_ORDER", "TARGET_POOL_ITEM_NOT_FOUND", "TARGET_STEP_CLOSED",
   "TARGET_STEP_MISMATCH", "TARGET_STEP_NOT_FOUND", "TARGET_TAKEN", "TENANT_INACTIVE"];
 // 工廠套用端 switch_step 會回的每一個 reject_code（StationSwitchStepApplier.cs＋Processor 的 switch_step 分支＋Poller）
@@ -1921,7 +1921,7 @@ test("phase 2 strings: zh-Hant + vi draft for every key, same placeholders; retr
   assert.ok(keys.length >= 60, `found ${keys.length}`);
   const retryAllowed = new Set(["switch_step_started_progress", "switch_step_started_uncertain", "switch_step_started_not_found", "switch_step_started_resend",
     "switch_step_started_unsure", "switch_step_started_err_busy", "switch_step_started_err_claim_not_applied", "switch_step_started_err_busy_retry",
-    "switch_step_started_err_internal_retry", "switch_step_started_err_expired", "switch_step_started_err_released"]);
+    "switch_step_started_err_internal_retry", "switch_step_started_err_expired", "switch_step_started_err_released", "switch_step_started_read_failed"]);
   for (const key of keys) {
     assert.equal(d.vi[key], d.viFile[key]?.value, `${key} vi i18n.js == locales`);
     assert.equal(d.viFile[key]._draft, true, `${key} vi draft`);
@@ -2310,4 +2310,56 @@ test("phase 2 pool key unknown: no pre-block — sent with p_pool_item_id null (
   assert.equal(state.submits.length, 1, "sent");
   assert.equal(state.submits[0].body.p_pool_item_id, null);
   assert.match(h.startedSheetHtml(), />系統找不到第 3 道是從待做池哪一筆接的，不能直接換。這台還是第 3 道。請找生管。</);
+});
+
+test("phase 2 POOL_ITEM_AMBIGUOUS (cloud resolves the held pool item from the ledger and finds more than one): same 找生管 sentence", () => {
+  const d = dictionaries();
+  const info = core.startedRejectInfo("POOL_ITEM_AMBIGUOUS");
+  assert.equal(info.known, true);
+  assert.equal(info.messageKey, "switch_step_started_err_no_pool_record");
+  assert.match(fill(d.zh[info.messageKey], { from: 3 }), /請找生管/);
+  assert.equal(core.startedSubmitErrorInfo(returnCore.submitErrorInfo(new Error('400 {"code":"P0001","message":"POOL_ITEM_AMBIGUOUS"}'))).messageKey, "switch_step_started_err_no_pool_record");
+});
+
+test("phase 2 pool-key reads FAIL (held-claims RPC or command history: network / HTTP error, not empty) → 讀取失敗，請再試一次, confirm disabled, nothing sent", async () => {
+  const boom = () => { throw new TypeError("Failed to fetch"); };
+  const http500 = () => { throw new Error("500 internal"); };
+  const missing = () => { throw new Error('404 {"code":"PGRST202"}'); };
+  for (const [label, extra] of [["held network", { held: boom }], ["held 500", { held: http500 }], ["held RPC missing", { held: missing }],
+    ["history network", { history: boom }], ["history 500", { history: http500 }], ["held not an array", { held: () => ({}) }]]) {
+    const state = Object.assign({}, extra);
+    const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(state), uuids: [S_UUID] });
+    await h.api.started.open("A05", null);
+    h.api.started.choose(keyOf(1));
+    assert.match(h.startedSheetHtml(), /data-switch-step-started-read-failed>讀取失敗，請再試一次。</, label);
+    assert.match(h.startedSheetHtml(), /data-switch-step-started-confirm disabled/, `${label}: confirm disabled`);
+    await h.api.started.submit();
+    assert.equal(state.submits.length, 0, `${label}: nothing sent`);
+  }
+  // 讀到了、只是空的＝不是失敗：照送 null
+  const empty = { held: () => [], history: () => [] };
+  const h = harness({ started: true, order: runningOrder(), backend: startedBackendOf(empty), uuids: [S_UUID] });
+  await h.api.started.open("A05", null);
+  h.api.started.choose(keyOf(1));
+  assert.doesNotMatch(h.startedSheetHtml(), /data-switch-step-started-read-failed/);
+  await h.api.started.submit();
+  assert.equal(empty.submits.length, 1);
+  assert.equal(empty.submits[0].body.p_pool_item_id, null);
+});
+
+test("phase 2 'reported today' ignores the 0/0 dailyStart the start confirm sheet writes (same rule as the cloud's SWITCH_STEP_HAS_REPORTS)", () => {
+  const row = (extra) => Object.assign({ process_id: PROCESS_ID, report_type: "dailyStart", completed_qty: 0, defect_qty: 0 }, extra);
+  assert.equal(core.todayReportBlocks([row()], PROCESS_ID), false, "0/0 dailyStart (開工確認卡) is not a report");
+  assert.equal(core.todayReportBlocks([row({ report_type: "workStart" }), row({ report_type: "pause" })], PROCESS_ID), false);
+  assert.equal(core.todayReportBlocks([row({ completed_qty: 3 })], PROCESS_ID), true, "a dailyStart with quantity is");
+  assert.equal(core.todayReportBlocks([row({ defect_qty: 1 })], PROCESS_ID), true);
+  assert.equal(core.todayReportBlocks([row({ report_type: "noon" })], PROCESS_ID), true, "noon / finish count even at 0 (the cloud refuses them too)");
+  assert.equal(core.todayReportBlocks([row({ report_type: "finish" })], PROCESS_ID), true);
+  assert.equal(core.todayReportBlocks([row({ process_id: "other", report_type: "finish" })], PROCESS_ID), false, "another step's report");
+  assert.equal(core.todayReportBlocks(null, PROCESS_ID), false);
+  // 卡片：剛開工、今日開工 0／0 已寫 → 按鈕還在；有報工 → 不出
+  const started = harness({ started: true, order: runningOrder(), todayRows: [row()] });
+  assert.equal(started.api.started.markup(started.machine), STARTED_BUTTON, "the button survives the start's own dailyStart row");
+  const reported = harness({ started: true, order: runningOrder(), todayRows: [row(), row({ report_type: "noon", completed_qty: 5, created_at: "x" })] });
+  assert.equal(reported.api.started.gate(reported.machine).reason, "has_reports");
 });

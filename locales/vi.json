@@ -817,6 +817,7 @@
   "switch_step_started_fresh_changed": { "value": "Phiếu hoặc công đoạn của máy này đã thay đổi, không thể đổi. Hãy tải lại màn hình.", "_draft": true },
   "switch_step_started_fresh_failed": { "value": "Không đọc được dữ liệu mới nhất của máy này nên chưa thể đổi công đoạn. Hãy kiểm tra mạng rồi tải lại màn hình.", "_draft": true },
   "switch_step_started_list_failed": { "value": "Không đọc được các công đoạn khác của phiếu này nên chưa thể đổi. Hãy kiểm tra mạng rồi tải lại màn hình.", "_draft": true },
+  "switch_step_started_read_failed": { "value": "Đọc dữ liệu thất bại, hãy thử lại.", "_draft": true },
   "switch_step_started_no_other": { "value": "Phiếu này hiện không có công đoạn nào để đổi sang (đã xong, ở máy khác hoặc không có trong kho chờ làm). Hãy báo bộ phận kế hoạch.", "_draft": true },
   "switch_step_started_on_behalf": { "value": "Bạn đang đổi công đoạn thay với quyền quản trị／kế hoạch; thao tác này sẽ ghi tên bạn.", "_draft": true },
   "switch_step_started_reason_label": { "value": "Lý do đổi công đoạn (bắt buộc)", "_draft": true },

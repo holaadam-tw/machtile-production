@@ -464,6 +464,7 @@
       switch_step_started_fresh_changed: "這台的工單或道次已經變了，不能換。請重新整理畫面。",
       switch_step_started_fresh_failed: "讀不到這台最新的資料，現在不能換道次。請檢查網路後重新整理畫面。",
       switch_step_started_list_failed: "讀不到這張單的其他道次，現在不能換。請檢查網路後重新整理畫面。",
+      switch_step_started_read_failed: "讀取失敗，請再試一次。",
       switch_step_started_no_other: "這張單現在沒有可以換過去的道次（都做完了、在別台，或不在待做池）。請找生管。",
       switch_step_started_on_behalf: "你是用管理員／生管身分代換道次，這筆會記成你按的。",
       switch_step_started_reason_label: "換道次原因（必填）",
@@ -969,6 +970,7 @@
       switch_step_started_fresh_changed: "Phiếu hoặc công đoạn của máy này đã thay đổi, không thể đổi. Hãy tải lại màn hình.", // _draft
       switch_step_started_fresh_failed: "Không đọc được dữ liệu mới nhất của máy này nên chưa thể đổi công đoạn. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
       switch_step_started_list_failed: "Không đọc được các công đoạn khác của phiếu này nên chưa thể đổi. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      switch_step_started_read_failed: "Đọc dữ liệu thất bại, hãy thử lại.", // _draft
       switch_step_started_no_other: "Phiếu này hiện không có công đoạn nào để đổi sang (đã xong, ở máy khác hoặc không có trong kho chờ làm). Hãy báo bộ phận kế hoạch.", // _draft
       switch_step_started_on_behalf: "Bạn đang đổi công đoạn thay với quyền quản trị／kế hoạch; thao tác này sẽ ghi tên bạn.", // _draft
       switch_step_started_reason_label: "Lý do đổi công đoạn (bắt buộc)", // _draft
