@@ -60,6 +60,7 @@ let finalRequiredOnce = false;
 let starterUserId = null;
 let previewBlockedCode = "";
 let previewSoftCode = "";
+let previewFirstStepOverrun = false;
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
@@ -132,6 +133,16 @@ await context.route("**/*", async route => {
         return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
           preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
             legacy_snapshot: { report: { guard } } } });
+      }
+      // Real shape (shadow 2026-11-13 r2-a-preview-163-flag-on.log): allowed preview, guard.Details carries the
+      // first-step overrun keys (StationReportGuard.cs), top-level preview_result.notices has FIRST_STEP_OVERRUN.
+      if (body.p_preview && previewFirstStepOverrun) {
+        const notice = { code: "FIRST_STEP_OVERRUN", message: "第一道超過工單數量報工：本次 38 件、報完累計 1002 件，工單 1000 件（多 2 件）。請生管核對。" };
+        const guard = { code: "", hard: false, message: "可送出", Details: { ...previewResult.legacy_snapshot.report.guard.Details,
+          first_step_overrun: true, over_available_qty: 2, overrun_order_qty: 1000, reported_after: 1002, over_order_qty: 2, over_effective_need_qty: 2,
+          notices: [{ Code: notice.code, Message: notice.message }] } };
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed",
+          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, notices: [notice], legacy_snapshot: { report: { guard } } } });
       }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
@@ -963,6 +974,53 @@ assert.equal(oldSent[1].p_report_note, "舊單補報");
 await old.close();
 previewSoftCode = "";
 console.log("PASS L3: double tap single chain, defect change blocks final, old-order note keeps soft state");
+
+// Owner 2026-11-13：第一道超過開單數量 → Factory 直接放行（旗標 ReportFirstStepOverrunAllowedEnabled），
+// 平板只多一行不擋人的提醒：同一顆送出鈕、沒有確認、送出的內容跟平常一字不差。
+const overrunText = "這次比開單數量多 2 件（開單 1000 件）。第一道不限數量，可以直接送出。";
+const plainRun = await openOperatorPage();
+const plainBefore = calls.commands.length;
+await plainRun.locator("#reportForm .submit-report").click();
+await plainRun.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const plainSent = calls.commands.slice(plainBefore);
+await plainRun.close();
+previewFirstStepOverrun = true;
+const ov = await openOperatorPage();
+// In the sheet: a preview that stays on screen shows the one reminder line; button text unchanged.
+await ov.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await ov.waitForFunction(() => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed");
+assert.equal(await ov.locator("#reportSheet [data-first-step-overrun-notice]:visible").count(), 1, "exactly one visible overrun reminder in the sheet");
+assert.equal(await ov.locator("#reportSheet [data-first-step-overrun-notice]:visible").innerText(), overrunText);
+assert.equal(await ov.locator("#reportForm .submit-report").innerText(), "送出報工", "submit button unchanged");
+assert.equal(await ov.locator("#reportForm .submit-report").isDisabled(), false, "reminder does not block");
+assert.equal(await ov.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 0, "no red box");
+await sheetShot(ov, "08-operator-first-step-overrun.png");
+await ov.close();
+const ov2 = await openOperatorPage();
+const ovBefore = calls.commands.length;
+await ov2.locator("#reportForm .submit-report").click();
+await ov2.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const ovSent = calls.commands.slice(ovBefore);
+assert.deepEqual(ovSent.map(c => c.p_preview), [true, false], "one press = preview then final, no extra confirm");
+const shapeOf = (c) => ({ ...c, p_command_uuid: "*", p_client_guard_snapshot: c.p_client_guard_snapshot ? { ...c.p_client_guard_snapshot, preview_command_uuid: "*", shown_at: "*" } : c.p_client_guard_snapshot });
+assert.deepEqual(ovSent.map(shapeOf), plainSent.map(shapeOf), "what is sent is identical to a normal report");
+assert.equal(await ov2.locator("#stationReportBackgroundStatus [data-station-report-background-message]").innerText(), "工廠已完成寫入");
+assert.equal(await ov2.locator("#stationReportBackgroundStatus [data-station-report-background-note]").innerText(), overrunText, "banner keeps the reminder after the sheet closes");
+await ov2.locator("#stationReportBackgroundStatus").screenshot({ path: path.join(implShots, "09-banner-first-step-overrun.png") });
+previewFirstStepOverrun = false;
+// Next normal report on the same page: the reminder line is gone, banner DOM back to the old shape.
+await ov2.locator("[data-open-report]:visible").first().click();
+await ov2.locator('#reportForm [data-report-type="noon"]').click();
+await ov2.waitForFunction(() => document.querySelector("#reportForm.is-simple-report"));
+await ov2.locator("#completedQty").fill("958");
+assert.equal(await ov2.locator("[data-first-step-overrun-notice]").count(), 0, "no reminder without the preview keys");
+await ov2.locator("#reportForm .submit-report").click();
+await ov2.waitForFunction(() => {
+  const el = document.querySelector("#stationReportBackgroundStatus");
+  return el?.textContent.includes("工廠已完成寫入") && !el.querySelector("[data-station-report-background-note]");
+}, null, { timeout: 8000 });
+await ov2.close();
+console.log("PASS first-step overrun: one non-blocking reminder (sheet + banner), same button, same payload");
 
 // ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
 previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";

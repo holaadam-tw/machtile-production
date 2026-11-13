@@ -28,6 +28,8 @@ const context = {
   ] } },
   machtileBatchMachineLabel: () => "A04",
   escapeHtml: htmlEscape,
+  machtileTranslate: (key, params = {}) => (key === "report_first_step_overrun"
+    ? `這次比開單數量多 ${params.n} 件（開單 ${params.order} 件）。第一道不限數量，可以直接送出。` : key),
   workOrderDetailUrl: (id) => `/orders/${id}`,
 };
 const render = vm.runInNewContext(`${panelSource}\n machtileRenderStationReportPanel`, context);
@@ -56,6 +58,24 @@ html = render("A04", order, row(preview("PREV_OUTSOURCE_UNCONFIRMED", "未結 4 
 panels.push(`<h2>委外確認</h2>${html}`);
 assert.match(html, /未結 4 件，可能使用倉別 a2/);
 assert.doesNotMatch(html, /PREV_OUTSOURCE_UNCONFIRMED/);
+
+// Owner 2026-11-13 first-step overrun (batch / non-simple panel path): allowed preview + Details keys →
+// one reminder line; the confirm button is the same long-press confirm, no ack button.
+const allowedPreview = (extraDetails = {}) => ({
+  command_type: "report_preview", status: "previewed",
+  preview_result: { allowed: true, hard: false, guard_code: null, message: "可送出", available: 161,
+    legacy_snapshot: { report: { guard: { code: "", hard: false, Details: { available: 161, ...extraDetails } } } } },
+});
+const overrunKeys = { first_step_overrun: true, over_available_qty: 2, overrun_order_qty: 161, reported_after: 163, over_order_qty: 2 };
+html = render("A04", order, row(allowedPreview(overrunKeys)), false);
+panels.push(`<h2>第一道超量提醒</h2>${html}`);
+assert.equal((html.match(/data-first-step-overrun-notice/g) || []).length, 1);
+assert.match(html, /這次比開單數量多 2 件（開單 161 件）。第一道不限數量，可以直接送出。/);
+assert.match(html, /data-station-report-confirm="A04"/);
+assert.doesNotMatch(html, /data-station-report-preview-ack|FIRST_STEP_OVERRUN/);
+const plainHtml = render("A04", order, row(allowedPreview()), false);
+assert.doesNotMatch(plainHtml, /data-first-step-overrun-notice/);
+assert.equal(html.replace(/<p class="report-limit-hint first-step-overrun-notice"[^>]*>[^<]*<\/p>/, ""), plainHtml, "only the reminder line differs");
 
 if (process.env.PANEL_HTML_OUT) fs.writeFileSync(process.env.PANEL_HTML_OUT,
   `<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${pathToFileURL(require("node:path").resolve("styles.css"))}"><body style="max-width:680px;margin:24px auto">${panels.join("<hr>")}</body></html>`, "utf8");

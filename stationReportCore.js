@@ -428,6 +428,7 @@
           values: result,
           preview: result,
           reportLimitHint: reportLimitHint(result),
+          overrunNotice: firstStepOverrunNotice(result),
         };
       }
       if (row.status === "rejected") return { kind: "hard", title: "預覽未通過", message: guardMessage(row.reject_code, row.reject_message, "預覽遭拒。"), code: row.reject_code || "" };
@@ -461,6 +462,21 @@
         : { key: "report_limit_available_outsource", params: { available: result.available, step, reported: result.previous_reported_good } };
     }
     return null;
+  }
+
+  // Owner 2026-11-13: the first route step has no quantity ceiling. With Factory
+  // StationCommands:ReportFirstStepOverrunAllowedEnabled on, an allowed preview carries
+  // legacy_snapshot.report.guard.Details.first_step_overrun=true plus over_order_qty /
+  // overrun_order_qty (StationReportGuard.cs). Display-only reminder: it never blocks,
+  // never adds an ack and never changes what is sent. Absent keys (older Factory) → null.
+  function firstStepOverrunNotice(result) {
+    if (!isPlainObject(result) || result.allowed !== true) return null;
+    const details = result.legacy_snapshot?.report?.guard?.Details;
+    if (!isPlainObject(details) || details.first_step_overrun !== true) return null;
+    const over = details.over_order_qty;
+    const order = details.overrun_order_qty;
+    if (!Number.isInteger(over) || over <= 0 || !Number.isInteger(order) || order < 0) return null;
+    return { key: "report_first_step_overrun", params: { n: over, order } };
   }
 
   function retryWithAck(previousArgs, ack, nextCommandUuid) {
@@ -566,7 +582,7 @@
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
-    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, retryWithAck, retryPreviewWithAck,
+    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, firstStepOverrunNotice, retryWithAck, retryPreviewWithAck,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
     refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient, operatorMessageKey,
   });

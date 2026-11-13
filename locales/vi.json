@@ -699,5 +699,6 @@
   "report_limit_available_station": { "value": "Hiện có thể báo tối đa {{available}} sản phẩm (công đoạn trước {{station}} đã báo {{reported}} sản phẩm)", "_draft": true },
   "report_limit_wait_station": { "value": "Chỉ có thể báo sau khi {{station}} báo công", "_draft": true },
   "report_limit_available_outsource": { "value": "Hiện có thể báo tối đa {{available}} sản phẩm (công đoạn gia công ngoài {{step}} đã nhận {{reported}} sản phẩm)", "_draft": true },
-  "report_limit_wait_outsource": { "value": "Chỉ có thể báo sau khi đã nhận hàng gia công ngoài", "_draft": true }
+  "report_limit_wait_outsource": { "value": "Chỉ có thể báo sau khi đã nhận hàng gia công ngoài", "_draft": true },
+  "report_first_step_overrun": { "value": "Lần này nhiều hơn số lượng trên phiếu {{n}} sản phẩm (phiếu {{order}} sản phẩm). Công đoạn đầu tiên không giới hạn số lượng, có thể gửi luôn.", "_draft": true }
 }

@@ -24419,8 +24419,9 @@ function machtileApplySimpleReportChrome() {
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
   const card = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = card?.reportLimitHint
-    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "";
+  const reportLimitHtml = (card?.reportLimitHint
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(card.reportLimitHint.key, card.reportLimitHint.params))}</p>` : "")
+    + machtileFirstStepOverrunHtml(card);
   const busy = machtileStationReportFlowBusy(flow);
   const defectQty = Number(document.getElementById("defectQty")?.value || 0);
   const defectOpen = st.defectOpen || defectQty > 0;
@@ -24753,8 +24754,9 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
   const result = flow.result ? core.resultCard(flow.result) : null;
-  const reportLimitHtml = result?.reportLimitHint
-    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "";
+  const reportLimitHtml = (result?.reportLimitHint
+    ? `<p class="report-limit-hint" data-report-limit-hint>${escapeHtml(machtileTranslate(result.reportLimitHint.key, result.reportLimitHint.params))}</p>` : "")
+    + machtileFirstStepOverrunHtml(result);
   const progress = order ? machtileBatchState.progressByProcess?.get?.(String(order.processId)) : null;
   const rateCheck = result && ["previewed", "preview-soft"].includes(result.kind)
     ? core.rateReasonableness({
@@ -24850,6 +24852,26 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     <button type="button" class="secondary-action station-report-action" data-station-report-preview="${escapeHtml(code)}"${!formAllowed || previewWaiting || flow.phase === "preview-timeout" ? " disabled" : ""}>先預覽，不寫入舊 MES</button>
     ${resultHtml}
   </section>`;
+}
+
+// Owner 2026-11-13: first-step overrun is accepted by the Factory without confirmation; the
+// tablet only shows one non-blocking reminder line. Read-only; "" when the preview has no such keys.
+function machtileFirstStepOverrunHtml(card) {
+  const notice = card?.overrunNotice;
+  return notice
+    ? `<p class="report-limit-hint first-step-overrun-notice" role="note" data-first-step-overrun-notice>${escapeHtml(machtileTranslate(notice.key, notice.params))}</p>` : "";
+}
+
+// Same reminder for the background banner: the one-button single report and the batch report
+// close/collapse right after an allowed preview, so the sheet line alone would flash by unseen.
+// Only when the final being sent was built from this exact preview. Read-only.
+function machtileFirstStepOverrunText(flow, args) {
+  const core = machtileStationReportCore();
+  const preview = flow?.preview;
+  if (!core?.firstStepOverrunNotice || !preview || preview.command_type !== "report_preview") return "";
+  if (args?.p_client_guard_snapshot?.preview_command_uuid !== preview.command_uuid) return "";
+  const notice = core.firstStepOverrunNotice(preview.preview_result);
+  return notice ? machtileTranslate(notice.key, notice.params) : "";
 }
 
 async function machtileStationReportWait(code, commandUuid, kind) {
@@ -25147,7 +25169,7 @@ window.addEventListener("online", () => {
 });
 
 let machtileStationReportBackgroundTimer = null;
-function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0 } = {}) {
+function machtileSetStationReportBackgroundStatus(message, { error = false, autoHideMs = 0, note = "" } = {}) {
   const notice = document.getElementById("stationReportBackgroundStatus");
   if (!notice) return;
   if (machtileStationReportBackgroundTimer) clearTimeout(machtileStationReportBackgroundTimer);
@@ -25155,6 +25177,18 @@ function machtileSetStationReportBackgroundStatus(message, { error = false, auto
   const text = notice.querySelector("[data-station-report-background-message]");
   const dismiss = notice.querySelector("[data-station-report-background-dismiss]");
   if (text) text.textContent = message;
+  // Optional second line (first-step overrun reminder). No note → the element is removed, so the
+  // banner DOM is exactly what it was before this reminder existed.
+  let noteEl = notice.querySelector("[data-station-report-background-note]");
+  if (note && message) {
+    if (!noteEl) {
+      noteEl = document.createElement("span");
+      noteEl.className = "station-report-background-note";
+      noteEl.setAttribute("data-station-report-background-note", "");
+      text ? text.after(noteEl) : notice.prepend(noteEl);
+    }
+    noteEl.textContent = note;
+  } else if (noteEl) noteEl.remove();
   notice.classList.toggle("is-error", error);
   if (dismiss) dismiss.hidden = !error;
   notice.hidden = !message;
@@ -25222,7 +25256,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
       reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
-  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中");
+  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中", { note: machtileFirstStepOverrunText(flow, args) });
   closeReport();
   showToast("已送出，工廠寫入中");
   return machtileStationReportSendFinal(code, args, { background: true, order }).catch((error) => {
@@ -25293,7 +25327,7 @@ async function machtileStationReportFinalizeApplied(code, args, options = {}) {
       flow.appliedFollowUpPendingUuid = null;
     }
     if (!failed) {
-      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, args) });
       if (options.background) showToast("工廠已完成寫入");
     } else {
       machtileSetStationReportBackgroundStatus(flow.error, { error: true });
@@ -25353,7 +25387,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     if (options.background) {
       const background = document.getElementById("stationReportBackgroundStatus");
       if (applied && !followUpFailed) {
-        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000 });
+        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, resultArgs) });
         showToast("工廠已完成寫入");
       } else if (background) {
         machtileSetStationReportBackgroundStatus(
