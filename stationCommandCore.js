@@ -590,6 +590,8 @@
       expectedSimulationId: text(rec.expectedSimulationId) || null,
       shortCompletion: rec.shortCompletion && typeof rec.shortCompletion === "object" ? rec.shortCompletion : null,
       finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
+      // 送出關站時開著的完工畫面代號（app.js 用來判斷結果回來時要不要自動關畫面）；沒有＝不自動關
+      finishCloseSheetToken: text(rec.finishCloseSheetToken) || null,
       poolItemId: text(rec.poolItemId) || null,
       standardFinishClaim: rec.standardFinishClaim === true,
       startedAt: Number(rec.startedAt) || Date.now(),

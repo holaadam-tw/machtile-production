@@ -11109,17 +11109,30 @@ function machtileCardQtyOverlayRecord(order, machineCode, total, status = "appli
 }
 
 // 報工 applied 後卡片數字要馬上跟上（2026-11-13 A03：卡片要等很久）：疊加值已記下，但只有重讀卡片進度時才套上。
-// 每一筆 applied 報工最多多讀一次（同一個 command_uuid 不重讀）。
-const machtileCardRefreshedAfterReport = new Set();
+// 同一個 command_uuid 不重讀；一批 applied 一起回來時合併：同時最多一個在讀＋一個排隊（讀的時候又有新的 → 讀完再讀一次）。
+// 讀失敗不影響畫面（保留上一次結果）；較舊的讀取比較新的晚回來時，machtileLoadCardLegacyProgress 自己會丟掉。
+const machtileCardRefreshAfterReport = { seen: new Set(), inFlight: false, dirty: false };
 function machtileRefreshCardAfterReportApplied(commandUuid) {
   const key = String(commandUuid || "");
-  if (!key || machtileCardRefreshedAfterReport.has(key) || state.source !== "supabase") return;
-  machtileCardRefreshedAfterReport.add(key);
+  const refresh = machtileCardRefreshAfterReport;
+  if (!key || refresh.seen.has(key) || state.source !== "supabase") return;
+  refresh.seen.add(key);
+  if (refresh.inFlight) { refresh.dirty = true; return; }
+  machtileRunCardRefreshAfterReport();
+}
+function machtileRunCardRefreshAfterReport() {
+  const refresh = machtileCardRefreshAfterReport;
+  refresh.inFlight = true;
+  refresh.dirty = false;
   const generation = machtileDeferredLoadGeneration;
-  void machtileLoadCardLegacyProgress(generation).then(() => {
-    if (generation !== machtileDeferredLoadGeneration) return;
+  void Promise.resolve().then(() => machtileLoadCardLegacyProgress(generation)).then((applied) => {
+    if (applied === false || generation !== machtileDeferredLoadGeneration) return;
     machtileRefreshCardSections();
-  }).catch((error) => console.warn("card progress refresh after report failed; keeping the last result", error));
+  }).catch((error) => console.warn("card progress refresh after report failed; keeping the last result", error))
+    .finally(() => {
+      refresh.inFlight = false;
+      if (refresh.dirty) machtileRunCardRefreshAfterReport();
+    });
 }
 
 function machtileCardQtyOverlayRemove(machineCode) {
@@ -11238,7 +11251,12 @@ async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDef
   }
 }
 
+// 每次讀卡片進度編一個號；比「已套上的那次」舊的結果晚回來就丟掉（不讓舊資料蓋掉新資料）。
+let machtileCardProgressCallSeq = 0;
+let machtileCardProgressAppliedSeq = 0;
+// 回傳 false＝這次結果沒套上（換了一輪載入，或已有更新的結果）
 async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadGeneration) {
+  const callSeq = ++machtileCardProgressCallSeq;
   const orders = [...(state.workOrders || []), ...(state.assignedCardOrders || [])];
   // Repeated progress refreshes must start from the cloud App quantity, never a prior display overlay.
   const appDoneByOrder = new Map(orders.map(order => [order, Number(config.cardQtyInstantEnabled === true ? (order.appDone ?? order.done ?? 0) : (order.done ?? 0))]));
@@ -11290,7 +11308,9 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
       console.warn("card progress failed; keeping App-only completion", error);
     }
   });
-  if (generation !== machtileDeferredLoadGeneration) return;
+  if (generation !== machtileDeferredLoadGeneration) return false;
+  if (callSeq < machtileCardProgressAppliedSeq) return false;
+  machtileCardProgressAppliedSeq = callSeq;
   if (overlaysChanged) machtileCardQtyOverlaysWrite(overlays);
   machtileCardPickState.progressByProcess = byProcess;
   orders.forEach((order) => {
@@ -11302,6 +11322,7 @@ async function machtileLoadCardLegacyProgress(generation = machtileDeferredLoadG
       order.progressSource = progress;
     }
   });
+  return true;
 }
 
 // Monitor 機台卡片的「機台加工時間／基準差異／每日估算」（owner 2026-10-02「卡片上面沒有顯示機台加工時間」）。
@@ -14949,15 +14970,32 @@ function machtileFinishCloseSetResult(code, view, record = null) {
   if (view?.terminal) void machtileLoadCardLatestCloseForMachines([code], { render: true });
 }
 
-// 完工畫面還開著（同一台）時，關站有最終結果就跟著動（2026-11-13 A03：關站已套用，畫面還停在「關站中…」）：
-// applied → 關掉完工畫面、橫幅說已關站；被擋／結果不確定 → 畫面留著並立刻重畫，顯示原因。
-function machtileFinishCloseAfterFinalResult(code, view) {
+// 完工畫面現在是不是開給這台（finishSheet，或 reportSheet 的完工分頁）
+function machtileFinishSheetOpenFor(code) {
   const machine = String(code || "").trim().toUpperCase();
-  const openFor = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase() === machine
-    && (document.getElementById("finishSheet")?.classList.contains("is-open")
+  return Boolean(machine) && String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase() === machine
+    && Boolean(document.getElementById("finishSheet")?.classList.contains("is-open")
       || (document.getElementById("reportSheet")?.classList.contains("is-open") && activeReportType === "finish"));
-  if (openFor && view?.phase === "applied") {
-    const flow = machtileStationReportState(machtileBatchRow(machine));
+}
+
+// 這筆關站是不是「現在開著的這個完工畫面」送出的：畫面開啟代號相同（作業員關掉再開＝新代號），
+// 而且畫面上的關站還是同一筆完工報工的（flow.close.reportCommandUuid 有值時要相同）。要在 SetResult 覆寫 flow.close 之前判斷。
+function machtileFinishCloseOwnsOpenSheet(code, record) {
+  if (!record?.finishCloseSheetToken || record.finishCloseSheetToken !== machtileReportSheetOpenToken) return false;
+  if (!machtileFinishSheetOpenFor(code)) return false;
+  const flow = machtileStationReportState(machtileBatchRow(String(code || "").trim().toUpperCase()));
+  if (!flow.close) return false;
+  return !flow.close.reportCommandUuid || flow.close.reportCommandUuid === record.finishCloseReportCommandUuid;
+}
+
+// 完工畫面還開著（同一台、同一筆）時，關站有最終結果就跟著動（2026-11-13 A03：關站已套用，畫面還停在「關站中…」）：
+// applied 且沒有「下一道」卡 → 關掉完工畫面、橫幅說已關站；
+// applied 但有下一道（標準完工流程：接下一道／換單）→ 畫面留著並重畫，讓作業員看到下一道卡；
+// 被擋／結果不確定 → 畫面留著並立刻重畫，顯示原因。不是這筆送出的畫面（重新開過）→ 只重畫，不關。
+function machtileFinishCloseAfterFinalResult(code, view, ownsSheet) {
+  const machine = String(code || "").trim().toUpperCase();
+  const flow = machtileStationReportState(machtileBatchRow(machine));
+  if (ownsSheet && view?.phase === "applied" && !flow.close?.nextStep) {
     machtileSetStationReportBackgroundStatus(`${machine} ${flow.close?.title || view.title}`, { autoHideMs: 8000 });
     closeReport();
     return;
@@ -14981,7 +15019,8 @@ async function machtileFinishCloseConfirmPreviousStep(code) {
   machtileRenderStationReportSurfaces();
   const commandUuid = machtileStationCmdCore.newUuid(window.crypto);
   await machtileStationCmdRunSubmission({ commandUuid, commandType: "close", machineCode: code,
-    fields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"] }, recordFields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"] }, startedAt: Date.now(),
+    fields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"] }, startedAt: Date.now(),
+    recordFields: { ...fields, acks: ["PREVIOUS_STEP_OPEN"], finishCloseSheetToken: machtileFinishSheetOpenFor(code) ? machtileReportSheetOpenToken : "" },
     onError: ({ info }) => { flow.close = { ...flow.close, phase: "rejected", title: machtileTranslate("finish_close_rejected_title"), message: info.text }; machtileRenderStationReportSurfaces(); },
     afterRecord: ({ record, view }) => { if (view.terminal || view.needsConfirmation) machtileFinishCloseSetResult(code, view, record); machtileRenderStationReportSurfaces(); },
   });
@@ -15113,6 +15152,8 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
   const identity = { orderNo: args.p_expected_order_no, partNo: args.p_expected_part_no, indexSn: args.p_expected_index_sn };
   flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid, identity };
   machtileRenderStationReportSurfaces();
+  // 送出時開著的完工畫面代號：結果回來時只有「還是這個畫面」才自動關（作業員重開過就不動）
+  const finishCloseSheetToken = machtileFinishSheetOpenFor(code) ? machtileReportSheetOpenToken : "";
   const commandUuid = crypto.randomUUID();
   await machtileStationCmdRunSubmission({
     commandUuid,
@@ -15134,6 +15175,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       expectedSimulationId: args.p_expected_simulation_id,
       shortCompletion: flow.singleReport?.shortCompletion || null,
       finishCloseReportCommandUuid: reportCommandUuid,
+      finishCloseSheetToken,
     },
     startedAt: Date.now(),
     onError: ({ info }) => {
@@ -16331,8 +16373,9 @@ function machtileStationCmdFinish(code, view) {
     if (view.phase === "applied") void machtileTakeoverRefreshAfterApplied(code, record.orderNo, record.step);
   }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) {
+    const ownsSheet = machtileFinishCloseOwnsOpenSheet(code, record);
     machtileFinishCloseSetResult(code, view, record);
-    machtileFinishCloseAfterFinalResult(code, view);
+    machtileFinishCloseAfterFinalResult(code, view, ownsSheet);
   }
   if (record.commandType === "claim_next" && record.standardFinishClaim) machtileStandardFinishSetClaimResult(code, view);
   if (record.commandType === "start" && record.standardFinishComboStart) {
@@ -22795,7 +22838,11 @@ function setSelectedOrder(order) {
   setReportDefaults(order);
 }
 
+// 報工／完工畫面每開一次給一個新代號（關掉＝清空）。完工關站結果回來時用它判斷「還是送出時那個畫面」。
+let machtileReportSheetOpenSeq = 0;
+let machtileReportSheetOpenToken = "";
 function openReport(orderId, options = {}) {
+  machtileReportSheetOpenToken = `${Date.now().toString(36)}-${++machtileReportSheetOpenSeq}`;
   machtileRestoreReportForm();
   $("#finishSheet")?.classList.remove("is-open");
   $("#finishSheet")?.setAttribute("aria-hidden", "true");
@@ -22877,6 +22924,7 @@ function openFinishReport(orderId, options = {}) {
 
 function closeReport() {
   const closingMachineCode = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase();
+  machtileReportSheetOpenToken = "";
   const returnDetailOrderId = activeReportReturnDetailOrderId;
   machtileRestoreReportForm();
   $("#finishSheet")?.classList.remove("is-open");

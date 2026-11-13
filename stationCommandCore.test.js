@@ -472,6 +472,9 @@ console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET�
   eq("expired 也記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "expired" }, "start", 0), at })?.code, "EXPIRED");
   eq("壞紀錄 → 不顯示", c.startRejectNotice("x", ctx), null);
 }
+// 完工關站：pendingRecord 保留送出時的完工畫面代號（app.js 判斷要不要自動關畫面）
+eq("pendingRecord 保留完工畫面代號", c.pendingRecord({ ...rec, commandType: "close", finishCloseReportCommandUuid: UUID, finishCloseSheetToken: "abc-3" }).finishCloseSheetToken, "abc-3");
+eq("pendingRecord 沒有代號 → null（不自動關）", c.pendingRecord(rec).finishCloseSheetToken, null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
