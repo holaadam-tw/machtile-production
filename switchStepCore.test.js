@@ -1440,7 +1440,7 @@ test("held step ≠ first-claimed step, ambiguous or missing pool row: 「換道
 // ---------------------------------------------------------------- 旗標關＝跟「只有退回」那一版逐字相同（原始碼層）
 test("app.js minus the switch-step section and its listed hooks is byte-identical to the return-claim build; other files only gain what is listed", (t) => {
   const git = (args) => childProcess.execFileSync("git", args, { cwd: __dirname, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  const base = process.env.SWITCH_STEP_BASE || "68c86b4feea120be569ae10e22a894a36e0a77fd";
+  const base = process.env.SWITCH_STEP_BASE || "4213c94a5d3985f056b6e6dbfb016888a894b188";
   let baseApp;
   try { baseApp = git(["show", `${base}:app.js`]); } catch { t.skip("git base (return-claim build) not available"); return; }
   const norm = (text) => text.replace(/\r\n/g, "\n");
