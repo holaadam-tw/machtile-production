@@ -65,6 +65,9 @@ window.MACHTILE_CONFIG = {
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
   overtimeStartCardEnabled: false,
+  // HMC 卡片六盤料號推算；關閉時不讀固定工件資料、不改卡片 DOM。
+  enableHmcPalletCard: false,
+  hmcPalletCardMachines: ["B01", "B02"],
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,

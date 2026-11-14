@@ -76,6 +76,8 @@ const config = {
   hmcFixedStagingEnabled: true,
   hmcFixedStagingWrites: true,
   enableHmcPalletReport: false,
+  enableHmcPalletCard: false,
+  hmcPalletCardMachines: ["B01", "B02"],
   // Owner-confirmed factory calendar (2026-07-16): weekdays 08:00–17:00,
   // lunch 12:00–13:00. Overtime 17:30–20:30 and Saturday capacity are
   // available only through an explicitly approved calendar exception.
@@ -323,6 +325,7 @@ function machtileHmcFixedSessionChanged() {
   // ready or a department filter renders a B-series card.
   if (config.hmcFixedStagingEnabled === true) machtileGetHmcFixedHost()?.authChanged();
   else machtileHmcFixedHost?.invalidate();
+  machtileHmcPalletCardState.clear();
 }
 
 function machtileHmcFixedEntries(machine) {
@@ -11635,6 +11638,7 @@ function deriveMachines() {
 // ---- 機台卡片「目前工單」挑選（owner 2026-10-02）----
 // 一台機台同時掛好幾張在站單時，卡片顯示最近有活動的那張；可以手動切換（只改畫面，不寫資料庫）。
 const machtileCardActiveCore = window.MachTileCardActiveOrderCore;
+const machtileHmcPalletCardCore = window.MachTileHmcPalletCardCore;
 const machtileCardPickState = {
   // orderKey（工序 id，沒有就單號）→ { lastReportAt, legacyUpdatedAt, actualStartAt }
   activityByKey: new Map(),
@@ -11783,6 +11787,63 @@ function machtileSetCardPick(machineName, key) {
 // 卡片每 30 秒重畫一次，所以一定要記住，否則剛點開的清單會自己收回去。
 const MACHTILE_CARD_ORDERS_OPEN_KEY = "machtile.cardOrdersOpen.v1";
 let machtileCardOrdersOpenSet = null;
+const machtileHmcPalletCardState = new Map();
+const MACHTILE_HMC_PALLET_CARD_REFRESH_MS = 30000;
+
+function machtileHmcPalletCardEnabled(machine) {
+  const code = String(machine?.code || machine?.name || "");
+  return config.enableHmcPalletCard === true && Array.isArray(config.hmcPalletCardMachines)
+    && config.hmcPalletCardMachines.includes(code);
+}
+
+function machtileLoadHmcPalletCard(machine) {
+  if (!machtileHmcPalletCardEnabled(machine)) return;
+  const code = String(machine.code || machine.name);
+  const cached = machtileHmcPalletCardState.get(code);
+  if (cached && (cached.status === "loading" || Date.now() - cached.loadedAt < MACHTILE_HMC_PALLET_CARD_REFRESH_MS)) return;
+  machtileHmcPalletCardState.set(code, { status: "loading", states: cached?.states || [], loadedAt: cached?.loadedAt || 0 });
+  void supabaseFetch("rpc/hmc_pallet_card_read", {
+    method: "POST",
+    body: JSON.stringify({ p_machine_code: code }),
+  }).then((result) => {
+    if (result?.ok !== true || !Array.isArray(result.pallets)) throw new Error("HMC_PALLET_CARD_READ_FAILED");
+    const states = result.pallets.map((pallet) => ({
+      palletNo: Number(pallet?.pallet_no),
+      slots: (Array.isArray(pallet?.parts) ? pallet.parts : []).map((partNo, index) => ({
+        slotId: `slot-${index + 1}`,
+        part: { partNo },
+      })),
+    }));
+    machtileHmcPalletCardState.set(code, { status: "ready", states, loadedAt: Date.now() });
+  }).catch(() => {
+    machtileHmcPalletCardState.set(code, { status: "error", states: [], loadedAt: Date.now() });
+  }).finally(() => {
+    try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("HMC pallet card re-render failed", error); }
+  });
+}
+
+function machtileHmcPalletOrderMarkup(entry) {
+  const order = entry?.order || entry || {};
+  return `<li class="hmc-pallet-order"><span><strong>${escapeHtml(order.part || order.partNo || order.id || "-")}</strong><small>${escapeHtml(order.id || "-")}</small></span>${machtileCardOrderProgressMarkup(order)}<em>${escapeHtml(machtileTranslate("hmc_pallet_inferred"))}</em></li>`;
+}
+
+function machtileHmcPalletCardMarkup(machine) {
+  if (!machtileHmcPalletCardEnabled(machine) || !machtileHmcPalletCardCore) return "";
+  machtileLoadHmcPalletCard(machine);
+  const code = String(machine.code || machine.name);
+  const cached = machtileHmcPalletCardState.get(code);
+  if (!cached || cached.status === "loading") return `<section class="hmc-pallet-card" data-no-detail data-hmc-pallet-card="${escapeHtml(code)}"><strong>${escapeHtml(machtileTranslate("hmc_pallet_title"))}</strong><p>${escapeHtml(machtileTranslate("hmc_pallet_loading"))}</p></section>`;
+  if (cached.status === "error") return `<section class="hmc-pallet-card" data-no-detail data-hmc-pallet-card="${escapeHtml(code)}"><strong>${escapeHtml(machtileTranslate("hmc_pallet_title"))}</strong><p>${escapeHtml(machtileTranslate("hmc_pallet_read_error"))}</p></section>`;
+  const mapped = machtileHmcPalletCardCore.mapOrdersToPallets(machine.cardOrders || [], cached.states);
+  const rows = mapped.pallets.map((pallet) => `<div class="hmc-pallet-row" data-hmc-pallet="${pallet.palletNo}"><b>${escapeHtml(machtileTranslate("hmc_pallet_number", { number: pallet.palletNo }))}</b>${!pallet.configured
+    ? `<span class="hmc-pallet-empty">${escapeHtml(machtileTranslate("hmc_pallet_not_configured"))}</span>`
+    : pallet.orders.length ? `<ul>${pallet.orders.map(machtileHmcPalletOrderMarkup).join("")}</ul>` : `<span class="hmc-pallet-empty">—</span>`}</div>`).join("");
+  const unmatched = mapped.unmatched.length ? `<div class="hmc-pallet-row is-unmatched" data-hmc-pallet-unmatched><b>${escapeHtml(machtileTranslate("hmc_pallet_unmatched"))}</b><ul>${mapped.unmatched.map((entry) => {
+    const order = entry?.order || entry || {};
+    return `<li class="hmc-pallet-order"><span><strong>${escapeHtml(order.part || order.partNo || order.id || "-")}</strong><small>${escapeHtml(order.id || "-")}</small></span>${machtileCardOrderProgressMarkup(order)}</li>`;
+  }).join("")}</ul></div>` : "";
+  return `<section class="hmc-pallet-card" data-no-detail data-hmc-pallet-card="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_title"))}</strong><small>${escapeHtml(machtileTranslate("hmc_pallet_inferred_note"))}</small></header>${rows}${unmatched}</section>`;
+}
 
 function machtileCardOrdersOpenState() {
   if (machtileCardOrdersOpenSet) return machtileCardOrdersOpenSet;
@@ -18113,7 +18174,7 @@ function renderMachineCard(machine) {
         `}
       </div>
       ${"" /* 原本中段「舊 MES 開工／停工」區塊的位置：已移到卡片底部（保留這一行，沒開功能的機台卡片 HTML 才會跟以前逐字相同） */}
-      ${machtileCardOrdersMarkup(machine)}
+      ${machtileHmcPalletCardMarkup(machine)}${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
         ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}${machtileSwitchStartedCardMarkup(machine)}

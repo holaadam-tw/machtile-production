@@ -1468,6 +1468,16 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   baseApp = norm(baseApp);
   assert.doesNotMatch(baseApp, /machtileSwitchStep/, "the base has no switch-step code");
   let current = norm(appSource);
+  // HMC pallet-card is independently flag-off tested. Remove its self-contained
+  // section and restore its two script/config hooks before comparing history.
+  current = current.replace('  enableHmcPalletCard: false,\n  hmcPalletCardMachines: ["B01", "B02"],\n', '');
+  current = current.replace('const machtileHmcPalletCardCore = window.MachTileHmcPalletCardCore;\n', '');
+  const hmcStart = current.indexOf('const machtileHmcPalletCardState = new Map();');
+  const hmcEnd = current.indexOf('function machtileCardOrdersOpenState()', hmcStart);
+  assert.ok(hmcStart >= 0 && hmcEnd > hmcStart, "HMC pallet-card section is present exactly where expected");
+  current = current.slice(0, hmcStart) + "\n" + current.slice(hmcEnd);
+  current = current.replace('  machtileHmcPalletCardState.clear();\n', '');
+  current = current.replace('      ${machtileHmcPalletCardMarkup(machine)}${machtileCardOrdersMarkup(machine)}', '      ${machtileCardOrdersMarkup(machine)}');
   // 第 2 階段（已開工，enableSwitchStepStarted 預設關）先整段拿掉、掛點還原；它旗標關時每一個掛點都等於原字串
   // （Locks()＝false、Restore／HandleClick 直接 return／回 false、CardMarkup()＝""、ForgetUser 沒有東西可丟；下面第 2 階段的「flag off」測試逐一斷言）。
   const startedSection = norm(startedSource);
@@ -1549,7 +1559,11 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   current = cut(current, "// 卡片明細載入時叫（旗標開才會進來）", "function machtileReturnClaimGate(machine) {");
   assert.doesNotMatch(current, /heldPoolKey|HeldPoolKeys|heldPoolPath|HELD_CLAIMS_RPC|machtile_held_pool_claims/, "no other held-key reference outside the switch-step section");
   assert.doesNotMatch(current, /machtileSwitchStep|enableSwitchStep|switch_step|switchStep/, "no other switch-step reference in app.js");
-  assert.equal(current, baseApp, "with the section removed and the hooks reverted, app.js is byte-identical to the return-claim build");
+  if (current !== baseApp) {
+    let mismatch = 0;
+    while (current[mismatch] === baseApp[mismatch]) mismatch++;
+    assert.fail(`HMC/switch baseline mismatch at ${mismatch}: current=${JSON.stringify(current.slice(mismatch, mismatch + 160))} base=${JSON.stringify(baseApp.slice(mismatch, mismatch + 160))}`);
+  }
   assert.doesNotMatch(appSource, /void machtileClaimDispatchPool\([^)]*\)[^;]*;[^\n]*\.ok/, "sanity");
   assert.equal([...appSource.matchAll(/machtileClaimDispatchPool\(/g)].length, 3, "the claim function has exactly one new caller (definition, the pool panel's click handler, the switch)");
   // 其他檔案
@@ -1577,19 +1591,25 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   const deployed = JSON.parse(read("version.json")).version;
   const baseDeployed = JSON.parse(show("version.json")).version;
   const unversion = (text, version) => text.split(version).join("<VERSION>");
-  assert.match(read("version.json"), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
+  assert.match(read("version.json").trim(), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
   const config = read("config.js");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
-  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
-  assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
+  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|enableHmcPalletCard|hmcPalletCardMachines|B01\/B02 卡片六盤料號推算|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only independently guarded HMC and switch-step flags");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags and the version string");
+  const hmcStyles = read("styles.css").replace(/\.hmc-pallet-card \{[\s\S]*?\.hmc-pallet-row\.is-unmatched > b \{[^\n]+\}\n/, "");
+  const filteredStyles = hmcStyles.split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n");
+  const baseStyles = show("styles.css");
+  if (filteredStyles !== baseStyles) {
+    let mismatch = 0; while (filteredStyles[mismatch] === baseStyles[mismatch]) mismatch++;
+    assert.fail(`styles baseline mismatch at ${mismatch}: current=${JSON.stringify(filteredStyles.slice(mismatch, mismatch + 120))} base=${JSON.stringify(baseStyles.slice(mismatch, mismatch + 120))}`);
+  }
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
     const removed = [], added = [];
     const baseLines = show(file).split("\n"), nowLines = read(file).split("\n");
     const baseSet = new Set(baseLines), nowSet = new Set(nowLines);
     baseLines.forEach((line) => { if (!nowSet.has(line)) removed.push(line); });
     nowLines.forEach((line) => { if (!baseSet.has(line)) added.push(line); });
-    assert.ok(added.filter((line) => !/switch_step_|換道次（switch step/.test(line)).every((line) => removed.some((old) => line.replace(/,(\s*\/\/ _draft)?$/, "$1") === old.replace(/,(\s*\/\/ _draft)?$/, "$1") || line === `${old},`)),
+    assert.ok(added.filter((line) => !/switch_step_|hmc_pallet_|換道次（switch step/.test(line)).every((line) => removed.some((old) => line.replace(/,(\s*\/\/ _draft)?$/, "$1") === old.replace(/,(\s*\/\/ _draft)?$/, "$1") || line === `${old},`)),
       `${file}: only switch_step_ entries are added (plus the comma after the previous last entry)`);
     assert.ok(removed.length <= 1, `${file}: no existing string changed`);
   }

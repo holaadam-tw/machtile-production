@@ -74,6 +74,14 @@
       lathe_single_operator_draft: "車床報工一次只能選一位報工人員，請取消其他人員後再送出。",
       select_work_order: "選擇工單",
       details: "完整單",
+      hmc_pallet_title: "1號盤～6號盤",
+      hmc_pallet_number: "{{number}}號盤",
+      hmc_pallet_inferred: "推算",
+      hmc_pallet_inferred_note: "依固定工件料號推算",
+      hmc_pallet_not_configured: "尚未登錄",
+      hmc_pallet_unmatched: "未對應盤號",
+      hmc_pallet_loading: "正在讀取固定工件設定…",
+      hmc_pallet_read_error: "固定工件設定暫時讀不到",
       machine_details: "機台詳情",
       machine_status: "機台 · {{status}}",
       work_order_status: "工單 · {{status}}",
@@ -583,6 +591,14 @@
       lathe_single_operator_draft: "Báo cáo máy tiện chỉ được chọn một người vận hành. Vui lòng bỏ chọn những người khác rồi gửi lại.", // _draft
       select_work_order: "Chọn lệnh sản xuất",
       details: "Xem đầy đủ",
+      hmc_pallet_title: "Pallet 1–6", // _draft
+      hmc_pallet_number: "Pallet {{number}}", // _draft
+      hmc_pallet_inferred: "Suy đoán", // _draft
+      hmc_pallet_inferred_note: "Suy đoán theo mã chi tiết cố định", // _draft
+      hmc_pallet_not_configured: "Chưa đăng ký", // _draft
+      hmc_pallet_unmatched: "Chưa khớp số pallet", // _draft
+      hmc_pallet_loading: "Đang đọc cấu hình chi tiết cố định…", // _draft
+      hmc_pallet_read_error: "Tạm thời không đọc được cấu hình chi tiết cố định", // _draft
       machine_details: "Chi tiết máy",
       machine_status: "Máy · {{status}}",
       work_order_status: "Lệnh · {{status}}",
