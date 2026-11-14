@@ -11788,6 +11788,7 @@ function machtileSetCardPick(machineName, key) {
 const MACHTILE_CARD_ORDERS_OPEN_KEY = "machtile.cardOrdersOpen.v1";
 let machtileCardOrdersOpenSet = null;
 const machtileHmcPalletCardState = new Map();
+const MACHTILE_HMC_PALLET_CARD_REFRESH_MS = 30000;
 
 function machtileHmcPalletCardEnabled(machine) {
   const code = String(machine?.code || machine?.name || "");
@@ -11798,14 +11799,24 @@ function machtileHmcPalletCardEnabled(machine) {
 function machtileLoadHmcPalletCard(machine) {
   if (!machtileHmcPalletCardEnabled(machine)) return;
   const code = String(machine.code || machine.name);
-  if (machtileHmcPalletCardState.has(code)) return;
-  const host = machtileGetHmcFixedHost();
-  if (!host?.available()) return;
-  machtileHmcPalletCardState.set(code, { status: "loading", states: [] });
-  void host.readPallets(code).then((states) => {
-    machtileHmcPalletCardState.set(code, { status: Array.isArray(states) ? "ready" : "error", states: states || [] });
+  const cached = machtileHmcPalletCardState.get(code);
+  if (cached && (cached.status === "loading" || Date.now() - cached.loadedAt < MACHTILE_HMC_PALLET_CARD_REFRESH_MS)) return;
+  machtileHmcPalletCardState.set(code, { status: "loading", states: cached?.states || [], loadedAt: cached?.loadedAt || 0 });
+  void supabaseFetch("rpc/hmc_pallet_card_read", {
+    method: "POST",
+    body: JSON.stringify({ p_machine_code: code }),
+  }).then((result) => {
+    if (result?.ok !== true || !Array.isArray(result.pallets)) throw new Error("HMC_PALLET_CARD_READ_FAILED");
+    const states = result.pallets.map((pallet) => ({
+      palletNo: Number(pallet?.pallet_no),
+      slots: (Array.isArray(pallet?.parts) ? pallet.parts : []).map((partNo, index) => ({
+        slotId: `slot-${index + 1}`,
+        part: { partNo },
+      })),
+    }));
+    machtileHmcPalletCardState.set(code, { status: "ready", states, loadedAt: Date.now() });
   }).catch(() => {
-    machtileHmcPalletCardState.set(code, { status: "error", states: [] });
+    machtileHmcPalletCardState.set(code, { status: "error", states: [], loadedAt: Date.now() });
   }).finally(() => {
     try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("HMC pallet card re-render failed", error); }
   });
