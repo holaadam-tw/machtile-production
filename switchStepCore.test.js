@@ -1669,7 +1669,9 @@ test("phase 2 flags: enableSwitchStepStarted / switchStepStartedAllowUnpooled de
   for (const flag of [undefined, false, "true", 1, null]) assert.equal(core.startedEnabled({ flag }), false, String(flag));
   assert.equal(core.startedEnabled(), false);
   const config = fs.readFileSync(path.join(__dirname, "config.js"), "utf8");
-  assert.match(config, /\n\s*enableSwitchStepStarted: false,\r?\n/);
+  // 2026-11-14 rollout: phase 2 is ON for A05 only (owner pack 20261114-a05-switchstep-enable); off, or on with exactly ["A05"].
+  assert.match(config, /\n\s*enableSwitchStepStarted: (false|true),\r?\n/);
+  if (/\n\s*enableSwitchStepStarted: true,/.test(config)) assert.match(config, /\n\s*switchStepStartedMachines: \["A05"\],\r?\n/, "phase 2 on = A05 only");
   assert.match(config, /\n\s*switchStepStartedAllowUnpooled: false,\r?\n/);
   assert.equal(core.STARTED_SUBMIT_RPC, "machtile_submit_switch_step_command");
   assert.equal(core.STARTED_COMMAND_TYPE, "switch_step");
@@ -2247,7 +2249,7 @@ test("phase 2 open-time reads fail closed: fresh read changed / reported / unrea
 });
 
 test("phase 2 machine allowlist: switchStepStartedMachines default [] (no machine); the button only for listed machines AND the flag", async () => {
-  assert.match(fs.readFileSync(path.join(__dirname, "config.js"), "utf8"), /\n\s*switchStepStartedMachines: \[\],\r?\n/, "config.js default is an empty list");
+  assert.match(fs.readFileSync(path.join(__dirname, "config.js"), "utf8"), /\n\s*switchStepStartedMachines: (\[\]|\["A05"\]),\r?\n/, "config.js: empty list (default) or the A05-only rollout (2026-11-14)");
   for (const startedMachines of [[], ["A04"], undefined === 1 ? [] : null, "A05"]) {
     const h = harness({ started: true, startedMachines, order: runningOrder(), backend: startedBackendOf({}) });
     assert.equal(h.api.started.markup(h.machine), "", JSON.stringify(startedMachines));
