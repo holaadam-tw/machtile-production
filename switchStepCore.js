@@ -850,7 +850,8 @@
       || (p.orderNo && known.orderNo && p.orderNo !== text(known.orderNo)) || (p.station && known.machineCode && p.station !== normCode(known.machineCode))) {
       return { phase: "invalid", terminal: true, code: "" };
     }
-    if (!p.ok) return { phase: "blocked", terminal: true, code: p.blockCode || "SWITCH_MOVE_PLAN_REFUSED", preview: p };
+    const acknowledgedOverrun = p.firstStep && p.needsOverrunAck && p.blockCode === MOVE_CONTRACT.overrunAck;
+    if (!p.ok && !acknowledgedOverrun) return { phase: "blocked", terminal: true, code: p.blockCode || "SWITCH_MOVE_PLAN_REFUSED", preview: p };
     if (p.good === null || p.fail === null || p.count === null || p.good + p.fail > MOVE_QTY_MAX) return { phase: "invalid", terminal: true, code: "" };
     // 第一道補報後超過工單量：伺服器說要勾，或自己算出來超過（保守：任何一邊說要就要）
     const overrun = p.firstStep && (p.needsOverrunAck || p.exceedsOrderQty || (p.orderQty !== null && p.targetAfter !== null && p.targetAfter > p.orderQty));
