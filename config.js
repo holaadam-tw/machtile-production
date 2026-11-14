@@ -136,4 +136,11 @@ window.MACHTILE_CONFIG = {
   switchStepStartedMachines: [],
   // 換道次（已開工）：不在待做池的道次也列出來（標「不在待做池」）。預設關；要跟工廠 SwitchStepAllowUnpooledTarget 一起開。
   switchStepStartedAllowUnpooled: false,
+  // 上一道擋住（owner 2026-11-14「照建議」；prevStepNotifyCore.js）。預設都關。
+  // enablePrevStepBlockHint：報工／關站被上一道擋時，多一句「卡在 A05（第 2 道）、請找 A05 或生管」。
+  // enablePrevStepNotify：再加「通知生管」鍵＋提醒中心看板（生管以上）；開之前要先套雲端 migration 20261114170000。
+  enablePrevStepBlockHint: false,
+  enablePrevStepNotify: false,
+  // A/B 機台已開智慧報工時，午報／完工不再退回直接寫 production_reports（只進雲端、不進舊 MES；REPORT #9）。預設關。
+  hideLegacyReportForStationMachines: false,
 };
