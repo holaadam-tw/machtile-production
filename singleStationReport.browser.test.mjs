@@ -1160,7 +1160,7 @@ assert.deepEqual(calls.prevStepResolve, [{ p_id: id(991), p_note: null }]);
 await board.close();
 prevStepBoardRows = [];
 // ④ REPORT #9 hideLegacyReportForStationMachines：Factory 關掉這台智慧報工（guard report_enabled=false）時，
-//    午報不再退回直接寫 production_reports（那筆只進雲端）；旗標關＝照舊可走舊報工
+//    必須保留直接寫 production_reports 的唯一報工路徑。
 prevStepFlags = "hideLegacyReportForStationMachines:true,"; guardEnabled = false;
 const legacy = await context.newPage();
 legacy.on("pageerror", error => errors.push(error.message));
@@ -1172,12 +1172,25 @@ await legacy.waitForFunction(() => !document.querySelector("#reportForm .submit-
 await legacy.locator("#completedQty").fill("930");
 const legacyReports = calls.reports.length;
 await legacy.locator("#reportForm .submit-report").click();
-await legacy.waitForFunction(() => /這台已改用智慧報工/.test(document.getElementById("reportSubmitError")?.textContent || ""));
-await legacy.waitForTimeout(300);
-assert.equal(calls.reports.length, legacyReports, "no direct production_reports POST for a smart-report A machine");
+for (let attempt = 0; attempt < 100 && calls.reports.length === legacyReports; attempt += 1) await legacy.waitForTimeout(50);
+assert.equal(calls.reports.length, legacyReports + 1, "Factory-disabled smart report keeps the legacy production_reports POST");
 await legacy.close();
+
+// Factory 同步設定已載入且這台確實開啟智慧報工時，legacy helper 必須擋住直接 POST。
+guardEnabled = true;
+const smartLegacyBlocked = await context.newPage();
+smartLegacyBlocked.on("pageerror", error => errors.push(error.message));
+await smartLegacyBlocked.goto(base, { waitUntil: "domcontentloaded" });
+await smartLegacyBlocked.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await smartLegacyBlocked.locator("[data-open-report]:visible").first().click();
+await smartLegacyBlocked.locator('#reportForm [data-report-type="noon"]').click();
+await smartLegacyBlocked.waitForFunction(() => machtileBatchState.stationReportSettings.status === "loaded");
+const smartLegacyReports = calls.reports.length;
+assert.equal(await smartLegacyBlocked.evaluate(() => machtileLegacyReportBlocked("A04", "noon")), true, "Factory-enabled smart report blocks the legacy path");
+assert.equal(calls.reports.length, smartLegacyReports, "blocked legacy path does not POST production_reports");
+await smartLegacyBlocked.close();
 prevStepFlags = ""; guardEnabled = true;
-console.log("PASS prev-step block: flags off unchanged; hint + 通知生管 payload; planner board + resolve; legacy direct report hidden (REPORT #9)");
+console.log("PASS prev-step block: flags off unchanged; hint + 通知生管 payload; planner board + resolve; legacy fallback preserved unless Factory enables smart reporting (REPORT #9)");
 previewBlockedCode = ""; starterUserId = null;
 console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
 
