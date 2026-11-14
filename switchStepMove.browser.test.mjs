@@ -1,5 +1,5 @@
 // 機台卡片「換道次（數量一起搬）」第 3 階段（已報過工；config.enableSwitchStepMove）瀏覽器端到端：真的 index.html／app.js，假資料 TEST-*，
-// 所有後端請求都由這支腳本攔截（假網域），不會碰任何真的後端。預覽／applied 快照用 fixtures/switch_step_move_r3_samples.json（依合約 r3 手寫）。
+// 所有後端請求都由這支腳本攔截（假網域），不會碰任何真的後端。fixture 來自 shadow-r2 工廠實跑；harness 只改身分／數量配合 TEST-WO-1。
 // MACHTILE_PLAYWRIGHT_MODULE=<playwright/index.mjs> node switchStepMove.browser.test.mjs
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -10,7 +10,20 @@ import path from 'node:path';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const imported = await import(process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : 'playwright');
 const { chromium } = imported.default || imported;
-const SAMPLES = JSON.parse(fs.readFileSync(path.join(root, 'fixtures', 'switch_step_move_r3_samples.json'), 'utf8'));
+const FACTORY_SAMPLES = JSON.parse(fs.readFileSync(path.join(root, 'fixtures', 'switch_step_move_r3_samples.json'), 'utf8'));
+const factorySample = (name) => JSON.parse(JSON.stringify(FACTORY_SAMPLES[name].payload));
+const SAMPLES = (() => {
+  const next = factorySample('preview_p17');
+  Object.assign(next.switch_step_preview, { station: 'A05', order_no: 'TEST-WO-1', movable_good: 5, movable_fail: 1, report_count: 2 });
+  Object.assign(next.switch_step_preview.target, { reported_good_before: 0, reported_good_after: 5, available: 8, order_qty: 120 });
+  next.switch_step_preview.reports = next.switch_step_preview.reports.slice(0, 2);
+  next.switch_step_preview.plan_text = next.switch_step_preview.plan_text.slice(0, 3);
+  const first = factorySample('preview_p17b'); first.switch_step_preview.order_no = 'TEST-WO-1';
+  Object.assign(first.switch_step_preview.target, { reported_good_before: 118, reported_good_after: 123, order_qty: 120, exceeds_order_qty: true, needs_overrun_ack: true });
+  const blocked = JSON.parse(JSON.stringify(first)); Object.assign(blocked.switch_step_preview, { ok: false, block_code: 'SWITCH_MOVE_AC01' });
+  const applied = factorySample('applied_p2_a05'); Object.assign(applied.switch_step, { order_no: 'TEST-WO-1', to_index_sn: 2, moved_good: 5, moved_fail: 1, moved_qty: 6 });
+  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_blocked_ac01: blocked, applied_moved: applied };
+})();
 const fake = 'https://switch-move-fixture.test', id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const tenant = id(1), auth = id(901), actor = id(902);
 const ORDER_NO = 'TEST-WO-1';   // 樣本裡的工單號

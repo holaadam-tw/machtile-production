@@ -17381,7 +17381,7 @@ async function machtileSwitchMovePreview() {
   machtileSwitchMoveRenderSheet();
   const known = { from: sheet.fields.step, to: target.step, orderNo: sheet.fields.orderNo, machineCode: sheet.code };
   const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileSwitchStepCore.MOVE_SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
     const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.MOVE_CONTRACT.submitRpc}`, { method: "POST", body: JSON.stringify(args), ...(controller ? { signal: controller.signal } : {}) });
@@ -17507,7 +17507,7 @@ async function machtileSwitchMoveSubmit() {
     machtileStationCmdRerender();
   };
   const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileSwitchStepCore.MOVE_SUBMIT_TIMEOUT_MS) : null;
   let row = null;
   try {
     const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.MOVE_CONTRACT.submitRpc}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });

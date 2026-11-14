@@ -426,7 +426,7 @@ function harness(options = {}) {
   if (options.pool !== null) Object.assign(api.poolState, { status: options.poolStatus || "ready", items: options.pool || [poolRow(1), poolRow(2), OTHER_ORDER_ROW] });
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
   const runPoll = async () => {
-    const index = timers.findIndex((timer) => timer.ms !== stationCore.SUBMIT_TIMEOUT_MS);
+    const index = timers.findIndex((timer) => ![stationCore.SUBMIT_TIMEOUT_MS, core.MOVE_SUBMIT_TIMEOUT_MS].includes(timer.ms));
     assert.ok(index >= 0, "a poll timer must be scheduled");
     const [timer] = timers.splice(index, 1);
     await timer.fn();
@@ -1587,11 +1587,11 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   const deployed = JSON.parse(read("version.json")).version;
   const baseDeployed = JSON.parse(show("version.json")).version;
   const unversion = (text, version) => text.split(version).join("<VERSION>");
-  assert.match(read("version.json"), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
+  assert.match(read("version.json").trim(), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
   const config = read("config.js");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
   assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flags and their comments");
-  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n").trimEnd(), unversion(show("index.html"), baseDeployed).trimEnd(), "index.html: only the new core script tag and the version string");
   assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
     const removed = [], added = [];
@@ -2399,9 +2399,31 @@ test("return-claim (退回) gate keeps hiding on ANY report row of the step, 0/0
 // ================================================================================================
 // 第 3 階段：已經報過工 → 換道次＋數量一起搬（config.enableSwitchStepMove；DESIGN 20261114-1545 §7、合約 CONTRACT-r3.md）
 //   預覽 switch_step_preview（status previewed、結果在 preview_result.switch_step_preview）→ 確認 → switch_step 帶 expected_moved_*。
-//   樣本＝fixtures/switch_step_move_r3_samples.json：APP 依合約 r3 手寫（工廠還沒有用真的程式產生樣本）。
+//   樣本＝fixtures/switch_step_move_r3_samples.json：shadow-r2 工廠實跑快照；下方 UI harness 只改身分／數量以配合既有 TEST-WO-1 卡片。
 // ================================================================================================
-const MOVE_SAMPLES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "switch_step_move_r3_samples.json"), "utf8"));
+const FACTORY_MOVE_SAMPLES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "switch_step_move_r3_samples.json"), "utf8"));
+const moveSample = (name) => JSON.parse(JSON.stringify(FACTORY_MOVE_SAMPLES[name].payload));
+const MOVE_SAMPLES = (() => {
+  const next = moveSample("preview_p17");
+  Object.assign(next.switch_step_preview, { station: "A05", order_no: "TEST-WO-1", movable_good: 5, movable_fail: 1, report_count: 2 });
+  Object.assign(next.switch_step_preview.target, { reported_good_before: 0, reported_good_after: 5, available: 8, order_qty: 120 });
+  next.switch_step_preview.reports = next.switch_step_preview.reports.slice(0, 2);
+  next.switch_step_preview.plan_text = next.switch_step_preview.plan_text.slice(0, 3);
+  const first = moveSample("preview_p17b");
+  first.switch_step_preview.order_no = "TEST-WO-1";
+  Object.assign(first.switch_step_preview.target, { reported_good_before: 118, reported_good_after: 123, order_qty: 120, exceeds_order_qty: true, needs_overrun_ack: true });
+  const blocked = JSON.parse(JSON.stringify(first));
+  Object.assign(blocked.switch_step_preview, { ok: false, block_code: "SWITCH_MOVE_AC01" });
+  const nothing = JSON.parse(JSON.stringify(first));
+  Object.assign(nothing.switch_step_preview, { movable_good: 0, movable_fail: 0, report_count: 0, moved_report_uuids: [], reports: [], plan_text: [] });
+  Object.assign(nothing.switch_step_preview.target, { reported_good_before: 0, reported_good_after: 0, exceeds_order_qty: false, needs_overrun_ack: false });
+  const applied = moveSample("applied_p2_a05");
+  Object.assign(applied.switch_step, { order_no: "TEST-WO-1", to_index_sn: 2, moved_good: 5, moved_fail: 1, moved_qty: 6 });
+  const already = JSON.parse(JSON.stringify(applied));
+  Object.assign(already.switch_step, { mode: "already_switched", moved_good: 0, moved_fail: 0, moved_qty: 0, moved_report_uuids: [], moved_reports: [], correction_ids: [], target_change_log: null });
+  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_blocked_ac01: blocked, preview_nothing: nothing,
+    applied_moved: applied, applied_already_switched: already, rejected_target_short: moveSample("rejected_p4_target_short") };
+})();
 const CONTRACT_R3_FILE = process.env.SWITCH_STEP_CONTRACT_R3 || "D:/04_SoftNet/ops/codex-inbox/20261114-1545-switchstep-phase3/CONTRACT-r3.md";
 // 合約 r3 §3 的碼（檔案在這台電腦上時從原始檔重抓比對）
 const R3_MOVE_CODES = ["SWITCH_MOVE_DISABLED", "SWITCH_MOVE_MIXED_HISTORY", "SWITCH_MOVE_QTY_CHANGED", "SWITCH_MOVE_DOWNSTREAM_USED", "SWITCH_MOVE_SOURCE_CLOSED",
@@ -2453,6 +2475,24 @@ async function startMove(h, step = 2) {
   await h.api.move.preview();
 }
 const moveTail = (from = 3) => `沒有換，這台還是第 ${from} 道，數字沒有變；`;
+
+test("phase 3 fixtures are source-attributed factory shadow-r2 payloads", () => {
+  const expected = ["preview_p17", "preview_p17b", "applied_p2_a05", "applied_p3_a03", "rejected_p1_ac01", "rejected_p4_target_short",
+    "rejected_p10_last_step", "rejected_p11_outsource_doc", "rejected_p7_mixed_history", "rejected_g_too_many_reports"];
+  assert.deepEqual(Object.keys(FACTORY_MOVE_SAMPLES).filter((key) => key !== "_source"), expected);
+  for (const name of expected) {
+    assert.match(FACTORY_MOVE_SAMPLES[name]._source_file, /^shadow-r2\//, `${name} cites its factory log`);
+    assert.equal(typeof FACTORY_MOVE_SAMPLES[name].payload, "object", `${name} has a payload`);
+  }
+  assert.equal(FACTORY_MOVE_SAMPLES.applied_p2_a05.payload.switch_step.moved_reports[0].report_uuid, "342c2892-725d-414e-8019-b5dbf167189c");
+  assert.equal(FACTORY_MOVE_SAMPLES.applied_p3_a03.payload.switch_step.moved_reports.length, 5);
+  assert.equal(FACTORY_MOVE_SAMPLES.rejected_g_too_many_reports.payload.switch_step_rejected.move.block_code, "SWITCH_MOVE_TOO_MANY_REPORTS");
+});
+
+test("phase 3 move transport outlives the 120-second factory ceiling", () => {
+  assert.equal(core.MOVE_PREVIEW_WAIT_MS, 120000);
+  assert.ok(core.MOVE_SUBMIT_TIMEOUT_MS > 120000);
+});
 
 test("phase 3 flags: enableSwitchStepMove default false, switchStepMoveMachines default []; only a strict true turns it on (independent of phases 1 / 2)", () => {
   assert.equal(core.moveEnabled({ flag: true }), true);
@@ -2786,7 +2826,7 @@ test("phase 3 happy path (A05 step 3 with 5 good / 1 bad → step 2): reads, pre
   assert.match(html, /系統會：① 第 3 道這 2 筆報工改成 0（領料、結算一起退回）；② 第 2 道掛到這台並補報 良品 5／不良 1；③ 停工，請再按「開工」。/);
   assert.match(html, /第 2 道換好後：已報 0 → 5（上一道可用 8）/);
   assert.match(html, /數量規則：第 2 道補報後不能超過上一道良品（含上一道關站餘料，現在可用 8）；不會從倉庫先領料。/);
-  assert.match(html, /第 3 道 10:01 那筆 良品 3→0、不良 1→0/, "the Factory's plan text is shown");
+  assert.match(html, /這筆報工紀錄（11\/14 21:07:00）：良品 2 → 0/, "the real P17 Factory plan text is shown");
   assert.doesNotMatch(html, /data-switch-step-move-overrun/, "no overrun checkbox for step 2");
   assert.match(html, /data-switch-step-move-submit >確定搬到第 2 道</);
   await h.api.move.submit();
@@ -2799,7 +2839,7 @@ test("phase 3 happy path (A05 step 3 with 5 good / 1 bad → step 2): reads, pre
   assert.equal(h.api.locks("A05"), true);
   assert.equal(h.api.blockMessage("A05"), "這台正在「換道次（數量一起搬）」，等它有結果再操作。");
   assert.match(h.api.move.markup(h.machine), /data-switch-step-move-status="pending"[^>]*>換道次處理中（第 3 道 → 第 2 道，良品 5／不良 1 一起搬），等工廠處理…</);
-  assert.match(h.moveSheetHtml(), /換道次（數量一起搬）處理中，等工廠處理（約 10–60 秒）。請不要重按。/);
+  assert.match(h.moveSheetHtml(), /處理中，約 30 秒。請不要重按。/);
   assert.ok(h.storage.get("machtile.switchStepMovePending.v1").includes(S_UUID), "kept across a reload");
   await h.api.move.open("A05", null);
   assert.equal(state.submits.length, 1, "no second command while pending");

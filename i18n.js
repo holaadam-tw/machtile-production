@@ -539,8 +539,8 @@
       switch_step_move_plan_title: "工廠會這樣改（細節）",
       switch_step_move_submit: "確定搬到第 {{to}} 道",
       switch_step_move_repick: "改選別道",
-      switch_step_move_sending: "送出中…",
-      switch_step_move_progress: "換道次（數量一起搬）處理中，等工廠處理（約 10–60 秒）。請不要重按。",
+      switch_step_move_sending: "處理中，約 30 秒",
+      switch_step_move_progress: "處理中，約 30 秒。請不要重按。",
       switch_step_move_card_pending: "換道次處理中（第 {{from}} 道 → 第 {{to}} 道，良品 {{good}}／不良 {{fail}} 一起搬），等工廠處理…",
       switch_step_move_busy: "這台正在「換道次（數量一起搬）」，等它有結果再操作。",
       switch_step_move_waiting: "已送出，等工廠接手…",
@@ -1143,8 +1143,8 @@
       switch_step_move_plan_title: "Nhà máy sẽ thay đổi như sau (chi tiết)", // _draft
       switch_step_move_submit: "Xác nhận chuyển sang công đoạn {{to}}", // _draft
       switch_step_move_repick: "Chọn công đoạn khác", // _draft
-      switch_step_move_sending: "Đang gửi…", // _draft
-      switch_step_move_progress: "Đang đổi công đoạn (chuyển cả số lượng), chờ nhà máy xử lý (khoảng 10–60 giây). Đừng bấm lại.", // _draft
+      switch_step_move_sending: "Đang xử lý, khoảng 30 giây", // _draft
+      switch_step_move_progress: "Đang xử lý, khoảng 30 giây. Đừng bấm lại.", // _draft
       switch_step_move_card_pending: "Đang đổi công đoạn ({{from}} → {{to}}, chuyển cả Tốt {{good}} / Lỗi {{fail}}), chờ nhà máy xử lý…", // _draft
       switch_step_move_busy: "Máy này đang “đổi công đoạn (chuyển cả số lượng)”, chờ có kết quả rồi hãy thao tác.", // _draft
       switch_step_move_waiting: "Đã gửi, chờ nhà máy tiếp nhận…", // _draft

@@ -729,7 +729,11 @@
   const MOVE_ARG_KEYS = Object.freeze([...STARTED_ARG_KEYS, ...MOVE_CONTRACT.extraArgKeys]);
   const MOVE_QTY_MAX = 100000;   // 合約 §0：良＋不良 > 100000 → COMMAND_INVALID
   // 預覽送出後最多等多久（只是算，不改東西；等不到＝請他再看一次）
-  const MOVE_PREVIEW_WAIT_MS = 90 * 1000;
+  // Factory move transactions may legitimately take close to 120 seconds. Keep the
+  // HTTP request alive beyond that ceiling, and never declare a preview timed out
+  // before the contract's ~120-second UI window has elapsed.
+  const MOVE_SUBMIT_TIMEOUT_MS = 130 * 1000;
+  const MOVE_PREVIEW_WAIT_MS = 120 * 1000;
   const MOVE_TRANSITIONS = Object.freeze({
     choosing: Object.freeze({ preview: "previewing", cancel: "closed" }),
     previewing: Object.freeze({ preview_ok: "confirming", preview_blocked: "preview_blocked", preview_failed: "preview_failed", repick: "choosing", cancel: "closed" }),
@@ -1097,7 +1101,7 @@
     startedResultView, startedIsUnsure, unpooledNotices, startedPendingRecord, startedSameSession, startedRestoreForSession,
     startedMergeForSave, startedRecordMatchesOrder, startedLocks, startedLastResultVisible, startedUnsureHold,
     // 第 3 階段（數量一起搬）
-    MOVE_CONTRACT, MOVE_ARG_KEYS, MOVE_QTY_MAX, MOVE_PREVIEW_WAIT_MS, MOVE_TRANSITIONS, MOVE_REJECT, MOVE_UNCERTAIN_CODES, MOVE_TAIL_KEYS,
+    MOVE_CONTRACT, MOVE_ARG_KEYS, MOVE_QTY_MAX, MOVE_SUBMIT_TIMEOUT_MS, MOVE_PREVIEW_WAIT_MS, MOVE_TRANSITIONS, MOVE_REJECT, MOVE_UNCERTAIN_CODES, MOVE_TAIL_KEYS,
     moveNext, moveEnabled, moveVisibility, moveFreshCheck, moveAdapterArgs, moveAdapterPreview, movePreviewView, moveRuleLine, moveTargetLine,
     moveRejectInfo, moveSubmitErrorInfo, moveAdapterApplied, moveAdapterRejectedBlock, moveResultView, moveFailureView, moveMessageView, moveIsUnsure,
     movePendingRecord, moveRestoreForSession, moveMergeForSave, moveUnsureHold,
