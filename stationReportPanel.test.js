@@ -31,6 +31,8 @@ const context = {
   machtileTranslate: (key, params = {}) => (key === "report_first_step_overrun"
     ? `這次比開單數量多 ${params.n} 件（開單 ${params.order} 件）。第一道不限數量，可以直接送出。` : key),
   workOrderDetailUrl: (id) => `/orders/${id}`,
+  // 「上一道擋住」（旗標預設關＝回 ""；prevStepNotifyCore.test.js 測真的內容）
+  machtilePrevStepBlockHtml: () => "",
 };
 const render = vm.runInNewContext(`${panelSource}\n machtileRenderStationReportPanel`, context);
 const row = (result, note = "") => ({ operatorId: "u1", good: 1, bad: 0, reportNote: note, stationReport: { phase: "finished", result, preview: result, args: {} } });

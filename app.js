@@ -14971,6 +14971,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
       ? (view?.warning && flow.singleReport?.shortCompletion ? machtileTranslate("short_completion_warning") : (view?.warning || machtileTranslate("finish_close_applied_detail")))
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
+    prevStepRow: applied ? null : view?.prevStepRow || null,
     claim: null,
     identity: closeIdentity,
     ...(view?.needsConfirmation && record ? { needsConfirmation: true, retryFields: {
@@ -15448,6 +15449,7 @@ function machtileStationCmdRenderSheet(focus) {
         ${view.detail ? `<small>工廠說明：${escapeHtml(view.detail)}</small>` : ""}
         ${view.code && view.phase === "rejected" ? `<small>代碼 ${escapeHtml(view.code)}</small>` : ""}
       </section>
+      ${sheet.type === "close" && view.prevStepRow ? machtilePrevStepBlockHtml(model.machine, view.prevStepRow, view.prevStepTarget || {}) : ""}
       ${machtileStationCmdDailyStartHtml(sheet)}`;
     actions = `<button type="button" class="station-cmd-secondary" data-station-cmd-close>${view.terminal ? "關閉" : "先關掉（結果會顯示在卡片上）"}</button>`;
   }
@@ -16434,6 +16436,7 @@ function machtileStationCmdPoll(code) {
         current.unconfirmed = false;
         const view = core.statusView(row, current.commandType, core.ageForHint(current, row.requested_at, Date.now()));
         if (current.commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
+        if (current.commandType === "close" && row) { view.prevStepRow = row; view.prevStepTarget = { workOrderNo: current.orderNo, processOrder: current.step }; }
         if (current.commandType === "start" && row?.reject_message) view.rejectMessage = String(row.reject_message);
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
@@ -16559,6 +16562,127 @@ document.addEventListener("keydown", (event) => {
   if (event.shiftKey && (document.activeElement === first || !inside)) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
 });
+
+// ---- 上一道擋住：白話「卡在哪一台／哪一道、找誰」＋「通知生管」（owner 2026-11-14「照建議」；prevStepNotifyCore.js）----
+// 旗標 config.enablePrevStepBlockHint（只顯示那一句）／config.enablePrevStepNotify（加按鈕＋管理頁看板，需雲端
+// migration 20261114170000）預設都 false：關＝不產生任何新 DOM、不打任何新 RPC。
+const machtilePrevStepCore = window.MachTilePrevStepNotifyCore || null;
+const machtilePrevStepState = { targets: {}, sent: {}, board: { status: "idle", rows: [], error: "", resolving: "" } };
+
+function machtilePrevStepBlockHtml(code, row, { workOrderNo = "", processOrder = null } = {}) {
+  if (!machtilePrevStepCore || !machtilePrevStepCore.hintEnabled(config) || !row) return "";
+  const receipt = machtileStationReportCore()?.findOutsourceReceiptSnapshot?.(row) || null;
+  const info = machtilePrevStepCore.blockInfo(row, { receipt });
+  if (!info) return "";
+  const message = machtilePrevStepCore.message(info);
+  const text = machtileTranslate(message.key, message.params);
+  const machine = String(code || "").trim().toUpperCase();
+  const step = Number.isInteger(processOrder) ? processOrder : /^\d{1,3}$/.test(String(processOrder ?? "").trim()) ? Number(processOrder) : null;
+  const key = [machine, String(workOrderNo || ""), step ?? "", info.code].join("|");
+  const payload = machtilePrevStepCore.notifyEnabled(config) && state.source === "supabase"
+    ? machtilePrevStepCore.buildNotifyPayload(info, { machineCode: machine, workOrderNo, processOrder: step,
+      messageText: `${machine} ${workOrderNo} 第 ${step ?? "?"} 道被擋：${text}` })
+    : null;
+  if (payload) machtilePrevStepState.targets[key] = payload;
+  const sent = machtilePrevStepState.sent[key];
+  const button = payload && sent?.phase !== "sent"
+    ? `<button type="button" class="secondary-action station-report-action prev-step-notify" data-no-detail data-prev-step-notify="${escapeHtml(key)}"${sent?.phase === "sending" ? " disabled" : ""}>${escapeHtml(machtileTranslate(sent?.phase === "sending" ? "prev_block_notify_sending" : "prev_block_notify"))}</button>`
+    : "";
+  const status = sent?.messageKey
+    ? `<p class="prev-step-notify-status" role="status" data-prev-step-notify-status="${escapeHtml(sent.phase)}">${escapeHtml(machtileTranslate(sent.messageKey))}</p>` : "";
+  return `<div class="prev-step-block" role="note" data-prev-step-block="${escapeHtml(info.code)}"><p data-prev-step-block-text>${escapeHtml(text)}</p>${button}${status}</div>`;
+}
+
+async function machtilePrevStepNotify(key) {
+  const payload = machtilePrevStepState.targets[key];
+  if (!payload || !machtilePrevStepCore?.notifyEnabled(config) || machtilePrevStepState.sent[key]?.phase === "sending") return;
+  machtilePrevStepState.sent[key] = { phase: "sending", messageKey: "" };
+  machtilePrevStepRerender();
+  try {
+    const result = await supabaseFetch(`rpc/${machtilePrevStepCore.NOTIFY_RPC}`, { method: "POST", body: JSON.stringify({ p_payload: payload }) });
+    const messageKey = machtilePrevStepCore.notifyResultKey(result);
+    machtilePrevStepState.sent[key] = { phase: messageKey === "prev_block_notify_failed" ? "failed" : "sent", messageKey };
+  } catch (error) {
+    console.warn("prev-step notify failed", error?.message || error);
+    machtilePrevStepState.sent[key] = { phase: "failed", messageKey: machtilePrevStepCore.notifyErrorKey(error) };
+  }
+  machtilePrevStepRerender();
+}
+
+function machtilePrevStepRerender() {
+  try { machtileRenderStationReportSurfaces(); } catch { /* surface not mounted */ }
+  try { if (machtileStationCmd.sheet?.phase === "status") machtileStationCmdRenderSheet(); } catch { /* sheet not mounted */ }
+}
+
+// 管理頁（提醒中心）看板：生管／主管／管理員；enablePrevStepNotify 關＝區塊一直 hidden、不讀資料。
+async function machtilePrevStepLoadBoard() {
+  const board = machtilePrevStepState.board;
+  if (!machtilePrevStepCore?.boardAllowed(config, machtileActualRole()) || state.source !== "supabase" || board.status === "loading") return;
+  board.status = "loading";
+  try {
+    const rows = await supabaseFetch(`rpc/${machtilePrevStepCore.LIST_RPC}`, { method: "POST", body: JSON.stringify({ p_include_resolved: false, p_limit: 100 }) });
+    board.rows = (Array.isArray(rows) ? rows : []).map((row) => machtilePrevStepCore.boardLine(row)).filter(Boolean);
+    board.status = "ready";
+    board.error = "";
+  } catch (error) {
+    board.status = "unavailable";
+    board.error = String(error?.message || error || "");
+  }
+  machtilePrevStepRenderBoard();
+}
+
+function machtilePrevStepRenderBoard() {
+  const holder = document.getElementById("prevStepBoard");
+  if (!holder) return;
+  if (!machtilePrevStepCore?.boardAllowed(config, machtileActualRole()) || state.source !== "supabase") { holder.hidden = true; holder.innerHTML = ""; return; }
+  const board = machtilePrevStepState.board;
+  if (board.status === "idle") { void machtilePrevStepLoadBoard(); }
+  const rows = board.rows.map((row) => `<li class="prev-step-board-row" data-prev-step-board-row="${escapeHtml(row.id)}">
+      <strong>${escapeHtml(machtileTranslate("prev_block_board_row", { machine: row.machine, order: row.workOrderNo, step: row.processOrder }))}</strong>
+      <p>${escapeHtml(row.message ? machtileTranslate(row.message.key, row.message.params) : row.raw)}</p>
+      <small>${escapeHtml(machtileTranslate("prev_block_board_count", { count: row.count, time: row.lastAt ? formatDateTime(row.lastAt) : "—" }))}</small>
+      <button type="button" class="secondary-action" data-prev-step-resolve="${escapeHtml(row.id)}"${board.resolving === row.id ? " disabled" : ""}>${escapeHtml(machtileTranslate("prev_block_board_resolve"))}</button>
+    </li>`).join("");
+  const body = board.status === "unavailable"
+    ? `<p class="batch-notice is-error" role="status" data-prev-step-board-state="unavailable">${escapeHtml(machtileTranslate("prev_block_board_unavailable"))}</p>`
+    : board.status === "ready" && !board.rows.length
+      ? `<p class="batch-muted" data-prev-step-board-state="empty">${escapeHtml(machtileTranslate("prev_block_board_empty"))}</p>`
+      : `<ul class="prev-step-board-list">${rows}</ul>`;
+  holder.hidden = false;
+  holder.innerHTML = `<div class="panel-title"><div><h2 id="prevStepBoardTitle">${escapeHtml(machtileTranslate("prev_block_board_title"))}</h2></div></div>${body}`;
+}
+
+async function machtilePrevStepResolve(id) {
+  const board = machtilePrevStepState.board;
+  if (!id || board.resolving || !machtilePrevStepCore?.boardAllowed(config, machtileActualRole())) return;
+  board.resolving = id;
+  machtilePrevStepRenderBoard();
+  try {
+    await supabaseFetch(`rpc/${machtilePrevStepCore.RESOLVE_RPC}`, { method: "POST", body: JSON.stringify({ p_id: id, p_note: null }) });
+    board.rows = board.rows.filter((row) => row.id !== id);
+  } catch (error) {
+    showToast(machtileTranslate("prev_block_notify_failed"));
+  }
+  board.resolving = "";
+  machtilePrevStepRenderBoard();
+}
+
+document.addEventListener("click", (event) => {
+  if (!machtilePrevStepCore?.hintEnabled(config)) return;
+  const notify = event.target.closest?.("[data-prev-step-notify]");
+  if (notify) { event.preventDefault(); void machtilePrevStepNotify(notify.dataset.prevStepNotify); return; }
+  const resolve = event.target.closest?.("[data-prev-step-resolve]");
+  if (resolve) { event.preventDefault(); void machtilePrevStepResolve(resolve.dataset.prevStepResolve); }
+});
+
+// REPORT #9（config.hideLegacyReportForStationMachines，預設 false）：A/B 機台已開智慧報工時，午報／完工不再退回
+// 直接寫 production_reports（那筆只進雲端、不會進舊 MES）。回 true＝已擋並顯示白話。
+function machtileLegacyReportBlocked(machineCode, reportType) {
+  if (!machtilePrevStepCore?.legacyReportBlocked(config, machineCode, reportType)) return false;
+  machtileShowReportSubmitError(machtileTranslate("legacy_report_blocked"));
+  return true;
+}
+// ---- 上一道擋住 到此 ----
 
 // ==== 換道次（已開工、還沒報工；第 2 階段） ==================================================
 // 設計：ops/codex-inbox/20261113-2230-switchstep-phase2/DESIGN.md §3／§4；快照合約 r2（CONTRACT-r2.md）。
@@ -18305,6 +18429,7 @@ function machtileOrderIncludedInAllAlerts(order, categories = alertCategories(or
 }
 
 function renderAlerts() {
+  machtilePrevStepRenderBoard();
   const counts = Object.fromEntries(alertFilters.map((filter) => [filter, 0]));
   state.workOrders.forEach((order) => {
     if (!machtileAttentionMatchesWorkflow(order)) return;
@@ -25975,6 +26100,8 @@ function machtileRenderSimpleStationReportPanel(code, order, row) {
   }
   const status = machtileSimpleReportStatus(flow, card);
   if (status) parts.push(`<p class="station-report-simple-status is-${status.tone}" role="${status.tone === "error" ? "alert" : "status"}" data-simple-report-status="${status.tone}">${escapeHtml(status.text)}</p>`);
+  const prevStepBlock = flow.result ? machtilePrevStepBlockHtml(code, flow.result, { workOrderNo: order?.id, processOrder: machtileStationReportContext(order, code)?.expectedIndexSn }) : "";
+  if (prevStepBlock) parts.push(prevStepBlock);
   const admin = machtileSingleReportAdminView();
   if (admin) {
     const counterText = document.getElementById("reportCounterPreview")?.textContent || "";
@@ -26424,6 +26551,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     const previousStep = ["hard", "preview-blocked"].includes(result.kind) && (result.code || result.guardCode) === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
       ? `<a class="station-report-previous-step" href="${escapeHtml(workOrderDetailUrl(order?.id))}">查看製程路線，先報第 ${prevIndex} 道</a>` : "";
     resultHtml = `${reportLimitHtml}<div class="station-report-result is-${resultTone}" role="${resultTone === "error" ? "alert" : "status"}"><strong>${escapeHtml(result.title)}</strong><p>${escapeHtml(result.message)}</p>${previewValues}${previousStep}</div>`;
+    if (!simple) resultHtml += machtilePrevStepBlockHtml(code, flow.result, { workOrderNo: order?.id, processOrder: context?.expectedIndexSn });
     if (result.kind === "previewed") {
       resultHtml += snapshotReady
         ? `${confirmCard}<div class="station-report-actions"><button type="button" class="primary-action station-report-action station-report-hold" data-station-report-confirm="${escapeHtml(code)}"${busy ? " disabled" : ""}><span>長按 0.8 秒確認報工</span><i aria-hidden="true"></i></button><button type="button" class="secondary-action station-report-action" data-station-report-cancel-preview="${escapeHtml(code)}">修改數量並重新預覽</button></div>`
@@ -26443,6 +26571,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   if (flow.close) {
     const closeTone = flow.close.phase === "applied" ? "success" : flow.close.phase === "pending" ? "pending" : "warning";
     resultHtml += `<div class="station-report-result is-${closeTone} finish-close-result" role="status"><strong>${escapeHtml(flow.close.title)}</strong><p>${escapeHtml(flow.close.message)}</p></div>`;
+    if (flow.close.prevStepRow) resultHtml += machtilePrevStepBlockHtml(code, flow.close.prevStepRow, { workOrderNo: flow.close.identity?.orderNo, processOrder: flow.close.identity?.indexSn });
     if (flow.close.needsConfirmation) resultHtml += `<div class="station-report-actions finish-close-confirm-actions"><button type="button" class="primary-action station-report-action" data-finish-close-confirm="${escapeHtml(code)}">${escapeHtml(machtileTranslate("finish_close_confirm_previous"))}</button><button type="button" class="secondary-action station-report-action" data-finish-close-cancel="${escapeHtml(code)}">${escapeHtml(machtileTranslate("cancel"))}</button></div>`;
     if (flow.close.nextStep) {
       const next = flow.close.nextStep;
@@ -29012,6 +29141,7 @@ function bindEvents() {
       }
       return;
     }
+    if (machtileLegacyReportBlocked(selectedOrder.machine, activeReportType)) return;
     const validationMessage = validateReportForm(activeReportType);
     if (validationMessage) {
       machtileShowReportSubmitError(validationMessage);

@@ -2558,6 +2558,38 @@ console.log("\n== 390px：重讀 5xx 期間別台平板記了今日開工 → �
   await context.close();
 }
 
+console.log("\n== 上一道擋住：完工關站被 PREVIOUS_STEP_OPEN 擋 → 卡在哪一台（enablePrevStepBlockHint；2026-11-14） ==");
+for (const flagOn of [false, true]) {
+  const be = makeBackend();
+  be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: `enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],${flagOn ? " enablePrevStepBlockHint: true," : ""}` });
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    machtileSingleStationReportState.loading = false;
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    const row = { command_type: "close", status: "rejected", reject_code: "PREVIOUS_STEP_OPEN",
+      reject_message: "上一道 A05（第 2 道）還沒關站，請找 A05 或生管。上一道還在進行中；這一道可以繼續報工，但要等上一道關站後才能關站。",
+      legacy_snapshot: { previous_station_code: "A05", previous_index_sn: 2, previous_last_report_at: "2026-11-13 10:00:00", stale_days: 3 } };
+    const view = MachTileStationCommandCore.statusView(row, "close", 0);
+    view.prevStepRow = row; view.prevStepTarget = { workOrderNo: "XX01202606120005", processOrder: 3 };
+    machtileFinishCloseSetResult("A04", view);
+    machtileRenderStationReportSurfaces();
+  });
+  await page.locator("#finishSheet .finish-close-result").waitFor({ timeout: 10000 });
+  const blocks = await page.locator("#finishSheet [data-prev-step-block]").count();
+  if (flagOn) {
+    const text = (await page.locator("#finishSheet [data-prev-step-block-text]").innerText()).trim();
+    ok(blocks === 1 && text === "上一道 A05（第 2 道）還沒關站。請找 A05 關站，或找生管。", "旗標開：完工畫面寫出卡在 A05 第 2 道、找誰", text);
+    ok(await page.locator("#finishSheet [data-prev-step-notify]").count() === 0, "只開提示旗標：沒有「通知生管」鍵");
+  } else {
+    ok(blocks === 0, "旗標關：完工畫面沒有新區塊");
+  }
+  ok(errors.length === 0, `prev-step close (flag ${flagOn ? "on" : "off"}) 無 JS 錯誤`, errors.join(" | "));
+  await context.close();
+}
+
 console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
 {
   const be = makeBackend();
