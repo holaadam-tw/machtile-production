@@ -35,7 +35,10 @@ const previewResult = {
     order_start: "2026-10-01", effective_need: 1000,
   } } } },
 };
-const calls = { commands: [], reports: [], closeCommands: [] };
+const calls = { commands: [], reports: [], closeCommands: [], prevStepNotify: [], prevStepResolve: [] };
+// 「上一道擋住」旗標（預設空字串＝config 不帶＝全關）；prevStepBoardRows＝看板 RPC 回的列
+let prevStepFlags = "";
+let prevStepBoardRows = [];
 const requestUrls = [];
 let currentMachine = "A04";
 let guardFails = false;
@@ -157,6 +160,9 @@ await context.route("**/*", async route => {
         ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: { ...previewResult, command_uuid: body.p_command_uuid } }
         : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty });
     }
+    if (url.pathname.endsWith("/rpc/machtile_notify_prev_step_block")) { calls.prevStepNotify.push(req.postDataJSON()); return json({ id: id(990), result: "created", notify_count: 1 }); }
+    if (url.pathname.endsWith("/rpc/machtile_prev_step_block_notices")) return json(prevStepBoardRows);
+    if (url.pathname.endsWith("/rpc/machtile_resolve_prev_step_block_notice")) { calls.prevStepResolve.push(req.postDataJSON()); return json({ id: req.postDataJSON().p_id, result: "resolved" }); }
     if (url.pathname.endsWith("/rpc/machtile_submit_station_command")) {
       const body = req.postDataJSON(); calls.closeCommands.push(body);
       closeCommand = { command_uuid: body.p_command_uuid, command_type: "close", status: "applied", reject_code: null, reject_message: null };
@@ -177,7 +183,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},${prevStepFlags}disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -1100,6 +1106,78 @@ assert.equal(await bn.evaluate(() => document.activeElement?.id), "completedQty"
 await bn.close();
 previewBlockedNoNumber = false;
 console.log("PASS hard QTY_EXCEEDS_AVAILABLE: max number + 改數量 (no send), edit → 重新送出, missing number → fallback");
+// ---- 上一道擋住（owner 2026-11-14「照建議」；prevStepNotifyCore.js）----
+// ① 旗標全關：被上一道擋也不多任何東西、不打任何新 RPC
+previewBlockedCode = "QTY_EXCEEDS_AVAILABLE"; currentMachine = "A04";
+const psOff = await openOperatorPage();
+await psOff.locator("#reportForm .submit-report").click();
+await psOff.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(await psOff.locator("[data-prev-step-block]").count(), 0, "flags off: no prev-step block");
+assert.equal(requestUrls.filter(u => /prev_step_block/.test(u)).length, 0, "flags off: no prev-step RPC");
+await psOff.close();
+// ② enablePrevStepNotify：一句白話（卡在 A01 第 1 道、差 8 件、找誰）＋「通知生管」→ 一次 RPC，payload 照雲端合約
+prevStepFlags = "enablePrevStepNotify:true,";
+const psOn = await openOperatorPage();
+const psCommands = calls.commands.length;
+await psOn.locator("#reportForm .submit-report").click();
+await psOn.waitForFunction(() => document.querySelector("#singleStationReportPanel [data-prev-step-block]"));
+assert.equal(await psOn.locator("[data-prev-step-block]:visible").count(), 1, "operator sees exactly one prev-step block");
+const psText = await psOn.locator("#singleStationReportPanel [data-prev-step-block-text]").innerText();
+assert.equal(psText, "卡在上一道 A01（第 1 道，車床）：還差 8 件。請找 A01 先報工；A01 已做完沒報，請找生管。", psText);
+assert.equal(await psOn.locator('[data-simple-report-status="error"]').count(), 1, "the original plain sentence stays");
+await sheetShot(psOn, "20-prev-step-block.png");
+await psOn.locator("#singleStationReportPanel [data-prev-step-notify]").click();
+await psOn.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-prev-step-notify-status="sent"]'));
+assert.equal(await psOn.locator("#singleStationReportPanel [data-prev-step-notify-status]").innerText(), "已通知生管，生管會在管理頁看到。");
+assert.equal(await psOn.locator("[data-prev-step-notify]").count(), 0, "button gone after a successful notice (every surface)");
+assert.equal(calls.prevStepNotify.length, 1, "exactly one notify RPC");
+const psPayload = calls.prevStepNotify[0].p_payload;
+assert.deepEqual({ ...psPayload, message: undefined }, { machine_code: "A04", work_order_no: "XX01202604140011", process_order: 2, reason_code: "QTY_EXCEEDS_AVAILABLE",
+  blocking_machine_code: "A01", blocking_process_order: 1, blocking_step_name: "車床", blocking_vendor_name: null, short_qty: 8, message: undefined }, JSON.stringify(psPayload));
+assert.match(psPayload.message, /^A04 XX01202604140011 第 2 道被擋：卡在上一道 A01/);
+assert.equal(calls.commands.slice(psCommands).filter(c => !c.p_preview).length, 0, "notify never sends a report");
+await psOn.close();
+previewBlockedCode = "";
+// ③ 管理頁看板（生管）：讀 RPC、顯示一行、按「已處理」→ resolve RPC、列消失；作業員看不到看板
+prevStepBoardRows = [{ id: id(991), machine_code: "A03", work_order_no: "XX01202606120005", process_order: 3, reason_code: "PREVIOUS_STEP_OPEN",
+  blocking_machine_code: "A05", blocking_process_order: 2, blocking_step_name: null, blocking_vendor_name: null, short_qty: null,
+  message: "m", status: "open", notify_count: 2, first_notified_at: "2026-11-14T01:00:00Z", last_notified_at: "2026-11-14T02:00:00Z", resolved_at: null, resolution_note: null }];
+const board = await context.newPage();
+board.on("pageerror", error => errors.push(error.message));
+await board.goto(base, { waitUntil: "domcontentloaded" });
+await board.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await board.evaluate(() => { machtileAuthState.role = "operator"; renderAlerts(); });
+assert.equal(await board.locator("#prevStepBoard").isHidden(), true, "operator: board stays hidden");
+await board.evaluate(() => { machtileAuthState.role = "planner"; switchView("alerts"); renderAlerts(); });
+await board.waitForFunction(() => document.querySelector("[data-prev-step-board-row]"));
+const boardText = await board.locator("#prevStepBoard").innerText();
+assert.match(boardText, /A03 工單 XX01202606120005 第 3 道/);
+assert.match(boardText, /上一道 A05（第 2 道）還沒關站。請找 A05 關站，或找生管。/);
+assert.match(boardText, /通知 2 次/);
+await board.locator(`[data-prev-step-resolve="${id(991)}"]`).click();
+await board.waitForFunction(() => document.querySelector('[data-prev-step-board-state="empty"]'));
+assert.deepEqual(calls.prevStepResolve, [{ p_id: id(991), p_note: null }]);
+await board.close();
+prevStepBoardRows = [];
+// ④ REPORT #9 hideLegacyReportForStationMachines：Factory 關掉這台智慧報工（guard report_enabled=false）時，
+//    午報不再退回直接寫 production_reports（那筆只進雲端）；旗標關＝照舊可走舊報工
+prevStepFlags = "hideLegacyReportForStationMachines:true,"; guardEnabled = false;
+const legacy = await context.newPage();
+legacy.on("pageerror", error => errors.push(error.message));
+await legacy.goto(base, { waitUntil: "domcontentloaded" });
+await legacy.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await legacy.locator("[data-open-report]:visible").first().click();
+await legacy.locator('#reportForm [data-report-type="noon"]').click();
+await legacy.waitForFunction(() => !document.querySelector("#reportForm .submit-report").hidden);
+await legacy.locator("#completedQty").fill("930");
+const legacyReports = calls.reports.length;
+await legacy.locator("#reportForm .submit-report").click();
+await legacy.waitForFunction(() => /這台已改用智慧報工/.test(document.getElementById("reportSubmitError")?.textContent || ""));
+await legacy.waitForTimeout(300);
+assert.equal(calls.reports.length, legacyReports, "no direct production_reports POST for a smart-report A machine");
+await legacy.close();
+prevStepFlags = ""; guardEnabled = true;
+console.log("PASS prev-step block: flags off unchanged; hint + 通知生管 payload; planner board + resolve; legacy direct report hidden (REPORT #9)");
 previewBlockedCode = ""; starterUserId = null;
 console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
 
@@ -1204,6 +1282,7 @@ guardFails = false;
 await failedGuard.locator("[data-station-report-reload-guard]").click();
 await failedGuard.waitForFunction(() => !document.querySelector("#reportForm .submit-report").disabled);
 assert.equal(await failedGuard.locator("#reportForm .submit-report").innerText(), "送出報工", "guard reload restores the one primary action");
+
 assert.deepEqual(errors, []);
 console.log("PASS single station smart report browser contract");
 await browser.close();

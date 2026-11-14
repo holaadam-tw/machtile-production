@@ -274,6 +274,17 @@ const STARTED_HOOKS = [
   ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStartedForgetUser();\n", ""],
   ["  machtileSwitchStartedForgetUser();\n  machtileSwitchStepForgetUser();\n", "  machtileSwitchStepForgetUser();\n"],
 ];
+// 「上一道擋住」掛進既有程式的每一個地方：[現在的字串, 旗標關時等價的原字串]（換行已正規化成 \n）
+const PREV_STEP_HOOKS = [
+  ["        if (current.commandType === \"close\" && row) { view.prevStepRow = row; view.prevStepTarget = { workOrderNo: current.orderNo, processOrder: current.step }; }\n", ""],
+  ["    prevStepRow: applied ? null : view?.prevStepRow || null,\n", ""],
+  ["    if (flow.close.prevStepRow) resultHtml += machtilePrevStepBlockHtml(code, flow.close.prevStepRow, { workOrderNo: flow.close.identity?.orderNo, processOrder: flow.close.identity?.indexSn });\n", ""],
+  ["    if (!simple) resultHtml += machtilePrevStepBlockHtml(code, flow.result, { workOrderNo: order?.id, processOrder: context?.expectedIndexSn });\n", ""],
+  ["  const prevStepBlock = flow.result ? machtilePrevStepBlockHtml(code, flow.result, { workOrderNo: order?.id, processOrder: machtileStationReportContext(order, code)?.expectedIndexSn }) : \"\";\n  if (prevStepBlock) parts.push(prevStepBlock);\n", ""],
+  ["      ${sheet.type === \"close\" && view.prevStepRow ? machtilePrevStepBlockHtml(model.machine, view.prevStepRow, view.prevStepTarget || {}) : \"\"}\n", ""],
+  ["function renderAlerts() {\n  machtilePrevStepRenderBoard();\n", "function renderAlerts() {\n"],
+  ["    if (machtileLegacyReportBlocked(selectedOrder.machine, activeReportType)) return;\n", ""],
+];
 const poolSource = slice("const machtileDispatchPoolState = {", "function machtileDispatchPoolOpenRefreshState(machine) {");
 const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {");
 const htmlEscape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -1478,6 +1489,22 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     current = current.replace(now, () => before);
   }
   assert.doesNotMatch(current, /machtileSwitchStarted|enableSwitchStepStarted|switch_step_started_/, "no other started switch-step reference in app.js");
+  // 「上一道擋住」（prevStepNotifyCore.js；2026-11-14，旗標 enablePrevStepBlockHint／enablePrevStepNotify／
+  // hideLegacyReportForStationMachines 預設關）：整段拿掉、掛點還原。旗標關時 machtilePrevStepBlockHtml()＝""、
+  // machtileLegacyReportBlocked()＝false、看板 hidden，所以每一個掛點都等於原字串（prevStepNotify 測試逐一斷言）。
+  {
+    const head = "// ---- 上一道擋住：白話";
+    const tail = "// ---- 上一道擋住 到此 ----\n\n";   // 這一段後面多留的那一行空白也一起拿掉
+    const from = current.indexOf(head);
+    const to = current.indexOf(tail);
+    assert.ok(from >= 0 && to > from && current.indexOf(head, from + 1) === -1, "prev-step section appears exactly once");
+    current = current.slice(0, from) + current.slice(to + tail.length);
+    for (const [now, before] of PREV_STEP_HOOKS) {
+      assert.equal(current.split(now).length, 2, `prev-step hook must appear exactly once: ${now.slice(0, 70)}`);
+      current = current.replace(now, () => before);
+    }
+    assert.doesNotMatch(current, /machtilePrevStep|machtileLegacyReportBlocked|prevStepRow|prevStepTarget/, "no other prev-step reference in app.js");
+  }
   const section = norm(switchSource);
   assert.equal(current.split(section).length, 2);
   current = current.replace(section, () => "");
@@ -1580,16 +1607,18 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   assert.match(read("version.json"), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
   const config = read("config.js");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
-  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
-  assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
+  // 「上一道擋住」（2026-11-14，三個預設關的旗標＋說明、核心 script tag、看板空殼 section、.prev-step-* 樣式）也一併濾掉
+  const prevStepLine = /enablePrevStep|hideLegacyReportForStationMachines|上一道擋住|A\/B 機台已開智慧報工|prev-step|prevStepNotifyCore\.js\?v=|id="prevStepBoard"/;
+  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|換道次|enableReturnClaim 也要開才有效/.test(line) && !prevStepLine.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
+  assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line) && !prevStepLine.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
     const removed = [], added = [];
     const baseLines = show(file).split("\n"), nowLines = read(file).split("\n");
     const baseSet = new Set(baseLines), nowSet = new Set(nowLines);
     baseLines.forEach((line) => { if (!nowSet.has(line)) removed.push(line); });
     nowLines.forEach((line) => { if (!baseSet.has(line)) added.push(line); });
-    assert.ok(added.filter((line) => !/switch_step_|換道次（switch step/.test(line)).every((line) => removed.some((old) => line.replace(/,(\s*\/\/ _draft)?$/, "$1") === old.replace(/,(\s*\/\/ _draft)?$/, "$1") || line === `${old},`)),
+    assert.ok(added.filter((line) => !/switch_step_|換道次（switch step|prev_block_|legacy_report_blocked/.test(line)).every((line) => removed.some((old) => line.replace(/,(\s*\/\/ _draft)?$/, "$1") === old.replace(/,(\s*\/\/ _draft)?$/, "$1") || line === `${old},`)),
       `${file}: only switch_step_ entries are added (plus the comma after the previous last entry)`);
     assert.ok(removed.length <= 1, `${file}: no existing string changed`);
   }
