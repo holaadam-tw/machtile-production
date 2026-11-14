@@ -702,6 +702,393 @@
     return age >= 0 && age <= STARTED_UNSURE_HOLD_MS && text(last.orderNo) === text(orderNo) && Number(last.step) === Number(step);
   }
 
+  // ================================================================ 第 3 階段：換道次＋已報數量一起搬（DESIGN 20261114-1545 §7；合約 r3）
+  // 已經報過工的道次（掛錯道次又報了工）→ 先預覽（switch_step_preview：工廠整套跑完一定回滾，回「會搬多少、目標道會變怎樣、擋不擋」）
+  // → 確認卡（良／不良、筆數、目標道、數量規則；第一道超工單量要勾選）→ 送 switch_step（帶 expected_moved_good／fail）→ 輪詢。
+  // 狀態：choosing → previewing → confirming → submitting → done｜rejected｜unsure（另有 preview_blocked／preview_failed／uncertain）。
+  // 旗標：config.enableSwitchStepMove（預設 false）＋機台名單 config.switchStepMoveMachines（預設 []），跟第 1／2 階段分開。
+  //
+  // ---- 合約欄位全部集中在 MOVE_CONTRACT 與下面三個 move*Adapter 函式（其他地方一律不寫欄位名稱）。
+  //   工廠 CONTRACT-r3.md（2026-11-14 16:29）：指令欄 expected_moved_good／expected_moved_fail（兩個都非 NULL＝搬數量；兩個都 NULL＝第 2 階段）、
+  //   acks 只允許 ["EXCEEDS_ORDER_QTY"]；預覽 command_type＝switch_step_preview、status＝previewed、結果在 preview_result.switch_step_preview；
+  //   applied 快照 legacy_snapshot.switch_step 多 contract/moved_good/moved_fail/moved_report_uuids/correction_ids/target_change_log；
+  //   rejected 快照 legacy_snapshot.switch_step_rejected.move.block_code。
+  //   雲端 RPC 參數（p_expected_moved_good／p_expected_moved_fail integer、p_acks text[]、p_preview boolean，都有預設值）：跟雲端
+  //   wt-phase3-cloud 20261114160000_station_switch_step_move.sql（尚未合併）的 machtile_submit_switch_step_command 一致；改名只改 moveAdapterArgs。
+  const MOVE_CONTRACT = Object.freeze({
+    submitRpc: STARTED_SUBMIT_RPC,                 // 同一支 submit RPC（假設：多四個有預設值的參數）
+    commandType: "switch_step",
+    previewCommandType: "switch_step_preview",
+    previewedStatus: "previewed",
+    previewResultKey: "switch_step_preview",       // preview_result.<key>
+    appliedSnapshotKey: "switch_step",             // legacy_snapshot.<key>
+    rejectedSnapshotKey: "switch_step_rejected",   // legacy_snapshot.<key>.move.block_code
+    overrunAck: "EXCEEDS_ORDER_QTY",
+    extraArgKeys: Object.freeze(["p_expected_moved_good", "p_expected_moved_fail", "p_acks", "p_preview"]),
+  });
+  const MOVE_ARG_KEYS = Object.freeze([...STARTED_ARG_KEYS, ...MOVE_CONTRACT.extraArgKeys]);
+  const MOVE_QTY_MAX = 100000;   // 合約 §0：良＋不良 > 100000 → COMMAND_INVALID
+  // 預覽送出後最多等多久（只是算，不改東西；等不到＝請他再看一次）
+  // Factory move transactions may legitimately take close to 120 seconds. Keep the
+  // HTTP request alive beyond that ceiling, and never declare a preview timed out
+  // before the contract's ~120-second UI window has elapsed.
+  const MOVE_SUBMIT_TIMEOUT_MS = 130 * 1000;
+  const MOVE_PREVIEW_WAIT_MS = 120 * 1000;
+  const MOVE_TRANSITIONS = Object.freeze({
+    choosing: Object.freeze({ preview: "previewing", cancel: "closed" }),
+    previewing: Object.freeze({ preview_ok: "confirming", preview_blocked: "preview_blocked", preview_failed: "preview_failed", repick: "choosing", cancel: "closed" }),
+    confirming: Object.freeze({ submit: "submitting", repick: "choosing", cancel: "closed" }),
+    preview_blocked: Object.freeze({ repick: "choosing", preview: "previewing", cancel: "closed" }),
+    preview_failed: Object.freeze({ repick: "choosing", preview: "previewing", cancel: "closed" }),
+    submitting: Object.freeze({ sent: "status", applied: "done", rejected: "rejected", unsure: "unsure", uncertain: "uncertain" }),
+    uncertain: Object.freeze({ resend: "submitting", sent: "status", applied: "done", rejected: "rejected", unsure: "unsure", cancel: "closed" }),
+    status: Object.freeze({ applied: "done", rejected: "rejected", unsure: "unsure", cancel: "closed" }),
+  });
+  function moveNext(state, event) {
+    const row = Object.prototype.hasOwnProperty.call(MOVE_TRANSITIONS, state) ? MOVE_TRANSITIONS[state] : null;
+    return row && Object.prototype.hasOwnProperty.call(row, event) ? row[event] : null;
+  }
+  const nonNegInt = (value) => {
+    const n = Number(value);
+    return value !== null && value !== "" && value !== undefined && typeof value !== "boolean" && Number.isInteger(n) && n >= 0 ? n : null;
+  };
+
+  function moveEnabled({ flag } = {}) { return flag === true; }
+
+  // ---------------------------------------------------------------- 卡片要不要出現「換道次（數量一起搬）」
+  // 跟第 2 階段同一套條件，只差數量：第 2 階段要 0 件；這一顆要「已經有報工」（卡片完成數 > 0，或今天有報工列）。兩顆不會同時出現。
+  function moveVisibility({ enabled: on, role, isBridge, cardDetailsReady, isUnassignedBucket, multiStation, machineCode, order, hasTodayReport,
+    commandInFlight, unsureHold, machineAllowed } = {}) {
+    const no = (reason) => ({ show: false, reason, needsReason: false });
+    if (on !== true) return no("flag_off");
+    if (!startedRoleAllowed(role, isBridge)) return no("role");
+    if (isUnassignedBucket === true) return no("no_machine");
+    const code = normCode(machineCode);
+    if (!code || code.length > 30) return no("no_machine");
+    if (machineAllowed !== true) return no("machine_not_listed");
+    if (multiStation === true) return no("multi_station");
+    if (!order) return no("no_order");
+    if (order.offStation === true) return no("off_station");
+    const orderNo = text(order.id);
+    if (!orderNo || orderNo.length > 100) return no("no_order_no");
+    if (positiveInt(order.stationStep) === null) return no("no_step");
+    if (!isUuid(order.processId)) return no("no_process");
+    if (cardDetailsReady !== true) return no("card_not_ready");
+    const done = Number(order.done);
+    if (!((Number.isFinite(done) && done > 0) || hasTodayReport === true)) return no("no_reports");
+    // 報過工＝開過工；雲端狀態沒做完、沒待檢才給（做完／待檢＝伺服器一定擋，不出按鈕）
+    if (!["pending", "running", "paused"].includes(text(order.processStatus))) return no("not_switchable");
+    if (commandInFlight === true) return no("command_in_flight");
+    if (unsureHold === true) return no("unsure_hold");
+    return { show: true, reason: "", needsReason: startedNeedsReason(role) };
+  }
+
+  // 開確認卡時重讀這一道：跟第 2 階段一樣（還在這台、同一張單同一道、沒做完），只是不要求 0 件（雲端數量可能還沒同步，不拿它擋）。
+  function moveFreshCheck({ machineCode, orderNo, step, row } = {}) {
+    const checked = startedFreshCheck({ machineCode, orderNo, step, row: row ? { ...row, qty_completed: 0, qty_defect: 0 } : row });
+    return checked.ok ? checked : { ok: false, reason: checked.reason, partNo: null, workOrderId: "" };
+  }
+
+  // ---------------------------------------------------------------- 送出參數（合約介面 1／3）
+  // preview＝true：預覽（expected_moved_* 送 NULL＝只算）；false：真的搬（expected_moved_*＝預覽算出來、確認卡上給他看的數字）。
+  function moveAdapterArgs({ preview, expectedGood, expectedFail, overrunAck, ...started } = {}) {
+    const args = startedBuildArgs(started);
+    if (preview === true) {
+      return { ...args, p_expected_moved_good: null, p_expected_moved_fail: null, p_acks: null, p_preview: true };
+    }
+    const good = nonNegInt(expectedGood);
+    const fail = nonNegInt(expectedFail);
+    if (good === null || fail === null || good + fail > MOVE_QTY_MAX) throw new Error("BAD_EXPECTED_MOVED");
+    return { ...args, p_expected_moved_good: good, p_expected_moved_fail: fail, p_acks: overrunAck === true ? [MOVE_CONTRACT.overrunAck] : null, p_preview: false };
+  }
+
+  // ---------------------------------------------------------------- 預覽結果（合約介面 2／3）
+  function previewResultOf(row) {
+    let raw = row && row.preview_result;
+    if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { raw = null; } }
+    const box = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    const inner = box[MOVE_CONTRACT.previewResultKey];
+    return inner && typeof inner === "object" && !Array.isArray(inner) ? inner : null;
+  }
+  function moveAdapterPreview(row) {
+    const result = previewResultOf(row);
+    if (!result) return null;
+    const target = result.target && typeof result.target === "object" && !Array.isArray(result.target) ? result.target : {};
+    return {
+      ok: result.ok === true,
+      blockCode: normCode(result.block_code),
+      from: positiveInt(result.from_index_sn),
+      to: positiveInt(result.to_index_sn),
+      orderNo: text(result.order_no),
+      station: normCode(result.station),
+      good: nonNegInt(result.movable_good),
+      fail: nonNegInt(result.movable_fail),
+      count: nonNegInt(result.report_count),
+      firstStep: target.first_step === true,
+      targetBefore: nonNegInt(target.reported_good_before),
+      targetAfter: nonNegInt(target.reported_good_after),
+      available: nonNegInt(target.available),
+      orderQty: nonNegInt(target.order_qty),
+      exceedsOrderQty: target.exceeds_order_qty === true,
+      needsOverrunAck: target.needs_overrun_ack === true,
+      willStop: result.will_stop !== false,
+      planText: (Array.isArray(result.plan_text) ? result.plan_text : []).map(text).filter(Boolean).slice(0, 20),
+    };
+  }
+
+  // 預覽那一列（輪詢回來的）→ 確認卡要的東西。known＝{ from, to, orderNo, machineCode }：送出時的值，回覆對不上＝看不懂（不拿它送）。
+  //   phase：pending（還在算）｜ready（可以搬）｜blocked（會被擋：code）｜failed（工廠沒算到：code）｜invalid（回覆看不懂）
+  function movePreviewView(row, known = {}) {
+    const status = text(row && row.status).toLowerCase();
+    if (status === "pending" || status === "claimed" || !status) return { phase: "pending", terminal: false, code: "" };
+    if (status === "expired") return { phase: "failed", terminal: true, code: "EXPIRED" };
+    if (status === "rejected") return { phase: "failed", terminal: true, code: normCode(row.reject_code) };
+    if (status !== MOVE_CONTRACT.previewedStatus || text(row.command_type) !== MOVE_CONTRACT.previewCommandType) return { phase: "invalid", terminal: true, code: "" };
+    const p = moveAdapterPreview(row);
+    if (!p) return { phase: "invalid", terminal: true, code: "" };
+    if ((p.from !== null && p.from !== positiveInt(known.from)) || (p.to !== null && p.to !== positiveInt(known.to))
+      || (p.orderNo && known.orderNo && p.orderNo !== text(known.orderNo)) || (p.station && known.machineCode && p.station !== normCode(known.machineCode))) {
+      return { phase: "invalid", terminal: true, code: "" };
+    }
+    const acknowledgedOverrun = p.firstStep && p.needsOverrunAck && p.blockCode === MOVE_CONTRACT.overrunAck;
+    if (!p.ok && !acknowledgedOverrun) return { phase: "blocked", terminal: true, code: p.blockCode || "SWITCH_MOVE_PLAN_REFUSED", preview: p };
+    if (p.good === null || p.fail === null || p.count === null || p.good + p.fail > MOVE_QTY_MAX) return { phase: "invalid", terminal: true, code: "" };
+    // 第一道補報後超過工單量：伺服器說要勾，或自己算出來超過（保守：任何一邊說要就要）
+    const overrun = p.firstStep && (p.needsOverrunAck || p.exceedsOrderQty || (p.orderQty !== null && p.targetAfter !== null && p.targetAfter > p.orderQty));
+    return { phase: "ready", terminal: true, code: "", preview: { ...p, needsOverrunAck: overrun }, nothing: p.good === 0 && p.fail === 0 };
+  }
+
+  // 數量規則那一行（D5）：第一道不限（超過工單量要勾）；第二道以後 ≤ 上一道良品，不會從倉庫先領。
+  function moveRuleLine(preview) {
+    if (!preview) return { key: "", params: {} };
+    return preview.firstStep ? { key: "switch_step_move_rule_first", params: { qty: preview.orderQty ?? "—" } }
+      : { key: "switch_step_move_rule_next", params: { to: preview.to ?? "—", available: preview.available ?? "—" } };
+  }
+  function moveTargetLine(preview) {
+    if (!preview) return { key: "", params: {} };
+    const params = { to: preview.to ?? "—", targetBefore: preview.targetBefore ?? "—", targetAfter: preview.targetAfter ?? "—", available: preview.available ?? "—", qty: preview.orderQty ?? "—" };
+    return { key: preview.firstStep ? "switch_step_move_target_info_first" : "switch_step_move_target_info", params };
+  }
+
+  // ---------------------------------------------------------------- 拒絕碼 → 一句白話＋結尾（「沒有換，這台還是第 X 道，數字沒有變；…」）
+  // reason：i18n key（switch_step_move_why_*）；tail：planner（請找生管）｜retry（請等一下再按一次）｜reload（請重新整理）｜repreview（請重新看會怎麼搬）｜login。
+  // 結果不確定的碼沒有結尾（不可以說「沒有換」）。畫面絕不顯示代碼本身。
+  const MOVE_REJECT = Object.freeze({
+    // ---- r3 擋單碼（合約 §3）
+    SWITCH_MOVE_DISABLED: ["switch_step_move_why_disabled", "planner"],
+    SWITCH_MOVE_MIXED_HISTORY: ["switch_step_move_why_mixed_history", "planner"],
+    SWITCH_MOVE_QTY_CHANGED: ["switch_step_move_why_qty_changed", "repreview"],
+    SWITCH_MOVE_DOWNSTREAM_USED: ["switch_step_move_why_downstream_used", "planner"],
+    SWITCH_MOVE_SOURCE_CLOSED: ["switch_step_move_why_source_closed", "planner"],
+    SWITCH_MOVE_LAST_STEP: ["switch_step_move_why_last_step", "planner"],
+    SWITCH_MOVE_STOCK_CONFIRMED: ["switch_step_move_why_stock_confirmed", "planner"],
+    SWITCH_MOVE_AC01: ["switch_step_move_why_ac01", "planner"],
+    SWITCH_MOVE_RESERVED: ["switch_step_move_why_reserved", "planner"],
+    SWITCH_MOVE_OUTSOURCE_DOC: ["switch_step_move_why_outsource_doc", "planner"],
+    SWITCH_MOVE_DEFERRED_MATERIAL: ["switch_step_move_why_deferred_material", "planner"],
+    SWITCH_MOVE_AMBIGUOUS: ["switch_step_move_why_ambiguous", "planner"],
+    SWITCH_MOVE_NOT_ENGINE: ["switch_step_move_why_not_engine", "planner"],
+    SWITCH_MOVE_ORDER_CLOSED: ["switch_step_move_why_order_closed", "planner"],
+    SWITCH_MOVE_TARGET_SHORT: ["switch_step_move_why_target_short", "planner"],
+    SWITCH_MOVE_TOO_MANY_REPORTS: ["switch_step_move_why_too_many_reports", "planner"],
+    SWITCH_MOVE_PLAN_REFUSED: ["switch_step_move_why_plan_refused", "planner"],
+    EXCEEDS_ORDER_QTY: ["switch_step_move_why_exceeds_order_qty", "repreview"],
+    QTY_EXCEEDS_AVAILABLE: ["switch_step_move_why_target_short", "planner"],
+    REPORT_ENGINE_FAILED: ["switch_step_move_why_report_engine_failed", "planner"],
+    INVALID_ACK: ["switch_step_move_why_card_data", "reload"],
+    INVALID_EXPECTED_MOVED: ["switch_step_move_why_card_data", "reload"],   // 雲端 r3 submit：expected_moved_* 形狀不對
+    TX_PROMOTION_BLOCKED: ["switch_step_move_why_factory_problem", "planner"],
+    // ---- 雲端 submit（第 2 階段的碼；搬數量時一樣會出現）
+    AUTH_REQUIRED: ["switch_step_move_why_login", "login"],
+    OPERATOR_REQUIRED: ["switch_step_move_why_role", "planner"],
+    APPLIER_CANNOT_SUBMIT: ["switch_step_move_why_role", "planner"],
+    TENANT_INACTIVE: ["switch_step_move_why_account", "planner"],
+    APP_USER_REQUIRED: ["switch_step_move_why_account", "planner"],
+    OPERATOR_LEGACY_ID_MISSING: ["switch_step_move_why_account", "planner"],
+    OPERATOR_LEGACY_ID_INVALID: ["switch_step_move_why_account", "planner"],
+    ADMIN_LEGACY_ID_MISSING: ["switch_step_move_why_account", "planner"],
+    FORBIDDEN: ["switch_step_move_why_account", "planner"],
+    ADMIN_SUBMIT_DISABLED: ["switch_step_move_why_admin_disabled", "planner"],
+    COMMAND_UUID_REQUIRED: ["switch_step_move_why_card_data", "reload"],
+    INVALID_MACHINE_CODE: ["switch_step_move_why_card_data", "reload"],
+    INVALID_POOL_ITEM_ID: ["switch_step_move_why_card_data", "reload"],
+    INVALID_TARGET_POOL_ITEM_ID: ["switch_step_move_why_card_data", "reload"],
+    INVALID_TARGET_STEP: ["switch_step_move_why_card_data", "reload"],
+    SAME_STEP: ["switch_step_move_why_card_data", "reload"],
+    TARGET_STEP_MISMATCH: ["switch_step_move_why_card_data", "reload"],
+    TARGET_NOT_SAME_WORK_ORDER: ["switch_step_move_why_card_data", "reload"],
+    COMMAND_UUID_CONFLICT: ["switch_step_move_why_conflict", "reload"],
+    SWITCH_STEP_DISABLED: ["switch_step_move_why_not_open", "planner"],
+    STALE: ["switch_step_move_why_stale", "reload"],
+    SWITCH_REASON_REQUIRED: ["switch_step_move_why_reason_required", "reload"],
+    INVALID_SWITCH_REASON: ["switch_step_move_why_reason_required", "reload"],
+    MACHINE_NOT_ALLOWED: ["switch_step_move_why_machine_not_allowed", "planner"],
+    NOT_CLAIM_OWNER: ["switch_step_move_why_not_owner", "planner"],
+    CLAIM_NOT_APPLIED: ["switch_step_move_why_claim_not_applied", "retry"],
+    ACTIVE_CLAIM_NOT_FOUND: ["switch_step_move_why_no_pool_record", "planner"],
+    POOL_ITEM_REQUIRED: ["switch_step_move_why_no_pool_record", "planner"],
+    POOL_ITEM_AMBIGUOUS: ["switch_step_move_why_no_pool_record", "planner"],
+    SWITCH_STEP_HAS_REPORTS: ["switch_step_move_why_has_reports", "planner"],   // 雲端「數量一起搬」還沒開（旗標關＝跟今天一樣擋有報工的）
+    HAS_REPORTS: ["switch_step_move_why_has_reports", "planner"],
+    SOURCE_STEP_NOT_SWITCHABLE: ["switch_step_move_why_source_state", "planner"],
+    TARGET_POOL_ITEM_NOT_FOUND: ["switch_step_move_why_target_gone", "reload"],
+    TARGET_STEP_NOT_FOUND: ["switch_step_move_why_target_gone", "reload"],
+    TARGET_TAKEN: ["switch_step_move_why_target_taken", "planner"],
+    TARGET_NOT_ELIGIBLE: ["switch_step_move_why_target_not_here", "planner"],
+    TARGET_STEP_CLOSED: ["switch_step_move_why_target_closed", "planner"],
+    MACHINE_COMMAND_IN_FLIGHT: ["switch_step_move_why_busy", "retry"],
+    // ---- 工廠套用端（第 2 階段的碼）
+    FACTORY_SWITCH_DISABLED: ["switch_step_move_why_not_open", "planner"],
+    UNSUPPORTED_STATION: ["switch_step_move_why_not_open", "planner"],
+    STATION_NOT_ENABLED: ["switch_step_move_why_not_open", "planner"],
+    COMMAND_INVALID: ["switch_step_move_why_not_open", "planner"],
+    OPERATOR_UNKNOWN: ["switch_step_move_why_account", "planner"],
+    POOL_ITEM_NOT_FOUND: ["switch_step_move_why_no_pool_record", "planner"],
+    SWITCH_STEP_STARTED_BEFORE_CLAIM: ["switch_step_move_why_before_claim", "planner"],
+    SWITCH_STEP_NOT_OPERATOR: ["switch_step_move_why_not_operator", "planner"],
+    SWITCH_STEP_STATE_UNSUPPORTED: ["switch_step_move_why_state", "planner"],
+    SWITCH_STEP_TARGET_TAKEN: ["switch_step_move_why_target_taken", "planner"],
+    SWITCH_STEP_TARGET_NOT_HERE: ["switch_step_move_why_target_not_here", "planner"],
+    SWITCH_STEP_TARGET_CLOSED: ["switch_step_move_why_target_closed", "planner"],
+    SWITCH_STEP_TARGET_NOT_POOLED: ["switch_step_move_why_target_not_pooled", "planner"],
+    SWITCH_STEP_SOURCE_NOT_POOLED: ["switch_step_move_why_source_not_pooled", "planner"],
+    LEGACY_STATE_INCONSISTENT: ["switch_step_move_why_inconsistent", "planner"],
+    LOCK_TIMEOUT: ["switch_step_move_why_factory_busy", "retry"],
+    INTERNAL_ERROR: ["switch_step_move_why_internal", "retry"],
+    LEDGER_CONFLICT: ["switch_step_move_why_factory_problem", "planner"],
+    WRITE_TARGET_DENIED: ["switch_step_move_why_factory_problem", "planner"],
+    STALE_COMMAND: ["switch_step_move_why_expired", "retry"],
+    EXPIRED: ["switch_step_move_why_expired", "retry"],
+  });
+  const MOVE_UNCERTAIN_CODES = STARTED_UNCERTAIN_CODES;
+  const MOVE_TAIL_KEYS = Object.freeze({ planner: "switch_step_move_tail_planner", retry: "switch_step_move_tail_retry", reload: "switch_step_move_tail_reload",
+    repreview: "switch_step_move_tail_repreview", login: "switch_step_move_tail_login" });
+
+  // { code, known, reasonKey, tailKey, uncertain, retryLater, repreview }；uncertain＝只說「結果不確定」（switch_step_move_unsure），沒有結尾
+  function moveRejectInfo(code) {
+    const key = normCode(code);
+    if (MOVE_UNCERTAIN_CODES.includes(key)) {
+      return { code: key, known: true, reasonKey: "switch_step_move_unsure", tailKey: "", uncertain: true, retryLater: false, repreview: false };
+    }
+    const known = Object.prototype.hasOwnProperty.call(MOVE_REJECT, key);
+    const [reasonKey, tail] = known ? MOVE_REJECT[key] : ["switch_step_move_why_generic", "planner"];
+    return { code: key, known, reasonKey, tailKey: MOVE_TAIL_KEYS[tail], uncertain: false,
+      retryLater: tail === "retry", repreview: tail === "repreview" };
+  }
+
+  // 送出失敗（雲端 submit raise／網路）：base＝returnClaimCore.submitErrorInfo(error)
+  function moveSubmitErrorInfo(base, error) {
+    const kind = text(base && base.kind);
+    const code = normCode(base && base.code);
+    // RPC 不存在（雲端還沒部署）＝當成「還沒開放」
+    if (kind === "missing") return { kind, code: "SWITCH_STEP_DISABLED", info: moveRejectInfo("SWITCH_STEP_DISABLED"), params: {} };
+    if (kind === "uncertain") return { kind, code, info: null, params: {} };
+    const effective = code || (text(base && base.messageKey) === "return_claim_err_login" ? "AUTH_REQUIRED" : "");
+    const params = {};
+    if (effective === "TARGET_TAKEN") { const machine = takenMachineOf(error); if (machine) params.machine = machine; }
+    return { kind: "rejected", code: effective, info: moveRejectInfo(effective), params };
+  }
+
+  // ---------------------------------------------------------------- applied／rejected（合約介面 3／3）
+  function moveAdapterApplied(row) {
+    const snap = snapshotOf(row);
+    const info = snap[MOVE_CONTRACT.appliedSnapshotKey] && typeof snap[MOVE_CONTRACT.appliedSnapshotKey] === "object" && !Array.isArray(snap[MOVE_CONTRACT.appliedSnapshotKey])
+      ? snap[MOVE_CONTRACT.appliedSnapshotKey] : {};
+    return { mode: text(info.mode), good: nonNegInt(info.moved_good), fail: nonNegInt(info.moved_fail), contract: text(info.contract), qtyPolicy: text(info.qty_policy) };
+  }
+  function moveAdapterRejectedBlock(row) {
+    const snap = snapshotOf(row);
+    const rejected = snap[MOVE_CONTRACT.rejectedSnapshotKey];
+    const move = rejected && typeof rejected === "object" && rejected.move && typeof rejected.move === "object" ? rejected.move : {};
+    return normCode(move.block_code);
+  }
+
+  // 伺服器那一列 → 畫面。known＝{ from, to, good, fail }：送出時記下的（輪詢不讀 target_index_sn；applied 以快照為準）。
+  // view.lines＝[{ key, params }]：一句理由＋一句結尾（或成功那一句＋提醒）。
+  function moveResultView(row, known = {}) {
+    const status = text(row && row.status).toLowerCase();
+    const params = { from: positiveInt(known.from) ?? positiveInt(row && row.expected_index_sn), to: positiveInt(known.to),
+      good: nonNegInt(known.good) ?? 0, fail: nonNegInt(known.fail) ?? 0 };
+    const base = { switchMove: true, status, mode: "", code: "", sourceUnpooled: false, params };
+    if (status === "applied") {
+      const step = appliedInfo(row);
+      const moved = moveAdapterApplied(row);
+      const p = { ...params, from: step.from ?? params.from, to: step.to ?? params.to, order: step.orderNo,
+        good: moved.good ?? params.good, fail: moved.fail ?? params.fail };
+      const already = moved.mode === "already_switched";
+      const view = { ...base, phase: "applied", terminal: true, tone: "ok", mode: moved.mode, sourceUnpooled: step.sourceUnpooled, params: p,
+        messageKey: already ? "switch_step_move_done_already" : "switch_step_move_done", lines: [{ key: already ? "switch_step_move_done_already" : "switch_step_move_done", params: p }] };
+      if (step.sourceUnpooled) { view.noticeKey = "switch_step_started_unpooled_notice"; view.lines.push({ key: view.noticeKey, params: p }); }
+      return view;
+    }
+    if (status === "rejected" || status === "expired") {
+      // reject_code＝合約 §3 的碼；萬一是空的，用快照 switch_step_rejected.move.block_code（同一個碼）
+      const code = status === "expired" ? "EXPIRED" : normCode(row.reject_code) || moveAdapterRejectedBlock(row);
+      return { ...base, ...moveFailureView(code, params), phase: status === "expired" ? "expired" : "rejected" };
+    }
+    if (status === "claimed") return { ...base, phase: "pending", terminal: false, tone: "wait", messageKey: "switch_step_move_processing", lines: [{ key: "switch_step_move_processing", params }] };
+    return { ...base, phase: "pending", status: "pending", terminal: false, tone: "wait", messageKey: "switch_step_move_waiting", lines: [{ key: "switch_step_move_waiting", params }] };
+  }
+  // 一個碼 → 失敗畫面（預覽與送出共用）
+  function moveFailureView(code, params = {}) {
+    const info = moveRejectInfo(code);
+    const lines = [{ key: info.reasonKey, params }];
+    if (info.tailKey) lines.push({ key: info.tailKey, params });
+    return { phase: "rejected", terminal: true, tone: info.uncertain ? "warn" : "bad", code: info.code, messageKey: info.reasonKey, uncertain: info.uncertain,
+      retryLater: info.retryLater, repreview: info.repreview, lines };
+  }
+  // 不是伺服器的碼、是 APP 自己的狀況（預覽送不出去／看不懂／等太久）：一句理由＋指定的結尾
+  function moveMessageView(reasonKey, tail, params = {}) {
+    const tailKey = MOVE_TAIL_KEYS[tail] || MOVE_TAIL_KEYS.planner;
+    return { phase: "rejected", terminal: true, tone: "bad", code: "", messageKey: reasonKey, uncertain: false,
+      retryLater: tail === "retry", repreview: tail === "repreview", lines: [{ key: reasonKey, params }, { key: tailKey, params }] };
+  }
+  function moveIsUnsure(view) { return Boolean(view) && MOVE_UNCERTAIN_CODES.includes(text(view.code)) && view.phase === "rejected"; }
+
+  // ---------------------------------------------------------------- 等結果中的紀錄（跟第 2 階段同規則；多了 expected_moved_* 等四個參數）
+  function movePendingRecord(rec = {}) {
+    const base = startedPendingRecord(rec);
+    const args = {};
+    MOVE_ARG_KEYS.forEach((key) => { args[key] = rec.args && rec.args[key] !== undefined ? rec.args[key] : null; });
+    return { ...base, args, good: nonNegInt(rec.good) ?? 0, fail: nonNegInt(rec.fail) ?? 0 };
+  }
+  function moveRestoreAll(raw, nowMs) {
+    let obj = raw;
+    if (typeof raw === "string") { try { obj = JSON.parse(raw); } catch { return {}; } }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    const out = {};
+    Object.keys(obj).forEach((code) => {
+      const rec = obj[code];
+      if (!rec || !isUuid(rec.commandUuid) || !rec.args || rec.args.p_command_uuid !== rec.commandUuid) return;
+      if (Number(nowMs) - Number(rec.startedAt) > STARTED_PENDING_KEEP_MS) return;
+      if (normCode(rec.args.p_machine_code) !== normCode(code)) return;
+      if (positiveInt(rec.args.p_target_index_sn) === null) return;
+      // 只還原真的搬數量那一筆（預覽不存）
+      if (rec.args.p_preview !== false || nonNegInt(rec.args.p_expected_moved_good) === null || nonNegInt(rec.args.p_expected_moved_fail) === null) return;
+      out[normCode(code)] = movePendingRecord(rec);
+    });
+    return out;
+  }
+  function moveRestoreForSession(raw, nowMs, session) {
+    const all = moveRestoreAll(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (startedSameSession(all[code], session)) out[code] = all[code]; });
+    return out;
+  }
+  function moveMergeForSave(raw, own, nowMs, session) {
+    const all = moveRestoreAll(raw, nowMs);
+    const out = {};
+    Object.keys(all).forEach((code) => { if (!startedSameSession(all[code], session)) out[code] = all[code]; });
+    Object.keys(own || {}).forEach((code) => { out[normCode(code)] = own[code]; });
+    return out;
+  }
+  // 結果不確定之後：同一張單同一道 10 分鐘內不再出按鈕（同第 2 階段）
+  function moveUnsureHold(last, { orderNo, step, nowMs } = {}) {
+    if (!last || !moveIsUnsure(last.view)) return false;
+    const age = Number(nowMs) - Number(last.at);
+    return age >= 0 && age <= STARTED_UNSURE_HOLD_MS && text(last.orderNo) === text(orderNo) && Number(last.step) === Number(step);
+  }
+
   return Object.freeze({
     APPLIED_MODES, CONTINUE_MAX_MS, POOL_READ_ATTEMPTS, TRANSITIONS, TERMINAL_STATES, HOLDING_STATES, CLAIM_REASON_KEY,
     enabled, machineMayTake, otherSteps, visibility, next, isTerminal, holds, claimAllowed, returnEvent, verifyTarget,
@@ -714,5 +1101,10 @@
     targetEligible, startedTargets, startedReasonCheck, startedBuildArgs, startedRejectInfo, startedSubmitErrorInfo, takenMachineOf, appliedInfo,
     startedResultView, startedIsUnsure, unpooledNotices, startedPendingRecord, startedSameSession, startedRestoreForSession,
     startedMergeForSave, startedRecordMatchesOrder, startedLocks, startedLastResultVisible, startedUnsureHold,
+    // 第 3 階段（數量一起搬）
+    MOVE_CONTRACT, MOVE_ARG_KEYS, MOVE_QTY_MAX, MOVE_SUBMIT_TIMEOUT_MS, MOVE_PREVIEW_WAIT_MS, MOVE_TRANSITIONS, MOVE_REJECT, MOVE_UNCERTAIN_CODES, MOVE_TAIL_KEYS,
+    moveNext, moveEnabled, moveVisibility, moveFreshCheck, moveAdapterArgs, moveAdapterPreview, movePreviewView, moveRuleLine, moveTargetLine,
+    moveRejectInfo, moveSubmitErrorInfo, moveAdapterApplied, moveAdapterRejectedBlock, moveResultView, moveFailureView, moveMessageView, moveIsUnsure,
+    movePendingRecord, moveRestoreForSession, moveMergeForSave, moveUnsureHold,
   });
 });
