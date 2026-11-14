@@ -9465,6 +9465,7 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
   if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStartedForgetUser();
+  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchMoveForgetUser();
   if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStepForgetUser();
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
   const signedTenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || "";
@@ -9501,6 +9502,7 @@ function machtileClearSession(message = "") {
   machtileAuthState.accessToken = "";
   machtileAuthState.email = "";
   machtileSwitchStartedForgetUser();
+  machtileSwitchMoveForgetUser();
   machtileSwitchStepForgetUser();
   machtileAuthState.userId = "";
   machtileAuthState.tenantId = "";
@@ -15228,6 +15230,7 @@ function machtileStationCmdRestorePending() {
 function machtileStationCmdRestorePendingEarly() {
   machtileReturnClaimRestore();   // 「接錯了，退回」等結果中的那筆也一起還原（旗標關＝什麼都不做）
   machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）
+  machtileSwitchMoveRestore();   // 「換道次（數量一起搬）」等結果中的那筆（旗標關＝什麼都不做）
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
   machtileStationCmdRestorePending();
 }
@@ -16792,16 +16795,17 @@ function machtileSwitchStartedTarget(sheet) {
 }
 
 // 開確認卡時的四個讀取（都只是讀）：這一道（還在這台、0 件）、待做池、這張單的各道、這一道的池列鍵。
-async function machtileSwitchStartedLoadSheet(sheet) {
+// 「換道次（數量一起搬）」也用這一支：owner＝machtileSwitchMove、freshCheck＝moveFreshCheck（不要求 0 件）。旗標關＝預設值＝跟以前一樣。
+async function machtileSwitchStartedLoadSheet(sheet, owner = machtileSwitchStarted, freshCheck = machtileSwitchStepCore.startedFreshCheck) {
   const code = sheet.code;
   let fresh = { ok: false, reason: "read_failed", partNo: null, workOrderId: "" };
   try {
     const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,qty_defect,work_orders!inner(id,work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(sheet.fields.processId)}`);
-    fresh = machtileSwitchStepCore.startedFreshCheck({ machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step, row: Array.isArray(rows) ? rows[0] : null });
+    fresh = freshCheck({ machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step, row: Array.isArray(rows) ? rows[0] : null });
   } catch (error) {
     console.warn("switch step (started): work_order_processes re-read failed", error);
   }
-  if (machtileSwitchStarted.sheet !== sheet) return;
+  if (owner.sheet !== sheet) return;
   sheet.freshOk = fresh.ok;
   sheet.freshKey = fresh.ok ? "" : fresh.reason === "read_failed" ? "switch_step_started_fresh_failed" : fresh.reason === "has_reports" ? "switch_step_started_err_reported" : "switch_step_started_fresh_changed";
   sheet.fields.partNo = fresh.partNo;
@@ -16816,7 +16820,7 @@ async function machtileSwitchStartedLoadSheet(sheet) {
   const historyRead = supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,legacy_snapshot&machine_code=eq.${encodeURIComponent(code)}&expected_order_no=eq.${encodeURIComponent(sheet.fields.orderNo)}&command_type=in.(claim_next,return_claim,switch_step)&status=eq.applied&order=requested_at.desc&limit=200`)
     .catch((error) => { console.warn("switch step (started): command history unavailable", error); return null; });
   const [poolOk, processes, heldRows, historyRows] = await Promise.all([machtileSwitchStepReadPool(), processesRead, heldRead, historyRead]);
-  if (machtileSwitchStarted.sheet !== sheet) return;
+  if (owner.sheet !== sheet) return;
   const machine = machtileStationCmdMachineByCode(code);
   const found = machtileSwitchStepCore.startedTargets({
     orderNo: sheet.fields.orderNo, currentStep: sheet.fields.step,
@@ -17129,6 +17133,620 @@ document.addEventListener("keydown", (event) => {
 });
 // ==== 換道次（已開工）到此 ====
 
+// ==== 換道次（數量一起搬；第 3 階段） ======================================================
+// 設計：ops/codex-inbox/20261114-1545-switchstep-phase3/DESIGN.md §7；合約 CONTRACT-r3.md（工廠）。決策在 switchStepCore.js（move* 開頭）。
+//   旗標 config.enableSwitchStepMove 預設 false＋機台名單 config.switchStepMoveMachines（預設 []）：
+//   關＝下面每個函式都回空字串／false／直接 return，不讀任何東西、不存任何東西，卡片 HTML 跟以前逐字相同。
+//   這一道已經報過工（第 2 階段的按鈕藏起來的那種）→ 「換道次（數量一起搬）」→ 確認卡（重讀這一道、待做池、這張單的各道、池列鍵）→ 選目標道次 →
+//   預覽（switch_step_preview：工廠算完一定回滾，不改任何東西）→ 確認（良／不良、筆數、目標道、數量規則；第一道超工單量要勾）→
+//   switch_step（帶預覽算出來的 expected_moved_*；command_uuid 由 App 產生，不確定有沒有送到＝同一個 uuid＋同樣內容重送）→ 既有指令輪詢。
+//   每一句失敗都以「沒有換，這台還是第 X 道，數字沒有變；…」結尾；結果不確定（OUTCOME_UNKNOWN 等）只說不確定、10 分鐘內不再出按鈕。
+//   預覽那一筆只在確認卡記憶體裡（不鎖機台、不存）；真的搬那一筆跟第 2 階段一樣存 localStorage、鎖住這台直到有結果。
+//   畫卡片的函式（Locks／Gate／CardMarkup）只讀不寫。
+// ============================================================================================
+const MACHTILE_SWITCH_MOVE_PENDING_KEY = "machtile.switchStepMovePending.v1";
+const machtileSwitchMove = {
+  pending: {},      // 機台代號 → switchStepCore.movePendingRecord（真的搬那一筆，等伺服器結果中／不確定有沒有送到）
+  timers: {},       // 機台代號 → 輪詢 timer
+  lastResult: {},   // 機台代號 → { view, at, orderNo, step }
+  sheet: null,      // 目前開著的確認卡
+  sessionKey: "",
+};
+
+function machtileSwitchMoveEnabled() {
+  return Boolean(machtileSwitchStepCore) && machtileSwitchStepCore.moveEnabled({ flag: config.enableSwitchStepMove })
+    && Boolean(machtileReturnClaimCore) && Boolean(machtileStationCmdCore) && Boolean(machtileDispatchPoolCore) && state.source === "supabase";
+}
+
+function machtileSwitchMoveReleased(rec) {
+  return Boolean(rec && machtileStationCmdCore?.lockReleased(rec.startedAt, Date.now()));
+}
+
+// 這台有一筆「數量一起搬」在等結果 → 開工／停工／報工／完工／選工單／批次都先鎖住（接在 machtileReturnClaimLocks／BlockMessage 最前面）。旗標關＝永遠 false。
+function machtileSwitchMoveLocks(code) {
+  if (!machtileSwitchMoveEnabled()) return false;
+  const rec = machtileSwitchMove.pending[String(code || "").trim().toUpperCase()];
+  return machtileSwitchStepCore.startedLocks(rec, machtileSwitchMoveReleased(rec));
+}
+
+function machtileSwitchMoveGate(machine) {
+  if (!machtileSwitchMoveEnabled() || !machine) return { show: false, reason: "flag_off", needsReason: false };
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine.order || null;
+  const todayRows = machtileCardState.todayStatus === "ok" && Array.isArray(machtileCardState.todayRows) ? machtileCardState.todayRows : [];
+  return machtileSwitchStepCore.moveVisibility({
+    enabled: true, role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    cardDetailsReady: machtileDeferredLoadState.get("card-details")?.status === "ready",
+    isUnassignedBucket: machine.isUnassignedBucket === true, machineCode: code, order,
+    multiStation: (Array.isArray(config.multiStationMachines) ? config.multiStationMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    machineAllowed: (Array.isArray(config.switchStepMoveMachines) ? config.switchStepMoveMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    // 今天有報工列（0／0 的今日開工不算）＝有報工；跟第 2 階段藏按鈕的條件同一個函式
+    hasTodayReport: Boolean(order) && machtileSwitchStepCore.todayReportBlocks(todayRows, order.processId),
+    commandInFlight: Boolean(machtileStationCmd.pending[code] || machtileInstantStartPending[code] || machtileSwitchMove.pending[code] || machtileSwitchStarted.pending[code]) || machtileReturnClaimLocks(code),
+    unsureHold: Boolean(order) && machtileSwitchStepCore.moveUnsureHold(machtileSwitchMove.lastResult[code], { orderNo: order.id, step: order.stationStep, nowMs: Date.now() }),
+  });
+}
+
+// 一個 view 的每一行（理由＋結尾，或成功那一句＋提醒）→ 文字
+function machtileSwitchMoveLines(view, extra = {}) {
+  return (Array.isArray(view?.lines) ? view.lines : []).map((line) => machtileTranslate(line.key, { ...(line.params || {}), ...extra }));
+}
+
+// 卡片上的那一段：等待中的一行字（＋重送）、最後一次結果、或按鈕。只讀。旗標關＝空字串。
+function machtileSwitchMoveCardMarkup(machine) {
+  if (!machtileSwitchMoveEnabled() || !machine) return "";
+  const code = machtileStationCmdMachineCode(machine);
+  const rec = machtileSwitchMove.pending[code];
+  if (rec) {
+    if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, machine.order || null)) {
+      return machtileSwitchMoveLocks(code)
+        ? `<p class="station-cmd-status is-wait" data-no-detail data-switch-step-move-status="other-order" role="status">${escapeHtml(machtileTranslate("switch_step_move_busy"))}</p>` : "";
+    }
+    const uncertain = rec.unconfirmed === true;
+    const key = rec.notFound ? "switch_step_move_not_found" : uncertain ? "switch_step_move_uncertain" : "switch_step_move_card_pending";
+    return `<p class="station-cmd-status is-${uncertain || rec.notFound ? "warn" : "wait"}" data-no-detail data-switch-step-move-status="${rec.notFound ? "not-found" : uncertain ? "uncertain" : "pending"}" role="status">${escapeHtml(machtileTranslate(key, { from: rec.step, to: rec.targetStep, good: rec.good, fail: rec.fail }))}</p>${uncertain || rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-move-retry="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_move_resend"))}</button>` : ""}${rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-move-dismiss="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_move_dismiss"))}</button>` : ""}`;
+  }
+  const order = machine.order || null;
+  const last = machtileSwitchMove.lastResult[code];
+  const note = machtileSwitchStepCore.startedLastResultVisible(last, { orderNo: order?.id, step: order?.stationStep, nowMs: Date.now() })
+    ? `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-no-detail data-switch-step-move-status="${escapeHtml(last.view.phase)}" role="status">${escapeHtml(machtileSwitchMoveLines(last.view).join(" "))}</p>` : "";
+  const button = machtileSwitchMoveGate(machine).show
+    ? `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-move-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_move_button"))}</button>` : "";
+  return note + button;
+}
+
+function machtileSwitchMoveSave() {
+  const own = {};
+  Object.keys(machtileSwitchMove.pending).forEach((code) => {
+    const { emptyPolls, releasedShown, ...rest } = machtileSwitchMove.pending[code];
+    own[code] = rest;
+  });
+  try {
+    const plain = machtileSwitchStepCore.moveMergeForSave(localStorage.getItem(MACHTILE_SWITCH_MOVE_PENDING_KEY), own, Date.now(), machtileSwitchStartedSession());
+    localStorage.setItem(MACHTILE_SWITCH_MOVE_PENDING_KEY, JSON.stringify(plain));
+  } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+}
+
+// 載入資料時呼叫（machtileStationCmdRestorePendingEarly，第一次畫卡片之前）：把目前登入的這個人上次還沒有結果的那一筆放回記憶體、繼續輪詢。
+function machtileSwitchMoveRestore() {
+  if (!machtileSwitchMoveEnabled()) return;
+  const session = machtileSwitchStartedSession();
+  const sessionKey = `${session.tenantId}|${session.appUserId}`;
+  if (sessionKey !== machtileSwitchMove.sessionKey) {
+    machtileSwitchMove.sessionKey = sessionKey;
+    machtileSwitchMove.lastResult = {};
+  }
+  Object.keys(machtileSwitchMove.pending).forEach((code) => {
+    if (machtileSwitchStepCore.startedSameSession(machtileSwitchMove.pending[code], session)) return;
+    clearTimeout(machtileSwitchMove.timers[code]);
+    delete machtileSwitchMove.timers[code];
+    delete machtileSwitchMove.pending[code];
+  });
+  let raw = null;
+  try { raw = localStorage.getItem(MACHTILE_SWITCH_MOVE_PENDING_KEY); } catch { raw = null; }
+  const restored = machtileSwitchStepCore.moveRestoreForSession(raw, Date.now(), session);
+  Object.keys(restored).forEach((code) => {
+    if (machtileSwitchMove.pending[code]) return;
+    machtileSwitchMove.pending[code] = restored[code];
+    if (!restored[code].notFound) machtileSwitchMovePoll(code);
+  });
+}
+
+function machtileSwitchMoveForgetUser() {
+  try {
+    if (machtileSwitchMove.sheet) { machtileSwitchMove.sheet.phase = "closing"; machtileSwitchMoveCloseSheet(); }
+    machtileSwitchMove.lastResult = {};
+  } catch { /* still loading: nothing to forget */ }
+}
+
+function machtileSwitchMoveCloseSheet() {
+  const sheet = machtileSwitchMove.sheet;
+  if (sheet && sheet.phase === "submitting") return;
+  document.getElementById("machtileSwitchMoveSheet")?.remove();
+  machtileSwitchMove.sheet = null;
+  if (!sheet) return;
+  clearTimeout(sheet.previewTimer);
+  sheet.previewUuid = "";   // 還在算的預覽：結果回來也不用了
+  const target = sheet.returnFocus && sheet.returnFocus.isConnected ? sheet.returnFocus
+    : document.querySelector(`#workOrderGrid [data-switch-step-move-open="${sheet.code}"], #workOrderGrid [data-switch-step-move-retry="${sheet.code}"]`);
+  try { target?.focus(); } catch { /* ignore */ }
+}
+
+function machtileSwitchMoveNewSheet(sheet) {
+  machtileSwitchMoveCloseSheet();
+  if (machtileSwitchMove.sheet) return false;
+  machtileSwitchMove.sheet = sheet;
+  const holder = document.createElement("div");
+  holder.id = "machtileSwitchMoveSheet";
+  holder.className = "station-cmd-overlay";
+  document.body.appendChild(holder);
+  machtileSwitchMoveRenderSheet(true);
+  return true;
+}
+
+function machtileSwitchMoveTarget(sheet) {
+  return sheet ? sheet.choices.find((choice) => choice.id === sheet.targetId) || null : null;
+}
+
+// 狀態機（switchStepCore.MOVE_TRANSITIONS）：不合法的事件＝不動
+function machtileSwitchMoveGo(sheet, event) {
+  const next = machtileSwitchStepCore.moveNext(sheet.phase, event);
+  if (!next) return false;
+  sheet.phase = next;
+  return true;
+}
+
+// 開確認卡時的四個讀取（都只是讀）：跟第 2 階段同一支（同樣的 select），只是這一道不要求 0 件（moveFreshCheck）。
+async function machtileSwitchMoveLoadSheet(sheet) {
+  await machtileSwitchStartedLoadSheet(sheet, machtileSwitchMove, machtileSwitchStepCore.moveFreshCheck);
+  if (machtileSwitchMove.sheet !== sheet || sheet.freshOk) return;
+  sheet.freshKey = sheet.freshKey === "switch_step_started_fresh_failed" ? "switch_step_move_fresh_failed" : "switch_step_move_fresh_changed";
+}
+
+async function machtileSwitchMoveOpen(code, returnFocus) {
+  if (!machtileSwitchMoveEnabled()) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machine ? machtileSwitchMoveGate(machine) : { show: false };
+  if (!gate.show || machtileSwitchMove.pending[code]) return;
+  let uuid;
+  try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast(machtileTranslate("switch_step_move_old_tablet")); return; }
+  const order = machine.order;
+  const sheet = {
+    code, uuid, previewUuid: "", previewTimer: null, role: machtileActualRole(), phase: "choosing", loading: true, freshOk: false, freshKey: "",
+    needsReason: gate.needsReason, reason: "", reasonError: "", returnFocus: returnFocus || null, args: null, view: null, failure: null,
+    listReady: false, choices: [], targetId: "", keyReadFailed: false, preview: null, overrunChecked: false,
+    fields: { poolItemId: "", orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "", targetStep: null },
+  };
+  if (!machtileSwitchMoveNewSheet(sheet)) return;
+  await machtileSwitchMoveLoadSheet(sheet);
+  if (machtileSwitchMove.sheet !== sheet) return;
+  sheet.loading = false;
+  machtileSwitchMoveRenderSheet();
+}
+
+// 選（或改選）目標道次：之前的預覽作廢，回到 choosing
+function machtileSwitchMoveChoose(id) {
+  const sheet = machtileSwitchMove.sheet;
+  if (!sheet || sheet.loading || !sheet.choices.some((choice) => choice.id === id)) return;
+  if (sheet.phase !== "choosing" && !machtileSwitchMoveGo(sheet, "repick")) return;
+  clearTimeout(sheet.previewTimer);
+  Object.assign(sheet, { targetId: id, previewUuid: "", preview: null, failure: null, overrunChecked: false });
+  machtileSwitchMoveRenderSheet();
+}
+
+function machtileSwitchMoveSetOverrun(checked) {
+  const sheet = machtileSwitchMove.sheet;
+  if (!sheet || sheet.phase !== "confirming") return;
+  sheet.overrunChecked = checked === true;
+  machtileSwitchMoveRenderSheet();
+}
+
+function machtileSwitchMoveFail(sheet, phaseEvent, view) {
+  if (machtileSwitchMove.sheet !== sheet) return;
+  clearTimeout(sheet.previewTimer);
+  sheet.previewUuid = "";
+  sheet.failure = view;
+  machtileSwitchMoveGo(sheet, phaseEvent);
+  machtileSwitchMoveRenderSheet();
+}
+
+// 「先看會怎麼搬」：送一筆 switch_step_preview（新的 uuid；只是算，工廠一定回滾）→ 等它算完 → 確認卡
+async function machtileSwitchMovePreview() {
+  const sheet = machtileSwitchMove.sheet;
+  if (!machtileSwitchMoveEnabled() || !sheet || sheet.loading || !["choosing", "preview_blocked", "preview_failed"].includes(sheet.phase)) return;
+  const target = machtileSwitchMoveTarget(sheet);
+  if (!sheet.freshOk || !sheet.listReady || sheet.keyReadFailed || !target) return;
+  const checked = machtileSwitchStepCore.startedReasonCheck(sheet.role, sheet.reason);
+  if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileSwitchMoveRenderSheet(); return; }
+  sheet.reasonError = "";
+  let previewUuid;
+  let args;
+  try {
+    previewUuid = machtileStationCmdCore.newUuid(window.crypto);
+    args = machtileSwitchStepCore.moveAdapterArgs({ preview: true, commandUuid: previewUuid, machineCode: sheet.code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
+      step: sheet.fields.step, targetStep: target.step, targetPoolItemId: target.sourceKey, partNo: sheet.fields.partNo, reason: checked.value, role: sheet.role });
+  } catch (error) {
+    console.warn("switch step (move): cannot build preview args", error);
+    machtileSwitchMoveGo(sheet, "preview");
+    machtileSwitchMoveFail(sheet, "preview_failed", machtileSwitchStepCore.moveMessageView("switch_step_move_why_card_data", "reload", { from: sheet.fields.step, to: target.step }));
+    return;
+  }
+  machtileSwitchMoveGo(sheet, "preview");
+  Object.assign(sheet, { previewUuid, preview: null, failure: null, overrunChecked: false, previewArgs: args, previewStartedAt: Date.now() });
+  sheet.fields.targetStep = target.step;
+  sheet.targetPoolItemId = target.sourceKey;
+  sheet.reasonValue = checked.value;
+  machtileSwitchMoveRenderSheet();
+  const known = { from: sheet.fields.step, to: target.step, orderNo: sheet.fields.orderNo, machineCode: sheet.code };
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.MOVE_CONTRACT.submitRpc}`, { method: "POST", body: JSON.stringify(args), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    if (sheet.previewUuid !== previewUuid) return;
+    const info = machtileSwitchStepCore.moveSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error), error);
+    console.warn("switch step (move): preview not accepted", info.code || info.kind, error);
+    // 預覽送不出去（網路）＝只是沒算到；不重送同一筆，讓他再按一次「再看一次」（新的 uuid，預覽不改任何東西）
+    const view = info.kind === "uncertain" ? machtileSwitchStepCore.moveMessageView("switch_step_move_why_preview_unsent", "retry", known)
+      : machtileSwitchStepCore.moveFailureView(info.code || "SWITCH_STEP_DISABLED", { ...known, ...info.params });
+    machtileSwitchMoveFail(sheet, "preview_failed", view);
+    return;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (sheet.previewUuid !== previewUuid) return;
+  if (!machtileReturnClaimCore.rowIsThis(row, previewUuid)) {
+    machtileSwitchMoveFail(sheet, "preview_failed", machtileSwitchStepCore.moveMessageView("switch_step_move_why_preview_invalid", "planner", known));
+    return;
+  }
+  machtileSwitchMovePreviewSettle(sheet, previewUuid, row, known);
+}
+
+// 預覽那一列有了新狀態（送出回來的、或輪詢讀到的）
+function machtileSwitchMovePreviewSettle(sheet, previewUuid, row, known) {
+  if (machtileSwitchMove.sheet !== sheet || sheet.previewUuid !== previewUuid) return;
+  const view = machtileSwitchStepCore.movePreviewView(row, known);
+  if (!view.terminal) {
+    if (Date.now() - sheet.previewStartedAt > machtileSwitchStepCore.MOVE_PREVIEW_WAIT_MS) {
+      machtileSwitchMoveFail(sheet, "preview_failed", machtileSwitchStepCore.moveMessageView("switch_step_move_why_preview_timeout", "retry", known));
+      return;
+    }
+    clearTimeout(sheet.previewTimer);
+    sheet.previewTimer = setTimeout(async () => {
+      if (machtileSwitchMove.sheet !== sheet || sheet.previewUuid !== previewUuid) return;
+      let next = row;
+      try {
+        const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,preview_result&command_uuid=eq.${encodeURIComponent(previewUuid)}`);
+        if (Array.isArray(rows) && rows[0] && machtileReturnClaimCore.rowIsThis(rows[0], previewUuid)) next = rows[0];
+      } catch (error) {
+        console.warn("switch step (move): preview poll failed; will retry", error);
+      }
+      machtileSwitchMovePreviewSettle(sheet, previewUuid, next, known);
+    }, machtileStationCmdCore.pollDelay(Date.now() - sheet.previewStartedAt));
+    return;
+  }
+  clearTimeout(sheet.previewTimer);
+  if (view.phase === "ready") {
+    sheet.preview = view.preview;
+    sheet.previewNothing = view.nothing === true;
+    sheet.failure = null;
+    machtileSwitchMoveGo(sheet, "preview_ok");
+    machtileSwitchMoveRenderSheet();
+    return;
+  }
+  if (view.phase === "blocked") { machtileSwitchMoveFail(sheet, "preview_blocked", machtileSwitchStepCore.moveFailureView(view.code, known)); return; }
+  if (view.phase === "invalid") { machtileSwitchMoveFail(sheet, "preview_failed", machtileSwitchStepCore.moveMessageView("switch_step_move_why_preview_invalid", "planner", known)); return; }
+  machtileSwitchMoveFail(sheet, "preview_failed", machtileSwitchStepCore.moveFailureView(view.code, known));
+}
+
+// 「不確定有沒有送到」的那一筆 → 從卡片再打開，用同一個 uuid＋同樣內容重送（伺服器看到同一個 uuid＝回原本那一列，不會搬兩次）
+function machtileSwitchMoveOpenRetry(code, returnFocus) {
+  if (!machtileSwitchMoveEnabled()) return;
+  const rec = machtileSwitchMove.pending[code];
+  if (!rec || !(rec.unconfirmed || rec.notFound)) return;
+  const cardOrder = machtileStationCmdMachineByCode(code)?.order || null;
+  if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, cardOrder)) return;
+  machtileSwitchMoveNewSheet({
+    code, uuid: rec.commandUuid, previewUuid: "", previewTimer: null, role: machtileActualRole(), phase: "uncertain", loading: false, freshOk: true, freshKey: "",
+    needsReason: false, reason: "", reasonError: "", returnFocus: returnFocus || null, args: rec.args, view: null, failure: null, listReady: false, choices: [], targetId: "",
+    keyReadFailed: false, preview: null, overrunChecked: false, retryKey: rec.notFound ? "switch_step_move_not_found" : "switch_step_move_uncertain",
+    fields: { poolItemId: rec.args.p_pool_item_id || "", orderNo: rec.orderNo, step: rec.step, processId: rec.processId, partNo: rec.args.p_expected_part_no, part: "", process: "",
+      targetStep: rec.targetStep, good: rec.good, fail: rec.fail },
+  });
+}
+
+function machtileSwitchMoveDismiss(code) {
+  const rec = machtileSwitchMove.pending[code];
+  if (!rec || !rec.notFound) return;
+  delete machtileSwitchMove.pending[code];
+  machtileSwitchMoveSave();
+  machtileStationCmdRerender();
+}
+
+// 「確定搬到第 N 道」：送 switch_step（帶預覽算出來的數字）
+async function machtileSwitchMoveSubmit() {
+  const sheet = machtileSwitchMove.sheet;
+  if (!machtileSwitchMoveEnabled() || !sheet || sheet.loading || !["confirming", "uncertain"].includes(sheet.phase)) return;
+  const code = sheet.code;
+  const existing = machtileSwitchMove.pending[code];
+  if (existing && existing.commandUuid !== sheet.uuid) return;   // 同一台另一筆還在等：不送第二筆
+  if (sheet.phase === "confirming") {
+    const preview = sheet.preview;
+    if (!preview || (preview.needsOverrunAck && !sheet.overrunChecked)) return;
+    try {
+      sheet.args = machtileSwitchStepCore.moveAdapterArgs({ preview: false, expectedGood: preview.good, expectedFail: preview.fail, overrunAck: preview.needsOverrunAck && sheet.overrunChecked,
+        commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+        targetStep: sheet.fields.targetStep, targetPoolItemId: sheet.targetPoolItemId, partNo: sheet.fields.partNo, reason: sheet.reasonValue, role: sheet.role });
+    } catch (error) {
+      console.warn("switch step (move): cannot build args", error);
+      machtileSwitchMoveGo(sheet, "submit");
+      sheet.view = machtileSwitchStepCore.moveMessageView("switch_step_move_why_card_data", "reload", { from: sheet.fields.step, to: sheet.fields.targetStep });
+      machtileSwitchMoveGo(sheet, "rejected");
+      machtileSwitchMoveRenderSheet();
+      return;
+    }
+    sheet.fields.good = preview.good;
+    sheet.fields.fail = preview.fail;
+  }
+  if (!sheet.args || !machtileSwitchMoveGo(sheet, sheet.phase === "uncertain" ? "resend" : "submit")) return;
+  machtileSwitchMoveRenderSheet();
+  const startedAt = existing && !existing.notFound ? existing.startedAt : Date.now();
+  const record = (extra) => machtileSwitchStepCore.movePendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+    targetStep: sheet.fields.targetStep, processId: sheet.fields.processId, ...machtileSwitchStartedSession(), args: sheet.args, startedAt,
+    good: sheet.fields.good, fail: sheet.fields.fail, ...extra });
+  const known = { from: sheet.fields.step, to: sheet.fields.targetStep, good: sheet.fields.good, fail: sheet.fields.fail };
+  const uncertain = () => {
+    machtileSwitchMove.pending[code] = record({ unconfirmed: true });
+    machtileSwitchMoveSave();
+    machtileSwitchMovePoll(code);
+    if (machtileSwitchMove.sheet === sheet) { machtileSwitchMoveGo(sheet, "uncertain"); sheet.retryKey = "switch_step_move_uncertain"; machtileSwitchMoveRenderSheet(); }
+    machtileStationCmdRerender();
+  };
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.MOVE_CONTRACT.submitRpc}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = machtileSwitchStepCore.moveSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error), error);
+    if (info.kind === "uncertain") { uncertain(); return; }
+    console.warn("switch step (move): submit refused", info.code || info.kind, error);
+    if (machtileSwitchMove.pending[code]?.commandUuid === sheet.uuid) { delete machtileSwitchMove.pending[code]; machtileSwitchMoveSave(); }
+    clearTimeout(machtileSwitchMove.timers[code]);
+    delete machtileSwitchMove.timers[code];
+    const view = machtileSwitchStepCore.moveFailureView(info.code, { ...known, ...info.params });
+    if (info.code === "TARGET_TAKEN" && info.params.machine) view.lines[0] = { key: "switch_step_move_why_target_taken_on", params: { ...known, ...info.params } };   // 雲端 DETAIL 有機台代號
+    machtileSwitchMove.lastResult[code] = { view, at: Date.now(), orderNo: sheet.fields.orderNo, step: sheet.fields.step };
+    if (machtileSwitchMove.sheet === sheet) { sheet.view = view; machtileSwitchMoveGo(sheet, view.uncertain ? "unsure" : "rejected"); machtileSwitchMoveRenderSheet(); }
+    else showToast(machtileSwitchMoveLines(view).join(" "));
+    machtileStationCmdRerender();
+    return;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (!machtileReturnClaimCore.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
+  const view = machtileSwitchStepCore.moveResultView(row, known);
+  machtileSwitchMove.pending[code] = record({ unconfirmed: false, lastStatus: view.status });
+  delete machtileSwitchMove.lastResult[code];
+  machtileSwitchMoveSave();
+  if (view.terminal) { machtileSwitchMoveFinish(code, view, row); return; }
+  if (machtileSwitchMove.sheet === sheet) { sheet.view = view; machtileSwitchMoveGo(sheet, "sent"); machtileSwitchMoveRenderSheet(); }
+  machtileSwitchMovePoll(code);
+  machtileStationCmdRerender();
+}
+
+// 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
+function machtileSwitchMoveFinish(code, view, row) {
+  const rec = machtileSwitchMove.pending[code];
+  if (!rec) return;
+  clearTimeout(machtileSwitchMove.timers[code]);
+  delete machtileSwitchMove.timers[code];
+  delete machtileSwitchMove.pending[code];
+  machtileSwitchMoveSave();
+  machtileSwitchMove.lastResult[code] = { view, at: Date.now(), orderNo: rec.orderNo, step: rec.step };
+  if (view.phase === "applied") {
+    delete machtilePickStartLocal[code];
+    // 原本那一道現在不在任何機台、也不在待做池：第 2 階段的提醒（它的旗標開著才有）也記一筆
+    if (view.sourceUnpooled && row && machtileSwitchStartedEnabled()) {
+      machtileSwitchStarted.localNotices = [...machtileSwitchStarted.localNotices.filter((item) => item.command_uuid !== row.command_uuid), row];
+      void machtileSwitchStartedLoadNotices();
+    }
+  } else console.warn("switch step (move): not applied", view.phase, view.code);
+  const sheet = machtileSwitchMove.sheet;
+  if (sheet && sheet.code === code && sheet.uuid === rec.commandUuid) {
+    sheet.view = view;
+    machtileSwitchMoveGo(sheet, view.phase === "applied" ? "applied" : machtileSwitchStepCore.moveIsUnsure(view) ? "unsure" : "rejected");
+    machtileSwitchMoveRenderSheet();
+  }
+  machtileStationCmdRerender();
+  showToast(machtileSwitchMoveLines(view).join(" "));
+  // 成功＝機台換了道次、數字搬了；沒成功＝卡片資料多半已經過時。兩種都重讀一次（卡片＋待做池）。
+  void machtileRefreshAfterApplied(code, machtileSwitchStepCore.MOVE_CONTRACT.commandType);
+}
+
+function machtileSwitchMovePoll(code) {
+  const rec = machtileSwitchMove.pending[code];
+  if (!machtileSwitchStepCore || !machtileStationCmdCore || !rec) return;
+  clearTimeout(machtileSwitchMove.timers[code]);
+  machtileSwitchMove.timers[code] = setTimeout(async () => {
+    const current = machtileSwitchMove.pending[code];
+    if (!current || current.commandUuid !== rec.commandUuid) return;
+    try {
+      const rows = await supabaseFetch(machtileReturnClaimCore.pollPath(current.commandUuid));
+      if (machtileSwitchMove.pending[code] !== current) return;
+      const row = Array.isArray(rows) ? rows[0] : null;
+      const sheet = machtileSwitchMove.sheet;
+      const sheetIsThis = Boolean(sheet) && sheet.code === code && sheet.uuid === current.commandUuid;
+      if (row) {
+        const view = machtileSwitchStepCore.moveResultView(row, { from: current.step, to: current.targetStep, good: current.good, fail: current.fail });
+        if (view.terminal) { current.unconfirmed = false; machtileSwitchMoveFinish(code, view, row); return; }
+        if (current.unconfirmed || current.notFound || current.lastStatus !== view.status) {
+          current.unconfirmed = false; current.notFound = false; current.lastStatus = view.status;
+          machtileSwitchMoveSave();
+          if (sheetIsThis && sheet.phase !== "submitting") { sheet.view = view; machtileSwitchMoveGo(sheet, "sent"); machtileSwitchMoveRenderSheet(); }
+          machtileStationCmdRerender();
+        }
+      } else if (current.unconfirmed) {
+        current.emptyPolls = (current.emptyPolls || 0) + 1;
+        if (machtileStationCmdCore.unconfirmedNotSent(current, Date.now())) {
+          // 送出時網路斷、之後連續查不到＝沒送到：停止輪詢、解開這台；紀錄留著，重送仍是同一個 uuid
+          current.notFound = true;
+          delete machtileSwitchMove.timers[code];
+          machtileSwitchMoveSave();
+          if (sheetIsThis && sheet.phase === "uncertain") { sheet.retryKey = "switch_step_move_not_found"; machtileSwitchMoveRenderSheet(); }
+          machtileStationCmdRerender();
+          return;
+        }
+      }
+    } catch (error) {
+      if (machtileReturnClaimCore.isMissingResourceError(error)) {
+        delete machtileSwitchMove.timers[code];
+        delete machtileSwitchMove.pending[code];
+        machtileSwitchMoveSave();
+        machtileStationCmdRerender();
+        return;
+      }
+      console.warn("switch step (move) poll failed; will retry", error);
+    }
+    if (!current.releasedShown && machtileSwitchMoveReleased(current)) { current.releasedShown = true; machtileStationCmdRerender(); }
+    machtileSwitchMovePoll(code);
+  }, machtileStationCmdCore.pollDelay(Date.now() - rec.startedAt));
+}
+
+function machtileSwitchMoveRenderSheet(focus) {
+  const sheet = machtileSwitchMove.sheet;
+  const holder = document.getElementById("machtileSwitchMoveSheet");
+  if (!sheet || !holder) return;
+  const t = machtileTranslate;
+  const target = machtileSwitchMoveTarget(sheet);
+  const toStep = target ? target.step : sheet.fields.targetStep;
+  const steps = { from: sheet.fields.step, to: toStep ?? "—", order: sheet.fields.orderNo };
+  const stepLine = (step, name) => [t("return_claim_step_value", { step }), name].filter(Boolean).join(" · ");
+  const notice = (tone, name, message) => `<p class="station-cmd-notice is-${tone}" role="alert" ${name}>${escapeHtml(message)}</p>`;
+  const head = `<p class="station-cmd-notice" data-switch-step-move-current>${escapeHtml(t("switch_step_move_current", { step: stepLine(sheet.fields.step, sheet.fields.process) }))}</p>`;
+  const choosingPhases = ["choosing", "previewing", "preview_blocked", "preview_failed"];
+  let body = "";
+  let actions = "";
+  if (choosingPhases.includes(sheet.phase)) {
+    const previewing = sheet.phase === "previewing";
+    const listed = !sheet.loading && sheet.freshOk && sheet.listReady && sheet.choices.length > 0;
+    const canPreview = !previewing && listed && !sheet.keyReadFailed && Boolean(target);
+    const choices = sheet.choices.map((choice) => {
+      const label = [stepLine(choice.step, choice.name), choice.quantity === null ? "" : t("switch_step_quantity", { quantity: choice.quantity }),
+        t(choice.pooled ? "switch_step_started_tag_pool" : "switch_step_started_tag_unpooled")].filter(Boolean).join(" · ");
+      return `<button type="button" class="switch-step-choice" role="radio" aria-checked="${choice.id === sheet.targetId ? "true" : "false"}" data-switch-step-move-choice="${escapeHtml(choice.id)}"${previewing ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+    }).join("");
+    body = `${head}
+      ${sheet.needsReason ? `<p class="station-cmd-notice is-warn" role="note" data-switch-step-move-on-behalf>${escapeHtml(t("switch_step_started_on_behalf"))}</p>` : ""}
+      ${sheet.loading ? `<p data-switch-step-move-checking role="status">${escapeHtml(t("switch_step_move_checking"))}</p>` : ""}
+      ${!sheet.loading && !sheet.freshOk ? notice("bad", "data-switch-step-move-stale", `${t(sheet.freshKey || "switch_step_move_fresh_failed", steps)} ${t("switch_step_move_tail_reload", steps)}`) : ""}
+      ${!sheet.loading && sheet.freshOk && !sheet.listReady ? notice("bad", "data-switch-step-move-list-failed", `${t("switch_step_move_list_failed")} ${t("switch_step_move_tail_reload", steps)}`) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.keyReadFailed ? notice("bad", "data-switch-step-move-read-failed", `${t("switch_step_move_read_failed")} ${t("switch_step_move_tail_retry", steps)}`) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.listReady && !sheet.choices.length ? notice("warn", "data-switch-step-move-no-other", `${t("switch_step_move_no_other")} ${t("switch_step_move_tail_planner", steps)}`) : ""}
+      ${listed ? `<p data-switch-step-move-choose>${escapeHtml(t("switch_step_move_choose"))}</p><div class="switch-step-choices" role="radiogroup" data-switch-step-move-choices>${choices}</div>` : ""}
+      ${previewing ? `<p class="station-cmd-notice" role="status" data-switch-step-move-previewing>${escapeHtml(t("switch_step_move_previewing", steps))}</p>` : ""}
+      ${sheet.failure ? notice("bad", `data-switch-step-move-preview-result="${escapeHtml(sheet.phase)}" data-switch-step-move-code="${escapeHtml(sheet.failure.code || "")}"`, machtileSwitchMoveLines(sheet.failure).join(" ")) : ""}
+      ${sheet.needsReason ? `<label class="station-cmd-daily" for="switchMoveReason">${escapeHtml(t("switch_step_started_reason_label"))}
+        <textarea id="switchMoveReason" data-switch-step-move-reason maxlength="${machtileSwitchStepCore.STARTED_REASON_MAX}" rows="3" required aria-required="true"${sheet.reasonError ? ' aria-invalid="true"' : ""}${previewing ? " readonly" : ""}>${escapeHtml(sheet.reason)}</textarea></label>` : ""}
+      ${sheet.reasonError ? `<p class="station-cmd-notice is-bad" role="alert" data-switch-step-move-reason-error>${escapeHtml(t(sheet.reasonError))}</p>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-move-preview ${canPreview ? "" : "disabled"}>${escapeHtml(previewing ? t("switch_step_move_previewing_short")
+        : !target ? t("switch_step_started_confirm_none") : sheet.failure ? t("switch_step_move_preview_again") : t("switch_step_move_preview_button"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-move-close>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "confirming" || (sheet.phase === "submitting" && sheet.preview)) {
+    const sending = sheet.phase === "submitting";
+    const p = sheet.preview;
+    const params = { ...steps, to: p.to ?? steps.to, good: p.good, fail: p.fail, count: p.count };
+    const targetLine = machtileSwitchStepCore.moveTargetLine(p);
+    const rule = machtileSwitchStepCore.moveRuleLine(p);
+    const canSend = !sending && (!p.needsOverrunAck || sheet.overrunChecked);
+    body = `${head}
+      <p class="station-cmd-notice is-warn" data-switch-step-move-confirm-text>${escapeHtml(t("switch_step_move_confirm", params))}</p>
+      ${sheet.previewNothing ? notice("warn", "data-switch-step-move-nothing", t("switch_step_move_nothing", params)) : ""}
+      <p class="station-cmd-notice" data-switch-step-move-explain>${escapeHtml(t("switch_step_move_explain", params))}</p>
+      <ul class="station-cmd-legacy" data-switch-step-move-target>
+        <li data-switch-step-move-target-info>${escapeHtml(t(targetLine.key, targetLine.params))}</li>
+        <li data-switch-step-move-rule>${escapeHtml(t(rule.key, rule.params))}</li>
+      </ul>
+      ${p.planText.length ? `<details class="station-cmd-legacy" data-switch-step-move-plan><summary>${escapeHtml(t("switch_step_move_plan_title"))}</summary><ul>${p.planText.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></details>` : ""}
+      ${p.needsOverrunAck ? `<label class="station-cmd-daily" data-switch-step-move-overrun-label><input type="checkbox" data-switch-step-move-overrun${sheet.overrunChecked ? " checked" : ""}${sending ? " disabled" : ""}> ${escapeHtml(t("switch_step_move_overrun_ack", { qty: p.orderQty ?? "—" }))}</label>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-move-submit ${canSend ? "" : "disabled"}>${escapeHtml(sending ? t("switch_step_move_sending") : t("switch_step_move_submit", params))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-move-repick ${sending ? "disabled" : ""}>${escapeHtml(t("switch_step_move_repick"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-move-close ${sending ? "disabled" : ""}>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "uncertain") {
+    body = `${head}${notice("warn", 'data-switch-step-move-result="uncertain"', t(sheet.retryKey || "switch_step_move_uncertain", { ...steps, to: sheet.fields.targetStep ?? "—" }))}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-move-submit>${escapeHtml(t("switch_step_move_resend"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-move-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
+  } else {
+    const view = sheet.view || machtileSwitchStepCore.moveResultView({ status: "pending" }, steps);
+    const lines = view.terminal ? machtileSwitchMoveLines(view) : [t("switch_step_move_progress")];
+    body = `${head}<section class="station-cmd-result is-${escapeHtml(view.tone)}" data-switch-step-move-result="${escapeHtml(view.phase)}" data-switch-step-move-code="${escapeHtml(view.code || "")}" role="status">${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</section>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-switch-step-move-close>${escapeHtml(t(view.terminal ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  const reasonHadFocus = Boolean(document.activeElement?.matches?.("[data-switch-step-move-reason]"));
+  const order = [sheet.fields.orderNo, [sheet.fields.partNo, sheet.fields.part].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-stop" role="dialog" aria-modal="true" aria-labelledby="switchMoveTitle" data-switch-step-move-sheet="${escapeHtml(sheet.code)}" data-switch-step-move-phase="${escapeHtml(sheet.phase)}">
+      <header><h2 id="switchMoveTitle">${escapeHtml(t("switch_step_move_title", { order }))}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  if (focus || hadFocusInside) {
+    const focusTarget = (reasonHadFocus ? holder.querySelector("[data-switch-step-move-reason]") : null)
+      || holder.querySelector("[data-switch-step-move-close]:not([disabled])") || holder.querySelector("h2");
+    try { focusTarget?.focus(); } catch { /* ignore */ }
+  }
+}
+
+// 卡片按鈕與確認卡的點擊（document 層代理，接在第 2 階段前面）。旗標關時畫面上沒有這些元素，一律回 false。
+function machtileSwitchMoveHandleClick(event) {
+  if (!machtileSwitchMoveEnabled()) return false;
+  const target = event.target;
+  const open = target.closest("[data-switch-step-move-open]");
+  if (open) { void machtileSwitchMoveOpen(open.dataset.switchStepMoveOpen, open); return true; }
+  const retry = target.closest("[data-switch-step-move-retry]");
+  if (retry) { machtileSwitchMoveOpenRetry(retry.dataset.switchStepMoveRetry, retry); return true; }
+  const dismiss = target.closest("[data-switch-step-move-dismiss]");
+  if (dismiss) { machtileSwitchMoveDismiss(dismiss.dataset.switchStepMoveDismiss); return true; }
+  if (!target.closest("#machtileSwitchMoveSheet")) return false;
+  const choice = target.closest("[data-switch-step-move-choice]");
+  if (choice) { machtileSwitchMoveChoose(choice.dataset.switchStepMoveChoice); return true; }
+  if (target.closest("[data-switch-step-move-preview]")) { void machtileSwitchMovePreview(); return true; }
+  if (target.closest("[data-switch-step-move-submit]")) { void machtileSwitchMoveSubmit(); return true; }
+  if (target.closest("[data-switch-step-move-repick]")) {
+    const sheet = machtileSwitchMove.sheet;
+    if (sheet && machtileSwitchMoveGo(sheet, "repick")) { Object.assign(sheet, { previewUuid: "", preview: null, failure: null, overrunChecked: false }); machtileSwitchMoveRenderSheet(); }
+    return true;
+  }
+  if (target.closest("[data-switch-step-move-close]")) { machtileSwitchMoveCloseSheet(); return true; }
+  return true;
+}
+
+document.addEventListener("input", (event) => {
+  const sheet = machtileSwitchMove.sheet;
+  if (!sheet || !event.target?.matches?.("#machtileSwitchMoveSheet [data-switch-step-move-reason]")) return;
+  sheet.reason = event.target.value;
+  if (sheet.reasonError) {
+    sheet.reasonError = "";
+    document.querySelector("#machtileSwitchMoveSheet [data-switch-step-move-reason-error]")?.remove();
+  }
+});
+document.addEventListener("change", (event) => {
+  if (!machtileSwitchMove.sheet || !event.target?.matches?.("#machtileSwitchMoveSheet [data-switch-step-move-overrun]")) return;
+  machtileSwitchMoveSetOverrun(event.target.checked === true);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !machtileSwitchMove.sheet || !document.getElementById("machtileSwitchMoveSheet")) return;
+  event.preventDefault();
+  machtileSwitchMoveCloseSheet();
+});
+// ==== 換道次（數量一起搬）到此 ====
+
 // ============================================================================================
 // 機台卡片「接錯了，退回」（作業員退回自己接、還沒開工的單；P2，owner 2026-11-12 Q4／Q5）。
 //   合約與決策在 returnClaimCore.js 檔頭（CONTRACT-P2 r1）。旗標 config.enableReturnClaim 預設 false：
@@ -17157,6 +17775,7 @@ function machtileReturnClaimReleased(rec) {
 // 這台有一筆退回在等結果 → 開工／報工／完工先鎖住（合約 §5）。旗標關＝永遠 false。
 function machtileReturnClaimLocks(code) {
   if (machtileSwitchStartedLocks(code)) return true;
+  if (machtileSwitchMoveLocks(code)) return true;
   if (!machtileReturnClaimEnabled()) return false;
   if (machtileSwitchStepHolds(code)) return true;
   const rec = machtileReturnClaim.pending[String(code || "").trim().toUpperCase()];
@@ -17167,6 +17786,7 @@ function machtileReturnClaimLocks(code) {
 // 沒鎖、旗標關＝空字串＝照舊。只讀。
 function machtileReturnClaimBlockMessage(code) {
   if (machtileSwitchStartedLocks(code)) return machtileTranslate("switch_step_started_busy");
+  if (machtileSwitchMoveLocks(code)) return machtileTranslate("switch_step_move_busy");
   if (machtileSwitchStepClaimPass(code)) return "";
   return machtileReturnClaimLocks(code) ? machtileTranslate(machtileSwitchStepActive(code) ? "switch_step_busy" : "return_claim_busy") : "";
 }
@@ -18116,7 +18736,7 @@ function renderMachineCard(machine) {
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}${machtileSwitchStartedCardMarkup(machine)}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}${machtileSwitchStartedCardMarkup(machine)}${machtileSwitchMoveCardMarkup(machine)}
       ${!pickActions || pickActions.includes("select") ? machtileCardPoolEntryMarkup(machine) : ""}
 
       ${order ? `
@@ -28789,6 +29409,7 @@ function bindEvents() {
       return;
     }
 
+    if (machtileSwitchMoveHandleClick(event)) return;
     if (machtileSwitchStartedHandleClick(event)) return;
     if (machtileReturnClaimHandleClick(event)) return;
     if (machtileStationCmdHandleClick(event)) return;
