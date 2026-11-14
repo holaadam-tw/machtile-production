@@ -18,13 +18,17 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
-async function open(base) {
+async function open(base, { flag = false, rpc = null } = {}) {
   const context = await browser.newContext({ serviceWorkers: "block" });
   await context.route("**/*", (route) => {
     const url = new URL(route.request().url());
     if (url.hostname !== "127.0.0.1") return route.abort();
     const relative = url.pathname.replace(/^\//, "") || "index.html";
-    if (relative === "config.js") return route.fulfill({ contentType: "text/javascript", body: "window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:false};" });
+    if (relative === "config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${flag},hmcPalletCardMachines:["CNC-01"],supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
+    if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_card_read")) {
+      if (rpc instanceof Error) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: rpc.message }) });
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(rpc) });
+    }
     if (base && baseFiles.has(relative)) return route.fulfill({ contentType: mime[path.extname(relative)], body: baseFiles.get(relative) });
     return route.fallback();
   });
@@ -47,5 +51,25 @@ try {
   assert.deepEqual(mapped.pallets[0].orders.map((x) => x.order.id), ["WO-1", "WO-2"], "browser maps several parts to one pallet");
   assert.deepEqual(mapped.unmatched.map((x) => x.order.id), ["WO-X"], "browser does not guess a duplicated pallet match");
   await before.context.close(); await after.context.close();
+
+  const success = await open(false, { flag: true, rpc: { ok: true, machine_code: "CNC-01", pallets: [
+    { pallet_no: 1, parts: ["SS-BUSH-118", "EXTRA-PART"] },
+    { pallet_no: 2, parts: [] }, { pallet_no: 3, parts: [] }, { pallet_no: 4, parts: [] }, { pallet_no: 5, parts: [] }, { pallet_no: 6, parts: [] },
+  ] } });
+  const card = success.page.locator('[data-hmc-pallet-card="CNC-01"]');
+  await card.locator('[data-hmc-pallet="1"]').waitFor();
+  assert.doesNotMatch(await card.locator('[data-hmc-pallet="1"]').textContent(), /尚未登錄/, "flag on accepts a multi-part pallet response as configured");
+  assert.match(await card.locator('[data-hmc-pallet="2"]').textContent(), /尚未登錄/, "only an ok empty pallet renders not configured");
+  assert.equal(await success.page.evaluate(() => window.MachTileHmcPalletCardCore.mapOrdersToPallets(
+    [{ order: { id: "WO-UNMAPPED", partNo: "NO-MATCH" } }],
+    [{ palletNo: 1, slots: [{ part: { partNo: "SS-BUSH-118" } }, { part: { partNo: "EXTRA-PART" } }] }]
+  ).unmatched[0].order.id), "WO-UNMAPPED", "flag-on browser keeps an unmapped order in the unmatched result");
+  await success.context.close();
+
+  const failed = await open(false, { flag: true, rpc: new Error("temporary") });
+  const failedCard = failed.page.locator('[data-hmc-pallet-card="CNC-01"]');
+  await failedCard.getByText("固定工件設定暫時讀不到").waitFor();
+  assert.doesNotMatch(await failedCard.textContent(), /尚未登錄|未對應/, "RPC failure renders only the read-error state");
+  await failed.context.close();
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
-console.log("PASS: 5 HMC pallet-card browser assertions");
+console.log("PASS: 9 HMC pallet-card browser assertions");
