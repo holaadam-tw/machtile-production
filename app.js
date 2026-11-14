@@ -9464,6 +9464,8 @@ function machtileSetSession(authResponse, email, persistence = null) {
   machtileAuthState.status = "signedIn";
   machtileAuthState.accessToken = accessToken;
   machtileAuthState.email = email || authResponse?.user?.email || jwtPayload.email || "";
+  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStartedForgetUser();
+  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || "")) machtileSwitchStepForgetUser();
   machtileAuthState.userId = authResponse?.user?.id || jwtPayload.sub || "";
   const signedTenantId = appMetadata.tenant_id || appMetadata.tenantId || jwtPayload.tenant_id || "";
   machtileAuthState.hmcFixedSignedTenantId = signedTenantId;
@@ -9498,6 +9500,8 @@ function machtileClearSession(message = "") {
   machtileAuthState.status = "signedOut";
   machtileAuthState.accessToken = "";
   machtileAuthState.email = "";
+  machtileSwitchStartedForgetUser();
+  machtileSwitchStepForgetUser();
   machtileAuthState.userId = "";
   machtileAuthState.tenantId = "";
   machtileAuthState.role = "";
@@ -10487,7 +10491,7 @@ function supabaseHeaders() {
 async function machtileSupabaseFetchRequest(path, options = {}) {
   const readOnlyRpc = new Set(["batch_report_progress", "attention_case_snapshot", "cnc_calibration_snapshot",
     "hmc_runtime_snapshot", "schedule_calendar_snapshot", "schedule_preview", "unified_event_list",
-    "manufacturing_quote_tracking_snapshot"]);
+    "manufacturing_quote_tracking_snapshot", "machtile_held_pool_claims"]);
   const rpc = path.split("?")[0].replace(/^rpc\//, "");
   if (machtileStrictMode() && path !== "rpc/machine_department_context"
       && !machtileDepartmentUnrestricted() && !readOnlyRpc.has(rpc)
@@ -11231,7 +11235,9 @@ function machtileMachineCardOrders() {
   return [...state.assignedCardOrders, ...(state.workOrders || []).filter(order => !order.machine)];
 }
 
-async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration) {
+async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDeferredLoadGeneration, statusOnly = false) {
+  // 「接錯了，退回」／「換道次」用的池列鍵（旗標關＝不叫）：跟下面的池列狀態同時讀、兩個都回來才算載入完；它只寫 order.heldPoolKey
+  if (!statusOnly && machtileReturnClaimEnabled()) { await Promise.all([machtileReturnClaimLoadHeldPoolKeys(generation), machtileLoadAssignedDispatchPoolStatuses(generation, true)]); return; }
   const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
   const keys = [...new Set(orders.map(order => order.dispatchPoolSourceKey).filter(Boolean))];
   if (!keys.length) {
@@ -12097,8 +12103,9 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
   return true;
 }
 
-async function machtileClaimDispatchPool(sourceKey, machineCode) {
+async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {
   if (!sourceKey || !machineCode || machtileDispatchPoolState.claimBusy) return;
+  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), "error"); return; }
   const holder = document.getElementById("machtileCardSelection");
   const message = holder?.querySelector("[data-pool-claim-message]");
   if (holder?.dataset.pickOrder === "true") {
@@ -12110,19 +12117,23 @@ async function machtileClaimDispatchPool(sourceKey, machineCode) {
   holder?.querySelectorAll("[data-pool-claim]").forEach(button => { button.disabled = true; });
   try {
     const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
-    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args) });
-    await loadFromSupabase({ preserveDepartmentOnFailure: true });
+    await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args), ...(switchStep ? switchStep.request : null) });
+    if (switchStep) switchStep.claimed = true;
+    await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));
     deriveMachines();
     renderAll();
     machtileCloseCardSelection();
-    showToast(machtileTranslate("claim_success"), "success");
+    if (!switchStep) showToast(machtileTranslate("claim_success"), "success");
+    return { ok: true };
   } catch (error) {
+    if (switchStep) return machtileSwitchStepClaimError(switchStep, error);
     machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
     if (message) message.textContent = machtileDispatchPoolState.claimMessage;
     showToast(machtileDispatchPoolState.claimMessage, "error");
     await machtileLoadDispatchPool();
+    return { ok: false, error };
   } finally {
-    machtileDispatchPoolState.claimBusy = "";
+    if (!(switchStep && switchStep.abandoned)) machtileDispatchPoolState.claimBusy = "";
     const machine = machtileScheduleMachine(machineCode);
     if (holder?.isConnected && machine) machtileOpenCardSelection(machineCode, machtileCardSelectionReopenOptions(holder, machineCode));
   }
@@ -12186,7 +12197,7 @@ function machtileDispatchPoolReturnMarkup(order, machineCode) {
   if (!order?.dispatchPoolSourceKey) return "";
   const cardDetailsReady = machtileDeferredLoadState.get("card-details")?.status === "ready";
   const isPendingClaim = cardDetailsReady && order.dispatchPoolStatus === "claimed" && order.processStatus === "pending" && order.done <= 0;
-  if (machtileCanReturnDispatchPool() && isPendingClaim) {
+  if (machtileCanReturnDispatchPool() && isPendingClaim && !machtileReturnClaimEnabled()) {
     return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-pool-return="${escapeHtml(order.dispatchPoolSourceKey)}" data-pool-return-machine="${escapeHtml(machineCode || "")}">退回池子</button>`;
   }
   if (!isPendingClaim && (order.dispatchPoolStatus === "gone" || order.processStatus === "running" || order.done > 0)) {
@@ -12196,7 +12207,7 @@ function machtileDispatchPoolReturnMarkup(order, machineCode) {
 }
 
 async function machtileReturnDispatchPool(sourceKey) {
-  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool()) return;
+  if (!sourceKey || machtileDispatchPoolState.claimBusy || !machtileCanReturnDispatchPool() || machtileReturnClaimEnabled()) return;
   const reason = window.prompt("請輸入退回池子的原因（1–500 字）", "");
   if (reason === null) return;
   const args = machtileDispatchPoolCore.returnArgs(sourceKey, reason);
@@ -12233,6 +12244,7 @@ function machtileCardSelectionReopenOptions(holder, machineCode) {
 function machtileOpenCardSelection(machineCode, { poolOnly = false, refreshPool = true, pickOrder = false } = {}) {
   const machine = machtileScheduleMachine(machineCode);
   if (!machine) return;
+  if (machtileReturnClaimBlockMessage(machineCode)) { showToast(machtileReturnClaimBlockMessage(machineCode), "error"); return; }
   if (!poolOnly && (!machtileCanEditSchedule() || !machtileCanAssignToMachine(machineCode))) return;
   const current = document.getElementById("machtileCardSelection");
   if (!refreshPool && current?.dataset.machineCode === String(machineCode || "")) {
@@ -15214,6 +15226,8 @@ function machtileStationCmdRestorePending() {
 // 第一次畫卡片之前先同步還原 localStorage 裡等確認的指令（不等 station_commands 探測）。
 // 否則探測完成前按鈕若可按，會在已有 unconfirmed pending 時另產生新 command_uuid。
 function machtileStationCmdRestorePendingEarly() {
+  machtileReturnClaimRestore();   // 「接錯了，退回」等結果中的那筆也一起還原（旗標關＝什麼都不做）
+  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）
   if (!machtileStationCmdCore || !machtileStationCmdCore.flagIsOn(machtileStationCmdFlag()) || state.source !== "supabase" || !machtileStationCmdRoleOk()) return;
   machtileStationCmdRestorePending();
 }
@@ -15287,7 +15301,7 @@ function machtileStationCmdParts(machine) {
   const label = machtileStationCmdCore.TYPE_LABEL;
   const released = pending && machtileStationCmdCore.lockReleased(pending.startedAt, Date.now());
   const releaseNote = released ? machtileStationCmdCore.releasedNote(pending.lastStatus) : null;
-  const locked = Boolean(pending) && !instantStartTimedOut && !(releaseNote && releaseNote.unlock);
+  const locked = (Boolean(pending) && !instantStartTimedOut && !(releaseNote && releaseNote.unlock)) || machtileReturnClaimLocks(code);
   let line = "";
   let retry = "";
   if (pending && pending.unconfirmed) {
@@ -15473,7 +15487,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket });
   const pending = machtileStationCmd.pending[code];
-  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending))) return;
+  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending)) || machtileReturnClaimLocks(code)) return;
   let uuid;
   try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
   const others = Number(machine?.cardOtherCount || 0);
@@ -16546,6 +16560,1470 @@ document.addEventListener("keydown", (event) => {
   else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
 });
 
+// ==== 換道次（已開工、還沒報工；第 2 階段） ==================================================
+// 設計：ops/codex-inbox/20261113-2230-switchstep-phase2/DESIGN.md §3／§4；快照合約 r2（CONTRACT-r2.md）。
+//   決策在 switchStepCore.js（started* 開頭的函式）。旗標 config.enableSwitchStepStarted 預設 false：
+//   關＝下面每個函式都回空字串／false／直接 return，不讀任何東西、不存任何東西，卡片 HTML 跟以前逐字相同。
+//   跟第 1 階段（enableSwitchStep：退回＋接單兩步）分開，也不需要 enableReturnClaim。
+//   按鈕（已開工、0 件）→ 確認卡（重讀這一道、待做池、這張單的各道、這一道的池列鍵）→ 選目標道次 →
+//   rpc/machtile_submit_switch_step_command（command_uuid 由 App 產生；不確定有沒有送到＝同一個 uuid＋同樣內容重送）→
+//   既有指令輪詢（returnClaimCore.pollPath，同一串 select）看到 applied／rejected／expired。工廠一個交易做完，不會有「退了、沒接到」。
+//   applied 的快照 source_unpooled===true＝原本那一道現在不在任何機台、也不在待做池 → 確認卡、卡片上都留一句「請生管用『設定到這台』重新安排」，
+//   而且管理員／生管從雲端讀最近的這種換道次（換到哪一台平板都看得到）。
+//   畫卡片的函式（Locks／Gate／CardMarkup／NoticesMarkup）只讀不寫。
+// ============================================================================================
+const MACHTILE_SWITCH_STARTED_PENDING_KEY = "machtile.switchStepStartedPending.v1";
+const MACHTILE_SWITCH_STARTED_DISMISSED_KEY = "machtile.switchStepUnpooledDismissed.v1";
+const machtileSwitchStarted = {
+  pending: {},      // 機台代號 → switchStepCore.startedPendingRecord（等伺服器結果中／不確定有沒有送到）
+  timers: {},       // 機台代號 → 輪詢 timer
+  lastResult: {},   // 機台代號 → { view, at, orderNo, step }
+  sheet: null,      // 目前開著的確認卡
+  notices: [],      // 雲端讀到的「第 N 道不在任何機台、也不在待做池」（switchStepCore.unpooledNotices）
+  localNotices: [], // 這台平板剛換好的（雲端還沒讀回來之前也要看得到）
+  noticesLoading: null,
+  sessionKey: "",
+};
+
+function machtileSwitchStartedEnabled() {
+  return Boolean(machtileSwitchStepCore) && machtileSwitchStepCore.startedEnabled({ flag: config.enableSwitchStepStarted })
+    && Boolean(machtileReturnClaimCore) && Boolean(machtileStationCmdCore) && Boolean(machtileDispatchPoolCore) && state.source === "supabase";
+}
+
+function machtileSwitchStartedReleased(rec) {
+  return Boolean(rec && machtileStationCmdCore?.lockReleased(rec.startedAt, Date.now()));
+}
+
+// 這台有一筆換道次在等結果 → 開工／停工／報工／完工／選工單／批次都先鎖住（接在 machtileReturnClaimLocks／BlockMessage 最前面）。旗標關＝永遠 false。
+function machtileSwitchStartedLocks(code) {
+  if (!machtileSwitchStartedEnabled()) return false;
+  const rec = machtileSwitchStarted.pending[String(code || "").trim().toUpperCase()];
+  return machtileSwitchStepCore.startedLocks(rec, machtileSwitchStartedReleased(rec));
+}
+
+function machtileSwitchStartedSession() {
+  return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
+}
+
+function machtileSwitchStartedGate(machine) {
+  if (!machtileSwitchStartedEnabled() || !machine) return { show: false, reason: "flag_off", needsReason: false };
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine.order || null;
+  const local = machtilePickStartLocal[code];
+  const startedLocally = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
+  const todayRows = machtileCardState.todayStatus === "ok" && Array.isArray(machtileCardState.todayRows) ? machtileCardState.todayRows : [];
+  return machtileSwitchStepCore.startedVisibility({
+    enabled: true, role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    cardDetailsReady: machtileDeferredLoadState.get("card-details")?.status === "ready",
+    isUnassignedBucket: machine.isUnassignedBucket === true, machineCode: code, order,
+    multiStation: (Array.isArray(config.multiStationMachines) ? config.multiStationMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    machineAllowed: (Array.isArray(config.switchStepStartedMachines) ? config.switchStepStartedMachines : []).map((item) => String(item).trim().toUpperCase()).includes(code),
+    actualStartAt: order ? (machtileCardActivityOf(order)?.actualStartAt || order.actualStartAt || null) : null,
+    startedLocally,
+    startedToday: Boolean(order) && machtileStationCmdCore.startedToday({
+      commandRows: [...state.dailyStationStartRows, ...state.localStationStartRows], reportRows: todayRows,
+      machineCode: code, orderNo: order.id, step: order.stationStep, processId: order.processId }),
+    // 開工確認卡會寫一筆 0／0 的「今日開工」（dailyStart）：那不算報工（雲端 submit 也放行 workStart／dailyStart／pause 的 0 件列）
+    hasTodayReport: Boolean(order) && machtileSwitchStepCore.todayReportBlocks(todayRows, order.processId),
+    commandInFlight: Boolean(machtileStationCmd.pending[code] || machtileInstantStartPending[code] || machtileSwitchStarted.pending[code]) || machtileReturnClaimLocks(code),
+    unsureHold: Boolean(order) && machtileSwitchStepCore.startedUnsureHold(machtileSwitchStarted.lastResult[code], { orderNo: order.id, step: order.stationStep, nowMs: Date.now() }),
+  });
+}
+
+function machtileSwitchStartedText(view) {
+  return machtileTranslate(view.messageKey, view.params || {});
+}
+
+function machtileSwitchStartedDismissed() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MACHTILE_SWITCH_STARTED_DISMISSED_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item).toLowerCase()) : []);
+  } catch { return new Set(); }
+}
+
+// 這台機台的「第 N 道不在任何機台、也不在待做池」提醒（雲端讀到的＋這台平板剛換好的）。只讀。
+function machtileSwitchStartedNoticesFor(code) {
+  if (!machtileSwitchStarted.notices.length && !machtileSwitchStarted.localNotices.length) return [];
+  const dismissed = machtileSwitchStartedDismissed();
+  const role = machtileActualRole();
+  const local = machtileSwitchStepCore.unpooledNotices({ rows: machtileSwitchStarted.localNotices, nowMs: Date.now(), role, dismissed });
+  const seen = new Set();
+  return [...machtileSwitchStarted.notices, ...local].filter((notice) => {
+    if (notice.machineCode !== code || seen.has(notice.commandUuid) || dismissed.has(notice.commandUuid)) return false;
+    seen.add(notice.commandUuid);
+    return true;
+  });
+}
+
+function machtileSwitchStartedNoticesMarkup(code) {
+  const canDismiss = machtileSwitchStepCore.startedNeedsReason(machtileActualRole());
+  return machtileSwitchStartedNoticesFor(code).map((notice) => `<p class="station-cmd-status is-warn switch-step-started-notice" data-no-detail data-switch-step-unpooled="${escapeHtml(notice.commandUuid)}" role="alert">${escapeHtml(machtileTranslate("switch_step_started_unpooled_card", { order: notice.orderNo, from: notice.from ?? "—", to: notice.to ?? "—", machine: notice.machineCode }))}</p>${canDismiss
+    ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-unpooled-dismiss="${escapeHtml(notice.commandUuid)}">${escapeHtml(machtileTranslate("switch_step_started_unpooled_dismiss"))}</button>` : ""}`).join("");
+}
+
+// 卡片上的那一段：提醒、等待中的一行字（＋重送）、最後一次結果、或按鈕。只讀。旗標關＝空字串。
+function machtileSwitchStartedCardMarkup(machine) {
+  if (!machtileSwitchStartedEnabled() || !machine) return "";
+  const code = machtileStationCmdMachineCode(machine);
+  const notices = machtileSwitchStartedNoticesMarkup(code);
+  const rec = machtileSwitchStarted.pending[code];
+  if (rec) {
+    if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, machine.order || null)) {
+      return notices + (machtileSwitchStartedLocks(code)
+        ? `<p class="station-cmd-status is-wait" data-no-detail data-switch-step-started-status="other-order" role="status">${escapeHtml(machtileTranslate("switch_step_started_busy"))}</p>` : "");
+    }
+    const uncertain = rec.unconfirmed === true;
+    const key = rec.notFound ? "switch_step_started_not_found" : uncertain ? "switch_step_started_uncertain" : "switch_step_started_card_pending";
+    return `${notices}<p class="station-cmd-status is-${uncertain || rec.notFound ? "warn" : "wait"}" data-no-detail data-switch-step-started-status="${rec.notFound ? "not-found" : uncertain ? "uncertain" : "pending"}" role="status">${escapeHtml(machtileTranslate(key, { from: rec.step, to: rec.targetStep }))}</p>${uncertain || rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-started-retry="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_resend"))}</button>` : ""}${rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-switch-step-started-dismiss="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_dismiss"))}</button>` : ""}`;
+  }
+  const order = machine.order || null;
+  const last = machtileSwitchStarted.lastResult[code];
+  const note = machtileSwitchStepCore.startedLastResultVisible(last, { orderNo: order?.id, step: order?.stationStep, nowMs: Date.now() })
+    ? `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-no-detail data-switch-step-started-status="${escapeHtml(last.view.phase)}" role="status">${escapeHtml(machtileSwitchStartedText(last.view))}</p>` : "";
+  const button = machtileSwitchStartedGate(machine).show
+    ? `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-started-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("switch_step_started_button"))}</button>` : "";
+  return notices + note + button;
+}
+
+function machtileSwitchStartedSave() {
+  const own = {};
+  Object.keys(machtileSwitchStarted.pending).forEach((code) => {
+    const { emptyPolls, releasedShown, ...rest } = machtileSwitchStarted.pending[code];
+    own[code] = rest;
+  });
+  try {
+    const plain = machtileSwitchStepCore.startedMergeForSave(localStorage.getItem(MACHTILE_SWITCH_STARTED_PENDING_KEY), own, Date.now(), machtileSwitchStartedSession());
+    localStorage.setItem(MACHTILE_SWITCH_STARTED_PENDING_KEY, JSON.stringify(plain));
+  } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+}
+
+// 載入資料時呼叫（machtileStationCmdRestorePendingEarly，第一次畫卡片之前）：把目前登入的這個人上次還沒有結果的換道次放回記憶體、繼續輪詢；
+// 順便（不等）讀一次雲端的「不在待做池」提醒。換了人＝記憶體裡前一個人的先放掉（localStorage 那筆不動）。
+function machtileSwitchStartedRestore() {
+  if (!machtileSwitchStartedEnabled()) return;
+  const session = machtileSwitchStartedSession();
+  const sessionKey = `${session.tenantId}|${session.appUserId}`;
+  if (sessionKey !== machtileSwitchStarted.sessionKey) {
+    machtileSwitchStarted.sessionKey = sessionKey;
+    machtileSwitchStarted.lastResult = {};
+    machtileSwitchStarted.localNotices = [];
+  }
+  Object.keys(machtileSwitchStarted.pending).forEach((code) => {
+    if (machtileSwitchStepCore.startedSameSession(machtileSwitchStarted.pending[code], session)) return;
+    clearTimeout(machtileSwitchStarted.timers[code]);
+    delete machtileSwitchStarted.timers[code];
+    delete machtileSwitchStarted.pending[code];
+  });
+  let raw = null;
+  try { raw = localStorage.getItem(MACHTILE_SWITCH_STARTED_PENDING_KEY); } catch { raw = null; }
+  const restored = machtileSwitchStepCore.startedRestoreForSession(raw, Date.now(), session);
+  Object.keys(restored).forEach((code) => {
+    if (machtileSwitchStarted.pending[code]) return;
+    machtileSwitchStarted.pending[code] = restored[code];
+    if (!restored[code].notFound) machtileSwitchStartedPoll(code);
+  });
+  void machtileSwitchStartedLoadNotices();
+}
+
+// 雲端最近 72 小時 applied 的 switch_step（只看快照 source_unpooled===true 的）。讀不到＝保留上次的，不跳訊息。
+async function machtileSwitchStartedLoadNotices() {
+  if (!machtileSwitchStartedEnabled()) return;
+  if (machtileSwitchStarted.noticesLoading) return machtileSwitchStarted.noticesLoading;
+  const since = new Date(Date.now() - machtileSwitchStepCore.UNPOOLED_NOTICE_ADMIN_MS).toISOString();
+  machtileSwitchStarted.noticesLoading = (async () => {
+    try {
+      const rows = await supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,status,requested_at,applied_at,legacy_snapshot&command_type=eq.switch_step&status=eq.applied&applied_at=gte.${encodeURIComponent(since)}&order=applied_at.desc&limit=200`);
+      if (!Array.isArray(rows)) return;
+      machtileSwitchStarted.notices = machtileSwitchStepCore.unpooledNotices({ rows, nowMs: Date.now(), role: machtileActualRole(), dismissed: machtileSwitchStartedDismissed() });
+      machtileStationCmdRerender();
+    } catch (error) {
+      console.warn("switch step (started): unpooled notices unavailable", error);
+    } finally {
+      machtileSwitchStarted.noticesLoading = null;
+    }
+  })();
+  return machtileSwitchStarted.noticesLoading;
+}
+
+// 管理員／生管按「已安排」：只在這台平板收起（雲端的換道次紀錄不動）
+function machtileSwitchStartedDismissNotice(uuid) {
+  if (!machtileSwitchStepCore.startedNeedsReason(machtileActualRole())) return;
+  const set = machtileSwitchStartedDismissed();
+  set.add(String(uuid || "").toLowerCase());
+  try { localStorage.setItem(MACHTILE_SWITCH_STARTED_DISMISSED_KEY, JSON.stringify([...set].slice(-200))); } catch { /* ignore */ }
+  machtileStationCmdRerender();
+}
+
+function machtileSwitchStartedForgetUser() {
+  try {
+    if (machtileSwitchStarted.sheet) { machtileSwitchStarted.sheet.phase = "closing"; machtileSwitchStartedCloseSheet(); }
+    machtileSwitchStarted.lastResult = {};
+    machtileSwitchStarted.localNotices = [];
+  } catch { /* still loading: nothing to forget */ }
+}
+
+function machtileSwitchStartedCloseSheet() {
+  const sheet = machtileSwitchStarted.sheet;
+  if (sheet && sheet.phase === "sending") return;
+  document.getElementById("machtileSwitchStartedSheet")?.remove();
+  machtileSwitchStarted.sheet = null;
+  if (!sheet) return;
+  const target = sheet.returnFocus && sheet.returnFocus.isConnected ? sheet.returnFocus
+    : document.querySelector(`#workOrderGrid [data-switch-step-started-open="${sheet.code}"], #workOrderGrid [data-switch-step-started-retry="${sheet.code}"]`);
+  try { target?.focus(); } catch { /* ignore */ }
+}
+
+function machtileSwitchStartedNewSheet(sheet) {
+  machtileSwitchStartedCloseSheet();
+  if (machtileSwitchStarted.sheet) return false;
+  machtileSwitchStarted.sheet = sheet;
+  const holder = document.createElement("div");
+  holder.id = "machtileSwitchStartedSheet";
+  holder.className = "station-cmd-overlay";
+  document.body.appendChild(holder);
+  machtileSwitchStartedRenderSheet(true);
+  return true;
+}
+
+function machtileSwitchStartedTarget(sheet) {
+  return sheet ? sheet.choices.find((choice) => choice.id === sheet.targetId) || null : null;
+}
+
+// 開確認卡時的四個讀取（都只是讀）：這一道（還在這台、0 件）、待做池、這張單的各道、這一道的池列鍵。
+async function machtileSwitchStartedLoadSheet(sheet) {
+  const code = sheet.code;
+  let fresh = { ok: false, reason: "read_failed", partNo: null, workOrderId: "" };
+  try {
+    const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,qty_defect,work_orders!inner(id,work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(sheet.fields.processId)}`);
+    fresh = machtileSwitchStepCore.startedFreshCheck({ machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step, row: Array.isArray(rows) ? rows[0] : null });
+  } catch (error) {
+    console.warn("switch step (started): work_order_processes re-read failed", error);
+  }
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  sheet.freshOk = fresh.ok;
+  sheet.freshKey = fresh.ok ? "" : fresh.reason === "read_failed" ? "switch_step_started_fresh_failed" : fresh.reason === "has_reports" ? "switch_step_started_err_reported" : "switch_step_started_fresh_changed";
+  sheet.fields.partNo = fresh.partNo;
+  if (!fresh.ok) return;
+  const workOrderId = fresh.workOrderId;
+  const processesRead = workOrderId
+    ? supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,machines!work_order_processes_machine_id_fkey(machine_code)&work_order_id=eq.${encodeURIComponent(workOrderId)}&order=process_order.asc`)
+      .then((rows) => (Array.isArray(rows) ? rows : null)).catch((error) => { console.warn("switch step (started): steps of the order unavailable", error); return null; })
+    : Promise.resolve(null);
+  const heldRead = supabaseFetch(`rpc/${machtileReturnClaimCore.HELD_CLAIMS_RPC}`, { method: "POST", body: "{}" })
+    .catch((error) => { console.warn("switch step (started): held claim lookup unavailable", error); return null; });
+  const historyRead = supabaseFetch(`station_commands?select=command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,legacy_snapshot&machine_code=eq.${encodeURIComponent(code)}&expected_order_no=eq.${encodeURIComponent(sheet.fields.orderNo)}&command_type=in.(claim_next,return_claim,switch_step)&status=eq.applied&order=requested_at.desc&limit=200`)
+    .catch((error) => { console.warn("switch step (started): command history unavailable", error); return null; });
+  const [poolOk, processes, heldRows, historyRows] = await Promise.all([machtileSwitchStepReadPool(), processesRead, heldRead, historyRead]);
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const found = machtileSwitchStepCore.startedTargets({
+    orderNo: sheet.fields.orderNo, currentStep: sheet.fields.step,
+    poolReady: poolOk && machtileDispatchPoolState.status === "ready", poolItems: machtileDispatchPoolState.items,
+    processesReady: Array.isArray(processes), processes,
+    machine: machtileSwitchStepMachineInfo(machine, code), allowUnpooled: config.switchStepStartedAllowUnpooled === true,
+  });
+  sheet.listReady = found.ready;
+  sheet.choices = found.choices;
+  sheet.targetId = found.choices.length === 1 ? found.choices[0].id : "";
+  // 池列鍵的兩個來源有一個讀失敗（網路／HTTP 錯誤，不是「沒有」）＝不知道該送哪一筆 → 不送 null、不給送，請他再試一次
+  sheet.keyReadFailed = !Array.isArray(heldRows) || !Array.isArray(historyRows);
+  const heldKey = machtileReturnClaimCore.heldPoolKey({ rows: heldRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step });
+  sheet.fields.poolItemId = machtileSwitchStepCore.sourcePoolKey({ heldKey, historyRows, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step }).key;
+}
+
+async function machtileSwitchStartedOpen(code, returnFocus) {
+  if (!machtileSwitchStartedEnabled()) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machine ? machtileSwitchStartedGate(machine) : { show: false };
+  if (!gate.show || machtileSwitchStarted.pending[code]) return;
+  let uuid;
+  try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast(machtileTranslate("switch_step_started_old_tablet")); return; }
+  const order = machine.order;
+  const sheet = {
+    code, uuid, role: machtileActualRole(), phase: "confirm", loading: true, freshOk: false, freshKey: "", needsReason: gate.needsReason, reason: "", reasonError: "",
+    returnFocus: returnFocus || null, args: null, messageKey: "", view: null, listReady: false, choices: [], targetId: "",
+    fields: { poolItemId: "", orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "", targetStep: null },
+  };
+  if (!machtileSwitchStartedNewSheet(sheet)) return;
+  await machtileSwitchStartedLoadSheet(sheet);
+  if (machtileSwitchStarted.sheet !== sheet) return;
+  sheet.loading = false;
+  machtileSwitchStartedRenderSheet();
+}
+
+function machtileSwitchStartedChoose(id) {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!sheet || sheet.phase !== "confirm" || sheet.loading || !sheet.choices.some((choice) => choice.id === id)) return;
+  sheet.targetId = id;
+  machtileSwitchStartedRenderSheet();
+}
+
+// 「不確定有沒有送到」的那一筆 → 從卡片再打開，用同一個 uuid＋同樣內容重送（伺服器看到同一個 uuid＝回原本那一列，不會換兩次）
+function machtileSwitchStartedOpenRetry(code, returnFocus) {
+  if (!machtileSwitchStartedEnabled()) return;
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec || !(rec.unconfirmed || rec.notFound)) return;
+  const cardOrder = machtileStationCmdMachineByCode(code)?.order || null;
+  if (!machtileSwitchStepCore.startedRecordMatchesOrder(rec, cardOrder)) return;
+  machtileSwitchStartedNewSheet({
+    code, uuid: rec.commandUuid, role: machtileActualRole(), phase: "uncertain", loading: false, freshOk: true, freshKey: "", needsReason: false,
+    reason: "", reasonError: "", returnFocus: returnFocus || null, args: rec.args, view: null, listReady: false, choices: [], targetId: "",
+    messageKey: rec.notFound ? "switch_step_started_not_found" : "switch_step_started_uncertain",
+    fields: { poolItemId: rec.args.p_pool_item_id || "", orderNo: rec.orderNo, step: rec.step, processId: rec.processId, partNo: rec.args.p_expected_part_no, part: "", process: "", targetStep: rec.targetStep },
+  });
+}
+
+function machtileSwitchStartedDismiss(code) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec || !rec.notFound) return;
+  delete machtileSwitchStarted.pending[code];
+  machtileSwitchStartedSave();
+  machtileStationCmdRerender();
+}
+
+async function machtileSwitchStartedSubmit() {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!machtileSwitchStartedEnabled() || !sheet || sheet.loading || !["confirm", "uncertain"].includes(sheet.phase)) return;
+  const code = sheet.code;
+  const existing = machtileSwitchStarted.pending[code];
+  if (existing && existing.commandUuid !== sheet.uuid) return;   // 同一台另一筆還在等：不送第二筆
+  if (sheet.phase === "confirm") {
+    const target = machtileSwitchStartedTarget(sheet);
+    if (!sheet.freshOk || !sheet.listReady || sheet.keyReadFailed || !target) return;
+    const checked = machtileSwitchStepCore.startedReasonCheck(sheet.role, sheet.reason);
+    if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileSwitchStartedRenderSheet(); return; }
+    sheet.reasonError = "";
+    try {
+      sheet.args = machtileSwitchStepCore.startedBuildArgs({ commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
+        step: sheet.fields.step, targetStep: target.step, targetPoolItemId: target.sourceKey, partNo: sheet.fields.partNo, reason: checked.value, role: sheet.role });
+    } catch (error) {
+      console.warn("switch step (started): cannot build args", error);
+      sheet.phase = "failed"; sheet.messageKey = "switch_step_started_err_card_data"; machtileSwitchStartedRenderSheet(); return;
+    }
+    sheet.fields.targetStep = target.step;
+  }
+  if (!sheet.args) return;
+  sheet.phase = "sending";
+  machtileSwitchStartedRenderSheet();
+  // 同一次嘗試沿用第一次按下的時間；之前查不到（notFound）才重送的，從現在重新算
+  const startedAt = existing && !existing.notFound ? existing.startedAt : Date.now();
+  const record = (extra) => machtileSwitchStepCore.startedPendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+    targetStep: sheet.fields.targetStep, processId: sheet.fields.processId, ...machtileSwitchStartedSession(), args: sheet.args, startedAt, ...extra });
+  const uncertain = () => {
+    machtileSwitchStarted.pending[code] = record({ unconfirmed: true });
+    machtileSwitchStartedSave();
+    machtileSwitchStartedPoll(code);
+    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "uncertain"; sheet.messageKey = "switch_step_started_uncertain"; machtileSwitchStartedRenderSheet(); }
+    machtileStationCmdRerender();
+  };
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${machtileSwitchStepCore.STARTED_SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = machtileSwitchStepCore.startedSubmitErrorInfo(machtileReturnClaimCore.submitErrorInfo(error), error);
+    if (info.kind === "uncertain") { uncertain(); return; }
+    console.warn("switch step (started): submit refused", info.code || info.kind, error);
+    if (machtileSwitchStarted.pending[code]?.commandUuid === sheet.uuid) { delete machtileSwitchStarted.pending[code]; machtileSwitchStartedSave(); }
+    clearTimeout(machtileSwitchStarted.timers[code]);
+    delete machtileSwitchStarted.timers[code];
+    const params = { from: sheet.fields.step, to: sheet.fields.targetStep, ...info.params };
+    if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "failed"; sheet.messageKey = info.messageKey; sheet.messageParams = info.params; machtileSwitchStartedRenderSheet(); }
+    else showToast(machtileTranslate(info.messageKey, params));
+    machtileStationCmdRerender();
+    return;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // 伺服器沒有回這一筆 → 不當成功也不當失敗：照「不確定」處理，輪詢去查
+  if (!machtileReturnClaimCore.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
+  const view = machtileSwitchStepCore.startedResultView(row, { from: sheet.fields.step, to: sheet.fields.targetStep });
+  machtileSwitchStarted.pending[code] = record({ unconfirmed: false, lastStatus: view.status });
+  delete machtileSwitchStarted.lastResult[code];
+  machtileSwitchStartedSave();
+  if (view.terminal) { machtileSwitchStartedFinish(code, view, row); return; }
+  if (machtileSwitchStarted.sheet === sheet) { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+  machtileSwitchStartedPoll(code);
+  machtileStationCmdRerender();
+}
+
+// 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
+function machtileSwitchStartedFinish(code, view, row) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!rec) return;
+  clearTimeout(machtileSwitchStarted.timers[code]);
+  delete machtileSwitchStarted.timers[code];
+  delete machtileSwitchStarted.pending[code];
+  machtileSwitchStartedSave();
+  machtileSwitchStarted.lastResult[code] = { view, at: Date.now(), orderNo: rec.orderNo, step: rec.step };
+  if (view.phase === "applied") {
+    delete machtilePickStartLocal[code];
+    // 原本那一道現在不在任何機台、也不在待做池：這台平板馬上看得到（雲端那份下面重讀）
+    if (view.sourceUnpooled && row) machtileSwitchStarted.localNotices = [...machtileSwitchStarted.localNotices.filter((item) => item.command_uuid !== row.command_uuid), row];
+  } else console.warn("switch step (started): not applied", view.phase, view.code);
+  const sheet = machtileSwitchStarted.sheet;
+  if (sheet && sheet.code === code && sheet.uuid === rec.commandUuid) { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+  machtileStationCmdRerender();
+  showToast(view.noticeKey ? `${machtileSwitchStartedText(view)} ${machtileTranslate(view.noticeKey, view.params)}` : machtileSwitchStartedText(view));
+  // 成功＝機台換了道次；沒成功＝卡片資料多半已經過時。兩種都重讀一次（卡片＋待做池）。
+  void machtileRefreshAfterApplied(code, machtileSwitchStepCore.STARTED_COMMAND_TYPE);
+  if (view.sourceUnpooled) void machtileSwitchStartedLoadNotices();
+}
+
+function machtileSwitchStartedPoll(code) {
+  const rec = machtileSwitchStarted.pending[code];
+  if (!machtileSwitchStepCore || !machtileStationCmdCore || !rec) return;
+  clearTimeout(machtileSwitchStarted.timers[code]);
+  machtileSwitchStarted.timers[code] = setTimeout(async () => {
+    const current = machtileSwitchStarted.pending[code];
+    if (!current || current.commandUuid !== rec.commandUuid) return;
+    try {
+      const rows = await supabaseFetch(machtileReturnClaimCore.pollPath(current.commandUuid));
+      if (machtileSwitchStarted.pending[code] !== current) return;
+      const row = Array.isArray(rows) ? rows[0] : null;
+      const sheet = machtileSwitchStarted.sheet;
+      const sheetIsThis = Boolean(sheet) && sheet.code === code && sheet.uuid === current.commandUuid;
+      if (row) {
+        const view = machtileSwitchStepCore.startedResultView(row, { from: current.step, to: current.targetStep });
+        if (view.terminal) { current.unconfirmed = false; machtileSwitchStartedFinish(code, view, row); return; }
+        if (current.unconfirmed || current.notFound || current.lastStatus !== view.status) {
+          current.unconfirmed = false; current.notFound = false; current.lastStatus = view.status;
+          machtileSwitchStartedSave();
+          if (sheetIsThis && sheet.phase !== "sending") { sheet.phase = "status"; sheet.view = view; machtileSwitchStartedRenderSheet(); }
+          machtileStationCmdRerender();
+        }
+      } else if (current.unconfirmed) {
+        current.emptyPolls = (current.emptyPolls || 0) + 1;
+        if (machtileStationCmdCore.unconfirmedNotSent(current, Date.now())) {
+          // 送出時網路斷、之後連續查不到＝沒送到：停止輪詢、解開這台；紀錄留著，重送仍是同一個 uuid
+          current.notFound = true;
+          delete machtileSwitchStarted.timers[code];
+          machtileSwitchStartedSave();
+          if (sheetIsThis && sheet.phase === "uncertain") { sheet.messageKey = "switch_step_started_not_found"; machtileSwitchStartedRenderSheet(); }
+          machtileStationCmdRerender();
+          return;
+        }
+      }
+    } catch (error) {
+      if (machtileReturnClaimCore.isMissingResourceError(error)) {
+        delete machtileSwitchStarted.timers[code];
+        delete machtileSwitchStarted.pending[code];
+        machtileSwitchStartedSave();
+        machtileStationCmdRerender();
+        return;
+      }
+      console.warn("switch step (started) poll failed; will retry", error);
+    }
+    if (!current.releasedShown && machtileSwitchStartedReleased(current)) { current.releasedShown = true; machtileStationCmdRerender(); }
+    machtileSwitchStartedPoll(code);
+  }, machtileStationCmdCore.pollDelay(Date.now() - rec.startedAt));
+}
+
+function machtileSwitchStartedRenderSheet(focus) {
+  const sheet = machtileSwitchStarted.sheet;
+  const holder = document.getElementById("machtileSwitchStartedSheet");
+  if (!sheet || !holder) return;
+  const t = machtileTranslate;
+  const target = machtileSwitchStartedTarget(sheet);
+  const toStep = target ? target.step : sheet.fields.targetStep;
+  const steps = { from: sheet.fields.step, to: toStep ?? "—", order: sheet.fields.orderNo };
+  const stepLine = (step, name) => [t("return_claim_step_value", { step }), name].filter(Boolean).join(" · ");
+  const notice = (tone, name, message) => `<p class="station-cmd-notice is-${tone}" role="alert" ${name}>${escapeHtml(message)}</p>`;
+  const head = `<p class="station-cmd-notice" data-switch-step-started-current>${escapeHtml(t("switch_step_started_current", { step: stepLine(sheet.fields.step, sheet.fields.process) }))}</p>`;
+  let body = "";
+  let actions = "";
+  if (sheet.phase === "confirm" || sheet.phase === "sending") {
+    const sending = sheet.phase === "sending";
+    const listed = !sheet.loading && sheet.freshOk && sheet.listReady && sheet.choices.length > 0;
+    const canSend = !sending && listed && !sheet.keyReadFailed && Boolean(target);
+    const choices = sheet.choices.map((choice) => {
+      const label = [stepLine(choice.step, choice.name), choice.quantity === null ? "" : t("switch_step_quantity", { quantity: choice.quantity }),
+        t(choice.pooled ? "switch_step_started_tag_pool" : "switch_step_started_tag_unpooled")].filter(Boolean).join(" · ");
+      return `<button type="button" class="switch-step-choice" role="radio" aria-checked="${choice.id === sheet.targetId ? "true" : "false"}" data-switch-step-started-choice="${escapeHtml(choice.id)}" data-switch-step-started-pooled="${choice.pooled ? "1" : "0"}"${sending ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+    }).join("");
+    body = `${head}
+      ${sheet.needsReason ? `<p class="station-cmd-notice is-warn" role="note" data-switch-step-started-on-behalf>${escapeHtml(t("switch_step_started_on_behalf"))}</p>` : ""}
+      ${sheet.loading ? `<p data-switch-step-started-checking role="status">${escapeHtml(t("switch_step_started_checking"))}</p>` : ""}
+      ${!sheet.loading && !sheet.freshOk ? notice("bad", "data-switch-step-started-stale", t(sheet.freshKey || "switch_step_started_fresh_failed", steps)) : ""}
+      ${!sheet.loading && sheet.freshOk && !sheet.listReady ? notice("bad", "data-switch-step-started-list-failed", t("switch_step_started_list_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.keyReadFailed ? notice("bad", "data-switch-step-started-read-failed", t("switch_step_started_read_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && sheet.listReady && !sheet.choices.length ? notice("warn", "data-switch-step-started-no-other", t("switch_step_started_no_other")) : ""}
+      ${listed ? `<p data-switch-step-started-choose>${escapeHtml(t("switch_step_started_choose"))}</p><div class="switch-step-choices" role="radiogroup" data-switch-step-started-choices>${choices}</div>` : ""}
+      ${target ? `<p class="station-cmd-notice is-warn" data-switch-step-started-confirm-text>${escapeHtml(t("switch_step_started_confirm_text", steps))}</p>` : ""}
+      <ul class="station-cmd-legacy" data-switch-step-started-explain>
+        <li>${escapeHtml(t("switch_step_started_explain_stop", steps))}</li>
+        <li>${escapeHtml(t("switch_step_started_explain_set"))}</li>
+      </ul>
+      ${sheet.needsReason ? `<label class="station-cmd-daily" for="switchStartedReason">${escapeHtml(t("switch_step_started_reason_label"))}
+        <textarea id="switchStartedReason" data-switch-step-started-reason maxlength="${machtileSwitchStepCore.STARTED_REASON_MAX}" rows="3" required aria-required="true"${sheet.reasonError ? ' aria-invalid="true"' : ""}${sending ? " readonly" : ""}>${escapeHtml(sheet.reason)}</textarea></label>` : ""}
+      ${sheet.reasonError ? `<p class="station-cmd-notice is-bad" role="alert" data-switch-step-started-reason-error>${escapeHtml(t(sheet.reasonError))}</p>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-started-confirm ${canSend ? "" : "disabled"}>${escapeHtml(sending ? t("switch_step_started_sending") : target ? t("switch_step_started_confirm", { to: target.step }) : t("switch_step_started_confirm_none"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-started-close ${sending ? "disabled" : ""}>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "uncertain") {
+    body = `${head}${notice("warn", 'data-switch-step-started-result="uncertain"', t(sheet.messageKey || "switch_step_started_uncertain", steps))}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-switch-step-started-confirm>${escapeHtml(t("switch_step_started_resend"))}</button>
+      <button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
+  } else if (sheet.phase === "failed") {
+    body = `${head}${notice("bad", 'data-switch-step-started-result="failed"', t(sheet.messageKey || "switch_step_started_err_generic", { ...steps, ...(sheet.messageParams || {}) }))}`;
+    actions = `<button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t("return_claim_close"))}</button>`;
+  } else {
+    const view = sheet.view || machtileSwitchStepCore.startedResultView({ status: "pending" }, steps);
+    const lines = [view.terminal ? machtileSwitchStartedText(view) : t("switch_step_started_progress")];
+    body = `${head}<section class="station-cmd-result is-${escapeHtml(view.tone)}" data-switch-step-started-result="${escapeHtml(view.phase)}" role="status">${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</section>
+      ${view.noticeKey ? notice("warn", "data-switch-step-started-unpooled", t(view.noticeKey, view.params)) : ""}`;
+    actions = `<button type="button" class="station-cmd-secondary" data-switch-step-started-close>${escapeHtml(t(view.terminal ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  const reasonHadFocus = Boolean(document.activeElement?.matches?.("[data-switch-step-started-reason]"));
+  const order = [sheet.fields.orderNo, [sheet.fields.partNo, sheet.fields.part].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-stop" role="dialog" aria-modal="true" aria-labelledby="switchStartedTitle" data-switch-step-started-sheet="${escapeHtml(sheet.code)}">
+      <header><h2 id="switchStartedTitle">${escapeHtml(t("switch_step_started_title", { order }))}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  if (focus || hadFocusInside) {
+    const focusTarget = (reasonHadFocus ? holder.querySelector("[data-switch-step-started-reason]") : null)
+      || holder.querySelector("[data-switch-step-started-close]:not([disabled])") || holder.querySelector("h2");
+    try { focusTarget?.focus(); } catch { /* ignore */ }
+  }
+}
+
+// 卡片按鈕與確認卡的點擊（document 層代理，接在「接錯了，退回」前面）。旗標關時畫面上沒有這些元素，一律回 false。
+function machtileSwitchStartedHandleClick(event) {
+  if (!machtileSwitchStartedEnabled()) return false;
+  const target = event.target;
+  const open = target.closest("[data-switch-step-started-open]");
+  if (open) { void machtileSwitchStartedOpen(open.dataset.switchStepStartedOpen, open); return true; }
+  const retry = target.closest("[data-switch-step-started-retry]");
+  if (retry) { machtileSwitchStartedOpenRetry(retry.dataset.switchStepStartedRetry, retry); return true; }
+  const dismiss = target.closest("[data-switch-step-started-dismiss]");
+  if (dismiss) { machtileSwitchStartedDismiss(dismiss.dataset.switchStepStartedDismiss); return true; }
+  const noticeDismiss = target.closest("[data-switch-step-unpooled-dismiss]");
+  if (noticeDismiss) { machtileSwitchStartedDismissNotice(noticeDismiss.dataset.switchStepUnpooledDismiss); return true; }
+  if (!target.closest("#machtileSwitchStartedSheet")) return false;
+  const choice = target.closest("[data-switch-step-started-choice]");
+  if (choice) { machtileSwitchStartedChoose(choice.dataset.switchStepStartedChoice); return true; }
+  if (target.closest("[data-switch-step-started-confirm]")) { void machtileSwitchStartedSubmit(); return true; }
+  if (target.closest("[data-switch-step-started-close]")) { machtileSwitchStartedCloseSheet(); return true; }
+  return true;
+}
+
+document.addEventListener("input", (event) => {
+  const sheet = machtileSwitchStarted.sheet;
+  if (!sheet || !event.target?.matches?.("#machtileSwitchStartedSheet [data-switch-step-started-reason]")) return;
+  sheet.reason = event.target.value;
+  if (sheet.reasonError) {
+    sheet.reasonError = "";
+    document.querySelector("#machtileSwitchStartedSheet [data-switch-step-started-reason-error]")?.remove();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !machtileSwitchStarted.sheet || !document.getElementById("machtileSwitchStartedSheet")) return;
+  event.preventDefault();
+  machtileSwitchStartedCloseSheet();
+});
+// ==== 換道次（已開工）到此 ====
+
+// ============================================================================================
+// 機台卡片「接錯了，退回」（作業員退回自己接、還沒開工的單；P2，owner 2026-11-12 Q4／Q5）。
+//   合約與決策在 returnClaimCore.js 檔頭（CONTRACT-P2 r1）。旗標 config.enableReturnClaim 預設 false：
+//   關＝下面每個函式都回空字串／false／直接 return，卡片 HTML 與行為跟以前逐字相同。
+//   按鈕 → 確認卡（開卡時重讀這一道是否還是「這台、pending、已報 0」）→ machtile_submit_return_claim_command
+//   （command_uuid 由 App 產生；同一次嘗試重送用同一個 uuid＋同樣內容）→ 輪詢到伺服器給 applied／rejected／expired。
+//   畫卡片的函式（Locks／Gate／CardMarkup）只讀不寫；狀態只在按鈕、送出、輪詢的處理函式裡改。
+// ============================================================================================
+const machtileReturnClaimCore = window.MachTileReturnClaimCore || null;
+const MACHTILE_RETURN_CLAIM_PENDING_KEY = "machtile.returnClaimPending.v1";
+const machtileReturnClaim = {
+  pending: {},      // 機台代號 → returnClaimCore.pendingRecord（等伺服器結果中／不確定有沒有送到）
+  timers: {},       // 機台代號 → 輪詢 timer
+  lastResult: {},   // 機台代號 → { view, at, orderNo, step }
+  sheet: null,      // 目前開著的確認卡
+};
+
+function machtileReturnClaimEnabled() {
+  return config.enableReturnClaim === true && Boolean(machtileReturnClaimCore) && Boolean(machtileStationCmdCore) && state.source === "supabase";
+}
+
+function machtileReturnClaimReleased(rec) {
+  return Boolean(rec && machtileStationCmdCore?.lockReleased(rec.startedAt, Date.now()));
+}
+
+// 這台有一筆退回在等結果 → 開工／報工／完工先鎖住（合約 §5）。旗標關＝永遠 false。
+function machtileReturnClaimLocks(code) {
+  if (machtileSwitchStartedLocks(code)) return true;
+  if (!machtileReturnClaimEnabled()) return false;
+  if (machtileSwitchStepHolds(code)) return true;
+  const rec = machtileReturnClaim.pending[String(code || "").trim().toUpperCase()];
+  return machtileReturnClaimCore.locks(rec, machtileReturnClaimReleased(rec));
+}
+
+// 卡片以外的入口（批次開工／停工、批次與單台報工、選工單／接單）：這台的退回還鎖著就用這一句擋下來。
+// 沒鎖、旗標關＝空字串＝照舊。只讀。
+function machtileReturnClaimBlockMessage(code) {
+  if (machtileSwitchStartedLocks(code)) return machtileTranslate("switch_step_started_busy");
+  if (machtileSwitchStepClaimPass(code)) return "";
+  return machtileReturnClaimLocks(code) ? machtileTranslate(machtileSwitchStepActive(code) ? "switch_step_busy" : "return_claim_busy") : "";
+}
+
+// 批次報工送出前：要送的機台裡有退回還鎖著的 → 整批不送，紅字說是哪一台、為什麼。回 true＝已擋下。
+function machtileReturnClaimBatchBlock(codes) {
+  const code = (Array.isArray(codes) ? codes : []).find((item) => machtileReturnClaimBlockMessage(item));
+  if (!code) return false;
+  machtileBatchState.formError = `${code}：${machtileReturnClaimBlockMessage(code)}`;
+  machtileRenderBatchReport();
+  showToast(machtileBatchState.formError);
+  return true;
+}
+
+// 目前登入的是誰（租戶＋app_users.id）：等待紀錄只屬於送出的那個人。
+let machtileReturnClaimSessionKey = "";
+function machtileReturnClaimSession() {
+  return { tenantId: String(machtileAuthState.tenantId || ""), appUserId: String(machtileAuthState.appUserId || "") };
+}
+
+// 卡片明細載入時叫（旗標開才會進來）：機台上每一道是接單帳本裡哪一筆接單。問雲端唯讀 RPC machtile_held_pool_claims()
+// （一次，不帶參數；它回「還沒退回、工序還是 pending、還掛在那台」的接單）。不查 dispatch_pool_items（Factory 確認接單後
+// 池列變 gone，App 讀不到），也不看 work_orders.external_ref（它停在這張工單第一次被接的那一道）。
+// 同機台、同工單、同道次剛好一列才把它的 source_key 記在這次載入的卡片物件上（order.heldPoolKey）。
+// RPC 還沒上（404）、讀不到、等太久（沿用指令送出的逾時）、回來的不是陣列、沒有、不只一列＝空字串＝兩顆按鈕都不出，不跳訊息、不重試。
+// 這不是畫卡片的函式；除了 order.heldPoolKey 什麼都不寫。
+async function machtileReturnClaimLoadHeldPoolKeys(generation) {
+  if (!machtileReturnClaimEnabled()) return;
+  const orders = Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : [];
+  let rows = null;
+  if (orders.some((order) => order.processStatus === "pending")) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+    try {
+      rows = await supabaseFetch(`rpc/${machtileReturnClaimCore.HELD_CLAIMS_RPC}`, { method: "POST", body: "{}", signal: controller ? controller.signal : undefined });
+    } catch (error) {
+      console.warn("return claim: held claim lookup unavailable; hiding the buttons", error);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  if (generation !== machtileDeferredLoadGeneration) return;
+  orders.forEach((order) => {
+    order.heldPoolKey = order.processStatus === "pending"
+      ? machtileReturnClaimCore.heldPoolKey({ rows, machineCode: order.machine, orderNo: order.id, step: order.stationStep }) : "";
+  });
+}
+
+function machtileReturnClaimGate(machine) {
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine?.order || null;
+  const local = machtilePickStartLocal[code];
+  const startedLocally = Boolean(local && order) && String(local.orderNo || "") === String(order.id || "") && Number(local.step) === Number(order.stationStep);
+  const todayRows = machtileCardState.todayStatus === "ok" && Array.isArray(machtileCardState.todayRows) ? machtileCardState.todayRows : [];
+  return machtileReturnClaimCore.visibility({
+    enabled: machtileReturnClaimEnabled(), role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
+    cardDetailsReady: machtileDeferredLoadState.get("card-details")?.status === "ready",
+    isUnassignedBucket: machine?.isUnassignedBucket === true, machineCode: code, order,
+    actualStartAt: order ? (machtileCardActivityOf(order)?.actualStartAt || order.actualStartAt || null) : null,
+    startedLocally,
+    startedToday: Boolean(order) && machtileStationCmdCore.startedToday({
+      commandRows: [...state.dailyStationStartRows, ...state.localStationStartRows], reportRows: todayRows,
+      machineCode: code, orderNo: order.id, step: order.stationStep, processId: order.processId }),
+    hasTodayReport: Boolean(order) && todayRows.some((row) => row && String(row.process_id || "") === String(order.processId || "")),
+    commandInFlight: Boolean(machtileStationCmd.pending[code] || machtileInstantStartPending[code]),
+  });
+}
+
+// 卡片上的那一段：按鈕、等待中的一行字、或最後一次結果。只讀。
+function machtileReturnClaimCardMarkup(machine) {
+  if (!machtileReturnClaimEnabled() || !machine) return "";
+  const code = machtileStationCmdMachineCode(machine);
+  if (machtileSwitchStepHolds(code)) return machtileSwitchStepHoldingMarkup(code);
+  const rec = machtileReturnClaim.pending[code];
+  // 紀錄講的不是卡片現在這張單這一道：還鎖著＝只說這台有一筆退回在處理；不鎖＝不顯示
+  const recMode = machtileReturnClaimCore.cardRecordMode(rec, machine.order || null, machtileReturnClaimReleased(rec));
+  if (recMode === "machine") {
+    return `<p class="station-cmd-status is-wait" data-no-detail data-return-claim-status="other-order" role="status">${escapeHtml(machtileTranslate(machtileSwitchStepActive(code) ? "switch_step_busy" : "return_claim_busy"))}</p>`;
+  }
+  if (recMode === "own") {
+    const uncertain = rec.unconfirmed === true;
+    const key = rec.notFound ? "return_claim_not_found" : uncertain ? "return_claim_card_uncertain"
+      : machtileReturnClaimReleased(rec) ? "return_claim_card_slow" : machtileSwitchStepActive(code) ? "switch_step_card_pending" : "return_claim_card_pending";
+    return `<p class="station-cmd-status is-${uncertain ? "warn" : "wait"}" data-no-detail data-return-claim-status="${rec.notFound ? "not-found" : uncertain ? "uncertain" : "pending"}" role="status">${escapeHtml(machtileTranslate(key))}</p>${uncertain
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-return-claim-retry="${escapeHtml(code)}">${escapeHtml(machtileTranslate("return_claim_resend"))}</button>` : ""}${rec.notFound
+      ? `<button type="button" class="station-cmd-retry" data-no-detail data-return-claim-dismiss="${escapeHtml(code)}">${escapeHtml(machtileTranslate("return_claim_dismiss"))}</button>` : ""}`;
+  }
+  const order = machine.order || null;
+  const last = machtileReturnClaim.lastResult[code];
+  const note = machtileReturnClaimCore.lastResultVisible(last, { orderNo: order?.id, step: order?.stationStep, nowMs: Date.now() })
+    ? `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-no-detail data-return-claim-status="${escapeHtml(last.view.phase)}" role="status">${escapeHtml(last.view.switchStep ? machtileSwitchStepText(last.view) : machtileTranslate(last.view.messageKey))}</p>` : "";
+  const button = machtileReturnClaimGate(machine).show
+    ? `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="${escapeHtml(code)}">${escapeHtml(machtileTranslate("return_claim_button"))}</button>` : "";
+  return note + button + machtileSwitchStepButtonMarkup(machine);
+}
+
+function machtileReturnClaimSave() {
+  const own = {};
+  Object.keys(machtileReturnClaim.pending).forEach((code) => {
+    const { emptyPolls, releasedShown, ...rest } = machtileReturnClaim.pending[code];
+    own[code] = rest;
+  });
+  try {
+    // 同一台平板上別人還沒過期的紀錄原樣留著；自己的照記憶體寫
+    const plain = machtileReturnClaimCore.mergeForSave(localStorage.getItem(MACHTILE_RETURN_CLAIM_PENDING_KEY), own, Date.now(), machtileReturnClaimSession());
+    localStorage.setItem(MACHTILE_RETURN_CLAIM_PENDING_KEY, JSON.stringify(plain));
+  } catch { /* 無痕視窗等：只是重新整理後不記得 */ }
+}
+
+// 載入資料時呼叫（第一次畫卡片之前；開機與 session 過期重新登入都會走到）：把「目前登入的這個人」上次還沒有結果的退回
+// 放回記憶體，繼續輪詢。換了人（租戶或 app_users.id 不同）＝記憶體裡前一個人的先放掉（localStorage 那筆不動）。
+function machtileReturnClaimRestore() {
+  if (!machtileReturnClaimEnabled()) return;
+  const session = machtileReturnClaimSession();
+  const sessionKey = `${session.tenantId}|${session.appUserId}`;
+  if (sessionKey !== machtileReturnClaimSessionKey) {
+    machtileReturnClaimSessionKey = sessionKey;
+    machtileReturnClaim.lastResult = {};
+  }
+  Object.keys(machtileReturnClaim.pending).forEach((code) => {
+    if (machtileReturnClaimCore.sameSession(machtileReturnClaim.pending[code], session)) return;
+    clearTimeout(machtileReturnClaim.timers[code]);
+    delete machtileReturnClaim.timers[code];
+    delete machtileReturnClaim.pending[code];
+  });
+  let raw = null;
+  try { raw = localStorage.getItem(MACHTILE_RETURN_CLAIM_PENDING_KEY); } catch { raw = null; }
+  const restored = machtileReturnClaimCore.restoreForSession(raw, Date.now(), session);
+  Object.keys(restored).forEach((code) => {
+    if (machtileReturnClaim.pending[code]) return;
+    machtileReturnClaim.pending[code] = restored[code];
+    if (!restored[code].notFound) machtileReturnClaimPoll(code);
+  });
+}
+
+function machtileReturnClaimCloseSheet() {
+  const sheet = machtileReturnClaim.sheet;
+  if (sheet && sheet.phase === "sending") return;
+  document.getElementById("machtileReturnClaimSheet")?.remove();
+  machtileReturnClaim.sheet = null;
+  if (!sheet) return;
+  const target = sheet.returnFocus && sheet.returnFocus.isConnected ? sheet.returnFocus
+    : document.querySelector(`#workOrderGrid [data-return-claim-open="${sheet.code}"], #workOrderGrid [data-return-claim-retry="${sheet.code}"]`);
+  try { target?.focus(); } catch { /* ignore */ }
+}
+
+function machtileReturnClaimRenderSheet(focus) {
+  const sheet = machtileReturnClaim.sheet;
+  const holder = document.getElementById("machtileReturnClaimSheet");
+  if (!sheet || !holder) return;
+  if (sheet.switchStep) { machtileSwitchStepRenderSheet(sheet, holder, focus); return; }
+  const t = machtileTranslate;
+  const field = (label, value, name) => `<div class="station-cmd-field"><span>${escapeHtml(label)}</span><strong data-return-claim-field="${name}">${escapeHtml(value || "—")}</strong></div>`;
+  const fields = `<div class="station-cmd-fields${["confirm", "sending"].includes(sheet.phase) ? "" : " is-compact"}">
+        ${field(t("return_claim_field_machine"), sheet.code, "machine")}
+        ${field(t("return_claim_field_order"), [sheet.fields.orderNo, sheet.fields.part].filter(Boolean).join("　"), "order")}
+        ${field(t("return_claim_field_step"), [t("return_claim_step_value", { step: sheet.fields.step }), sheet.fields.process].filter(Boolean).join("　"), "step")}
+      </div>`;
+  let body = "";
+  let actions = "";
+  if (sheet.phase === "confirm" || sheet.phase === "sending") {
+    const sending = sheet.phase === "sending";
+    const canSend = !sending && !sheet.loading && sheet.freshOk;
+    body = `${fields}
+      ${sheet.needsReason ? `<p class="station-cmd-notice is-warn" role="note" data-return-claim-on-behalf>${escapeHtml(t("return_claim_on_behalf"))}</p>` : ""}
+      <ul class="station-cmd-legacy" data-return-claim-explain>
+        <li>${escapeHtml(t("return_claim_explain_pool"))}</li>
+        <li>${escapeHtml(t("return_claim_explain_machine"))}</li>
+        <li>${escapeHtml(t("return_claim_explain_no_report"))}</li>
+      </ul>
+      ${sheet.needsReason ? `<label class="station-cmd-daily" for="returnClaimReason">${escapeHtml(t("return_claim_reason_label"))}
+        <textarea id="returnClaimReason" data-return-claim-reason maxlength="${machtileReturnClaimCore.REASON_MAX}" rows="3" required aria-required="true"${sheet.reasonError ? ' aria-invalid="true"' : ""}${sending ? " readonly" : ""}>${escapeHtml(sheet.reason)}</textarea></label>` : ""}
+      ${sheet.reasonError ? `<p class="station-cmd-notice is-bad" role="alert" data-return-claim-reason-error>${escapeHtml(t(sheet.reasonError))}</p>` : ""}
+      ${sheet.loading ? `<p data-return-claim-checking role="status">${escapeHtml(t("return_claim_checking"))}</p>` : ""}
+      ${!sheet.loading && !sheet.freshOk ? `<p class="station-cmd-notice is-bad" role="alert" data-return-claim-stale>${escapeHtml(t(sheet.freshKey || "return_claim_fresh_failed"))}</p>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-return-claim-confirm ${canSend ? "" : "disabled"}>${escapeHtml(t(sending ? "return_claim_sending" : "return_claim_confirm"))}</button>
+      <button type="button" class="station-cmd-secondary" data-return-claim-close ${sending ? "disabled" : ""}>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "uncertain") {
+    body = `${fields}<p class="station-cmd-notice is-warn" role="alert" data-return-claim-result="uncertain">${escapeHtml(t(sheet.messageKey || "return_claim_uncertain"))}</p>`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-return-claim-confirm>${escapeHtml(t("return_claim_resend"))}</button>
+      <button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
+  } else if (sheet.phase === "failed") {
+    body = `${fields}<p class="station-cmd-notice is-bad" role="alert" data-return-claim-result="failed">${escapeHtml(t(sheet.messageKey || "return_claim_err_generic"))}</p>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t("return_claim_close"))}</button>`;
+  } else {
+    const view = sheet.view || machtileReturnClaimCore.resultView({ status: "pending" });
+    body = `${fields}<section class="station-cmd-result is-${escapeHtml(view.tone)}" data-return-claim-result="${escapeHtml(view.phase)}" role="status"><p>${escapeHtml(t(view.messageKey))}</p></section>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t(view.terminal ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  const reasonHadFocus = Boolean(document.activeElement?.matches?.("[data-return-claim-reason]"));
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-stop" role="dialog" aria-modal="true" aria-labelledby="returnClaimTitle">
+      <header><h2 id="returnClaimTitle">${escapeHtml(t("return_claim_title"))}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  // 初始焦點放「取消」（不是確認）；管理員正在打原因時重畫，焦點留在那一格
+  if (focus || hadFocusInside) {
+    const target = (reasonHadFocus ? holder.querySelector("[data-return-claim-reason]") : null)
+      || holder.querySelector("[data-return-claim-close]:not([disabled])") || holder.querySelector("h2");
+    try { target?.focus(); } catch { /* ignore */ }
+  }
+}
+
+function machtileReturnClaimNewSheet(sheet) {
+  machtileReturnClaimCloseSheet();
+  if (machtileReturnClaim.sheet) return false;
+  machtileReturnClaim.sheet = sheet;
+  const holder = document.createElement("div");
+  holder.id = "machtileReturnClaimSheet";
+  holder.className = "station-cmd-overlay";
+  document.body.appendChild(holder);
+  machtileReturnClaimRenderSheet(true);
+  return true;
+}
+
+// 按下去之前重讀這一道（第一次送出與重送共用）：還在這台、同一道、pending、已報 0 才給送。
+async function machtileReturnClaimFreshRead(code, fields) {
+  try {
+    if (!machtileReturnClaimCore.isUuid(fields.processId)) throw new Error("NO_PROCESS_ID");
+    const rows = await supabaseFetch(`work_order_processes?select=id,process_order,process_name,status,off_station_at,qty_completed,work_orders!inner(work_order_no,part_no,part_name,status),machines!work_order_processes_machine_id_fkey(machine_code)&id=eq.${encodeURIComponent(fields.processId)}`);
+    const fresh = machtileReturnClaimCore.freshCheck({ machineCode: code, orderNo: fields.orderNo, step: fields.step, row: Array.isArray(rows) ? rows[0] : null });
+    return { ok: fresh.ok, key: fresh.ok ? "" : "return_claim_fresh_changed", partNo: fresh.partNo };
+  } catch (error) {
+    console.warn("return claim: work_order_processes re-read failed", error);
+    return { ok: false, key: "return_claim_fresh_failed", partNo: null };
+  }
+}
+
+async function machtileReturnClaimOpen(code, returnFocus, switchStep = false) {
+  if (!machtileReturnClaimEnabled()) return;
+  const machine = machtileStationCmdMachineByCode(code);
+  const gate = machine ? machtileReturnClaimGate(machine) : { show: false };
+  if (!gate.show) return;
+  if (switchStep && !machtileSwitchStepGate(machine).show) return;
+  const stale = machtileReturnClaim.pending[code];
+  if (stale) {
+    // 還鎖著、或就是卡片這張單的紀錄 → 不開新的。過時的（不鎖、也不是這張單）→ 丟掉，照新的一筆走
+    if (machtileReturnClaimCore.cardRecordMode(stale, machine.order, machtileReturnClaimReleased(stale)) !== "none") return;
+    clearTimeout(machtileReturnClaim.timers[code]);
+    delete machtileReturnClaim.timers[code];
+    delete machtileReturnClaim.pending[code];
+    machtileReturnClaimSave();
+  }
+  let uuid;
+  try { uuid = machtileStationCmdCore.newUuid(window.crypto); } catch { showToast(machtileTranslate("return_claim_old_tablet")); return; }
+  const order = machine.order;
+  const role = machtileActualRole();
+  const sheet = {
+    code, uuid, role, phase: "confirm", loading: true, freshOk: false, freshKey: "", needsReason: gate.needsReason, reason: "", reasonError: "",
+    returnFocus: returnFocus || null, args: null, messageKey: "", view: null,
+    fields: { poolItemId: order.heldPoolKey, orderNo: order.id, step: Number(order.stationStep), processId: order.processId, partNo: null, part: order.part || "", process: order.process || "" },
+    ...(switchStep ? { switchStep: machtileSwitchStepNewState() } : {}),
+  };
+  if (!machtileReturnClaimNewSheet(sheet)) return;
+  const fresh = await machtileReturnClaimFreshRead(code, sheet.fields);
+  sheet.freshOk = fresh.ok;
+  sheet.freshKey = fresh.key;
+  sheet.fields.partNo = fresh.partNo;
+  if (sheet.switchStep && machtileReturnClaim.sheet === sheet) await machtileSwitchStepLoadChoices(sheet);
+  if (machtileReturnClaim.sheet !== sheet) return;
+  sheet.loading = false;
+  machtileReturnClaimRenderSheet();
+}
+
+// 「不確定有沒有送到」的那一筆 → 從卡片再打開，用同一個 uuid＋同樣內容重送
+function machtileReturnClaimOpenRetry(code, returnFocus) {
+  if (!machtileReturnClaimEnabled()) return;
+  const rec = machtileReturnClaim.pending[code];
+  if (!rec || !rec.unconfirmed) return;
+  const cardOrder = machtileStationCmdMachineByCode(code)?.order || null;
+  if (!machtileReturnClaimCore.recordMatchesOrder(rec, cardOrder)) return;   // 卡片已經不是這張單：不給重送
+  machtileReturnClaimNewSheet({
+    code, uuid: rec.commandUuid, role: machtileActualRole(), phase: "uncertain", loading: false, freshOk: true, freshKey: "", needsReason: false,
+    reason: "", reasonError: "", returnFocus: returnFocus || null, args: rec.args, view: null,
+    messageKey: rec.notFound ? "return_claim_not_found" : "return_claim_uncertain",
+    fields: { poolItemId: rec.args.p_pool_item_id, orderNo: rec.orderNo, step: rec.step, processId: rec.processId || cardOrder.processId, partNo: rec.args.p_expected_part_no, part: "", process: "" },
+  });
+}
+
+function machtileReturnClaimDismiss(code) {
+  const rec = machtileReturnClaim.pending[code];
+  if (!rec || !rec.notFound) return;
+  delete machtileReturnClaim.pending[code];
+  machtileReturnClaimSave();
+  machtileStationCmdRerender();
+}
+
+async function machtileReturnClaimSubmit() {
+  const sheet = machtileReturnClaim.sheet;
+  if (!machtileReturnClaimEnabled() || !sheet || sheet.loading || !["confirm", "uncertain"].includes(sheet.phase)) return;
+  const code = sheet.code;
+  const existing = machtileReturnClaim.pending[code];
+  if (existing && existing.commandUuid !== sheet.uuid) return;
+  if (sheet.phase === "confirm") {
+    if (!sheet.freshOk) return;
+    const checked = machtileReturnClaimCore.reasonCheck(sheet.role, sheet.reason);
+    if (!checked.ok) { sheet.reasonError = checked.messageKey; machtileReturnClaimRenderSheet(); return; }
+    sheet.reasonError = "";
+    try {
+      sheet.args = machtileReturnClaimCore.buildArgs({ commandUuid: sheet.uuid, machineCode: code, poolItemId: sheet.fields.poolItemId, orderNo: sheet.fields.orderNo,
+        step: sheet.fields.step, partNo: sheet.fields.partNo, reason: checked.value, role: sheet.role });
+    } catch (error) {
+      console.warn("return claim: cannot build args", error);
+      sheet.phase = "failed"; sheet.messageKey = "return_claim_err_card_data"; machtileReturnClaimRenderSheet(); return;
+    }
+    if (sheet.switchStep && !machtileSwitchStepBegin(sheet)) return;
+  }
+  if (!sheet.args) return;
+  const resend = sheet.phase === "uncertain";
+  sheet.phase = "sending";
+  machtileReturnClaimRenderSheet();
+  if (resend) {
+    // 重送也跟第一次一樣先重讀：這張單已開工、已報工或已不在這台 → 不送
+    const fresh = await machtileReturnClaimFreshRead(code, sheet.fields);
+    if (machtileReturnClaim.sheet !== sheet || sheet.phase !== "sending") return;   // 等的時候輪詢已經拿到結果，確認卡已換成結果
+    const current = machtileReturnClaim.pending[code];
+    if (current && current.commandUuid === sheet.uuid && !current.unconfirmed) {
+      // 等的時候輪詢查到這筆已經在伺服器上：不用重送
+      sheet.phase = "status"; sheet.view = machtileReturnClaimCore.resultView({ status: current.lastStatus }); machtileReturnClaimRenderSheet();
+      return;
+    }
+    if (!fresh.ok) { sheet.phase = "uncertain"; sheet.messageKey = fresh.key; machtileReturnClaimRenderSheet(); return; }
+  }
+  // 同一次嘗試沿用第一次按下的時間；之前查不到（notFound）才重送的，從現在重新算等待時間
+  const startedAt = existing && !existing.notFound ? existing.startedAt : Date.now();
+  const record = (extra) => machtileReturnClaimCore.pendingRecord({ commandUuid: sheet.uuid, machineCode: code, orderNo: sheet.fields.orderNo, step: sheet.fields.step,
+    processId: sheet.fields.processId, ...machtileReturnClaimSession(), args: sheet.args, startedAt, ...extra });
+  const uncertain = () => {
+    machtileSwitchStepStop(sheet);
+    machtileReturnClaim.pending[code] = record({ unconfirmed: true });
+    machtileReturnClaimSave();
+    machtileReturnClaimPoll(code);
+    if (machtileReturnClaim.sheet === sheet) { sheet.phase = "uncertain"; sheet.messageKey = "return_claim_uncertain"; machtileReturnClaimRenderSheet(); }
+    machtileStationCmdRerender();
+  };
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS) : null;
+  let row = null;
+  try {
+    const result = await supabaseFetch(`rpc/${machtileReturnClaimCore.SUBMIT_RPC}`, { method: "POST", body: JSON.stringify(sheet.args), ...(controller ? { signal: controller.signal } : {}) });
+    row = Array.isArray(result) ? result[0] : result;
+  } catch (error) {
+    const info = machtileReturnClaimCore.submitErrorInfo(error);
+    if (info.kind === "uncertain") { uncertain(); return; }
+    console.warn("return claim: submit refused", info.code || info.kind, error);
+    machtileSwitchStepStop(sheet);
+    if (machtileReturnClaim.pending[code]?.commandUuid === sheet.uuid) { delete machtileReturnClaim.pending[code]; machtileReturnClaimSave(); }
+    clearTimeout(machtileReturnClaim.timers[code]);
+    delete machtileReturnClaim.timers[code];
+    if (machtileReturnClaim.sheet === sheet) { sheet.phase = "failed"; sheet.messageKey = info.messageKey; machtileReturnClaimRenderSheet(); }
+    else showToast(machtileTranslate(info.messageKey));
+    machtileStationCmdRerender();
+    return;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // 伺服器沒有回這一筆 → 不當成功也不當失敗：照「不確定」處理，輪詢去查
+  if (!machtileReturnClaimCore.rowIsThis(row, sheet.uuid)) { uncertain(); return; }
+  const view = machtileReturnClaimCore.resultView(row);
+  machtileReturnClaim.pending[code] = record({ unconfirmed: false, lastStatus: view.status });
+  delete machtileReturnClaim.lastResult[code];
+  machtileReturnClaimSave();
+  if (view.terminal) { machtileReturnClaimFinish(code, view); return; }
+  if (machtileReturnClaim.sheet === sheet) { sheet.phase = "status"; sheet.view = view; machtileReturnClaimRenderSheet(); }
+  machtileReturnClaimPoll(code);
+  machtileStationCmdRerender();
+}
+
+// 只有伺服器給了結果（applied／rejected／expired）才會走到這裡
+function machtileReturnClaimFinish(code, view) {
+  const rec = machtileReturnClaim.pending[code];
+  if (!rec) return;
+  clearTimeout(machtileReturnClaim.timers[code]);
+  delete machtileReturnClaim.timers[code];
+  delete machtileReturnClaim.pending[code];
+  machtileReturnClaimSave();
+  machtileReturnClaim.lastResult[code] = { view, at: Date.now(), orderNo: rec.orderNo, step: rec.step };
+  if (view.phase !== "applied") console.warn("return claim: not applied", view.phase, view.code);
+  const sheet = machtileReturnClaim.sheet;
+  if (sheet && sheet.code === code && sheet.uuid === rec.commandUuid) { sheet.phase = "status"; sheet.view = view; machtileReturnClaimRenderSheet(); }
+  if (view.phase === "applied") delete machtilePickStartLocal[code];
+  if (machtileSwitchStepAfterReturn(code, rec, view)) return;
+  machtileStationCmdRerender();
+  showToast(machtileTranslate(view.messageKey));
+  // 成功＝機台清空、池子多一張；沒成功＝卡片資料多半已經過時。兩種都重讀一次（卡片＋待做池）。
+  void machtileRefreshAfterApplied(code, machtileReturnClaimCore.COMMAND_TYPE);
+}
+
+function machtileReturnClaimPoll(code) {
+  const rec = machtileReturnClaim.pending[code];
+  if (!machtileReturnClaimCore || !machtileStationCmdCore || !rec) return;
+  clearTimeout(machtileReturnClaim.timers[code]);
+  machtileReturnClaim.timers[code] = setTimeout(async () => {
+    const current = machtileReturnClaim.pending[code];
+    if (!current || current.commandUuid !== rec.commandUuid) return;
+    try {
+      const rows = await supabaseFetch(machtileReturnClaimCore.pollPath(current.commandUuid));
+      if (machtileReturnClaim.pending[code] !== current) return;
+      const row = Array.isArray(rows) ? rows[0] : null;
+      const sheet = machtileReturnClaim.sheet;
+      const sheetIsThis = Boolean(sheet) && sheet.code === code && sheet.uuid === current.commandUuid;
+      if (row) {
+        const view = machtileReturnClaimCore.resultView(row);
+        if (view.terminal) { current.unconfirmed = false; machtileReturnClaimFinish(code, view); return; }
+        if (current.unconfirmed || current.notFound || current.lastStatus !== view.status) {
+          current.unconfirmed = false; current.notFound = false; current.lastStatus = view.status;
+          machtileReturnClaimSave();
+          if (sheetIsThis && sheet.phase !== "sending") { sheet.phase = "status"; sheet.view = view; machtileReturnClaimRenderSheet(); }
+          machtileStationCmdRerender();
+        }
+      } else if (current.unconfirmed) {
+        current.emptyPolls = (current.emptyPolls || 0) + 1;
+        if (machtileStationCmdCore.unconfirmedNotSent(current, Date.now())) {
+          // 送出時網路斷、之後連續查不到＝沒送到：停止輪詢、解開開工／報工；紀錄留著，重送仍是同一個 uuid
+          current.notFound = true;
+          delete machtileReturnClaim.timers[code];
+          machtileReturnClaimSave();
+          if (sheetIsThis && sheet.phase === "uncertain") { sheet.messageKey = "return_claim_not_found"; machtileReturnClaimRenderSheet(); }
+          machtileStationCmdRerender();
+          return;
+        }
+      }
+    } catch (error) {
+      if (machtileReturnClaimCore.isMissingResourceError(error)) {
+        // 表不見了：停止輪詢；不宣稱結果
+        delete machtileReturnClaim.timers[code];
+        delete machtileReturnClaim.pending[code];
+        machtileReturnClaimSave();
+        machtileStationCmdRerender();
+        return;
+      }
+      console.warn("return claim poll failed; will retry", error);
+    }
+    if (!current.releasedShown && machtileReturnClaimReleased(current)) { current.releasedShown = true; machtileStationCmdRerender(); }
+    machtileReturnClaimPoll(code);
+  }, machtileStationCmdCore.pollDelay(Date.now() - rec.startedAt));
+}
+
+// 卡片按鈕與確認卡的點擊（document 層代理）。旗標關時畫面上沒有這些元素，一律回 false。
+function machtileReturnClaimHandleClick(event) {
+  if (!machtileReturnClaimEnabled()) return false;
+  const target = event.target;
+  const open = target.closest("[data-return-claim-open]");
+  if (open) { void machtileReturnClaimOpen(open.dataset.returnClaimOpen, open); return true; }
+  if (machtileSwitchStepHandleClick(target)) return true;
+  const retry = target.closest("[data-return-claim-retry]");
+  if (retry) { machtileReturnClaimOpenRetry(retry.dataset.returnClaimRetry, retry); return true; }
+  const dismiss = target.closest("[data-return-claim-dismiss]");
+  if (dismiss) { machtileReturnClaimDismiss(dismiss.dataset.returnClaimDismiss); return true; }
+  if (!target.closest("#machtileReturnClaimSheet")) return false;
+  if (target.closest("[data-return-claim-confirm]")) { void machtileReturnClaimSubmit(); return true; }
+  if (target.closest("[data-return-claim-close]")) { machtileReturnClaimCloseSheet(); return true; }
+  return true;
+}
+
+// 管理員／生管打的原因：跟著確認卡存（卡片重畫時不會不見）
+document.addEventListener("input", (event) => {
+  const sheet = machtileReturnClaim.sheet;
+  if (!sheet || !event.target?.matches?.("#machtileReturnClaimSheet [data-return-claim-reason]")) return;
+  sheet.reason = event.target.value;
+  if (sheet.reasonError) {
+    sheet.reasonError = "";
+    document.querySelector("#machtileReturnClaimSheet [data-return-claim-reason-error]")?.remove();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !machtileReturnClaim.sheet || !document.getElementById("machtileReturnClaimSheet")) return;
+  event.preventDefault();
+  machtileReturnClaimCloseSheet();
+});
+
+// ---- 換道次 ---------------------------------------------------------------------------------
+// 機台卡片「換道次」（owner 2026-11-12：「訂單對，但是製程順序錯誤」）：同一張工單換成待做池裡另一道，一次做完。
+//   決策在 switchStepCore.js。旗標 config.enableSwitchStep 預設 false，而且 enableReturnClaim 也要開才有效；
+//   關＝下面每個函式都回空字串／false／null／直接 return，上面「接錯了，退回」的行為跟沒有這一段時一樣。
+//   做法＝沿用既有兩條路，沒有新的請求格式：
+//     (a) 上面的退回（同一張確認卡物件、同一支 buildArgs、同一個輪詢），多帶一個 sheet.switchStep；
+//     (b) 伺服器說退回 applied 之後：重讀待做池 → 選的那一道還在而且這台可以接 → 既有的 machtileClaimDispatchPool（只叫一次，不重試）。
+//   「要接哪一道」只放在記憶體（machtileSwitchStep.active），不寫 localStorage：平板在 (a)(b) 之間重新整理，
+//   還原回來的只是一筆普通的退回，不會自動接。畫面函式（Active／Holds／Gate／…Markup／RenderSheet）只讀不寫。
+const machtileSwitchStepCore = window.MachTileSwitchStepCore || null;
+const machtileSwitchStep = {
+  active: {},      // 機台代號 → { uuid（退回那筆的 command_uuid）, userId（按的人）, phase, orderNo, fromStep, target: { sourceKey, step, name }, startedAt }
+  claimPass: "",   // 只在呼叫既有接單函式的那一瞬間（同步）＝機台代號：讓這一次接單不被「換道次處理中」自己擋住
+};
+
+function machtileSwitchStepEnabled() {
+  return machtileSwitchStepCore !== null
+    && machtileSwitchStepCore.enabled({ flag: config.enableSwitchStep, returnClaimEnabled: machtileReturnClaimEnabled() })
+    && Boolean(machtileDispatchPoolCore);
+}
+
+// 這台有一筆換道次還在進行：第一步（退回還在等結果，而且就是換道次送的那一筆）或第二步（重讀待做池／接新的一道）。
+function machtileSwitchStepActive(code) {
+  const key = String(code || "").trim().toUpperCase();
+  const active = machtileSwitchStep.active[key];
+  if (!active || machtileSwitchStepCore === null) return null;
+  if (machtileSwitchStepCore.holds(active.phase)) return active;
+  return machtileReturnClaim.pending[key]?.commandUuid === active.uuid ? active : null;
+}
+
+// 第二步進行中：退回的等待紀錄已經收掉，由這裡繼續鎖住這台（開工／報工／選工單／批次）。
+function machtileSwitchStepHolds(code) {
+  const active = machtileSwitchStep.active[String(code || "").trim().toUpperCase()];
+  return Boolean(active) && machtileSwitchStepCore !== null && machtileSwitchStepCore.holds(active.phase);
+}
+
+function machtileSwitchStepClaimPass(code) {
+  return machtileSwitchStep.claimPass !== "" && machtileSwitchStep.claimPass === String(code || "").trim().toUpperCase();
+}
+
+function machtileSwitchStepMachineInfo(machine, code) {
+  return { machineCode: code, departmentCode: machtileDispatchPoolCore.departmentCodeOf(normalizedMachineDepartment(machine)),
+    status: machine?.status, multiStation: (Array.isArray(config.multiStationMachines) ? config.multiStationMachines : []).map(String).includes(code),
+    enabledMachines: config.dispatchPoolMachines };
+}
+
+function machtileSwitchStepGate(machine) {
+  if (!machtileSwitchStepEnabled() || !machine) return { show: false, reason: "flag_off", choices: [] };
+  const code = machtileStationCmdMachineCode(machine);
+  const order = machine.order || null;
+  return machtileSwitchStepCore.visibility({
+    enabled: true, returnShow: machtileReturnClaimGate(machine).show,
+    poolStatus: machtileDispatchPoolState.status, items: machtileDispatchPoolState.items,
+    orderNo: order?.id, currentStep: order?.stationStep, currentSourceKey: order?.heldPoolKey,
+    machine: machtileSwitchStepMachineInfo(machine, code),
+  });
+}
+
+function machtileSwitchStepButtonMarkup(machine) {
+  if (!machtileSwitchStepGate(machine).show) return "";
+  return `<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-open="${escapeHtml(machtileStationCmdMachineCode(machine))}">${escapeHtml(machtileTranslate("switch_step_button"))}</button>`;
+}
+
+function machtileSwitchStepHoldingMarkup(code) {
+  const active = machtileSwitchStep.active[code];
+  return `<p class="station-cmd-status is-wait" data-no-detail data-switch-step-status="claiming" role="status">${escapeHtml(machtileTranslate("switch_step_progress_claim", { from: active.fromStep, to: active.target.step }))}</p>`;
+}
+
+// 結果那一句（卡片、確認卡、提示共用）：原因也是 i18n key，顯示時才翻。
+function machtileSwitchStepText(view) {
+  return machtileTranslate(view.messageKey, { ...view.params, reason: view.reasonKey ? machtileTranslate(view.reasonKey) : "" });
+}
+
+function machtileSwitchStepNewState() {
+  return { poolOk: false, choices: [], targetKey: "", stopped: false, outcome: null };
+}
+
+function machtileSwitchStepTarget(sheet) {
+  const sw = sheet && sheet.switchStep;
+  return sw ? sw.choices.find((choice) => choice.sourceKey === sw.targetKey) || null : null;
+}
+
+// 登入的人換了／登出（machtileSetSession、machtileClearSession 叫進來）：記憶體裡「要接哪一道」全部丟掉，
+// 之後就算退回成功也不會用另一個人的登入去接；開著的換道次確認卡一起關掉。旗標關時 active 本來就是空的＝沒有任何效果。
+// try：app.js 還在載入、下面用到的 const 還沒建立時被叫到（那時也不可能有換道次）＝什麼都不用做。
+function machtileSwitchStepForgetUser() {
+  try {
+    Object.values(machtileSwitchStep.active).forEach((active) => machtileSwitchStepAbandonClaim(active.pass));   // 接單還在路上：不等它，晚到的結果不碰下一個人的畫面
+    machtileSwitchStep.active = {};
+    machtileSwitchStep.claimPass = "";
+    if (machtileReturnClaim.sheet && machtileReturnClaim.sheet.switchStep) machtileReturnClaimCloseSheet();
+  } catch { /* still loading: nothing to forget */ }
+}
+
+// 這一筆換道次還算數：沒有被上面那支丟掉，而且現在登入的還是按的那個人。
+function machtileSwitchStepOwned(code, active) {
+  return machtileSwitchStep.active[code] === active && active.userId === String(machtileAuthState.userId || "");
+}
+
+// 換道次裡每一個等待（重讀待做池、接單、接單後重讀畫面）都有期限，沿用既有指令送出的逾時（SUBMIT_TIMEOUT_MS）：
+// 等不到就當成失敗往下走，機台的鎖一定會放開，不用重新整理頁面。逾時只是不再等，絕不重送、也不會因此去接單。
+function machtileSwitchStepTimeout(work) {
+  let timer = null;
+  const limit = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error("SWITCH_STEP_TIMEOUT")), machtileStationCmdCore.SUBMIT_TIMEOUT_MS); });
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+}
+
+// 重讀待做池（只是讀）。回 true＝這一次真的讀到最新的；被別的載入蓋掉、讀不到、等太久＝false（不拿舊資料來猜）。
+async function machtileSwitchStepReadPool() {
+  const watch = { expired: false };
+  const read = async () => {
+    for (let attempt = 0; attempt < machtileSwitchStepCore.POOL_READ_ATTEMPTS && !watch.expired; attempt += 1) {
+      const sequence = machtileDispatchPoolState.requestSequence + 1;
+      try {
+        await machtileLoadDispatchPool({ preserveItemsOnFailure: true });
+        if (!watch.expired && machtileDispatchPoolState.status === "ready" && machtileDispatchPoolState.requestSequence === sequence) return true;
+      } catch (error) {
+        console.warn("switch step: dispatch pool re-read failed", error);
+      }
+    }
+    return false;
+  };
+  try {
+    return await machtileSwitchStepTimeout(read());
+  } catch (error) {
+    watch.expired = true;
+    console.warn("switch step: dispatch pool re-read timed out", error);
+    return false;
+  }
+}
+
+// 既有接單函式在換道次模式下出錯（machtileClaimDispatchPool 的 catch 叫進來）。不跳提示：結果那一句由換道次自己說一次。
+//   接單 RPC 已經成功（pass.claimed）＝接到了，只是重讀畫面失敗／逾時 → 不留「接單失敗」訊息，回 claimed: true；
+//   RPC 本身失敗＝跟一般接單一樣留訊息、重讀待做池；重讀只是送出去、不等它（等它會讓已經知道的結果卡在一個讀取上）。
+function machtileSwitchStepClaimError(pass, error) {
+  if (pass.abandoned === true) return { ok: false, abandoned: true, error };   // 已經不等這一筆了：不留訊息、不重讀待做池
+  if (pass.claimed === true) return { ok: false, claimed: true, error };
+  machtileDispatchPoolState.claimMessage = machtileDispatchPoolCore.claimErrorText(error);
+  machtileLoadDispatchPool().catch((reloadError) => { console.warn("switch step: pool reload after a failed claim", reloadError); });
+  return { ok: false, error };
+}
+
+// 換道次不再等這一筆接單了（等太久，或登入的人換了）：
+//   請求還在路上＝中止它（fetch 的 signal）。中止只是這台平板不再等，伺服器可能已經收到，所以結果照舊算「不確定」，絕不重送；
+//   既有接單函式佔著的 claimBusy 放開（還是這一筆佔著才放），「選工單」馬上可以再接；
+//   之後才回來的成功／失敗（或接單後還在跑的重讀畫面）全部不算：不關面板、不留接單訊息、不跳提示（pass.abandoned，
+//   machtileClaimDispatchPool 的 finally、pass.reload、machtileSwitchStepClaimError 都看它）。
+// pass.settled＝既有接單函式已經自己收尾：沒有東西要放棄。
+function machtileSwitchStepAbandonClaim(pass) {
+  if (!pass || pass.settled === true || pass.abandoned === true) return;
+  pass.abandoned = true;
+  try { if (pass.controller) pass.controller.abort(new Error("SWITCH_STEP_ABANDONED")); } catch (error) { console.warn("switch step: could not abort the claim request", error); }
+  if (pass.sourceKey && machtileDispatchPoolState.claimBusy === pass.sourceKey) {
+    machtileDispatchPoolState.claimBusy = "";
+    // 這時開著的「選工單」面板（別台的）按鈕還是灰的：用既有的面板更新讓它們馬上可以按
+    const holder = document.getElementById("machtileCardSelection");
+    if (holder && holder.dataset) machtileUpdateDispatchPoolSelection(holder.dataset.machineCode);
+  }
+}
+
+// 開確認卡時：重讀待做池，列出同一張工單、這台可以接的其他道。只有一道可以換就先幫忙選好（還是要按確認）。
+async function machtileSwitchStepLoadChoices(sheet) {
+  const poolOk = await machtileSwitchStepReadPool();
+  if (machtileReturnClaim.sheet !== sheet || !sheet.switchStep) return;
+  const found = machtileSwitchStepCore.otherSteps({
+    poolStatus: poolOk ? machtileDispatchPoolState.status : "", items: machtileDispatchPoolState.items,
+    orderNo: sheet.fields.orderNo, currentStep: sheet.fields.step, currentSourceKey: sheet.fields.poolItemId,
+    machine: machtileSwitchStepMachineInfo(machtileStationCmdMachineByCode(sheet.code), sheet.code),
+  });
+  sheet.switchStep.poolOk = found.ready;
+  sheet.switchStep.choices = found.choices;
+  sheet.switchStep.targetKey = found.choices.length === 1 ? found.choices[0].sourceKey : "";
+}
+
+function machtileSwitchStepChoose(sourceKey) {
+  const sheet = machtileReturnClaim.sheet;
+  if (!sheet || !sheet.switchStep || sheet.phase !== "confirm" || sheet.loading) return;
+  if (!sheet.switchStep.choices.some((choice) => choice.sourceKey === sourceKey)) return;
+  sheet.switchStep.targetKey = sourceKey;
+  machtileReturnClaimRenderSheet();
+}
+
+// 按下「換成第 x 道」、退回的參數已經組好、正要送出：記下要接哪一道（只在記憶體）。回 false＝還沒選好，不送。
+function machtileSwitchStepBegin(sheet) {
+  const target = machtileSwitchStepTarget(sheet);
+  if (!machtileSwitchStepEnabled() || !target || !sheet.switchStep.poolOk || sheet.switchStep.stopped) return false;
+  machtileSwitchStep.active[sheet.code] = { uuid: sheet.uuid, userId: String(machtileAuthState.userId || ""), phase: machtileSwitchStepCore.next("choosing", "confirm"), orderNo: sheet.fields.orderNo,
+    fromStep: sheet.fields.step, target: { sourceKey: target.sourceKey, step: target.step, name: target.name }, startedAt: Date.now() };
+  return true;
+}
+
+// 退回那一步送出時斷線／逾時（不知道有沒有送到）或被伺服器當場拒絕：換道次到此為止，之後不會接。
+// 確認卡照既有的「不確定／重送」走，重送的只是那一筆退回。
+function machtileSwitchStepStop(sheet) {
+  if (!sheet || !sheet.switchStep) return;
+  const active = machtileSwitchStep.active[sheet.code];
+  if (active && active.uuid === sheet.uuid) delete machtileSwitchStep.active[sheet.code];
+  sheet.switchStep.stopped = true;
+}
+
+function machtileSwitchStepSheetFor(code, uuid) {
+  const sheet = machtileReturnClaim.sheet;
+  return sheet && sheet.switchStep && sheet.code === code && sheet.uuid === uuid ? sheet : null;
+}
+
+// 退回那筆指令有了伺服器結果（machtileReturnClaimFinish 叫進來）。回 true＝換道次自己接手後面的事（提示、重讀）；
+// 回 false＝不是換道次的那一筆，或沒有退回成功 → 照一般退回的結果處理（那一句拒絕原因、重讀卡片）。
+function machtileSwitchStepAfterReturn(code, rec, view) {
+  const active = machtileSwitchStep.active[code];
+  if (!active || active.uuid !== rec.commandUuid || machtileSwitchStepCore === null) return false;
+  const step = machtileSwitchStepCore.returnEvent({ view, startedAt: active.startedAt, nowMs: Date.now() });
+  active.phase = machtileSwitchStepCore.next(active.phase, step.event);
+  if (view.phase !== "applied") { delete machtileSwitchStep.active[code]; return false; }
+  if (active.phase !== "verifying") {
+    machtileSwitchStepEnd(code, active, machtileSwitchStepCore.outcome({ state: active.phase, mode: view.mode, from: active.fromStep, to: active.target.step, reasonKey: step.reasonKey }));
+    return true;
+  }
+  void machtileSwitchStepClaim(code, active, view.mode);
+  return true;
+}
+
+// 第二步：重讀待做池 → 確認選的那一道還在而且這台可以接 → 既有的接單函式，只叫一次。
+async function machtileSwitchStepClaim(code, active, mode) {
+  const sheet = machtileSwitchStepSheetFor(code, active.uuid);
+  if (sheet) { sheet.phase = "switch"; machtileReturnClaimRenderSheet(); }
+  machtileStationCmdRerender();
+  let reasonKey = "";
+  let claimSent = false;
+  // pass.claimed＝接單 RPC 成功回來的那一刻由既有接單函式設成 true；reload＝接單後重讀畫面（有期限）；
+  // request＝只有換道次的接單請求多帶的 signal（等不到時可以中止）；abandoned／settled 見 machtileSwitchStepAbandonClaim
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const pass = { claimed: false, abandoned: false, settled: false, sourceKey: "", controller, request: controller ? { signal: controller.signal } : null,
+    reload: async () => {
+      if (pass.abandoned) throw new Error("SWITCH_STEP_ABANDONED");
+      await machtileSwitchStepTimeout(loadFromSupabase({ preserveDepartmentOnFailure: true }));
+      if (pass.abandoned) throw new Error("SWITCH_STEP_ABANDONED");
+    } };
+  try {
+    const poolFresh = await machtileSwitchStepReadPool();
+    // 等待中登入的人換了／登出：這一筆已經被丟掉，不接、不留結果、不跳提示（那是別人的畫面了）
+    if (!machtileSwitchStepOwned(code, active)) {
+      if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
+      machtileStationCmdRerender();
+      return;
+    }
+    const machine = machtileStationCmdMachineByCode(code);
+    const check = machtileSwitchStepCore.verifyTarget({ poolFresh, items: machtileDispatchPoolState.items, target: active.target, orderNo: active.orderNo,
+      machine: machtileSwitchStepMachineInfo(machine, code) });
+    reasonKey = check.reasonKey;
+    active.phase = machtileSwitchStepCore.next(active.phase, check.ok ? "verify_ok" : "verify_failed");
+    if (machtileSwitchStepCore.claimAllowed(active.phase)) {
+      machtileCloseCardSelection();
+      let claim;
+      machtileSwitchStep.claimPass = code;
+      // 機台代號用「選工單」面板接單時的同一個寫法（machine.code || machine.name，不轉大寫）：送出的內容才會逐字相同
+      pass.sourceKey = active.target.sourceKey;
+      active.pass = pass;
+      try { claim = machtileClaimDispatchPool(active.target.sourceKey, String(machine?.code || machine?.name || code), pass); } finally { machtileSwitchStep.claimPass = ""; }
+      claimSent = true;
+      const claimResult = await machtileSwitchStepTimeout(claim);
+      pass.settled = true;
+      const claimed = machtileSwitchStepCore.claimEvent(claimResult);
+      reasonKey = claimed.reasonKey;
+      active.phase = machtileSwitchStepCore.next(active.phase, claimed.event);
+    }
+  } catch (error) {
+    console.warn("switch step: second step failed", error);
+    // 等太久或出錯：RPC 已經成功＝接到了（畫面沒更新）；已送出但沒有結果＝不確定；還沒送＝沒接
+    active.phase = pass.claimed === true ? machtileSwitchStepCore.next("claiming", "claim_ok_unrefreshed") : claimSent ? "claim_uncertain" : "returned_not_claimed";
+    reasonKey = "";
+    // 接單已送出、等不到它收尾：不再等（中止請求、放開 claimBusy、晚到的結果不算）。結果照上面那一行，不因為中止而改變。
+    if (claimSent) machtileSwitchStepAbandonClaim(pass);
+  }
+  // 接單在路上的時候登入的人換了／登出：結果不是現在這個人的 → 不留結果、不跳提示（跟上面重讀待做池之後的那一個檢查一樣）
+  if (claimSent && !machtileSwitchStepOwned(code, active)) {
+    if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
+    machtileStationCmdRerender();
+    return;
+  }
+  machtileSwitchStepEnd(code, active, machtileSwitchStepCore.outcome({ state: active.phase, mode, from: active.fromStep, to: active.target.step, reasonKey }));
+}
+
+// 換道次結束（退回已成功之後的每一種結果都走這裡）：解鎖、留一句結果、重讀卡片。
+function machtileSwitchStepEnd(code, active, outcome) {
+  if (machtileSwitchStep.active[code] === active) delete machtileSwitchStep.active[code];
+  machtileReturnClaim.lastResult[code] = { view: outcome, at: Date.now(), orderNo: active.orderNo, step: active.target.step };
+  if (outcome.state !== "done") console.warn("switch step: ended without a clean switch", outcome.state, outcome.reasonKey);
+  const sheet = machtileSwitchStepSheetFor(code, active.uuid);
+  if (sheet) { sheet.phase = "switch"; sheet.switchStep.outcome = outcome; machtileReturnClaimRenderSheet(); }
+  machtileStationCmdRerender();
+  showToast(machtileSwitchStepText(outcome));
+  // 接到了＝既有接單函式已經重讀過；沒接到／不確定／接到了但畫面沒更新＝這裡重讀一次（背景，不擋、不鎖）
+  if (outcome.state !== "done") void machtileRefreshAfterApplied(code, machtileReturnClaimCore.COMMAND_TYPE);
+}
+
+function machtileSwitchStepRenderSheet(sheet, holder, focus) {
+  const t = machtileTranslate;
+  const sw = sheet.switchStep;
+  const stepLine = (step, name) => [t("return_claim_step_value", { step }), name].filter(Boolean).join(" · ");
+  const target = machtileSwitchStepTarget(sheet);
+  const active = machtileSwitchStep.active[sheet.code];
+  const toStep = target ? target.step : active && active.uuid === sheet.uuid ? active.target.step : "";
+  const steps = { from: sheet.fields.step, to: toStep };
+  const head = `<p class="station-cmd-notice" data-switch-step-current>${escapeHtml(t("switch_step_current", { step: stepLine(sheet.fields.step, sheet.fields.process) }))}</p>`;
+  const notice = (tone, name, message) => `<p class="station-cmd-notice is-${tone}" role="alert" ${name}>${escapeHtml(message)}</p>`;
+  let body = "";
+  let actions = "";
+  if (sheet.phase === "confirm" || sheet.phase === "sending") {
+    const sending = sheet.phase === "sending";
+    const listed = !sheet.loading && sheet.freshOk && sw.poolOk && sw.choices.length > 0;
+    const canSend = !sending && listed && Boolean(target);
+    const choices = sw.choices.map((choice) => {
+      const label = [stepLine(choice.step, choice.name), choice.quantity === null ? "" : t("switch_step_quantity", { quantity: choice.quantity })].filter(Boolean).join(" · ");
+      const picked = choice.sourceKey === sw.targetKey;
+      return `<button type="button" class="switch-step-choice" role="radio" aria-checked="${picked ? "true" : "false"}" data-switch-step-choice="${escapeHtml(choice.sourceKey)}" data-switch-step-choice-step="${escapeHtml(choice.step)}"${sending ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+    }).join("");
+    body = `${head}
+      ${sheet.needsReason ? `<p class="station-cmd-notice is-warn" role="note" data-return-claim-on-behalf>${escapeHtml(t("return_claim_on_behalf"))}</p>` : ""}
+      ${sheet.loading ? `<p data-switch-step-checking role="status">${escapeHtml(t("switch_step_checking"))}</p>` : ""}
+      ${!sheet.loading && !sheet.freshOk ? notice("bad", "data-return-claim-stale", t(sheet.freshKey || "return_claim_fresh_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && !sw.poolOk ? notice("bad", "data-switch-step-pool-failed", t("switch_step_pool_failed")) : ""}
+      ${!sheet.loading && sheet.freshOk && sw.poolOk && !sw.choices.length ? notice("warn", "data-switch-step-no-other", t("switch_step_no_other")) : ""}
+      ${listed ? `<p data-switch-step-choose>${escapeHtml(t("switch_step_choose"))}</p><div class="switch-step-choices" role="radiogroup" data-switch-step-choices>${choices}</div>` : ""}
+      <ul class="station-cmd-legacy" data-switch-step-explain>
+        <li>${escapeHtml(t("switch_step_explain_return", { from: sheet.fields.step }))}</li>
+        <li>${escapeHtml(t("switch_step_explain_claim"))}</li>
+        <li>${escapeHtml(t("return_claim_explain_no_report"))}</li>
+      </ul>
+      ${sheet.needsReason ? `<label class="station-cmd-daily" for="returnClaimReason">${escapeHtml(t("return_claim_reason_label"))}
+        <textarea id="returnClaimReason" data-return-claim-reason maxlength="${machtileReturnClaimCore.REASON_MAX}" rows="3" required aria-required="true"${sheet.reasonError ? ' aria-invalid="true"' : ""}${sending ? " readonly" : ""}>${escapeHtml(sheet.reason)}</textarea></label>` : ""}
+      ${sheet.reasonError ? `<p class="station-cmd-notice is-bad" role="alert" data-return-claim-reason-error>${escapeHtml(t(sheet.reasonError))}</p>` : ""}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-return-claim-confirm data-switch-step-confirm ${canSend ? "" : "disabled"}>${escapeHtml(sending ? t("return_claim_sending") : target ? t("switch_step_confirm", { to: target.step }) : t("switch_step_confirm_none"))}</button>
+      <button type="button" class="station-cmd-secondary" data-return-claim-close ${sending ? "disabled" : ""}>${escapeHtml(t("cancel"))}</button>`;
+  } else if (sheet.phase === "uncertain") {
+    // 退回那一步不知道有沒有送到：換道次已經停了；下面的重送只重送那一筆退回（同一個 uuid）
+    body = `${head}${notice("warn", 'data-return-claim-result="uncertain"', t(sheet.messageKey || "return_claim_uncertain"))}
+      ${notice("warn", "data-switch-step-stopped", t("switch_step_stopped_uncertain", steps))}`;
+    actions = `<button type="button" class="station-cmd-confirm is-stop" data-return-claim-confirm>${escapeHtml(t("return_claim_resend"))}</button>
+      <button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t("return_claim_close_later"))}</button>`;
+  } else if (sheet.phase === "failed") {
+    body = `${head}${notice("bad", 'data-return-claim-result="failed" data-switch-step-result="return_rejected"', t("switch_step_not_switched", steps))}
+      ${notice("bad", "data-switch-step-return-message", t(sheet.messageKey || "return_claim_err_generic"))}`;
+    actions = `<button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t("return_claim_close"))}</button>`;
+  } else if (sheet.phase === "switch") {
+    const outcome = sw.outcome;
+    body = `${head}<section class="station-cmd-result is-${escapeHtml(outcome ? outcome.tone : "wait")}" data-switch-step-result="${escapeHtml(outcome ? outcome.state : "claiming")}" role="status"><p>${escapeHtml(outcome ? machtileSwitchStepText(outcome) : t("switch_step_progress_claim", steps))}</p></section>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t(outcome ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  } else {
+    // 退回那一步的伺服器狀態（等待中／被拒絕／過期；或換道次停掉之後退回才成功）
+    const view = sheet.view || machtileReturnClaimCore.resultView({ status: "pending" });
+    const unsure = machtileReturnClaimCore.UNCERTAIN_CODES.includes(view.code);
+    const lines = !view.terminal ? (sw.stopped ? [t(view.messageKey), t("switch_step_stopped_uncertain", steps)] : [t("switch_step_progress_return", steps)])
+      : view.phase === "applied" ? [t(view.messageKey), t("switch_step_stopped_after_return", steps)]
+      : [t(unsure ? "switch_step_stopped_unsure" : "switch_step_not_switched", steps), t(view.messageKey)];
+    const result = !view.terminal ? "returning" : view.phase === "applied" ? "stopped_uncertain" : unsure ? "return_unsure" : "return_rejected";
+    body = `${head}<section class="station-cmd-result is-${escapeHtml(view.tone)}" data-return-claim-result="${escapeHtml(view.phase)}" data-switch-step-result="${result}" role="status">${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</section>`;
+    actions = `<button type="button" class="station-cmd-secondary" data-return-claim-close>${escapeHtml(t(view.terminal ? "return_claim_close" : "return_claim_close_later"))}</button>`;
+  }
+  const hadFocusInside = holder.contains(document.activeElement);
+  const reasonHadFocus = Boolean(document.activeElement?.matches?.("[data-return-claim-reason]"));
+  const order = [sheet.fields.orderNo, [sheet.fields.partNo, sheet.fields.part].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+  holder.innerHTML = `
+    <section class="station-cmd-panel is-stop" role="dialog" aria-modal="true" aria-labelledby="returnClaimTitle" data-switch-step-sheet="${escapeHtml(sheet.code)}">
+      <header><h2 id="returnClaimTitle">${escapeHtml(t("switch_step_title", { order }))}</h2></header>
+      ${body}
+      <footer class="station-cmd-actions">${actions}</footer>
+    </section>`;
+  if (focus || hadFocusInside) {
+    const focusTarget = (reasonHadFocus ? holder.querySelector("[data-return-claim-reason]") : null)
+      || holder.querySelector("[data-return-claim-close]:not([disabled])") || holder.querySelector("h2");
+    try { focusTarget?.focus(); } catch { /* ignore */ }
+  }
+}
+
+// 卡片上的「換道次」與確認卡裡選道次的點擊。旗標關時畫面上沒有這些元素，一律回 false。
+function machtileSwitchStepHandleClick(target) {
+  if (!machtileSwitchStepEnabled()) return false;
+  const open = target.closest("[data-switch-step-open]");
+  if (open) { void machtileReturnClaimOpen(open.dataset.switchStepOpen, open, true); return true; }
+  const choice = target.closest("#machtileReturnClaimSheet [data-switch-step-choice]");
+  if (choice) { machtileSwitchStepChoose(choice.dataset.switchStepChoice); return true; }
+  return false;
+}
+
 function renderMachineCard(machine) {
   const order = machine.order;
   const status = statusMeta[machine.status] || statusMeta.idle;
@@ -16591,10 +18069,12 @@ function renderMachineCard(machine) {
       : `已上傳${profile.programVersion && profile.programVersion !== "-" ? ` ${profile.programVersion}` : ""}`;
   // 選工單／開工分開（旗標開的機台）：pickActions 決定這個階段要不要報工／完工／選單入口；旗標關＝null＝照舊
   const pickActions = stationCmd.pickPhase ? stationCmd.pickActions || [] : null;
-  const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport
+  // 這台有一筆「接錯了，退回」在等結果 → 報工／完工先鎖住（旗標關＝永遠 false）
+  const returnClaimLocked = machtileReturnClaimLocks(machine.code || machine.name);
+  const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport && !returnClaimLocked
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
-  const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport
+  const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport && !returnClaimLocked
     ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
@@ -16636,7 +18116,7 @@ function renderMachineCard(machine) {
       ${machtileCardOrdersMarkup(machine)}
       ${machtileProcessFlowMarkup(order, { level: flowLevel, machine })}
       ${(!pickActions || pickActions.includes("select")) && !machine.isUnassignedBucket && machtileCanEditSchedule() && machtileCanAssignToMachine(machine.code || machine.name)
-        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}
+        ? `<button type="button" class="card-select-entry" data-no-detail data-card-select-open="${escapeHtml(machine.code || machine.name)}">${escapeHtml(machtileTranslate("select_work_order"))}</button>` : ""}${order ? machtileDispatchPoolReturnMarkup(order, machine.code || machine.name) : ""}${machtileReturnClaimCardMarkup(machine)}${machtileSwitchStartedCardMarkup(machine)}
       ${!pickActions || pickActions.includes("select") ? machtileCardPoolEntryMarkup(machine) : ""}
 
       ${order ? `
@@ -25096,6 +26576,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     else showToast(message);
     machtileRenderStationReportSurfaces();
   };
+  if (machtileReturnClaimBlockMessage(code)) { block(machtileReturnClaimBlockMessage(code)); return; }
   if (!core) { block("智慧報工尚未載入，請重新整理後再試。"); return; }
   if (!context) { block("智慧報工缺少舊 MES 對照資料，本次未送出；請重新整理或通知主管。"); return; }
   if (machtileStationReportFlowBusy(flow)) { block("上一筆智慧報工仍在處理，請稍候查看結果。"); return; }
@@ -25362,6 +26843,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow) || !flow.preview) return;
+  if (machtileReturnClaimBlockMessage(code)) { flow.error = machtileReturnClaimBlockMessage(code); machtileRenderStationReportSurfaces(); return; }
   let snapshot;
   try { snapshot = core.buildClientGuardSnapshot(flow.preview); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
@@ -25894,6 +27376,7 @@ function machtileBatchCommandChoice(code, type = machtileBatchState.commandType)
   const order = machtileBatchSelectedOrder(code);
   const base = machtileBatchCore().batchCommandChoice(type, machtileBatchState.stationShiftByMachine.get(code), Boolean(order));
   if (!base.eligible) return base;
+  if (machtileReturnClaimBlockMessage(code)) return { eligible: false, checked: false, reason: machtileReturnClaimBlockMessage(code) };
   const pending = machtileStationCmd.pending[code];
   if (pending && !machtileStationCmdUnlocked(pending)) {
     return { eligible: false, checked: false, reason: pending.unconfirmed ? "等待確認（可用同一筆重送）" : "指令等待中" };
@@ -26361,6 +27844,7 @@ async function machtileSubmitBatchReport() {
     return;
   }
   if (!toSend.length) { showToast(mode === "dailyStart" ? "沒有勾選要開工的機台。" : "沒有要送的機台（累計數與不良皆空白）。"); return; }
+  if (machtileReturnClaimBatchBlock(toSend.map(({ model }) => model.machineCode))) return;
   if (mode !== "dailyStart") {
     try {
       for (const { model } of toSend) {
@@ -27305,6 +28789,8 @@ function bindEvents() {
       return;
     }
 
+    if (machtileSwitchStartedHandleClick(event)) return;
+    if (machtileReturnClaimHandleClick(event)) return;
     if (machtileStationCmdHandleClick(event)) return;
 
     if (event.target.closest("[data-no-detail]")) {
@@ -27500,6 +28986,7 @@ function bindEvents() {
       machtileShowReportSubmitError("此機台尚未指派工單，請先由主管排入工單。");
       return;
     }
+    if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }
     if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(activeReportType)) {
       const fresh = await machtileRefreshReportTotalState(selectedOrder);
       if (!fresh) {

@@ -349,7 +349,175 @@
       asm_block_qty_exceeds: "這次數量比可以報的還多，請確認件數。",
       asm_block_qty_invalid: "數量不對，請確認件數。",
       asm_block_not_started: "這張單還沒開工，請先按開工再報工。",
-      login_timeout: "登入流程已逾時，請重新登入。"
+      login_timeout: "登入流程已逾時，請重新登入。",
+      // 接錯了，退回（return_claim，P2；config.enableReturnClaim）
+      return_claim_button: "接錯了，退回",
+      return_claim_title: "確認退回這張單",
+      return_claim_explain_pool: "這張單會回到待做池，別人可以再接。",
+      return_claim_explain_machine: "這台機台會變成沒有工單。",
+      return_claim_explain_no_report: "不會報工，也不會記任何數量。",
+      return_claim_on_behalf: "你是用管理員／生管身分代退，這筆會記成你按的。",
+      return_claim_field_machine: "機台",
+      return_claim_field_order: "工單號",
+      return_claim_field_step: "第幾道／工序",
+      return_claim_step_value: "第 {{step}} 道",
+      return_claim_reason_label: "退回原因（必填）",
+      return_claim_reason_required: "代退要寫原因，請填一句話。",
+      return_claim_reason_too_long: "原因太長了，最多 500 個字。",
+      return_claim_confirm: "確認退回",
+      return_claim_close: "關閉",
+      return_claim_close_later: "先關掉（結果會顯示在卡片上）",
+      return_claim_checking: "正在確認這張單的最新狀況…",
+      return_claim_fresh_changed: "這張單的狀況變了（已開工、已有報工，或已經不在這台），不能退回。請重新整理畫面。",
+      return_claim_fresh_failed: "讀不到這張單的最新資料，現在不能退回。請檢查網路後重新整理畫面。",
+      return_claim_sending: "送出中…",
+      return_claim_waiting: "已送出，等工廠處理。請稍等，不要重按。",
+      return_claim_processing: "工廠處理中，請稍等。",
+      return_claim_card_pending: "退回中，等工廠處理…",
+      return_claim_card_slow: "退回送出很久還沒有結果，請問生管。",
+      return_claim_uncertain: "網路不穩，還不知道有沒有送到。按「用同一筆重送」不會重複退回。",
+      return_claim_card_uncertain: "退回：上次送出時網路斷了，正在確認有沒有送到。",
+      return_claim_not_found: "目前查不到這筆退回，這張單還在這台。要退回請按「用同一筆重送」，不會重複。",
+      return_claim_resend: "用同一筆重送",
+      return_claim_dismiss: "不退了",
+      return_claim_applied: "已退回待做池，這台現在沒有工單。",
+      return_claim_applied_reconciled: "已把這張單退回待做池；這台機台目前掛的工單沒有動。",
+      return_claim_old_tablet: "這台平板太舊，不能用這個功能，請找生管。",
+      return_claim_err_login: "登入已過期，請重新登入。",
+      return_claim_err_role: "這個帳號不能退回接單，請用作業員、生管或管理員帳號。",
+      return_claim_err_account: "你的帳號資料還沒設定好，不能退回。請找管理員。",
+      return_claim_err_admin_disabled: "管理員／生管代退還沒開放，請找管理員。",
+      return_claim_err_card_data: "卡片上的工單資料不完整，請重新整理畫面；還是不行請找生管。",
+      return_claim_err_conflict: "這筆退回跟剛才送出的內容不一樣，沒有送出。請關掉、重新整理畫面後再看。",
+      return_claim_err_not_open: "退回功能還沒開放，請找生管幫你處理。",
+      return_claim_err_station_not_open: "這台機台還沒開放退回，請找生管幫你處理。",
+      return_claim_err_stale: "畫面上的工單資料跟系統不一樣了，沒有退回。請重新整理畫面。",
+      return_claim_err_machine_not_allowed: "你的帳號不能操作這台機台（課別不符），請找生管。",
+      return_claim_err_no_claim: "這張單已經不在接單狀態（可能已經退回了）。請重新整理畫面。",
+      return_claim_err_not_owner: "這張單不是你接的，你不能退回。請找接單的人或生管。",
+      return_claim_err_claim_not_applied: "接單還沒被工廠確認，現在不能退回。請等一兩分鐘再試。",
+      return_claim_err_started: "這張單已經開工或已有報工，不能退回。要換單請找生管。",
+      return_claim_err_in_flight: "這台還有一筆指令在等工廠處理，等它有結果再試。",
+      return_claim_err_inconsistent: "舊 MES 的資料對不起來，系統不敢退回。請找生管處理。",
+      return_claim_err_pool_missing: "工廠找不到這張待做單，沒有退回。請找生管。",
+      return_claim_err_stale_command: "工廠太晚處理，這次沒有退回，工單還在這台。需要的話請再按一次。",
+      return_claim_err_expired: "超過 10 分鐘工廠都沒有接手，這次沒有退回，工單還在這台。需要的話請再按一次。",
+      return_claim_err_released: "主管取消了這筆退回，有沒有退成不確定。請重新整理畫面看這台的工單，或問生管。",
+      return_claim_busy: "這台有一筆「退回接單」還在等工廠處理，等它有結果再操作。",
+      return_claim_err_busy_retry: "工廠系統剛好在忙，這次沒有退回，工單還在這台。請等一下再按一次。",
+      return_claim_err_internal_retry: "工廠處理時出了問題，這次沒有退回，工單還在這台。請過幾分鐘再試一次；還是不行請找生管。",
+      return_claim_err_outcome_unknown: "工廠那邊的結果不確定：這張單可能已經退回，也可能還在這台。請重新整理畫面看這台現在掛哪張單；看不出來請問生管。",
+      return_claim_err_factory_problem: "工廠系統那邊有問題，這次沒有退回，工單還在這台。請找生管處理。",
+      return_claim_err_generic: "沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。",
+      // 換道次（switch step；config.enableSwitchStep，而且 enableReturnClaim 也要開）
+      switch_step_button: "換道次",
+      switch_step_title: "換道次：{{order}}",
+      switch_step_current: "現在掛的：{{step}}",
+      switch_step_choose: "要換成哪一道？（只列待做池裡這張單、這台可以接的道次）",
+      switch_step_quantity: "{{quantity}} 件",
+      switch_step_confirm: "換成第 {{to}} 道",
+      switch_step_confirm_none: "請先選要換成哪一道",
+      switch_step_explain_return: "現在這一道（第 {{from}} 道）會退回待做池，別人可以再接。",
+      switch_step_explain_claim: "你選的那一道會掛到這台機台。",
+      switch_step_checking: "正在讀最新的待做池…",
+      switch_step_pool_failed: "讀不到最新的待做池，現在不能換道次。請檢查網路後重新整理畫面。",
+      switch_step_no_other: "待做池裡現在沒有這張單、這台可以接的其他道次，不能換。",
+      switch_step_progress_return: "換道次處理中（1／2）：正在把第 {{from}} 道退回待做池，等工廠處理。請稍等，不要重按。",
+      switch_step_progress_claim: "換道次處理中（2／2）：第 {{from}} 道已退回，正在接第 {{to}} 道…",
+      switch_step_card_pending: "換道次處理中，等工廠處理…",
+      switch_step_busy: "這台正在「換道次」，等它有結果再操作。",
+      switch_step_done: "已換成第 {{to}} 道。原本的第 {{from}} 道已退回待做池。",
+      switch_step_not_switched: "沒有換道次，這台還是原本的第 {{from}} 道。",
+      switch_step_stopped_unsure: "換道次停下來了，沒有幫你接第 {{to}} 道。",
+      switch_step_stopped_uncertain: "換道次先停下來：還不知道退回有沒有成功，所以沒有幫你接第 {{to}} 道。等退回有結果後，請到「選工單」自己接。",
+      switch_step_stopped_after_return: "換道次之前已經停下來，系統沒有自動接第 {{to}} 道。請到「選工單」自己接。",
+      switch_step_claim_failed: "原本那一道已經退回待做池，這台現在沒有工單；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
+      switch_step_claim_failed_reconciled: "原本那一道已經退回待做池，這台機台目前掛的工單沒有動；第 {{to}} 道沒有接成功（{{reason}}）。請到「選工單」重新接。",
+      switch_step_claim_uncertain: "原本那一道已經退回待做池；第 {{to}} 道不確定有沒有接到（網路不穩）。請重新整理畫面看這台現在掛哪張單；沒有的話請到「選工單」重新接。",
+      switch_step_claimed_refresh_failed: "已換成第 {{to}} 道（原本的第 {{from}} 道已退回待做池），但畫面沒有更新成功。請重新整理畫面。",
+      switch_step_reason_taken: "已經被別台接走",
+      switch_step_reason_not_in_pool: "待做池裡已經沒有這一道",
+      switch_step_reason_not_eligible: "這台不能做這一道",
+      switch_step_reason_machine_busy: "系統上這台還有未完成的工單",
+      switch_step_reason_pool_unread: "讀不到最新的待做池",
+      switch_step_reason_late: "工廠回覆太慢，系統沒有自動接",
+      switch_step_reason_unknown_mode: "工廠的回覆系統看不懂，沒有自動接",
+      switch_step_reason_login: "登入已失效",
+      switch_step_reason_not_open: "接單功能還沒開放",
+      switch_step_reason_busy: "另一筆接單正在處理",
+      switch_step_reason_generic: "系統沒有接成功",
+      switch_step_reason_machine_not_idle: "系統上這台不是空閒狀態",
+      // 換道次（switch step，第 2 階段：已開工、還沒報工；config.enableSwitchStepStarted）
+      switch_step_started_button: "換道次",
+      switch_step_started_title: "換道次：{{order}}",
+      switch_step_started_current: "現在掛的：{{step}}（已開工、還沒報工）",
+      switch_step_started_choose: "要換成哪一道？（同一張工單、還沒做完、沒有掛在別台的道次）",
+      switch_step_started_tag_pool: "待做池",
+      switch_step_started_tag_unpooled: "不在待做池",
+      switch_step_started_confirm_text: "這台現在做的是 {{order}} 第 {{from}} 道（已開工、還沒報工）。要換成第 {{to}} 道嗎？",
+      switch_step_started_explain_stop: "系統會：① 第 {{from}} 道停工，不記任何數量；② 第 {{from}} 道退回待做池。",
+      switch_step_started_explain_set: "③ 你選的那一道設到這台。換好後請再按「開工」。",
+      switch_step_started_confirm: "換成第 {{to}} 道",
+      switch_step_started_confirm_none: "請先選要換成哪一道",
+      switch_step_started_sending: "送出中…",
+      switch_step_started_checking: "正在讀這台和這張單最新的資料…",
+      switch_step_started_fresh_changed: "這台的工單或道次已經變了，不能換。請重新整理畫面。",
+      switch_step_started_fresh_failed: "讀不到這台最新的資料，現在不能換道次。請檢查網路後重新整理畫面。",
+      switch_step_started_list_failed: "讀不到這張單的其他道次，現在不能換。請檢查網路後重新整理畫面。",
+      switch_step_started_read_failed: "讀取失敗，請再試一次。",
+      switch_step_started_no_other: "這張單現在沒有可以換過去的道次（都做完了、在別台，或不在待做池）。請找生管。",
+      switch_step_started_on_behalf: "你是用管理員／生管身分代換道次，這筆會記成你按的。",
+      switch_step_started_reason_label: "換道次原因（必填）",
+      switch_step_started_reason_required: "請寫換道次的原因。",
+      switch_step_started_reason_too_long: "原因最多 500 字。",
+      switch_step_started_progress: "換道次處理中，等工廠處理（約 10–30 秒）。請不要重按。",
+      switch_step_started_card_pending: "換道次處理中（第 {{from}} 道 → 第 {{to}} 道），等工廠處理…",
+      switch_step_started_busy: "這台正在「換道次」，等它有結果再操作。",
+      switch_step_started_waiting: "已送出，等工廠接手…",
+      switch_step_started_processing: "工廠處理中…",
+      switch_step_started_done: "已換成第 {{to}} 道，請按「開工」開始做。第 {{from}} 道已退回待做池，沒有記任何數量。",
+      switch_step_started_done_plain: "已換成第 {{to}} 道，請按「開工」開始做。第 {{from}} 道沒有記任何數量。",
+      switch_step_started_unpooled_notice: "注意：第 {{from}} 道現在不在任何機台、也不在待做池。請生管用「設定到這台」重新安排。",
+      switch_step_started_unpooled_card: "待安排：{{order}} 第 {{from}} 道現在不在任何機台、也不在待做池（{{machine}} 換成第 {{to}} 道時撤下）。請生管用「設定到這台」重新安排。",
+      switch_step_started_unpooled_dismiss: "已安排，收起",
+      switch_step_started_uncertain: "換道次不確定有沒有送到（網路不穩），系統會繼續確認。要再送請按「用同一筆重送」，不會換兩次。",
+      switch_step_started_not_found: "查不到這筆換道次，應該沒有送到；這台還是第 {{from}} 道。可以用同一筆重送，或收起。",
+      switch_step_started_resend: "用同一筆重送",
+      switch_step_started_dismiss: "收起",
+      switch_step_started_old_tablet: "這台平板的瀏覽器太舊，不能換道次。請找生管。",
+      switch_step_started_unsure: "換道次結果還不確定。請重新整理，看這台現在掛第幾道；不要重按。",
+      switch_step_started_err_login: "登入已過期，沒有換。請重新登入。",
+      switch_step_started_err_role: "這個帳號不能換道次。",
+      switch_step_started_err_account: "帳號資料不完整（例如沒有舊 MES 工號），不能換道次。請找生管。",
+      switch_step_started_err_admin_disabled: "管理員／生管代換道次還沒開放。",
+      switch_step_started_err_card_data: "畫面上的資料不完整，沒有送出，這台沒有變。請重新整理畫面。",
+      switch_step_started_err_conflict: "這筆換道次的內容跟之前送的不一樣，沒有送出。請重新整理畫面。",
+      switch_step_started_err_not_open: "換道次（已開工）還沒開放，沒有換。這台還是第 {{from}} 道。",
+      switch_step_started_err_stale: "這台的工單或道次已經變了，沒有換。請重新整理畫面。",
+      switch_step_started_err_machine_not_allowed: "你沒有這台機台的權限，沒有換。",
+      switch_step_started_err_not_owner: "第 {{from}} 道不是你接的，不能換。請找接單的人或生管。",
+      switch_step_started_err_claim_not_applied: "第 {{from}} 道的接單工廠還沒確認，沒有換。請等一下再按一次。",
+      switch_step_started_err_no_pool_record: "系統找不到第 {{from}} 道是從待做池哪一筆接的，不能直接換。這台還是第 {{from}} 道。請找生管。",
+      switch_step_started_err_reported: "第 {{from}} 道已經有報工數量，不能直接換道次。請找生管處理（報工修正）。",
+      switch_step_started_err_source_state: "第 {{from}} 道現在的狀態不能換（例如已完工或待檢），沒有換。請找生管。",
+      switch_step_started_err_target_gone: "第 {{to}} 道已經不在待做池或找不到，沒有換。這台還是第 {{from}} 道。請重新整理畫面再選。",
+      switch_step_started_err_target_taken: "第 {{to}} 道已經在別台機台上或被別台接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
+      switch_step_started_err_target_taken_on: "第 {{to}} 道已經在 {{machine}} 上或被 {{machine}} 接走，沒有換。這台還是第 {{from}} 道，狀態沒有變。",
+      switch_step_started_err_target_not_here: "第 {{to}} 道不能設到這台（排程或機台不符），沒有換。這台還是第 {{from}} 道。",
+      switch_step_started_err_target_closed: "第 {{to}} 道已經關站，沒有換。這台還是第 {{from}} 道。",
+      switch_step_started_err_busy: "這台正在處理另一筆指令，請稍後再試。",
+      switch_step_started_err_before_claim: "第 {{from}} 道在這次接單之前就開過工，不能直接換。請找生管。",
+      switch_step_started_err_not_operator: "你不在這台的作業人員名單上，不能換道次。請找這台的作業員或生管。",
+      switch_step_started_err_state: "這台的狀態不明（例如干涉停工），沒有換。請找生管。",
+      switch_step_started_err_target_not_pooled: "第 {{to}} 道不在待做池，作業員不能自己設到這台，沒有換。請找生管。",
+      switch_step_started_err_source_not_pooled: "第 {{from}} 道是生管設定到這台的（不是從待做池接的），作業員不能自己換，沒有換。請找生管。",
+      switch_step_started_err_inconsistent: "工廠的資料對不起來，沒有換。這台還是第 {{from}} 道。請找生管。",
+      switch_step_started_err_busy_retry: "工廠系統剛好在忙，沒有換，這台還是第 {{from}} 道。請等一下再按一次。",
+      switch_step_started_err_internal_retry: "工廠處理時出了問題，沒有換，這台還是第 {{from}} 道。請過幾分鐘再試一次；還是不行請找生管。",
+      switch_step_started_err_factory_problem: "工廠系統那邊有問題，沒有換，這台還是第 {{from}} 道。請找生管。",
+      switch_step_started_err_expired: "工廠太久沒有處理，這次沒有換，這台還是第 {{from}} 道。需要的話請再按一次。",
+      switch_step_started_err_released: "主管取消了這筆換道次，結果不確定。請重新整理畫面看這台掛第幾道；不要重按。",
+      switch_step_started_err_generic: "沒有換成功。請重新整理畫面看這台現在掛第幾道；還是不對請找生管。",
     },
     vi: {
       app_update_available: "Có phiên bản mới",
@@ -689,7 +857,173 @@
       asm_block_qty_exceeds: "Số lượng lần này nhiều hơn số được báo; hãy kiểm tra lại.",
       asm_block_qty_invalid: "Số lượng không đúng; hãy kiểm tra lại.",
       asm_block_not_started: "Phiếu này chưa bắt đầu; hãy bấm Bắt đầu rồi mới báo công.",
-      login_timeout: "Quá thời gian đăng nhập. Vui lòng đăng nhập lại."
+      login_timeout: "Quá thời gian đăng nhập. Vui lòng đăng nhập lại.",
+      return_claim_button: "Nhận nhầm, trả lại", // _draft
+      return_claim_title: "Xác nhận trả lại phiếu này", // _draft
+      return_claim_explain_pool: "Phiếu này sẽ quay về danh sách chờ làm, người khác có thể nhận.", // _draft
+      return_claim_explain_machine: "Máy này sẽ không còn phiếu nào.", // _draft
+      return_claim_explain_no_report: "Không báo công và không ghi số lượng nào.", // _draft
+      return_claim_on_behalf: "Bạn đang trả thay với quyền quản trị／kế hoạch; thao tác này sẽ ghi tên bạn.", // _draft
+      return_claim_field_machine: "Máy", // _draft
+      return_claim_field_order: "Số phiếu", // _draft
+      return_claim_field_step: "Công đoạn", // _draft
+      return_claim_step_value: "Công đoạn {{step}}", // _draft
+      return_claim_reason_label: "Lý do trả lại (bắt buộc)", // _draft
+      return_claim_reason_required: "Trả thay phải ghi lý do; hãy ghi một câu.", // _draft
+      return_claim_reason_too_long: "Lý do quá dài, tối đa 500 ký tự.", // _draft
+      return_claim_confirm: "Xác nhận trả lại", // _draft
+      return_claim_close: "Đóng", // _draft
+      return_claim_close_later: "Đóng trước (kết quả sẽ hiện trên thẻ máy)", // _draft
+      return_claim_checking: "Đang kiểm tra tình trạng mới nhất của phiếu…", // _draft
+      return_claim_fresh_changed: "Tình trạng phiếu đã thay đổi (đã bắt đầu, đã có báo công, hoặc không còn ở máy này) nên không trả lại được. Hãy tải lại màn hình.", // _draft
+      return_claim_fresh_failed: "Không đọc được dữ liệu mới nhất của phiếu nên chưa trả lại được. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      return_claim_sending: "Đang gửi…", // _draft
+      return_claim_waiting: "Đã gửi, đang chờ nhà máy xử lý. Vui lòng chờ, đừng bấm lại.", // _draft
+      return_claim_processing: "Nhà máy đang xử lý, vui lòng chờ.", // _draft
+      return_claim_card_pending: "Đang trả lại, chờ nhà máy xử lý…", // _draft
+      return_claim_card_slow: "Đã gửi trả lại khá lâu mà chưa có kết quả; hãy hỏi bộ phận kế hoạch.", // _draft
+      return_claim_uncertain: "Mạng không ổn định, chưa biết đã gửi được chưa. Bấm “Gửi lại cùng lệnh” sẽ không trả lại hai lần.", // _draft
+      return_claim_card_uncertain: "Trả lại: lần gửi trước bị mất mạng, đang kiểm tra đã gửi được chưa.", // _draft
+      return_claim_not_found: "Hiện không tìm thấy lệnh trả lại này, phiếu vẫn ở máy này. Muốn trả lại hãy bấm “Gửi lại cùng lệnh”; sẽ không bị trùng.", // _draft
+      return_claim_resend: "Gửi lại cùng lệnh", // _draft
+      return_claim_dismiss: "Không trả nữa", // _draft
+      return_claim_applied: "Đã trả về danh sách chờ làm; máy này hiện không có phiếu.", // _draft
+      return_claim_applied_reconciled: "Đã trả phiếu này về danh sách chờ làm; phiếu đang gắn trên máy này không thay đổi.", // _draft
+      return_claim_old_tablet: "Máy tính bảng này quá cũ nên không dùng được chức năng này; hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_login: "Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.", // _draft
+      return_claim_err_role: "Tài khoản này không trả lại phiếu được; hãy dùng tài khoản công nhân, kế hoạch hoặc quản trị.", // _draft
+      return_claim_err_account: "Tài khoản của bạn chưa được thiết lập đầy đủ nên không trả lại được. Hãy báo quản trị viên.", // _draft
+      return_claim_err_admin_disabled: "Chức năng trả thay của quản trị／kế hoạch chưa mở; hãy báo quản trị viên.", // _draft
+      return_claim_err_card_data: "Dữ liệu phiếu trên thẻ máy chưa đầy đủ; hãy tải lại màn hình, nếu vẫn lỗi hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_conflict: "Lệnh trả lại này khác với nội dung vừa gửi nên chưa được gửi. Hãy đóng lại, tải lại màn hình rồi xem lại.", // _draft
+      return_claim_err_not_open: "Chức năng trả lại chưa mở; hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_station_not_open: "Máy này chưa mở chức năng trả lại; hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_stale: "Dữ liệu phiếu trên màn hình không còn khớp với hệ thống nên chưa trả lại. Hãy tải lại màn hình.", // _draft
+      return_claim_err_machine_not_allowed: "Tài khoản của bạn không được thao tác máy này (khác bộ phận); hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_no_claim: "Phiếu này không còn ở trạng thái đã nhận (có thể đã được trả lại). Hãy tải lại màn hình.", // _draft
+      return_claim_err_not_owner: "Phiếu này không phải do bạn nhận nên bạn không trả lại được. Hãy tìm người đã nhận hoặc bộ phận kế hoạch.", // _draft
+      return_claim_err_claim_not_applied: "Việc nhận phiếu chưa được nhà máy xác nhận nên chưa trả lại được. Hãy chờ một hai phút rồi thử lại.", // _draft
+      return_claim_err_started: "Phiếu này đã bắt đầu hoặc đã có báo công nên không trả lại được. Muốn đổi phiếu hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_in_flight: "Máy này còn một lệnh đang chờ nhà máy xử lý; hãy chờ có kết quả rồi thử lại.", // _draft
+      return_claim_err_inconsistent: "Dữ liệu trên MES cũ không khớp nên hệ thống không dám trả lại. Hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_pool_missing: "Nhà máy không tìm thấy phiếu chờ làm này nên chưa trả lại. Hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_stale_command: "Nhà máy xử lý quá muộn nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
+      return_claim_err_expired: "Quá 10 phút nhà máy vẫn chưa tiếp nhận nên lần này chưa trả lại, phiếu vẫn ở máy này. Nếu cần hãy bấm lại một lần.", // _draft
+      return_claim_err_released: "Quản lý đã hủy lệnh trả lại này, chưa chắc đã trả được hay chưa. Hãy tải lại màn hình để xem phiếu của máy, hoặc hỏi bộ phận kế hoạch.", // _draft
+      return_claim_busy: "Máy này có một lệnh trả lại phiếu đang chờ nhà máy xử lý; hãy chờ có kết quả rồi thao tác.", // _draft
+      return_claim_err_busy_retry: "Hệ thống nhà máy đang bận nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy chờ một chút rồi bấm lại.", // _draft
+      return_claim_err_internal_retry: "Nhà máy xử lý bị lỗi nên lần này chưa trả lại, phiếu vẫn ở máy này. Vài phút nữa hãy thử lại; nếu vẫn không được hãy báo bộ phận kế hoạch.", // _draft
+      return_claim_err_outcome_unknown: "Chưa chắc kết quả ở nhà máy: phiếu này có thể đã được trả lại, cũng có thể vẫn ở máy này. Hãy tải lại màn hình để xem máy đang gắn phiếu nào; nếu không rõ hãy hỏi bộ phận kế hoạch.", // _draft
+      return_claim_err_factory_problem: "Hệ thống nhà máy có vấn đề nên lần này chưa trả lại, phiếu vẫn ở máy này. Hãy nhờ bộ phận kế hoạch xử lý.", // _draft
+      return_claim_err_generic: "Chưa trả lại được. Hãy tải lại màn hình để kiểm tra phiếu của máy; nếu vẫn không đúng hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_button: "Đổi công đoạn", // _draft
+      switch_step_title: "Đổi công đoạn: {{order}}", // _draft
+      switch_step_current: "Đang gắn: {{step}}", // _draft
+      switch_step_choose: "Đổi sang công đoạn nào? (chỉ liệt kê các công đoạn của lệnh này trong danh sách chờ mà máy này nhận được)", // _draft
+      switch_step_quantity: "{{quantity}} sản phẩm", // _draft
+      switch_step_confirm: "Đổi sang công đoạn {{to}}", // _draft
+      switch_step_confirm_none: "Hãy chọn công đoạn muốn đổi sang", // _draft
+      switch_step_explain_return: "Công đoạn hiện tại (công đoạn {{from}}) sẽ được trả về danh sách chờ, người khác có thể nhận.", // _draft
+      switch_step_explain_claim: "Công đoạn bạn chọn sẽ được gắn vào máy này.", // _draft
+      switch_step_checking: "Đang đọc danh sách chờ mới nhất…", // _draft
+      switch_step_pool_failed: "Không đọc được danh sách chờ mới nhất nên chưa thể đổi công đoạn. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      switch_step_no_other: "Trong danh sách chờ hiện không có công đoạn nào khác của lệnh này mà máy này nhận được, nên không đổi được.", // _draft
+      switch_step_progress_return: "Đang đổi công đoạn (1/2): đang trả công đoạn {{from}} về danh sách chờ, chờ nhà máy xử lý. Vui lòng chờ, đừng bấm nhiều lần.", // _draft
+      switch_step_progress_claim: "Đang đổi công đoạn (2/2): công đoạn {{from}} đã được trả lại, đang nhận công đoạn {{to}}…", // _draft
+      switch_step_card_pending: "Đang đổi công đoạn, chờ nhà máy xử lý…", // _draft
+      switch_step_busy: "Máy này đang đổi công đoạn; hãy chờ có kết quả rồi thao tác.", // _draft
+      switch_step_done: "Đã đổi sang công đoạn {{to}}. Công đoạn {{from}} ban đầu đã được trả về danh sách chờ.", // _draft
+      switch_step_not_switched: "Chưa đổi công đoạn, máy này vẫn giữ công đoạn {{from}} ban đầu.", // _draft
+      switch_step_stopped_unsure: "Việc đổi công đoạn đã dừng, hệ thống chưa nhận công đoạn {{to}} cho bạn.", // _draft
+      switch_step_stopped_uncertain: "Tạm dừng đổi công đoạn: chưa biết việc trả lại có thành công không nên hệ thống chưa nhận công đoạn {{to}} cho bạn. Khi việc trả lại có kết quả, hãy vào «Chọn lệnh» để tự nhận.", // _draft
+      switch_step_stopped_after_return: "Việc đổi công đoạn đã dừng từ trước nên hệ thống không tự nhận công đoạn {{to}}. Hãy vào «Chọn lệnh» để tự nhận.", // _draft
+      switch_step_claim_failed: "Công đoạn ban đầu đã được trả về danh sách chờ, máy này hiện không có lệnh; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", // _draft
+      switch_step_claim_failed_reconciled: "Công đoạn ban đầu đã được trả về danh sách chờ, lệnh đang gắn trên máy này không bị thay đổi; chưa nhận được công đoạn {{to}} ({{reason}}). Hãy vào «Chọn lệnh» để nhận lại.", // _draft
+      switch_step_claim_uncertain: "Công đoạn ban đầu đã được trả về danh sách chờ; chưa chắc đã nhận được công đoạn {{to}} hay chưa (mạng không ổn định). Hãy tải lại màn hình để xem máy đang gắn lệnh nào; nếu chưa có, hãy vào «Chọn lệnh» để nhận lại.", // _draft
+      switch_step_claimed_refresh_failed: "Đã đổi sang công đoạn {{to}} (công đoạn {{from}} ban đầu đã được trả về danh sách chờ), nhưng màn hình chưa cập nhật được. Hãy tải lại màn hình.", // _draft
+      switch_step_reason_taken: "máy khác đã nhận mất", // _draft
+      switch_step_reason_not_in_pool: "công đoạn này không còn trong danh sách chờ", // _draft
+      switch_step_reason_not_eligible: "máy này không làm được công đoạn này", // _draft
+      switch_step_reason_machine_busy: "trên hệ thống máy này vẫn còn lệnh chưa xong", // _draft
+      switch_step_reason_pool_unread: "không đọc được danh sách chờ mới nhất", // _draft
+      switch_step_reason_late: "nhà máy phản hồi quá chậm nên hệ thống không tự nhận", // _draft
+      switch_step_reason_unknown_mode: "hệ thống không hiểu phản hồi của nhà máy nên không tự nhận", // _draft
+      switch_step_reason_login: "phiên đăng nhập đã hết hạn", // _draft
+      switch_step_reason_not_open: "chức năng nhận lệnh chưa được mở", // _draft
+      switch_step_reason_busy: "một lệnh nhận khác đang được xử lý", // _draft
+      switch_step_reason_generic: "hệ thống chưa nhận được", // _draft
+      switch_step_reason_machine_not_idle: "trên hệ thống máy này không ở trạng thái rảnh", // _draft
+      // 換道次（switch step，第 2 階段：已開工）
+      switch_step_started_button: "Đổi công đoạn", // _draft
+      switch_step_started_title: "Đổi công đoạn: {{order}}", // _draft
+      switch_step_started_current: "Đang gán: {{step}} (đã bắt đầu, chưa báo sản lượng)", // _draft
+      switch_step_started_choose: "Đổi sang công đoạn nào? (cùng phiếu, chưa làm xong, không gán ở máy khác)", // _draft
+      switch_step_started_tag_pool: "Kho chờ làm", // _draft
+      switch_step_started_tag_unpooled: "Không có trong kho chờ làm", // _draft
+      switch_step_started_confirm_text: "Máy này đang làm {{order}} công đoạn {{from}} (đã bắt đầu, chưa báo sản lượng). Đổi sang công đoạn {{to}}?", // _draft
+      switch_step_started_explain_stop: "Hệ thống sẽ: ① dừng công đoạn {{from}}, không ghi số lượng nào; ② trả công đoạn {{from}} về kho chờ làm.", // _draft
+      switch_step_started_explain_set: "③ Gán công đoạn bạn chọn vào máy này. Đổi xong hãy bấm “Bắt đầu”.", // _draft
+      switch_step_started_confirm: "Đổi sang công đoạn {{to}}", // _draft
+      switch_step_started_confirm_none: "Hãy chọn công đoạn cần đổi sang", // _draft
+      switch_step_started_sending: "Đang gửi…", // _draft
+      switch_step_started_checking: "Đang đọc dữ liệu mới nhất của máy và phiếu này…", // _draft
+      switch_step_started_fresh_changed: "Phiếu hoặc công đoạn của máy này đã thay đổi, không thể đổi. Hãy tải lại màn hình.", // _draft
+      switch_step_started_fresh_failed: "Không đọc được dữ liệu mới nhất của máy này nên chưa thể đổi công đoạn. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      switch_step_started_list_failed: "Không đọc được các công đoạn khác của phiếu này nên chưa thể đổi. Hãy kiểm tra mạng rồi tải lại màn hình.", // _draft
+      switch_step_started_read_failed: "Đọc dữ liệu thất bại, hãy thử lại.", // _draft
+      switch_step_started_no_other: "Phiếu này hiện không có công đoạn nào để đổi sang (đã xong, ở máy khác hoặc không có trong kho chờ làm). Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_on_behalf: "Bạn đang đổi công đoạn thay với quyền quản trị／kế hoạch; thao tác này sẽ ghi tên bạn.", // _draft
+      switch_step_started_reason_label: "Lý do đổi công đoạn (bắt buộc)", // _draft
+      switch_step_started_reason_required: "Hãy ghi lý do đổi công đoạn.", // _draft
+      switch_step_started_reason_too_long: "Lý do tối đa 500 ký tự.", // _draft
+      switch_step_started_progress: "Đang đổi công đoạn, chờ nhà máy xử lý (khoảng 10–30 giây). Đừng bấm lại.", // _draft
+      switch_step_started_card_pending: "Đang đổi công đoạn ({{from}} → {{to}}), chờ nhà máy xử lý…", // _draft
+      switch_step_started_busy: "Máy này đang đổi công đoạn; hãy chờ có kết quả rồi thao tác.", // _draft
+      switch_step_started_waiting: "Đã gửi, chờ nhà máy tiếp nhận…", // _draft
+      switch_step_started_processing: "Nhà máy đang xử lý…", // _draft
+      switch_step_started_done: "Đã đổi sang công đoạn {{to}}, hãy bấm “Bắt đầu” để làm. Công đoạn {{from}} đã trả về kho chờ làm, không ghi số lượng nào.", // _draft
+      switch_step_started_done_plain: "Đã đổi sang công đoạn {{to}}, hãy bấm “Bắt đầu” để làm. Công đoạn {{from}} không ghi số lượng nào.", // _draft
+      switch_step_started_unpooled_notice: "Lưu ý: công đoạn {{from}} hiện không ở máy nào và cũng không có trong kho chờ làm. Bộ phận kế hoạch hãy dùng “Gán vào máy này” để sắp xếp lại.", // _draft
+      switch_step_started_unpooled_card: "Cần sắp xếp: {{order}} công đoạn {{from}} hiện không ở máy nào và không có trong kho chờ làm (gỡ ra khi {{machine}} đổi sang công đoạn {{to}}). Bộ phận kế hoạch hãy dùng “Gán vào máy này” để sắp xếp lại.", // _draft
+      switch_step_started_unpooled_dismiss: "Đã sắp xếp, ẩn đi", // _draft
+      switch_step_started_uncertain: "Chưa chắc lệnh đổi công đoạn đã gửi được chưa (mạng chập chờn), hệ thống sẽ tiếp tục kiểm tra. Muốn gửi lại hãy bấm “Gửi lại cùng lệnh”, sẽ không đổi hai lần.", // _draft
+      switch_step_started_not_found: "Không tìm thấy lệnh đổi công đoạn này, có lẽ chưa gửi được; máy vẫn ở công đoạn {{from}}. Có thể gửi lại cùng lệnh hoặc ẩn đi.", // _draft
+      switch_step_started_resend: "Gửi lại cùng lệnh", // _draft
+      switch_step_started_dismiss: "Ẩn đi", // _draft
+      switch_step_started_old_tablet: "Trình duyệt của máy tính bảng này quá cũ, không thể đổi công đoạn. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_unsure: "Kết quả đổi công đoạn chưa chắc chắn. Hãy tải lại để xem máy đang ở công đoạn nào; đừng bấm lại.", // _draft
+      switch_step_started_err_login: "Phiên đăng nhập đã hết hạn nên chưa đổi. Hãy đăng nhập lại.", // _draft
+      switch_step_started_err_role: "Tài khoản này không thể đổi công đoạn.", // _draft
+      switch_step_started_err_account: "Dữ liệu tài khoản chưa đủ (ví dụ thiếu mã nhân viên MES cũ), không thể đổi công đoạn. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_admin_disabled: "Chức năng quản trị／kế hoạch đổi công đoạn thay chưa được mở.", // _draft
+      switch_step_started_err_card_data: "Dữ liệu trên màn hình chưa đủ nên chưa gửi, máy không thay đổi. Hãy tải lại màn hình.", // _draft
+      switch_step_started_err_conflict: "Nội dung lệnh đổi công đoạn khác với lần gửi trước nên chưa gửi. Hãy tải lại màn hình.", // _draft
+      switch_step_started_err_not_open: "Chức năng đổi công đoạn (đã bắt đầu) chưa được mở nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", // _draft
+      switch_step_started_err_stale: "Phiếu hoặc công đoạn của máy này đã thay đổi nên chưa đổi. Hãy tải lại màn hình.", // _draft
+      switch_step_started_err_machine_not_allowed: "Bạn không có quyền với máy này nên chưa đổi.", // _draft
+      switch_step_started_err_not_owner: "Công đoạn {{from}} không phải do bạn nhận nên không thể đổi. Hãy báo người đã nhận hoặc bộ phận kế hoạch.", // _draft
+      switch_step_started_err_claim_not_applied: "Nhà máy chưa xác nhận việc nhận công đoạn {{from}} nên chưa đổi. Hãy chờ một chút rồi bấm lại.", // _draft
+      switch_step_started_err_no_pool_record: "Hệ thống không tìm thấy công đoạn {{from}} được nhận từ dòng nào của kho chờ làm nên không thể đổi trực tiếp. Máy vẫn ở công đoạn {{from}}. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_reported: "Công đoạn {{from}} đã có số lượng báo, không thể đổi công đoạn trực tiếp. Hãy báo bộ phận kế hoạch xử lý (sửa báo sản lượng).", // _draft
+      switch_step_started_err_source_state: "Trạng thái hiện tại của công đoạn {{from}} không cho đổi (ví dụ đã hoàn thành hoặc chờ kiểm), chưa đổi. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_target_gone: "Công đoạn {{to}} không còn trong kho chờ làm hoặc không tìm thấy nên chưa đổi. Máy vẫn ở công đoạn {{from}}. Hãy tải lại màn hình rồi chọn lại.", // _draft
+      switch_step_started_err_target_taken: "Công đoạn {{to}} đã ở máy khác hoặc đã bị máy khác nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", // _draft
+      switch_step_started_err_target_taken_on: "Công đoạn {{to}} đã ở máy {{machine}} hoặc đã bị máy {{machine}} nhận nên chưa đổi. Máy vẫn ở công đoạn {{from}}, trạng thái không đổi.", // _draft
+      switch_step_started_err_target_not_here: "Không thể gán công đoạn {{to}} vào máy này (lịch hoặc máy không khớp) nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", // _draft
+      switch_step_started_err_target_closed: "Công đoạn {{to}} đã đóng trạm nên chưa đổi. Máy vẫn ở công đoạn {{from}}.", // _draft
+      switch_step_started_err_busy: "Máy này đang xử lý một lệnh khác, hãy thử lại sau.", // _draft
+      switch_step_started_err_before_claim: "Công đoạn {{from}} đã từng bắt đầu trước lần nhận này nên không thể đổi trực tiếp. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_not_operator: "Bạn không có trong danh sách người vận hành của máy này nên không thể đổi công đoạn. Hãy báo người vận hành máy này hoặc bộ phận kế hoạch.", // _draft
+      switch_step_started_err_state: "Trạng thái của máy này không rõ (ví dụ dừng do can thiệp) nên chưa đổi. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_target_not_pooled: "Công đoạn {{to}} không có trong kho chờ làm, người vận hành không thể tự gán vào máy này nên chưa đổi. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_source_not_pooled: "Công đoạn {{from}} do bộ phận kế hoạch gán vào máy này (không nhận từ kho chờ làm), người vận hành không thể tự đổi nên chưa đổi. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_inconsistent: "Dữ liệu nhà máy không khớp nên chưa đổi. Máy vẫn ở công đoạn {{from}}. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_busy_retry: "Hệ thống nhà máy đang bận nên chưa đổi, máy vẫn ở công đoạn {{from}}. Hãy chờ một chút rồi bấm lại.", // _draft
+      switch_step_started_err_internal_retry: "Nhà máy gặp sự cố khi xử lý nên chưa đổi, máy vẫn ở công đoạn {{from}}. Hãy thử lại sau vài phút; nếu vẫn không được hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_factory_problem: "Hệ thống nhà máy có vấn đề nên chưa đổi, máy vẫn ở công đoạn {{from}}. Hãy báo bộ phận kế hoạch.", // _draft
+      switch_step_started_err_expired: "Nhà máy quá lâu chưa xử lý nên lần này chưa đổi, máy vẫn ở công đoạn {{from}}. Nếu cần hãy bấm lại một lần.", // _draft
+      switch_step_started_err_released: "Quản lý đã hủy lệnh đổi công đoạn này, kết quả chưa chắc chắn. Hãy tải lại màn hình để xem máy đang ở công đoạn nào; đừng bấm lại.", // _draft
+      switch_step_started_err_generic: "Chưa đổi được. Hãy tải lại màn hình để xem máy đang ở công đoạn nào; nếu vẫn sai hãy báo bộ phận kế hoạch.", // _draft
     }
   };
 

@@ -1,0 +1,278 @@
+{
+  "pooled_to_pooled": {
+    "switch_step": {
+      "mode": "switched",
+      "switch_key": "A05|WO1|3|1",
+      "station": "A05",
+      "order_no": "WO1",
+      "from_index_sn": 3,
+      "to_index_sn": 1,
+      "from_simulation_id": "S30",
+      "to_simulation_id": "S10",
+      "source_pool_item_id": "01|N000000001|S30",
+      "target_pool_item_id": "01|N000000001|S10",
+      "source_pool_status": "returned",
+      "target_pool_status": "assigned",
+      "source_unpooled": false,
+      "source_pool": {
+        "pool_id": 30,
+        "status_before": "assigned",
+        "status_after": "returned",
+        "returned": true
+      },
+      "target_pool": {
+        "pool_id": 10,
+        "status_before": "pending",
+        "status_after": "assigned",
+        "claimed": true
+      },
+      "station_state_before": "1",
+      "station_state_after": "2",
+      "stopped_in_transaction": true,
+      "qty_policy": "require_zero",
+      "moved_qty": 0,
+      "rms_stop": {
+        "planned": true,
+        "endpoint_error": null,
+        "delivery": "after_commit_best_effort"
+      },
+      "operate_log_ids": {
+        "set": "DSET1",
+        "audit": "DAUD1"
+      },
+      "label_queued": true,
+      "actor": "1080301",
+      "submitted_role": "operator",
+      "reason": "operator_wrong_step",
+      "decision": "running-stop-and-switch",
+      "claim_anchor": "2026-11-13 08:00:00.000",
+      "before": {
+        "station": {
+          "state": "1",
+          "order_no": "WO1",
+          "index_sn": 3,
+          "simulation_id": "S30",
+          "part_no": "P1",
+          "op_no": "1080301",
+          "start_time": "2026-11-13 08:05:00.000",
+          "remark_time_s": "2026-11-13 08:05:00.000"
+        },
+        "source_pool": {
+          "pool_id": 30,
+          "status": "assigned",
+          "claimed_station": "A05",
+          "assigned_station": "A05",
+          "claim_at": "2026-11-13 08:00:00.000",
+          "live_rows": 1
+        },
+        "target_pool": {
+          "pool_id": 10,
+          "status": "pending",
+          "claimed_station": null,
+          "assigned_station": null,
+          "eligible": true,
+          "live_rows": 1
+        },
+        "checks": {
+          "set_log_at": "2026-11-13 08:00:01.000",
+          "start_logs_all_time": 1,
+          "first_start_at": "2026-11-13 08:05:00.000",
+          "stop_logs_all_time": 0,
+          "report_logs_all_time": 0,
+          "close_logs_all_time": 0,
+          "sfc_qty_rows": 0,
+          "sfc_qty_rows_other_stations": 0,
+          "settlement_qty_rows": 0,
+          "settlement_rows_any": 0,
+          "produced_rechecked": true,
+          "aps_detail_qty_rows": 0,
+          "aps_detail_checked": true,
+          "aps_detail_simulation_id": "S30",
+          "source_step_closed": false,
+          "source_open_elsewhere": "",
+          "target_simulation_count": 1,
+          "target_step_closed": false,
+          "target_open_elsewhere": "",
+          "prior_switch_applied": false,
+          "prior_switch_checked": false
+        }
+      }
+    }
+  },
+  "planner_source_unpooled_to_pooled": {
+    "switch_step": {
+      "mode": "switched",
+      "switch_key": "A05|WO1|3|1",
+      "station": "A05",
+      "order_no": "WO1",
+      "from_index_sn": 3,
+      "to_index_sn": 1,
+      "from_simulation_id": "S30",
+      "to_simulation_id": "S10",
+      "source_pool_item_id": null,
+      "target_pool_item_id": "01|N000000001|S10",
+      "source_pool_status": "none",
+      "target_pool_status": "assigned",
+      "source_unpooled": true,
+      "source_pool": null,
+      "target_pool": {
+        "pool_id": 10,
+        "status_before": "pending",
+        "status_after": "assigned",
+        "claimed": true
+      },
+      "station_state_before": "1",
+      "station_state_after": "2",
+      "stopped_in_transaction": true,
+      "qty_policy": "require_zero",
+      "moved_qty": 0,
+      "rms_stop": {
+        "planned": true,
+        "endpoint_error": null,
+        "delivery": "after_commit_best_effort"
+      },
+      "operate_log_ids": {
+        "set": "DSET2",
+        "audit": "DAUD2"
+      },
+      "label_queued": false,
+      "actor": "1080301",
+      "submitted_role": "admin",
+      "reason": "生管代換：接錯道次",
+      "decision": "running-stop-and-switch",
+      "claim_anchor": "2026-11-13 08:00:00.000",
+      "before": {
+        "station": {
+          "state": "1",
+          "order_no": "WO1",
+          "index_sn": 3,
+          "simulation_id": "S30",
+          "part_no": "P1",
+          "op_no": "1080301",
+          "start_time": "2026-11-13 08:05:00.000",
+          "remark_time_s": "2026-11-13 08:05:00.000"
+        },
+        "source_pool": null,
+        "target_pool": {
+          "pool_id": 10,
+          "status": "pending",
+          "claimed_station": null,
+          "assigned_station": null,
+          "eligible": true,
+          "live_rows": 1
+        },
+        "checks": {
+          "set_log_at": "2026-11-13 08:00:00.000",
+          "start_logs_all_time": 1,
+          "first_start_at": "2026-11-13 08:05:00.000",
+          "stop_logs_all_time": 0,
+          "report_logs_all_time": 0,
+          "close_logs_all_time": 0,
+          "sfc_qty_rows": 0,
+          "sfc_qty_rows_other_stations": 0,
+          "settlement_qty_rows": 0,
+          "settlement_rows_any": 0,
+          "produced_rechecked": true,
+          "aps_detail_qty_rows": 0,
+          "aps_detail_checked": true,
+          "aps_detail_simulation_id": "S30",
+          "source_step_closed": false,
+          "source_open_elsewhere": "",
+          "target_simulation_count": 1,
+          "target_step_closed": false,
+          "target_open_elsewhere": "",
+          "prior_switch_applied": false,
+          "prior_switch_checked": false
+        }
+      }
+    }
+  },
+  "pooled_to_unpooled_target": {
+    "switch_step": {
+      "mode": "switched",
+      "switch_key": "A05|WO1|3|1",
+      "station": "A05",
+      "order_no": "WO1",
+      "from_index_sn": 3,
+      "to_index_sn": 1,
+      "from_simulation_id": "S30",
+      "to_simulation_id": "S10",
+      "source_pool_item_id": "01|N000000001|S30",
+      "target_pool_item_id": null,
+      "source_pool_status": "returned",
+      "target_pool_status": "none",
+      "source_unpooled": false,
+      "source_pool": {
+        "pool_id": 30,
+        "status_before": "assigned",
+        "status_after": "returned",
+        "returned": true
+      },
+      "target_pool": null,
+      "station_state_before": "2",
+      "station_state_after": "2",
+      "stopped_in_transaction": false,
+      "qty_policy": "require_zero",
+      "moved_qty": 0,
+      "rms_stop": {
+        "planned": false,
+        "endpoint_error": null,
+        "delivery": null
+      },
+      "operate_log_ids": {
+        "set": "DSET3",
+        "audit": "DAUD3"
+      },
+      "label_queued": false,
+      "actor": "1080301",
+      "submitted_role": "operator",
+      "reason": "operator_wrong_step",
+      "decision": "stopped-switch",
+      "claim_anchor": "2026-11-13 08:00:00.000",
+      "before": {
+        "station": {
+          "state": "2",
+          "order_no": "WO1",
+          "index_sn": 3,
+          "simulation_id": "S30",
+          "part_no": "P1",
+          "op_no": "1080301",
+          "start_time": "2026-11-13 08:05:00.000",
+          "remark_time_s": "2026-11-13 08:05:00.000"
+        },
+        "source_pool": {
+          "pool_id": 30,
+          "status": "assigned",
+          "claimed_station": "A05",
+          "assigned_station": "A05",
+          "claim_at": "2026-11-13 08:00:00.000",
+          "live_rows": 1
+        },
+        "target_pool": null,
+        "checks": {
+          "set_log_at": "2026-11-13 08:00:01.000",
+          "start_logs_all_time": 1,
+          "first_start_at": "2026-11-13 08:05:00.000",
+          "stop_logs_all_time": 1,
+          "report_logs_all_time": 0,
+          "close_logs_all_time": 0,
+          "sfc_qty_rows": 0,
+          "sfc_qty_rows_other_stations": 0,
+          "settlement_qty_rows": 0,
+          "settlement_rows_any": 0,
+          "produced_rechecked": true,
+          "aps_detail_qty_rows": 0,
+          "aps_detail_checked": true,
+          "aps_detail_simulation_id": "S30",
+          "source_step_closed": false,
+          "source_open_elsewhere": "",
+          "target_simulation_count": 1,
+          "target_step_closed": false,
+          "target_open_elsewhere": "",
+          "prior_switch_applied": false,
+          "prior_switch_checked": false
+        }
+      }
+    }
+  }
+}
