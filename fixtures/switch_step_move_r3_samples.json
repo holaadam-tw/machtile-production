@@ -1,5 +1,9 @@
 {
     "_source":  "Factory-produced snapshots extracted verbatim from shadow-r2 logs. Each sample has an adjacent _source_file citation; payload objects are not normalized or amended.",
+    "preview_overrun_r6":  {
+                                "_source_file":  "D:/04_SoftNet/ops/codex-inbox/20261115-0300-codex-phase3-r6/preview-overrun-sample.json",
+                                "payload":  {"switch_step_preview":{"contract":"r3","ok":true,"block_code":null,"block_message":null,"station":"A05","order_no":"WO1","from_index_sn":3,"to_index_sn":1,"movable_good":7,"movable_fail":1,"report_count":2,"moved_report_uuids":[],"reports":[{"change_log_time":"2026-11-14T08:20:00.502","good":2,"fail":1,"op_no":"E811","report_uuid":null},{"change_log_time":"2026-11-14T08:10:00.502","good":5,"fail":0,"op_no":"E811","report_uuid":"9db5cc4b-309d-4ab2-ad5a-8becd4e183a4"}],"target":{"first_step":true,"reported_good_before":3,"reported_good_after":10,"available":null,"order_qty":10,"exceeds_order_qty":true,"needs_overrun_ack":true},"station_state":"1","will_stop":true,"ac01_reversal":false,"plan_text":["這筆報工紀錄：良品 5 → 0"],"rolled_back":true}}
+                            },
     "preview_p17":  {
                         "_source_file":  "shadow-r2/P17.log (PREVIEW_RESULT)",
                         "payload":  {

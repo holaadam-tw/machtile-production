@@ -2412,6 +2412,7 @@ const MOVE_SAMPLES = (() => {
   const first = moveSample("preview_p17b");
   first.switch_step_preview.order_no = "TEST-WO-1";
   Object.assign(first.switch_step_preview.target, { reported_good_before: 118, reported_good_after: 123, order_qty: 120, exceeds_order_qty: true, needs_overrun_ack: true });
+  const factoryOverrun = moveSample("preview_overrun_r6");
   const blocked = JSON.parse(JSON.stringify(first));
   Object.assign(blocked.switch_step_preview, { ok: false, block_code: "SWITCH_MOVE_AC01" });
   const nothing = JSON.parse(JSON.stringify(first));
@@ -2421,7 +2422,7 @@ const MOVE_SAMPLES = (() => {
   Object.assign(applied.switch_step, { order_no: "TEST-WO-1", to_index_sn: 2, moved_good: 5, moved_fail: 1, moved_qty: 6 });
   const already = JSON.parse(JSON.stringify(applied));
   Object.assign(already.switch_step, { mode: "already_switched", moved_good: 0, moved_fail: 0, moved_qty: 0, moved_report_uuids: [], moved_reports: [], correction_ids: [], target_change_log: null });
-  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_blocked_ac01: blocked, preview_nothing: nothing,
+  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_factory_overrun_r6: factoryOverrun, preview_blocked_ac01: blocked, preview_nothing: nothing,
     applied_moved: applied, applied_already_switched: already, rejected_target_short: moveSample("rejected_p4_target_short") };
 })();
 const CONTRACT_R3_FILE = process.env.SWITCH_STEP_CONTRACT_R3 || "D:/04_SoftNet/ops/codex-inbox/20261114-1545-switchstep-phase3/CONTRACT-r3.md";
@@ -2477,16 +2478,20 @@ async function startMove(h, step = 2) {
 const moveTail = (from = 3) => `沒有換，這台還是第 ${from} 道，數字沒有變；`;
 
 test("phase 3 fixtures are source-attributed factory shadow-r2 payloads", () => {
-  const expected = ["preview_p17", "preview_p17b", "applied_p2_a05", "applied_p3_a03", "rejected_p1_ac01", "rejected_p4_target_short",
+  const expected = ["preview_overrun_r6", "preview_p17", "preview_p17b", "applied_p2_a05", "applied_p3_a03", "rejected_p1_ac01", "rejected_p4_target_short",
     "rejected_p10_last_step", "rejected_p11_outsource_doc", "rejected_p7_mixed_history", "rejected_g_too_many_reports"];
   assert.deepEqual(Object.keys(FACTORY_MOVE_SAMPLES).filter((key) => key !== "_source"), expected);
   for (const name of expected) {
-    assert.match(FACTORY_MOVE_SAMPLES[name]._source_file, /^shadow-r2\//, `${name} cites its factory log`);
+    assert.ok(name === "preview_overrun_r6"
+      ? FACTORY_MOVE_SAMPLES[name]._source_file.endsWith("/20261115-0300-codex-phase3-r6/preview-overrun-sample.json")
+      : /^shadow-r2\//.test(FACTORY_MOVE_SAMPLES[name]._source_file), `${name} cites its factory source`);
     assert.equal(typeof FACTORY_MOVE_SAMPLES[name].payload, "object", `${name} has a payload`);
   }
   assert.equal(FACTORY_MOVE_SAMPLES.applied_p2_a05.payload.switch_step.moved_reports[0].report_uuid, "342c2892-725d-414e-8019-b5dbf167189c");
   assert.equal(FACTORY_MOVE_SAMPLES.applied_p3_a03.payload.switch_step.moved_reports.length, 5);
   assert.equal(FACTORY_MOVE_SAMPLES.rejected_g_too_many_reports.payload.switch_step_rejected.move.block_code, "SWITCH_MOVE_TOO_MANY_REPORTS");
+  assert.deepEqual(FACTORY_MOVE_SAMPLES.preview_overrun_r6.payload.switch_step_preview.target,
+    { first_step: true, reported_good_before: 3, reported_good_after: 10, available: null, order_qty: 10, exceeds_order_qty: true, needs_overrun_ack: true });
 });
 
 test("phase 3 move transport outlives the 120-second factory ceiling", () => {
@@ -2571,6 +2576,12 @@ test("phase 3 preview view: the four contract samples; pending / rejected / expi
   assert.equal(core.movePreviewView(row("preview_ok_next_step", { preview_result: JSON.stringify(MOVE_SAMPLES.preview_ok_next_step) }), known).phase, "ready", "a JSON string is read too");
   const first = core.movePreviewView(row("preview_ok_first_step_overrun"), { ...known, to: 1 });
   assert.equal(first.preview.needsOverrunAck, true);
+  const factoryOverrun = core.movePreviewView(row("preview_factory_overrun_r6"), { from: 3, to: 1, orderNo: "WO1", machineCode: "A05" });
+  assert.deepEqual([factoryOverrun.phase, factoryOverrun.preview.needsOverrunAck, factoryOverrun.preview.good, factoryOverrun.preview.fail], ["ready", true, 7, 1]);
+  const defensiveOverrun = JSON.parse(JSON.stringify(MOVE_SAMPLES.preview_factory_overrun_r6));
+  Object.assign(defensiveOverrun.switch_step_preview, { ok: false, block_code: "EXCEEDS_ORDER_QTY" });
+  const defensiveView = core.movePreviewView(row("x", { preview_result: defensiveOverrun }), { from: 3, to: 1, orderNo: "WO1", machineCode: "A05" });
+  assert.deepEqual([defensiveView.phase, defensiveView.preview.needsOverrunAck], ["ready", true], "defensive soft overrun still reaches confirmation");
   // 伺服器沒說要勾、但自己算出來超過工單量 → 還是要勾（保守）
   const sneaky = JSON.parse(JSON.stringify(MOVE_SAMPLES.preview_ok_first_step_overrun));
   Object.assign(sneaky.switch_step_preview.target, { needs_overrun_ack: false, exceeds_order_qty: false });

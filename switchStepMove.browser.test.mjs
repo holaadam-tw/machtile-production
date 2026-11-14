@@ -20,9 +20,11 @@ const SAMPLES = (() => {
   next.switch_step_preview.plan_text = next.switch_step_preview.plan_text.slice(0, 3);
   const first = factorySample('preview_p17b'); first.switch_step_preview.order_no = 'TEST-WO-1';
   Object.assign(first.switch_step_preview.target, { reported_good_before: 118, reported_good_after: 123, order_qty: 120, exceeds_order_qty: true, needs_overrun_ack: true });
+  const factoryOverrun = factorySample('preview_overrun_r6'); factoryOverrun.switch_step_preview.order_no = 'TEST-WO-1';
+  const defensiveOverrun = JSON.parse(JSON.stringify(factoryOverrun)); Object.assign(defensiveOverrun.switch_step_preview, { ok: false, block_code: 'EXCEEDS_ORDER_QTY' });
   const blocked = JSON.parse(JSON.stringify(first)); Object.assign(blocked.switch_step_preview, { ok: false, block_code: 'SWITCH_MOVE_AC01' });
   const applied = factorySample('applied_p2_a05'); Object.assign(applied.switch_step, { order_no: 'TEST-WO-1', to_index_sn: 2, moved_good: 5, moved_fail: 1, moved_qty: 6 });
-  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_blocked_ac01: blocked, applied_moved: applied };
+  return { preview_ok_next_step: next, preview_ok_first_step_overrun: first, preview_factory_overrun_r6: factoryOverrun, preview_defensive_overrun_r6: defensiveOverrun, preview_blocked_ac01: blocked, applied_moved: applied };
 })();
 const fake = 'https://switch-move-fixture.test', id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const tenant = id(1), auth = id(901), actor = id(902);
@@ -231,7 +233,7 @@ try {
   }
 
   // ---- 第一道超過工單量：要勾才可以送，送 acks
-  reset({ previewSample: 'preview_ok_first_step_overrun' });
+  reset({ previewSample: 'preview_factory_overrun_r6' });
   {
     const { ctx, page } = await openApp();
     await openSheet(page);
@@ -241,7 +243,7 @@ try {
     await page.waitForFunction(() => machtileSwitchMove.sheet?.overrunChecked === true);
     await sheet(page).locator('[data-switch-step-move-submit]:not([disabled])').click();
     await page.waitForFunction(() => Boolean(machtileSwitchMove.pending.A05), null, { timeout: 10000 });
-    ok(JSON.stringify(fx.submits[0].body.p_acks) === '["EXCEEDS_ORDER_QTY"]' && fx.submits[0].body.p_expected_moved_good === 5, 'overrun: acks sent with the move');
+    ok(JSON.stringify(fx.submits[0].body.p_acks) === '["EXCEEDS_ORDER_QTY"]' && fx.submits[0].body.p_expected_moved_good === 7, 'factory overrun: acks sent with the move');
     // 工廠回 OUTCOME_UNKNOWN：只說不確定、這一道不再出按鈕
     fx.onPoll = () => { fx.command = { ...fx.command, status: 'rejected', claimed_at: new Date().toISOString(), reject_code: 'OUTCOME_UNKNOWN', reject_message: 'fixture' }; };
     await page.waitForFunction(() => !machtileSwitchMove.pending.A05, null, { timeout: 30000 });
@@ -249,6 +251,21 @@ try {
     const card = await cardHtml(page);
     ok(card.includes('結果不確定，請重新整理看這台掛第幾道、數字是多少；不要重按。') && !card.includes('data-switch-step-move-open') && !card.includes('沒有換'), 'OUTCOME_UNKNOWN: unsure, no button, never "not switched"');
     ok(fx.submits.length === 1, 'OUTCOME_UNKNOWN: no new command');
+    await ctx.close();
+  }
+
+  // Defensive compatibility: an older Factory may pair the acknowledgement request with ok=false.
+  reset({ previewSample: 'preview_defensive_overrun_r6' });
+  {
+    const { ctx, page } = await openApp();
+    await openSheet(page);
+    await previewTo(page, 1);
+    ok(await sheet(page).locator('[data-switch-step-move-overrun]').count() === 1, 'defensive overrun: confirming card shows the checkbox');
+    ok(await sheet(page).locator('[data-switch-step-move-submit][disabled]').count() === 1, 'defensive overrun: send disabled until ticked');
+    await sheet(page).locator('[data-switch-step-move-overrun]').check();
+    await sheet(page).locator('[data-switch-step-move-submit]:not([disabled])').click();
+    await page.waitForFunction(() => Boolean(machtileSwitchMove.pending.A05), null, { timeout: 10000 });
+    ok(JSON.stringify(fx.submits[0].body.p_acks) === '["EXCEEDS_ORDER_QTY"]', 'defensive overrun: checked submit sends only the overrun ack');
     await ctx.close();
   }
 
