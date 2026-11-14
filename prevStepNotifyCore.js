@@ -167,10 +167,11 @@
       message: message(info), raw: text(row.message) };
   }
 
-  // REPORT #9：A/B 機台已開智慧報工（stationReportMachines 有它、enableStationReport 開）時，
+  // REPORT #9：A/B 機台已開智慧報工（APP allowlist + Factory 同步設定都開）時，
   // 單台報工表單的「午報／完工」不可再退回直接寫 production_reports（那筆只進雲端、不會進舊 MES）。
-  function legacyReportBlocked(config, machineCode, reportType) {
+  function legacyReportBlocked(config, machineCode, reportType, { source = "", settingsLoaded = false, smartReportEnabled = false } = {}) {
     if (config?.hideLegacyReportForStationMachines !== true || config?.enableStationReport !== true) return false;
+    if (source !== "supabase" || settingsLoaded !== true || smartReportEnabled !== true) return false;
     const code = text(machineCode).toUpperCase();
     if (!STATION_MACHINE_RE.test(code) || !["noon", "finish"].includes(text(reportType))) return false;
     const allowed = Array.isArray(config.stationReportMachines) ? config.stationReportMachines.map((item) => text(item).toUpperCase()) : [];

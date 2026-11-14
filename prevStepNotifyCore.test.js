@@ -130,14 +130,18 @@ test("board line", () => {
 
 test("legacy direct report is blocked only for smart-report A/B machines with the flag on (REPORT #9)", () => {
   const on = { hideLegacyReportForStationMachines: true, enableStationReport: true, stationReportMachines: ["A01", "A03", "B03"] };
-  assert.equal(core.legacyReportBlocked(on, "a03", "noon"), true);
-  assert.equal(core.legacyReportBlocked(on, "B03", "finish"), true);
-  assert.equal(core.legacyReportBlocked(on, "A03", "dailyStart"), false, "today-start is not a quantity report");
-  assert.equal(core.legacyReportBlocked(on, "B01", "noon"), false, "not on the smart-report list");
-  assert.equal(core.legacyReportBlocked(on, "F01", "noon"), false, "not an A/B machine");
-  assert.equal(core.legacyReportBlocked({ ...on, stationReportMachines: ["*"] }, "A02", "noon"), true);
-  assert.equal(core.legacyReportBlocked({ ...on, hideLegacyReportForStationMachines: false }, "A03", "noon"), false);
-  assert.equal(core.legacyReportBlocked({ ...on, enableStationReport: false }, "A03", "noon"), false);
+  const enabled = { source: "supabase", settingsLoaded: true, smartReportEnabled: true };
+  assert.equal(core.legacyReportBlocked(on, "a03", "noon", enabled), true);
+  assert.equal(core.legacyReportBlocked(on, "B03", "finish", enabled), true);
+  assert.equal(core.legacyReportBlocked(on, "A03", "dailyStart", enabled), false, "today-start is not a quantity report");
+  assert.equal(core.legacyReportBlocked(on, "B01", "noon", enabled), false, "not on the smart-report list");
+  assert.equal(core.legacyReportBlocked(on, "F01", "noon", enabled), false, "not an A/B machine");
+  assert.equal(core.legacyReportBlocked({ ...on, stationReportMachines: ["*"] }, "A02", "noon", enabled), true);
+  assert.equal(core.legacyReportBlocked({ ...on, hideLegacyReportForStationMachines: false }, "A03", "noon", enabled), false);
+  assert.equal(core.legacyReportBlocked({ ...on, enableStationReport: false }, "A03", "noon", enabled), false);
+  assert.equal(core.legacyReportBlocked(on, "A03", "noon", { ...enabled, source: "demo" }), false, "non-Supabase keeps fallback");
+  assert.equal(core.legacyReportBlocked(on, "A03", "noon", { ...enabled, settingsLoaded: false }), false, "unloaded Factory settings keep fallback");
+  assert.equal(core.legacyReportBlocked(on, "A03", "noon", { ...enabled, smartReportEnabled: false }), false, "Factory-disabled smart report keeps fallback");
 });
 
 test("every i18n key the core can return exists in both languages", () => {

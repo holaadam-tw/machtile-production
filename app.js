@@ -16631,6 +16631,19 @@ async function machtilePrevStepLoadBoard() {
   machtilePrevStepRenderBoard();
 }
 
+function machtilePrevStepBoardVisible() {
+  const holder = document.getElementById("prevStepBoard");
+  return document.visibilityState === "visible" && holder && !holder.hidden && holder.offsetParent !== null;
+}
+
+window.setInterval(() => {
+  if (machtilePrevStepBoardVisible()) void machtilePrevStepLoadBoard();
+}, 60000);
+
+document.addEventListener("visibilitychange", () => {
+  if (machtilePrevStepBoardVisible()) void machtilePrevStepLoadBoard();
+});
+
 function machtilePrevStepRenderBoard() {
   const holder = document.getElementById("prevStepBoard");
   if (!holder) return;
@@ -16678,7 +16691,14 @@ document.addEventListener("click", (event) => {
 // REPORT #9（config.hideLegacyReportForStationMachines，預設 false）：A/B 機台已開智慧報工時，午報／完工不再退回
 // 直接寫 production_reports（那筆只進雲端、不會進舊 MES）。回 true＝已擋並顯示白話。
 function machtileLegacyReportBlocked(machineCode, reportType) {
-  if (!machtilePrevStepCore?.legacyReportBlocked(config, machineCode, reportType)) return false;
+  const settings = machtileBatchState.stationReportSettings;
+  const smartReportEnabled = settings.status === "loaded"
+    && Boolean(machtileStationReportCore()?.reportMachineEnabled(settings.machines, machineCode));
+  if (!machtilePrevStepCore?.legacyReportBlocked(config, machineCode, reportType, {
+    source: state.source,
+    settingsLoaded: settings.status === "loaded",
+    smartReportEnabled,
+  })) return false;
   machtileShowReportSubmitError(machtileTranslate("legacy_report_blocked"));
   return true;
 }
