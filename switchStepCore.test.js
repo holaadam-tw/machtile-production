@@ -228,7 +228,8 @@ test("outcome sentences (zh-Hant): done, returned-but-not-claimed (machine empty
 test("every switch_step string exists in both languages, vi is draft, no raw code, and nothing tells the operator to press again", () => {
   const d = dictionaries();
   const sources = ["app.js", "switchStepCore.js"].map((name) => fs.readFileSync(path.join(__dirname, name), "utf8")).join("\n");
-  const used = new Set([...sources.matchAll(/"(switch_step_[a-z0-9_]+)"/g)].map((m) => m[1]));
+  // switch_step_preview／switch_step_rejected＝合約裡的指令種類與快照鍵（MOVE_CONTRACT），不是畫面文字
+  const used = new Set([...sources.matchAll(/"(switch_step_[a-z0-9_]+)"/g)].map((m) => m[1]).filter((key) => !["switch_step_preview", "switch_step_rejected"].includes(key)));
   assert.ok(used.size >= 30, `expected the full string set, found ${used.size}`);
   const defined = Object.keys(d.zh).filter((key) => key.startsWith("switch_step_"));
   assert.deepEqual([...used].sort(), defined.sort(), "keys used by code == keys defined (no missing, no orphan)");
@@ -243,8 +244,8 @@ test("every switch_step string exists in both languages, vi is draft, no raw cod
     assert.equal(d.viFile[key]._draft, true, `${key} vi is marked draft`);
     assert.notEqual(d.vi[key], d.zh[key], `${key} is translated`);
     assert.deepEqual([...d.vi[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), [...d.zh[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), `${key} same placeholders`);
-    // 第 1 階段：除了「等一下、不要重按」那一句，沒有任何一句叫人再按一次（第 2 階段的規則在它自己的測試裡）
-    if (key !== "switch_step_progress_return" && !key.startsWith("switch_step_started_")) assert.doesNotMatch(d.zh[key], /再按|重按|重送|再試|重試/, `${key} zh-Hant`);
+    // 第 1 階段：除了「等一下、不要重按」那一句，沒有任何一句叫人再按一次（第 2／3 階段的規則在它們自己的測試裡）
+    if (key !== "switch_step_progress_return" && !key.startsWith("switch_step_started_") && !key.startsWith("switch_step_move_")) assert.doesNotMatch(d.zh[key], /再按|重按|重送|再試|重試/, `${key} zh-Hant`);
   }
   assert.equal(d.zh.switch_step_button, "換道次");
   assert.match(d.zh.switch_step_busy, /換道次/);
@@ -266,13 +267,15 @@ const switchSource = slice("// ---- 換道次 ----", "function renderMachineCard
 const startedSource = slice("// ==== 換道次（已開工、還沒報工；第 2 階段）", `// ============================================================================================${NL}// 機台卡片「接錯了，退回」`);
 // 第 2 階段掛進既有程式的每一個地方：[現在的字串, 旗標關時等價的原字串]（換行已正規化成 \n）
 const STARTED_HOOKS = [
-  ["function machtileReturnClaimLocks(code) {\n  if (machtileSwitchStartedLocks(code)) return true;\n", "function machtileReturnClaimLocks(code) {\n"],
-  ["function machtileReturnClaimBlockMessage(code) {\n  if (machtileSwitchStartedLocks(code)) return machtileTranslate(\"switch_step_started_busy\");\n", "function machtileReturnClaimBlockMessage(code) {\n"],
-  ["  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）\n", ""],
-  ["${machtileSwitchStartedCardMarkup(machine)}", ""],
-  ["    if (machtileSwitchStartedHandleClick(event)) return;\n", ""],
-  ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStartedForgetUser();\n", ""],
-  ["  machtileSwitchStartedForgetUser();\n  machtileSwitchStepForgetUser();\n", "  machtileSwitchStepForgetUser();\n"],
+  // 第 3 階段（數量一起搬，enableSwitchStepMove 預設關）那一段也在同一個範圍裡（緊接在第 2 階段後面）；它的掛點跟第 2 階段的掛在一起，
+  // 旗標關時每一個都等於原字串（MoveLocks()＝false、MoveRestore／MoveHandleClick 直接 return／回 false、MoveCardMarkup()＝""、MoveForgetUser 沒有東西可丟）。
+  ["function machtileReturnClaimLocks(code) {\n  if (machtileSwitchStartedLocks(code)) return true;\n  if (machtileSwitchMoveLocks(code)) return true;\n", "function machtileReturnClaimLocks(code) {\n"],
+  ["function machtileReturnClaimBlockMessage(code) {\n  if (machtileSwitchStartedLocks(code)) return machtileTranslate(\"switch_step_started_busy\");\n  if (machtileSwitchMoveLocks(code)) return machtileTranslate(\"switch_step_move_busy\");\n", "function machtileReturnClaimBlockMessage(code) {\n"],
+  ["  machtileSwitchStartedRestore();   // 「換道次（已開工）」等結果中的那筆＋不在待做池提醒（旗標關＝什麼都不做）\n  machtileSwitchMoveRestore();   // 「換道次（數量一起搬）」等結果中的那筆（旗標關＝什麼都不做）\n", ""],
+  ["${machtileSwitchStartedCardMarkup(machine)}${machtileSwitchMoveCardMarkup(machine)}", ""],
+  ["    if (machtileSwitchMoveHandleClick(event)) return;\n    if (machtileSwitchStartedHandleClick(event)) return;\n", ""],
+  ["  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchStartedForgetUser();\n  if (machtileAuthState.userId !== (authResponse?.user?.id || jwtPayload.sub || \"\")) machtileSwitchMoveForgetUser();\n", ""],
+  ["  machtileSwitchStartedForgetUser();\n  machtileSwitchMoveForgetUser();\n  machtileSwitchStepForgetUser();\n", "  machtileSwitchStepForgetUser();\n"],
 ];
 const poolSource = slice("const machtileDispatchPoolState = {", "function machtileDispatchPoolOpenRefreshState(machine) {");
 const claimSource = slice("async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {", "async function machtileReplaceStoppedDispatchPool(sourceKey, machineCode) {");
@@ -347,6 +350,8 @@ function harness(options = {}) {
   if (options.started !== undefined) config.enableSwitchStepStarted = options.started;
   if (options.started !== undefined) config.switchStepStartedMachines = options.startedMachines === undefined ? ["A05"] : options.startedMachines;
   if (options.allowUnpooled !== undefined) config.switchStepStartedAllowUnpooled = options.allowUnpooled;
+  if (options.move !== undefined) config.enableSwitchStepMove = options.move;
+  if (options.move !== undefined) config.switchStepMoveMachines = options.moveMachines === undefined ? ["A05"] : options.moveMachines;
   const context = {
     window: { MachTileReturnClaimCore: returnCore, MachTileSwitchStepCore: options.noCore ? undefined : core, crypto: { randomUUID: () => (options.uuids ? options.uuids.shift() : UUID) } },
     config,
@@ -412,7 +417,11 @@ function harness(options = {}) {
        started: { state: machtileSwitchStarted, enabled: machtileSwitchStartedEnabled, gate: machtileSwitchStartedGate, markup: machtileSwitchStartedCardMarkup,
          locks: machtileSwitchStartedLocks, open: machtileSwitchStartedOpen, choose: machtileSwitchStartedChoose, submit: machtileSwitchStartedSubmit,
          openRetry: machtileSwitchStartedOpenRetry, restore: machtileSwitchStartedRestore, handleClick: machtileSwitchStartedHandleClick,
-         loadNotices: machtileSwitchStartedLoadNotices, forgetUser: machtileSwitchStartedForgetUser, closeSheet: machtileSwitchStartedCloseSheet } })`, context);
+         loadNotices: machtileSwitchStartedLoadNotices, forgetUser: machtileSwitchStartedForgetUser, closeSheet: machtileSwitchStartedCloseSheet },
+       move: { state: machtileSwitchMove, enabled: machtileSwitchMoveEnabled, gate: machtileSwitchMoveGate, markup: machtileSwitchMoveCardMarkup,
+         locks: machtileSwitchMoveLocks, open: machtileSwitchMoveOpen, choose: machtileSwitchMoveChoose, preview: machtileSwitchMovePreview,
+         submit: machtileSwitchMoveSubmit, setOverrun: machtileSwitchMoveSetOverrun, openRetry: machtileSwitchMoveOpenRetry, restore: machtileSwitchMoveRestore,
+         handleClick: machtileSwitchMoveHandleClick, forgetUser: machtileSwitchMoveForgetUser, closeSheet: machtileSwitchMoveCloseSheet } })`, context);
   // 待做池：畫面載入時已經讀到的那一份
   if (options.pool !== null) Object.assign(api.poolState, { status: options.poolStatus || "ready", items: options.pool || [poolRow(1), poolRow(2), OTHER_ORDER_ROW] });
   const sheetHtml = () => holders.machtileReturnClaimSheet?.innerHTML || "";
@@ -435,7 +444,8 @@ function harness(options = {}) {
     await settle();
   };
   const startedSheetHtml = () => holders.machtileSwitchStartedSheet?.innerHTML || "";
-  return { api, calls, machine, storage, sheetHtml, startedSheetHtml, runPoll, pollTimers, urls, context, timeouts, expire, holders, selectionUpdates };
+  const moveSheetHtml = () => holders.machtileSwitchMoveSheet?.innerHTML || "";
+  return { api, calls, machine, storage, sheetHtml, startedSheetHtml, moveSheetHtml, runPoll, pollTimers, urls, context, timeouts, expire, holders, selectionUpdates };
 }
 const RETURN_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-return-claim-open="A05">接錯了，退回</button>';
 const SWITCH_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-open="A05">換道次</button>';
@@ -1477,7 +1487,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     assert.equal(current.split(now).length, 2, `started hook must appear exactly once: ${now.slice(0, 70)}`);
     current = current.replace(now, () => before);
   }
-  assert.doesNotMatch(current, /machtileSwitchStarted|enableSwitchStepStarted|switch_step_started_/, "no other started switch-step reference in app.js");
+  assert.doesNotMatch(current, /machtileSwitchStarted|enableSwitchStepStarted|switch_step_started_|machtileSwitchMove|enableSwitchStepMove|switchStepMove|switch_step_move_/, "no other started / move switch-step reference in app.js");
   const section = norm(switchSource);
   assert.equal(current.split(section).length, 2);
   current = current.replace(section, () => "");
@@ -1580,7 +1590,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   assert.match(read("version.json"), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
   const config = read("config.js");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
-  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flag and its comment");
+  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only the new default-off flags and their comments");
   assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=")).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only the new core script tag and the version string");
   assert.equal(read("styles.css").split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line)).join("\n"), show("styles.css"), "styles.css: only the new .switch-step-* rules");
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
@@ -2384,4 +2394,612 @@ test("return-claim (退回) gate keeps hiding on ANY report row of the step, 0/0
   assert.equal(h.api.markup(h.machine), "", "a 0/0 dailyStart today hides 「接錯了，退回」");
   const clean = harness({ returnFlag: true, todayRows: [Object.assign({}, dailyStart, { process_id: "other-step" })] });
   assert.equal(clean.api.markup(clean.machine), RETURN_BUTTON, "another step's row does not");
+});
+
+// ================================================================================================
+// 第 3 階段：已經報過工 → 換道次＋數量一起搬（config.enableSwitchStepMove；DESIGN 20261114-1545 §7、合約 CONTRACT-r3.md）
+//   預覽 switch_step_preview（status previewed、結果在 preview_result.switch_step_preview）→ 確認 → switch_step 帶 expected_moved_*。
+//   樣本＝fixtures/switch_step_move_r3_samples.json：APP 依合約 r3 手寫（工廠還沒有用真的程式產生樣本）。
+// ================================================================================================
+const MOVE_SAMPLES = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "switch_step_move_r3_samples.json"), "utf8"));
+const CONTRACT_R3_FILE = process.env.SWITCH_STEP_CONTRACT_R3 || "D:/04_SoftNet/ops/codex-inbox/20261114-1545-switchstep-phase3/CONTRACT-r3.md";
+// 合約 r3 §3 的碼（檔案在這台電腦上時從原始檔重抓比對）
+const R3_MOVE_CODES = ["SWITCH_MOVE_DISABLED", "SWITCH_MOVE_MIXED_HISTORY", "SWITCH_MOVE_QTY_CHANGED", "SWITCH_MOVE_DOWNSTREAM_USED", "SWITCH_MOVE_SOURCE_CLOSED",
+  "SWITCH_MOVE_LAST_STEP", "SWITCH_MOVE_STOCK_CONFIRMED", "SWITCH_MOVE_AC01", "SWITCH_MOVE_RESERVED", "SWITCH_MOVE_OUTSOURCE_DOC", "SWITCH_MOVE_DEFERRED_MATERIAL",
+  "SWITCH_MOVE_AMBIGUOUS", "SWITCH_MOVE_NOT_ENGINE", "SWITCH_MOVE_ORDER_CLOSED", "SWITCH_MOVE_TARGET_SHORT", "SWITCH_MOVE_TOO_MANY_REPORTS", "SWITCH_MOVE_PLAN_REFUSED"];
+const R3_EXISTING_CODES = ["EXCEEDS_ORDER_QTY", "QTY_EXCEEDS_AVAILABLE", "REPORT_ENGINE_FAILED", "INVALID_ACK", "TX_PROMOTION_BLOCKED"];
+// 雲端 r3 submit 新增的碼（wt-phase3-cloud 20261114160000_station_switch_step_move.sql，尚未合併；檔案在這台電腦上時從原始碼重抓比對）
+const R3_CLOUD_CODES = ["SWITCH_MOVE_DISABLED", "SWITCH_MOVE_SOURCE_CLOSED", "INVALID_EXPECTED_MOVED", "INVALID_ACK"];
+const CLOUD_MOVE_SQL = process.env.SWITCH_STEP_MOVE_CLOUD_SQL || "D:/04_SoftNet/wt-phase3-cloud/supabase/migrations/20261114160000_station_switch_step_move.sql";
+const P_UUID = "7d3e4f50-6172-4c83-9d94-1eaf9b8c7d62";
+const P_UUID2 = "8e4f5061-7283-4d94-8ea5-2fb0ac9d8e73";
+const reportedOrder = (extra) => runningOrder(Object.assign({ done: 6 }, extra));
+const MOVE_BUTTON = '<button type="button" class="card-select-entry pool-return-action" data-no-detail data-switch-step-move-open="A05">換道次（數量一起搬）</button>';
+const previewRowOf = (body, extra) => Object.assign({ command_uuid: body.p_command_uuid, command_type: "switch_step_preview", machine_code: body.p_machine_code,
+  expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, status: "pending", requested_at: new Date().toISOString(),
+  claimed_at: null, applied_at: null, reject_code: null, reject_message: null, preview_result: null }, extra);
+const PREVIEW_POLL = "station_commands?select=command_uuid,command_type,machine_code,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,preview_result&command_uuid=eq.";
+function moveBackendOf(state) {
+  Object.assign(state, { previews: [], previewPolls: 0, previewRow: null, ...state });
+  const base = startedBackendOf(state);
+  return async (url, init) => {
+    if (url === `rpc/${core.MOVE_CONTRACT.submitRpc}`) {
+      const body = JSON.parse(init.body);
+      if (body.p_preview === true) {
+        state.previews.push({ body, raw: init.body });
+        if (state.previewError) throw state.previewError;
+        state.previewRow = previewRowOf(body);
+        return [state.previewRow];
+      }
+    }
+    if (url.startsWith(PREVIEW_POLL)) {
+      state.previewPolls += 1;
+      assert.equal(url, `${PREVIEW_POLL}${state.previewRow.command_uuid}`, "the preview is polled by its own uuid");
+      return state.previewRow ? [state.previewRow] : [];
+    }
+    return base(url, init);
+  };
+}
+const previewedAs = (state, name) => { state.previewRow = Object.assign({}, state.previewRow, { status: "previewed", claimed_at: new Date().toISOString(), preview_result: JSON.parse(JSON.stringify(MOVE_SAMPLES[name])) }); };
+const moveAppliedAs = (state, name, extra) => {
+  state.row = switchRow({ command_uuid: state.row.command_uuid, expected_order_no: "TEST-WO-1", pool_item_id: state.row.pool_item_id, status: "applied",
+    claimed_at: new Date().toISOString(), applied_at: new Date().toISOString(),
+    legacy_snapshot: Object.assign(JSON.parse(JSON.stringify(MOVE_SAMPLES[name])), { cloud_finalize: { moved_qty: 6 } }), ...extra });
+};
+// 開卡 → 選第 step 道 → 先看會怎麼搬（預覽還在算）
+async function startMove(h, step = 2) {
+  await h.api.move.open("A05", null);
+  h.api.move.choose(keyOf(step));
+  await h.api.move.preview();
+}
+const moveTail = (from = 3) => `沒有換，這台還是第 ${from} 道，數字沒有變；`;
+
+test("phase 3 flags: enableSwitchStepMove default false, switchStepMoveMachines default []; only a strict true turns it on (independent of phases 1 / 2)", () => {
+  assert.equal(core.moveEnabled({ flag: true }), true);
+  for (const flag of [undefined, false, "true", 1, null]) assert.equal(core.moveEnabled({ flag }), false, String(flag));
+  assert.equal(core.moveEnabled(), false);
+  const config = fs.readFileSync(path.join(__dirname, "config.js"), "utf8");
+  assert.match(config, /\n\s*enableSwitchStepMove: false,\r?\n/);
+  assert.match(config, /\n\s*switchStepMoveMachines: \[\],\r?\n/);
+});
+
+test("phase 3 visibility: same rules as phase 2 except it needs REPORTS (card done > 0 or a report row today); the two buttons never show together", () => {
+  const base = { enabled: true, role: "operator", isBridge: false, cardDetailsReady: true, isUnassignedBucket: false, multiStation: false, machineCode: "A05",
+    order: reportedOrder(), hasTodayReport: false, commandInFlight: false, unsureHold: false, machineAllowed: true };
+  const see = (extra) => core.moveVisibility(Object.assign({}, base, extra));
+  assert.deepEqual(see(), { show: true, reason: "", needsReason: false });
+  assert.deepEqual(see({ role: "planner" }), { show: true, reason: "", needsReason: true }, "planners must give a reason");
+  assert.equal(see({ order: reportedOrder({ done: 0 }), hasTodayReport: true }).show, true, "a report row today counts (card total not refreshed yet)");
+  assert.equal(see({ order: reportedOrder({ done: 0 }) }).reason, "no_reports", "zero quantity = phase 2's button, not this one");
+  assert.equal(see({ order: reportedOrder({ processStatus: "paused" }) }).show, true);
+  assert.equal(see({ order: reportedOrder({ processStatus: "pending" }) }).show, true, "reported = started; the server re-checks");
+  for (const processStatus of ["completed", "waiting_inspection", "skipped", ""]) assert.equal(see({ order: reportedOrder({ processStatus }) }).reason, "not_switchable", processStatus);
+  for (const [extra, reason] of [[{ enabled: false }, "flag_off"], [{ enabled: "true" }, "flag_off"], [{ role: "viewer" }, "role"], [{ isBridge: true }, "role"],
+    [{ machineAllowed: false }, "machine_not_listed"], [{ multiStation: true }, "multi_station"], [{ order: null }, "no_order"],
+    [{ order: reportedOrder({ offStation: true }) }, "off_station"], [{ cardDetailsReady: false }, "card_not_ready"], [{ commandInFlight: true }, "command_in_flight"],
+    [{ unsureHold: true }, "unsure_hold"], [{ order: reportedOrder({ processId: "x" }) }, "no_process"], [{ isUnassignedBucket: true }, "no_machine"]]) {
+    assert.equal(see(extra).reason, reason, JSON.stringify(extra));
+  }
+  // 第 2 階段與第 3 階段互斥：同一張卡片同一時間只有一個成立
+  for (const order of [runningOrder(), reportedOrder()]) {
+    const started = core.startedVisibility({ ...base, order, startedLocally: false, startedToday: false, actualStartAt: null }).show;
+    assert.equal(started !== see({ order }).show, true, `exactly one of the two for done=${order.done}`);
+  }
+});
+
+test("phase 3 fresh read: still this machine / order / step and not done — the cloud quantity is NOT required to be zero (it may lag)", () => {
+  const row = (extra) => Object.assign({ id: PROCESS_ID, process_order: 3, process_name: "精車", status: "running", off_station_at: null, qty_completed: 6, qty_defect: 1,
+    work_orders: { id: WO_ID, work_order_no: "TEST-WO-1", part_no: "TEST-P1", part_name: "測試軸", status: "in_progress" }, machines: { machine_code: "A05" } }, extra);
+  const check = (extra) => core.moveFreshCheck({ machineCode: "A05", orderNo: "TEST-WO-1", step: 3, row: row(extra) });
+  assert.deepEqual(check(), { ok: true, reason: "", partNo: "TEST-P1", workOrderId: WO_ID });
+  assert.equal(check({ machines: { machine_code: "A03" } }).reason, "machine_changed");
+  assert.equal(check({ process_order: 2 }).reason, "step_changed");
+  assert.equal(check({ status: "completed" }).reason, "not_switchable");
+  assert.equal(check({ off_station_at: "2026-11-14T00:00:00Z" }).reason, "off_station");
+  assert.equal(core.moveFreshCheck({ machineCode: "A05", orderNo: "TEST-WO-1", step: 3, row: null }).reason, "process_not_found");
+});
+
+test("phase 3 args (contract adapter): the nine phase-2 parameters + expected_moved_good / _fail, acks, preview — in MOVE_ARG_KEYS order", () => {
+  const common = { commandUuid: S_UUID, machineCode: "a05", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 2, targetPoolItemId: keyOf(2), partNo: "TEST-P1", role: "operator" };
+  assert.deepEqual(core.MOVE_ARG_KEYS, [...core.STARTED_ARG_KEYS, "p_expected_moved_good", "p_expected_moved_fail", "p_acks", "p_preview"]);
+  const preview = core.moveAdapterArgs({ ...common, preview: true, expectedGood: 9, overrunAck: true });
+  assert.deepEqual(Object.keys(preview), core.MOVE_ARG_KEYS);
+  assert.deepEqual(preview, { p_command_uuid: S_UUID, p_machine_code: "A05", p_pool_item_id: keyOf(3), p_expected_order_no: "TEST-WO-1", p_expected_index_sn: 3,
+    p_target_index_sn: 2, p_target_pool_item_id: keyOf(2), p_expected_part_no: "TEST-P1", p_reason: null,
+    p_expected_moved_good: null, p_expected_moved_fail: null, p_acks: null, p_preview: true }, "preview: both expected NULL (contract §1: only compute)");
+  const submit = core.moveAdapterArgs({ ...common, expectedGood: 5, expectedFail: 1 });
+  assert.deepEqual(Object.keys(submit), core.MOVE_ARG_KEYS);
+  assert.deepEqual([submit.p_expected_moved_good, submit.p_expected_moved_fail, submit.p_acks, submit.p_preview], [5, 1, null, false]);
+  assert.deepEqual(core.moveAdapterArgs({ ...common, expectedGood: 0, expectedFail: 0 }).p_expected_moved_good, 0, "0/0 is a valid move (contract §2.1 P21)");
+  assert.deepEqual(core.moveAdapterArgs({ ...common, expectedGood: 5, expectedFail: 0, overrunAck: true }).p_acks, ["EXCEEDS_ORDER_QTY"], "the only ack the contract allows");
+  assert.equal(core.moveAdapterArgs({ ...common, expectedGood: 5, expectedFail: 0, overrunAck: "yes" }).p_acks, null, "only a strict true");
+  for (const [good, fail] of [[null, 0], [0, null], [-1, 0], [1.5, 0], ["", 0], [true, 0], [100000, 1]]) {
+    assert.throws(() => core.moveAdapterArgs({ ...common, expectedGood: good, expectedFail: fail }), /BAD_EXPECTED_MOVED/, `${good}/${fail}`);
+  }
+  assert.throws(() => core.moveAdapterArgs({ ...common, role: "admin", expectedGood: 1, expectedFail: 0 }), /REASON_REQUIRED/, "admins still need a reason (phase 2 rule)");
+  assert.equal(core.MOVE_CONTRACT.submitRpc, core.STARTED_SUBMIT_RPC, "assumption: the same submit RPC with four new defaulted parameters");
+});
+
+test("phase 3 preview view: the four contract samples; pending / rejected / expired; answers for another step or order are not trusted", () => {
+  const known = { from: 3, to: 2, orderNo: "TEST-WO-1", machineCode: "A05" };
+  const row = (name, extra) => Object.assign({ command_uuid: P_UUID, command_type: "switch_step_preview", status: "previewed", preview_result: MOVE_SAMPLES[name] }, extra);
+  const next = core.movePreviewView(row("preview_ok_next_step"), known);
+  assert.equal(next.phase, "ready");
+  assert.deepEqual([next.preview.good, next.preview.fail, next.preview.count, next.preview.firstStep, next.preview.targetBefore, next.preview.targetAfter, next.preview.available, next.preview.needsOverrunAck],
+    [5, 1, 2, false, 0, 5, 8, false]);
+  assert.equal(next.preview.planText.length, 3);
+  assert.equal(core.movePreviewView(row("preview_ok_next_step", { preview_result: JSON.stringify(MOVE_SAMPLES.preview_ok_next_step) }), known).phase, "ready", "a JSON string is read too");
+  const first = core.movePreviewView(row("preview_ok_first_step_overrun"), { ...known, to: 1 });
+  assert.equal(first.preview.needsOverrunAck, true);
+  // 伺服器沒說要勾、但自己算出來超過工單量 → 還是要勾（保守）
+  const sneaky = JSON.parse(JSON.stringify(MOVE_SAMPLES.preview_ok_first_step_overrun));
+  Object.assign(sneaky.switch_step_preview.target, { needs_overrun_ack: false, exceeds_order_qty: false });
+  assert.equal(core.movePreviewView(row("x", { preview_result: sneaky }), { ...known, to: 1 }).preview.needsOverrunAck, true);
+  const blocked = core.movePreviewView(row("preview_blocked_ac01"), { ...known, to: 1 });
+  assert.deepEqual([blocked.phase, blocked.code], ["blocked", "SWITCH_MOVE_AC01"]);
+  const nothing = core.movePreviewView(row("preview_nothing"), { ...known, to: 1 });
+  assert.deepEqual([nothing.phase, nothing.nothing, nothing.preview.good], ["ready", true, 0]);
+  assert.equal(core.movePreviewView(row("preview_ok_next_step"), { ...known, to: 1 }).phase, "invalid", "answer for another target");
+  assert.equal(core.movePreviewView(row("preview_ok_next_step"), { ...known, orderNo: "TEST-WO-9" }).phase, "invalid", "answer for another order");
+  assert.equal(core.movePreviewView(row("preview_ok_next_step"), { ...known, machineCode: "A03" }).phase, "invalid");
+  assert.equal(core.movePreviewView(row("preview_ok_next_step", { command_type: "switch_step" }), known).phase, "invalid", "not a preview row");
+  assert.equal(core.movePreviewView(row("preview_ok_next_step", { preview_result: null }), known).phase, "invalid");
+  const badQty = JSON.parse(JSON.stringify(MOVE_SAMPLES.preview_ok_next_step));
+  badQty.switch_step_preview.movable_good = -1;
+  assert.equal(core.movePreviewView(row("x", { preview_result: badQty }), known).phase, "invalid", "a negative quantity is never sent");
+  const okFalseNoCode = JSON.parse(JSON.stringify(MOVE_SAMPLES.preview_blocked_ac01));
+  okFalseNoCode.switch_step_preview.block_code = null;
+  assert.equal(core.movePreviewView(row("x", { preview_result: okFalseNoCode }), { ...known, to: 1 }).code, "SWITCH_MOVE_PLAN_REFUSED", "ok=false without a code still blocks");
+  for (const status of ["pending", "claimed"]) assert.deepEqual(core.movePreviewView({ status }, known), { phase: "pending", terminal: false, code: "" }, status);
+  assert.deepEqual(core.movePreviewView({ status: "rejected", reject_code: "lock_timeout" }, known), { phase: "failed", terminal: true, code: "LOCK_TIMEOUT" });
+  assert.deepEqual(core.movePreviewView({ status: "expired" }, known), { phase: "failed", terminal: true, code: "EXPIRED" });
+  // 確認卡上的兩行
+  assert.deepEqual(core.moveRuleLine(next.preview), { key: "switch_step_move_rule_next", params: { to: 2, available: 8 } });
+  assert.deepEqual(core.moveRuleLine(first.preview), { key: "switch_step_move_rule_first", params: { qty: 120 } });
+  assert.deepEqual(core.moveTargetLine(next.preview), { key: "switch_step_move_target_info", params: { to: 2, targetBefore: 0, targetAfter: 5, available: 8, qty: 120 } });
+  assert.equal(core.moveTargetLine(first.preview).key, "switch_step_move_target_info_first");
+});
+
+test("phase 3 codes: every r3 block code, every phase-2 cloud / Factory code has a sentence; every refusal ends 「沒有換，這台還是第 X 道，數字沒有變；…」; unsure never says 'not switched'", () => {
+  const d = dictionaries();
+  let r3Codes = [...R3_MOVE_CODES, ...R3_EXISTING_CODES];
+  let contract = "";
+  try { contract = fs.readFileSync(CONTRACT_R3_FILE, "utf8"); } catch { /* ops folder not on this machine */ }
+  if (contract) {
+    const section = contract.slice(contract.indexOf("## 3."), contract.indexOf("## 4."));
+    const fromFile = [...new Set([...section.matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)].map((m) => m[1]))];
+    for (const code of R3_MOVE_CODES) assert.ok(fromFile.includes(code), `${code} is in CONTRACT-r3 §3`);
+    for (const code of fromFile.filter((code) => code.startsWith("SWITCH_MOVE_"))) assert.ok(R3_MOVE_CODES.includes(code), `new contract code ${code} must be added here and mapped`);
+    r3Codes = [...new Set([...r3Codes, ...fromFile])];
+  }
+  let cloudSql = "";
+  try { cloudSql = fs.readFileSync(CLOUD_MOVE_SQL, "utf8"); } catch { /* cloud worktree not on this machine */ }
+  let cloudCodes = [...R3_CLOUD_CODES];
+  if (cloudSql) {
+    const submit = cloudSql.slice(cloudSql.indexOf("create function public.machtile_submit_switch_step_command("), cloudSql.indexOf("create function public.machtile_finish_switch_step_command("));
+    assert.ok(submit.length > 1000, "cloud r3 submit function found");
+    assert.match(submit, /p_expected_moved_good integer default null,p_expected_moved_fail integer default null,\s*p_acks text\[\] default null,p_preview boolean default false\)/, "the four parameter names the app sends");
+    const raised = [...new Set([...submit.matchAll(/raise exception '([A-Z][A-Z0-9_]+)'/g)].map((m) => m[1]))];
+    for (const code of R3_CLOUD_CODES) assert.ok(raised.includes(code), `${code} is raised by the cloud r3 submit`);
+    cloudCodes = [...new Set([...cloudCodes, ...raised])];
+  }
+  for (const code of cloudCodes) assert.equal(core.moveRejectInfo(code).known, true, `cloud r3 submit code ${code} is mapped`);
+  const params = { from: 3, to: 2, machine: "A04" };
+  for (const code of [...r3Codes, ...cloudCodes, ...CLOUD_SUBMIT_CODES, ...FACTORY_SWITCH_CODES, "SOMETHING_NEW"]) {
+    const info = core.moveRejectInfo(code);
+    const view = core.moveFailureView(code, params);
+    const text = view.lines.map((line) => fill(d.zh[line.key], line.params)).join(" ");
+    assert.doesNotMatch(text, /[A-Z][A-Z0-9]*_[A-Z0-9_]+|undefined|MISSING/, `${code}: ${text}`);
+    if (core.MOVE_UNCERTAIN_CODES.includes(code)) {
+      assert.equal(info.uncertain, true, code);
+      assert.doesNotMatch(text, /沒有換/, `${code} is not a refusal`);
+      assert.equal(text, "結果不確定，請重新整理看這台掛第幾道、數字是多少；不要重按。");
+      continue;
+    }
+    assert.ok(text.includes(moveTail(3)), `${code}: ${text}`);
+    if (R3_MOVE_CODES.includes(code) || CLOUD_SUBMIT_CODES.includes(code) || FACTORY_SWITCH_CODES.includes(code)) {
+      assert.equal(info.known, true, `${code} mapped`);
+      assert.notEqual(info.reasonKey, "switch_step_move_why_generic", `${code} has its own reason`);
+    }
+  }
+  // 「再按一次」只出現在等一下有機會成功的碼；數量變了＝重新看一次會怎麼搬
+  assert.deepEqual(Object.keys(core.MOVE_REJECT).filter((code) => core.moveRejectInfo(code).retryLater).sort(),
+    ["CLAIM_NOT_APPLIED", "EXPIRED", "INTERNAL_ERROR", "LOCK_TIMEOUT", "MACHINE_COMMAND_IN_FLIGHT", "STALE_COMMAND"]);
+  assert.deepEqual(Object.keys(core.MOVE_REJECT).filter((code) => core.moveRejectInfo(code).repreview).sort(), ["EXCEEDS_ORDER_QTY", "SWITCH_MOVE_QTY_CHANGED"]);
+  // 幾句看得懂的
+  const say = (code) => core.moveFailureView(code, params).lines.map((line) => fill(d.zh[line.key], line.params)).join(" ");
+  assert.equal(say("SWITCH_MOVE_AC01"), `這幾筆報工從上一道關站餘料領了料（入庫後再領出），系統還不能自動退回。 ${moveTail(3)}請找生管。`);
+  assert.equal(say("SWITCH_MOVE_QTY_CHANGED"), `第 3 道的數量剛剛變了（有人報工或修正），跟剛剛看到的不一樣。 ${moveTail(3)}請重新打開「換道次（數量一起搬）」再看一次會怎麼搬。`);
+  assert.equal(say("SWITCH_MOVE_TARGET_SHORT"), `第 2 道的上一道良品不夠（或要從倉庫先領料），補報不上去。 ${moveTail(3)}請找生管。`);
+  assert.equal(say("LOCK_TIMEOUT"), `工廠系統剛好在忙。 ${moveTail(3)}請等一下再按一次。`);
+  assert.equal(say("SWITCH_STEP_HAS_REPORTS"), `雲端還沒開放「數量一起搬」，有報工的道次不能換。 ${moveTail(3)}請找生管。`, "cloud move flag still off");
+  // 送出時的錯誤
+  const sub = (base, error) => core.moveSubmitErrorInfo(base, error);
+  assert.deepEqual(sub({ kind: "uncertain", code: "" }), { kind: "uncertain", code: "", info: null, params: {} });
+  assert.deepEqual([sub({ kind: "missing" }).code, sub({ kind: "missing" }).info.reasonKey], ["SWITCH_STEP_DISABLED", "switch_step_move_why_not_open"], "RPC not deployed = not open");
+  assert.equal(sub({ kind: "rejected", code: "", messageKey: "return_claim_err_login" }).info.reasonKey, "switch_step_move_why_login");
+  assert.deepEqual(sub({ kind: "rejected", code: "TARGET_TAKEN" }, new Error('400 {"code":"P0001","details":"{\\"claimed_machine_code\\": \\"A04\\"}","hint":null,"message":"TARGET_TAKEN"}')).params, { machine: "A04" });
+});
+
+test("phase 3 strings: zh-Hant + vi draft for every switch_step_move_ key, same placeholders, no raw code; 'press again' only where it can help", () => {
+  const d = dictionaries();
+  const keys = Object.keys(d.zh).filter((key) => key.startsWith("switch_step_move_"));
+  assert.ok(keys.length >= 90, `found ${keys.length}`);
+  const retryAllowed = new Set(["switch_step_move_progress", "switch_step_move_uncertain", "switch_step_move_not_found", "switch_step_move_resend", "switch_step_move_unsure",
+    "switch_step_move_tail_retry", "switch_step_move_tail_repreview", "switch_step_move_preview_again"]);
+  for (const key of keys) {
+    assert.equal(d.vi[key], d.viFile[key]?.value, `${key} vi i18n.js == locales`);
+    assert.equal(d.viFile[key]._draft, true, `${key} vi draft`);
+    assert.equal(d.zh[key], d.zhFile[key], `${key} zh i18n.js == locales`);
+    assert.notEqual(d.vi[key], d.zh[key], `${key} translated`);
+    assert.deepEqual([...d.vi[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), [...d.zh[key].matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort(), `${key} placeholders`);
+    assert.doesNotMatch(d.zh[key], /[A-Z][A-Z0-9]*_[A-Z0-9_]+/, `${key} no raw code`);
+    if (/再按|重按|重送|再試|重試|再看一次/.test(d.zh[key].replace(/再按「開工」|請按「開工」/g, "").replace(/不要重按|請不要重按/g, ""))) assert.ok(retryAllowed.has(key), `${key} must not tell the operator to press again`);
+  }
+  // 設計文件 §7 逐字的幾句
+  assert.equal(fill(d.zh.switch_step_move_confirm, { order: "WO", from: 3, good: 5, fail: 1, count: 2, to: 1 }), "這台目前是 WO 第 3 道，已報 良品 5／不良 1（2 筆）。要換成第 1 道，數量一起搬過去嗎？");
+  assert.equal(fill(d.zh.switch_step_move_done, { to: 1, good: 5, fail: 0, from: 3 }), "已換成第 1 道，搬了 良品 5／不良 0。第 3 道已改成 0、退回待做池。請按「開工」。");
+  assert.equal(d.zh.switch_step_move_unsure, "結果不確定，請重新整理看這台掛第幾道、數字是多少；不要重按。");
+  assert.equal(fill(d.zh.switch_step_move_overrun_ack, { qty: 120 }), "第一道補報後會超過工單量 120，確定要搬？（勾選才可送出）");
+  for (const tail of Object.values(core.MOVE_TAIL_KEYS)) assert.ok(fill(d.zh[tail], { from: 3 }).startsWith(moveTail(3)), tail);
+});
+
+test("phase 3 result view: applied sample → done sentence with the moved numbers; already_switched → nothing moved twice; rejected → reason + tail; unsure → hold", () => {
+  const d = dictionaries();
+  const say = (view) => view.lines.map((line) => fill(d.zh[line.key], line.params)).join(" ");
+  const applied = core.moveResultView(switchRow({ status: "applied", expected_order_no: "TEST-WO-1", legacy_snapshot: MOVE_SAMPLES.applied_moved }), { from: 3, to: 2, good: 5, fail: 1 });
+  assert.deepEqual([applied.phase, applied.terminal, applied.tone, applied.mode], ["applied", true, "ok", "switched"]);
+  assert.equal(say(applied), "已換成第 2 道，搬了 良品 5／不良 1。第 3 道已改成 0、退回待做池。請按「開工」。");
+  const snapshot = JSON.parse(JSON.stringify(MOVE_SAMPLES.applied_moved));
+  snapshot.switch_step.moved_good = 4;
+  assert.equal(core.moveResultView(switchRow({ status: "applied", legacy_snapshot: snapshot }), { from: 3, to: 2, good: 5, fail: 1 }).params.good, 4, "the Factory's numbers win over what the app sent");
+  const already = core.moveResultView(switchRow({ status: "applied", legacy_snapshot: MOVE_SAMPLES.applied_already_switched }), { from: 3, to: 2, good: 5, fail: 1 });
+  assert.equal(say(already), "這台已經是第 2 道（之前那一次已經搬過數量，這次沒有再搬）。請按「開工」。");
+  const unpooled = JSON.parse(JSON.stringify(MOVE_SAMPLES.applied_moved));
+  unpooled.switch_step.source_unpooled = true;
+  const uview = core.moveResultView(switchRow({ status: "applied", legacy_snapshot: unpooled }), { from: 3, to: 2 });
+  assert.equal(uview.noticeKey, "switch_step_started_unpooled_notice");
+  assert.match(say(uview), /第 3 道現在不在任何機台、也不在待做池/);
+  const rejected = core.moveResultView(switchRow({ status: "rejected", reject_code: "SWITCH_MOVE_TARGET_SHORT", legacy_snapshot: MOVE_SAMPLES.rejected_target_short }), { from: 3, to: 2 });
+  assert.deepEqual([rejected.phase, rejected.tone, rejected.code], ["rejected", "bad", "SWITCH_MOVE_TARGET_SHORT"]);
+  assert.ok(say(rejected).endsWith(`${moveTail(3)}請找生管。`));
+  assert.equal(core.moveResultView(switchRow({ status: "rejected", reject_code: null, legacy_snapshot: MOVE_SAMPLES.rejected_target_short }), { from: 3, to: 2 }).code, "SWITCH_MOVE_TARGET_SHORT", "empty reject_code → the snapshot's block_code");
+  const expired = core.moveResultView(switchRow({ status: "expired" }), { from: 3, to: 2 });
+  assert.deepEqual([expired.phase, expired.code], ["expired", "EXPIRED"]);
+  assert.equal(say(expired), `工廠太久沒有處理。 ${moveTail(3)}請等一下再按一次。`);
+  const unsure = core.moveResultView(switchRow({ status: "rejected", reject_code: "OUTCOME_UNKNOWN" }), { from: 3, to: 2 });
+  assert.deepEqual([unsure.tone, core.moveIsUnsure(unsure)], ["warn", true]);
+  const last = { view: unsure, at: 0, orderNo: "TEST-WO-1", step: 3 };
+  assert.equal(core.moveUnsureHold(last, { orderNo: "TEST-WO-1", step: 3, nowMs: 60000 }), true);
+  assert.equal(core.moveUnsureHold(last, { orderNo: "TEST-WO-1", step: 3, nowMs: core.STARTED_UNSURE_HOLD_MS + 1 }), false, "10 minutes");
+  assert.equal(core.moveUnsureHold(last, { orderNo: "TEST-WO-1", step: 2, nowMs: 60000 }), false);
+  assert.equal(core.moveUnsureHold({ ...last, view: rejected }, { orderNo: "TEST-WO-1", step: 3, nowMs: 1 }), false);
+  for (const status of ["pending", "claimed"]) assert.equal(core.moveResultView(switchRow({ status }), { from: 3, to: 2 }).terminal, false);
+});
+
+test("phase 3 state machine: choosing → previewing → confirming → submitting → done | rejected | unsure; nothing skips the preview", () => {
+  const go = (events, from = "choosing") => events.reduce((state, event) => (state ? core.moveNext(state, event) : null), from);
+  assert.equal(go(["preview", "preview_ok", "submit", "sent", "applied"]), "done");
+  assert.equal(go(["preview", "preview_ok", "submit", "applied"]), "done");
+  assert.equal(go(["preview", "preview_ok", "submit", "rejected"]), "rejected");
+  assert.equal(go(["preview", "preview_ok", "submit", "unsure"]), "unsure");
+  assert.equal(go(["preview", "preview_ok", "submit", "uncertain", "resend", "sent", "applied"]), "done");
+  assert.equal(go(["preview", "preview_blocked", "repick", "preview", "preview_ok"]), "confirming");
+  assert.equal(go(["preview", "preview_failed", "preview"]), "previewing");
+  assert.equal(go(["preview", "preview_ok", "repick"]), "choosing");
+  assert.equal(core.moveNext("choosing", "submit"), null, "no submit without a preview");
+  assert.equal(core.moveNext("previewing", "submit"), null);
+  assert.equal(core.moveNext("preview_blocked", "submit"), null, "a blocked preview can never be sent");
+  assert.equal(core.moveNext("done", "submit"), null);
+  assert.equal(core.moveNext("bogus", "preview"), null);
+});
+
+test("phase 3 pending record: thirteen args kept, only a real move (never a preview) is restored, session-scoped", () => {
+  const args = core.moveAdapterArgs({ commandUuid: S_UUID, machineCode: "A05", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 2, targetPoolItemId: keyOf(2), role: "operator", expectedGood: 5, expectedFail: 1 });
+  const rec = core.movePendingRecord({ commandUuid: S_UUID, machineCode: "a05", orderNo: "TEST-WO-1", step: 3, targetStep: 2, processId: PROCESS_ID, ...SESSION, args, startedAt: 1000, good: 5, fail: 1 });
+  assert.deepEqual(rec.args, args);
+  assert.deepEqual([rec.machineCode, rec.good, rec.fail], ["A05", 5, 1]);
+  const raw = JSON.stringify({ A05: rec });
+  assert.deepEqual(Object.keys(core.moveRestoreForSession(raw, 2000, SESSION)), ["A05"]);
+  assert.deepEqual(core.moveRestoreForSession(raw, 2000, { tenantId: SESSION.tenantId, appUserId: "someone-else" }), {});
+  assert.deepEqual(core.moveRestoreForSession(raw, 1000 + core.STARTED_PENDING_KEEP_MS + 1, SESSION), {});
+  const preview = core.moveAdapterArgs({ commandUuid: S_UUID, machineCode: "A05", poolItemId: keyOf(3), orderNo: "TEST-WO-1", step: 3, targetStep: 2, targetPoolItemId: keyOf(2), role: "operator", preview: true });
+  assert.deepEqual(core.moveRestoreForSession(JSON.stringify({ A05: { ...rec, args: preview } }), 2000, SESSION), {}, "a preview is never restored");
+  assert.deepEqual(core.moveRestoreForSession(JSON.stringify({ A05: { ...rec, args: { ...args, p_expected_moved_good: null } } }), 2000, SESSION), {});
+  const merged = core.moveMergeForSave(JSON.stringify({ A03: { ...rec, appUserId: "other", args: { ...args, p_machine_code: "A03" } } }), { A05: rec }, 2000, SESSION);
+  assert.deepEqual(Object.keys(merged).sort(), ["A03", "A05"], "another user's record on this tablet is kept");
+});
+
+// ---------------------------------------------------------------- 第 3 階段 app.js 接線
+test("phase 3 flag off (missing / false / non-boolean): no button, no lock, no fetch, no storage — the card is what it was", async () => {
+  for (const move of [undefined, false, "true", 1, null]) {
+    const h = harness({ move, order: reportedOrder(), backend: moveBackendOf({}) });
+    assert.equal(h.api.move.enabled(), false, String(move));
+    assert.equal(h.api.move.markup(h.machine), "");
+    assert.equal(h.api.move.locks("A05"), false);
+    assert.equal(h.api.locks("A05"), false);
+    assert.equal(h.api.blockMessage("A05"), "");
+    assert.equal(h.api.move.handleClick(clickOf("data-switch-step-move-open", { switchStepMoveOpen: "A05" })), false);
+    await h.api.move.open("A05", null);
+    await h.api.move.preview();
+    await h.api.move.submit();
+    h.api.move.restore();
+    h.api.move.forgetUser();
+    assert.equal(h.moveSheetHtml(), "");
+    assert.deepEqual(h.calls, { fetch: [], toasts: [], rerenders: 0, refresh: [], storageReads: 0, reloads: 0, closedSelection: 0 });
+  }
+  const noCore = harness({ move: true, noCore: true, order: reportedOrder() });
+  assert.equal(noCore.api.move.enabled(), false);
+  assert.equal(noCore.api.move.markup(noCore.machine), "");
+});
+
+test("phase 3 flag on: 「換道次（數量一起搬）」 only on a reported card of a listed machine; the zero-quantity card keeps phase 2's button; rendering is read-only", () => {
+  const h = harness({ move: true, started: true, order: reportedOrder() });
+  assert.equal(h.api.move.markup(h.machine), MOVE_BUTTON);
+  assert.equal(h.api.started.markup(h.machine), "", "phase 2 hides on a reported card");
+  assert.equal(h.calls.fetch.length + h.calls.storageReads, 0, "drawing the card fetches and reads nothing");
+  const zero = harness({ move: true, started: true, order: runningOrder() });
+  assert.equal(zero.api.move.markup(zero.machine), "");
+  assert.equal(zero.api.started.markup(zero.machine), STARTED_BUTTON);
+  const today = harness({ move: true, order: runningOrder({ done: 0 }), todayRows: [{ process_id: PROCESS_ID, report_type: "noon", completed_qty: 2 }] });
+  assert.equal(today.api.move.markup(today.machine), MOVE_BUTTON, "a report row today counts");
+  const dailyOnly = harness({ move: true, order: runningOrder({ done: 0 }), todayRows: [{ process_id: PROCESS_ID, report_type: "dailyStart", completed_qty: 0, defect_qty: 0 }] });
+  assert.equal(dailyOnly.api.move.markup(dailyOnly.machine), "", "the 0/0 dailyStart is not a report");
+  assert.equal(harness({ move: true, moveMachines: [], order: reportedOrder() }).api.move.markup(harness({ move: true, moveMachines: [], order: reportedOrder() }).machine), "", "default [] = no machine");
+  assert.equal(harness({ move: true, moveMachines: ["A03"], order: reportedOrder() }).api.move.markup(harness({ move: true, moveMachines: ["A03"], order: reportedOrder() }).machine), "");
+  const busy = harness({ move: true, order: reportedOrder(), stationPending: { A05: { commandUuid: UUID2, commandType: "stop" } } });
+  assert.equal(busy.api.move.markup(busy.machine), "", "another station command in flight");
+});
+
+test("phase 3 happy path (A05 step 3 with 5 good / 1 bad → step 2): reads, preview with NULL expected, confirm card, submit with 5 / 1, existing poll, done sentence", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  h.api.move.handleClick(clickOf("data-switch-step-move-open", { switchStepMoveOpen: "A05" }));
+  await settle();
+  await settle();
+  assert.deepEqual([...state.reads].sort(), ["fresh", "held", "history", "pool", "steps"].sort(), "the same four reads as phase 2 (same selects)");
+  let html = h.moveSheetHtml();
+  assert.match(html, /換道次（數量一起搬）：TEST-WO-1 · TEST-P1 測試軸/);
+  assert.match(html, /現在掛的：第 3 道 · 精車（已經報過工）/);
+  assert.match(html, /data-switch-step-move-choice="01\|TEST-WO-1\|S2"[^>]*>第 2 道 · 車牙 · 120 件 · 待做池</);
+  assert.match(html, /data-switch-step-move-preview disabled/, "two choices: nothing picked yet");
+  assert.doesNotMatch(html, /data-switch-step-move-submit/, "no way to send before the preview");
+  await h.api.move.submit();
+  assert.equal(state.submits.length + state.previews.length, 0);
+  h.api.move.choose(keyOf(2));
+  assert.match(h.moveSheetHtml(), />先看會怎麼搬（不會改任何東西）</);
+  await h.api.move.preview();
+  assert.equal(state.previews.length, 1);
+  assert.deepEqual(state.previews[0].body, { p_command_uuid: P_UUID, p_machine_code: "A05", p_pool_item_id: CURRENT_KEY, p_expected_order_no: "TEST-WO-1", p_expected_index_sn: 3,
+    p_target_index_sn: 2, p_target_pool_item_id: keyOf(2), p_expected_part_no: "TEST-P1", p_reason: null,
+    p_expected_moved_good: null, p_expected_moved_fail: null, p_acks: null, p_preview: true });
+  assert.match(h.moveSheetHtml(), /正在請工廠算第 3 道 → 第 2 道會怎麼搬（只是算，不會改任何東西）…/);
+  assert.equal(h.api.move.locks("A05"), false, "a preview does not lock the machine");
+  assert.equal(h.storage.get("machtile.switchStepMovePending.v1"), undefined, "a preview is not stored");
+  await h.runPoll();
+  assert.equal(state.previewPolls, 1, "still computing");
+  previewedAs(state, "preview_ok_next_step");
+  await h.runPoll();
+  html = h.moveSheetHtml();
+  assert.match(html, /data-switch-step-move-phase="confirming"/);
+  assert.match(html, /這台目前是 TEST-WO-1 第 3 道，已報 良品 5／不良 1（2 筆）。要換成第 2 道，數量一起搬過去嗎？/);
+  assert.match(html, /系統會：① 第 3 道這 2 筆報工改成 0（領料、結算一起退回）；② 第 2 道掛到這台並補報 良品 5／不良 1；③ 停工，請再按「開工」。/);
+  assert.match(html, /第 2 道換好後：已報 0 → 5（上一道可用 8）/);
+  assert.match(html, /數量規則：第 2 道補報後不能超過上一道良品（含上一道關站餘料，現在可用 8）；不會從倉庫先領料。/);
+  assert.match(html, /第 3 道 10:01 那筆 良品 3→0、不良 1→0/, "the Factory's plan text is shown");
+  assert.doesNotMatch(html, /data-switch-step-move-overrun/, "no overrun checkbox for step 2");
+  assert.match(html, /data-switch-step-move-submit >確定搬到第 2 道</);
+  await h.api.move.submit();
+  assert.equal(state.submits.length, 1);
+  assert.deepEqual(state.submits[0].body, { p_command_uuid: S_UUID, p_machine_code: "A05", p_pool_item_id: CURRENT_KEY, p_expected_order_no: "TEST-WO-1", p_expected_index_sn: 3,
+    p_target_index_sn: 2, p_target_pool_item_id: keyOf(2), p_expected_part_no: "TEST-P1", p_reason: null,
+    p_expected_moved_good: 5, p_expected_moved_fail: 1, p_acks: null, p_preview: false });
+  assert.deepEqual(Object.keys(state.submits[0].body), core.MOVE_ARG_KEYS);
+  // 等結果中：這台全部鎖住
+  assert.equal(h.api.locks("A05"), true);
+  assert.equal(h.api.blockMessage("A05"), "這台正在「換道次（數量一起搬）」，等它有結果再操作。");
+  assert.match(h.api.move.markup(h.machine), /data-switch-step-move-status="pending"[^>]*>換道次處理中（第 3 道 → 第 2 道，良品 5／不良 1 一起搬），等工廠處理…</);
+  assert.match(h.moveSheetHtml(), /換道次（數量一起搬）處理中，等工廠處理（約 10–60 秒）。請不要重按。/);
+  assert.ok(h.storage.get("machtile.switchStepMovePending.v1").includes(S_UUID), "kept across a reload");
+  await h.api.move.open("A05", null);
+  assert.equal(state.submits.length, 1, "no second command while pending");
+  moveAppliedAs(state, "applied_moved");
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["已換成第 2 道，搬了 良品 5／不良 1。第 3 道已改成 0、退回待做池。請按「開工」。"]);
+  assert.deepEqual(h.calls.refresh, [["A05", "switch_step"]]);
+  assert.match(h.moveSheetHtml(), /data-switch-step-move-result="applied"/);
+  assert.equal(h.api.locks("A05"), false);
+  assert.equal(JSON.parse(h.storage.get("machtile.switchStepMovePending.v1")).A05, undefined);
+  assert.equal(state.submits.length, 1, "never resubmitted");
+  assert.equal(state.previews.length, 1);
+});
+
+test("phase 3 preview says it would be blocked (SWITCH_MOVE_AC01): the reason + 「這台還是第 3 道，數字沒有變；請找生管」, and nothing can be sent", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 1);
+  previewedAs(state, "preview_blocked_ac01");
+  await h.runPoll();
+  const html = h.moveSheetHtml();
+  assert.match(html, /data-switch-step-move-phase="preview_blocked"/);
+  assert.match(html, /data-switch-step-move-code="SWITCH_MOVE_AC01"/);
+  assert.ok(html.includes(`這幾筆報工從上一道關站餘料領了料（入庫後再領出），系統還不能自動退回。 ${moveTail(3)}請找生管。`), html);
+  assert.doesNotMatch(html, /data-switch-step-move-submit/);
+  await h.api.move.submit();
+  assert.equal(state.submits.length, 0);
+  assert.equal(h.api.locks("A05"), false);
+});
+
+test("phase 3 first step over the order quantity: the checkbox must be ticked, then acks=[\"EXCEEDS_ORDER_QTY\"] is sent", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 1);
+  previewedAs(state, "preview_ok_first_step_overrun");
+  await h.runPoll();
+  let html = h.moveSheetHtml();
+  assert.match(html, /第 1 道換好後：已報 118 → 123（工單量 120）/);
+  assert.match(html, /數量規則：第一道不限數量；補報後超過工單量 120 要勾選確認。/);
+  assert.match(html, /<input type="checkbox" data-switch-step-move-overrun> 第一道補報後會超過工單量 120，確定要搬？（勾選才可送出）/);
+  assert.match(html, /data-switch-step-move-submit disabled/);
+  await h.api.move.submit();
+  assert.equal(state.submits.length, 0, "not ticked → not sent");
+  h.api.move.setOverrun(true);
+  html = h.moveSheetHtml();
+  assert.match(html, /data-switch-step-move-overrun checked/);
+  assert.match(html, /data-switch-step-move-submit >確定搬到第 1 道</);
+  await h.api.move.submit();
+  assert.deepEqual([state.submits[0].body.p_expected_moved_good, state.submits[0].body.p_expected_moved_fail, state.submits[0].body.p_acks], [5, 0, ["EXCEEDS_ORDER_QTY"]]);
+});
+
+test("phase 3 Factory refusals after the preview: QTY_CHANGED says look again; nothing left locked; every sentence keeps 「這台還是第 3 道，數字沒有變」", async () => {
+  for (const [code, ending] of [["SWITCH_MOVE_QTY_CHANGED", "請重新打開「換道次（數量一起搬）」再看一次會怎麼搬。"], ["SWITCH_MOVE_DOWNSTREAM_USED", "請找生管。"],
+    ["REPORT_ENGINE_FAILED", "請找生管。"], ["LOCK_TIMEOUT", "請等一下再按一次。"]]) {
+    const state = { held: () => [claimedRow(3)] };
+    const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+    await startMove(h, 2);
+    previewedAs(state, "preview_ok_next_step");
+    await h.runPoll();
+    await h.api.move.submit();
+    state.row = Object.assign({}, state.row, { status: "rejected", claimed_at: new Date().toISOString(), reject_code: code, reject_message: "fixture" });
+    await h.runPoll();
+    const html = h.moveSheetHtml();
+    assert.match(html, new RegExp(`data-switch-step-move-result="rejected" data-switch-step-move-code="${code}"`), code);
+    assert.ok(html.includes(`${moveTail(3)}${ending}`), `${code}: ${html}`);
+    assert.ok(h.calls.toasts[0].includes(moveTail(3)), code);
+    assert.equal(h.api.locks("A05"), false, code);
+    assert.equal(state.submits.length, 1, code);
+  }
+});
+
+test("phase 3 cloud refuses at submit (HAS_REPORTS while the cloud move flag is off; TARGET_TAKEN on A04): plain sentence + tail, nothing pending", async () => {
+  for (const [message, expected] of [['400 {"code":"P0001","message":"SWITCH_STEP_HAS_REPORTS"}', "雲端還沒開放「數量一起搬」，有報工的道次不能換。"],
+    ['400 {"code":"P0001","details":"{\\"claimed_machine_code\\": \\"A04\\"}","hint":null,"message":"TARGET_TAKEN"}', "第 2 道已經在 A04 上或被 A04 接走。"]]) {
+    const state = { held: () => [claimedRow(3)] };
+    const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+    await startMove(h, 2);
+    previewedAs(state, "preview_ok_next_step");
+    await h.runPoll();
+    state.submitError = new Error(message);
+    await h.api.move.submit();
+    const html = h.moveSheetHtml();
+    assert.ok(html.includes(`<p>${expected}</p><p>${moveTail(3)}請找生管。</p>`), html);
+    assert.equal(h.api.locks("A05"), false);
+    const left = h.storage.get("machtile.switchStepMovePending.v1");
+    assert.ok(!left || JSON.parse(left).A05 === undefined, "nothing pending is stored");
+  }
+});
+
+test("phase 3 OUTCOME_UNKNOWN: 'not sure' (never 'not switched'), the button stays hidden for that step for 10 minutes — no second command", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 2);
+  previewedAs(state, "preview_ok_next_step");
+  await h.runPoll();
+  await h.api.move.submit();
+  state.row = Object.assign({}, state.row, { status: "rejected", claimed_at: new Date().toISOString(), reject_code: "OUTCOME_UNKNOWN", reject_message: "fixture" });
+  await h.runPoll();
+  assert.deepEqual(h.calls.toasts, ["結果不確定，請重新整理看這台掛第幾道、數字是多少；不要重按。"]);
+  assert.match(h.moveSheetHtml(), /data-switch-step-move-result="rejected"/);
+  const card = h.api.move.markup(h.machine);
+  assert.match(card, /結果不確定，請重新整理看這台掛第幾道、數字是多少；不要重按。/);
+  assert.doesNotMatch(card, /data-switch-step-move-open/);
+  assert.equal(h.api.move.gate(h.machine).reason, "unsure_hold");
+  assert.equal(state.submits.length, 1);
+});
+
+test("phase 3 network cut on submit: 'not sure it was sent', polled with the same uuid; resend = same uuid + byte-identical args (expected numbers included)", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 2);
+  previewedAs(state, "preview_ok_next_step");
+  await h.runPoll();
+  state.submitError = new TypeError("Failed to fetch");
+  await h.api.move.submit();
+  assert.match(h.moveSheetHtml(), /不確定有沒有送到（網路不穩），系統會繼續確認。/);
+  assert.equal(h.api.locks("A05"), true, "not sure → the machine stays locked");
+  const stored = JSON.parse(h.storage.get("machtile.switchStepMovePending.v1")).A05;
+  assert.deepEqual([stored.unconfirmed, stored.args.p_expected_moved_good, stored.args.p_expected_moved_fail], [true, 5, 1]);
+  delete state.submitError;
+  await h.api.move.submit();   // 確認卡上的「用同一筆重送」
+  assert.equal(state.submits.length, 2);
+  assert.equal(state.submits[1].raw, state.submits[0].raw, "same command_uuid and byte-identical args");
+  // 重新整理：同一筆從 localStorage 還原、繼續輪詢，不會再送
+  const again = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), storage: h.storage });
+  again.api.move.restore();
+  assert.equal(again.api.locks("A05"), true);
+  moveAppliedAs(state, "applied_moved");
+  await again.runPoll();
+  assert.equal(again.api.locks("A05"), false);
+  assert.match(again.calls.toasts[0], /已換成第 2 道，搬了 良品 5／不良 1。/);
+  assert.equal(state.submits.length, 2, "a reload never resubmits");
+});
+
+test("phase 3 preview cannot be sent (network) or the Factory never answers: 'look again' with a NEW preview uuid; nothing is ever sent as a move", async () => {
+  const state = { held: () => [claimedRow(3)], previewError: new TypeError("Failed to fetch") };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID, P_UUID2] });
+  await startMove(h, 2);
+  let html = h.moveSheetHtml();
+  assert.match(html, /data-switch-step-move-phase="preview_failed"/);
+  assert.ok(html.includes(`會怎麼搬沒有算出來（網路不穩，可能沒送到）。 ${moveTail(3)}請等一下再按一次。`), html);
+  assert.match(html, />再看一次會怎麼搬</);
+  delete state.previewError;
+  await h.api.move.preview();
+  assert.deepEqual(state.previews.map((p) => p.body.p_command_uuid), [P_UUID, P_UUID2], "a preview retry is a new command (it changes nothing)");
+  // 工廠一直沒算完 → 等太久
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    h.context.Date.now = () => t0 + core.MOVE_PREVIEW_WAIT_MS + 1000;
+    await h.runPoll();
+  } finally { h.context.Date.now = realNow; }
+  html = h.moveSheetHtml();
+  assert.ok(html.includes(`工廠太久沒有算出會怎麼搬。 ${moveTail(3)}請等一下再按一次。`), html);
+  assert.equal(state.submits.length, 0);
+});
+
+test("phase 3 preview answer that does not match (another target) is not trusted; a Factory rejection of the preview keeps the tail", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 1);
+  previewedAs(state, "preview_ok_next_step");   // 答的是第 2 道
+  await h.runPoll();
+  assert.ok(h.moveSheetHtml().includes(`工廠回來的計算結果看不懂。 ${moveTail(3)}請找生管。`));
+  const s2 = { held: () => [claimedRow(3)] };
+  const h2 = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(s2), uuids: [S_UUID, P_UUID] });
+  await startMove(h2, 2);
+  s2.previewRow = Object.assign({}, s2.previewRow, { status: "rejected", reject_code: "SWITCH_MOVE_DISABLED" });
+  await h2.runPoll();
+  assert.ok(h2.moveSheetHtml().includes(`這台的「數量一起搬」工廠還沒開放。 ${moveTail(3)}請找生管。`));
+  assert.equal(s2.submits.length, 0);
+});
+
+test("phase 3 admin / planner: reason required before the preview; the same reason goes with the move", async () => {
+  const state = {};
+  const h = harness({ move: true, role: "planner", order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await h.api.move.open("A05", null);
+  assert.match(h.moveSheetHtml(), /data-switch-step-move-on-behalf/);
+  h.api.move.choose(keyOf(2));
+  await h.api.move.preview();
+  assert.equal(state.previews.length, 0);
+  assert.match(h.moveSheetHtml(), /data-switch-step-move-reason-error[^>]*>請寫換道次的原因。</);
+  h.api.move.state.sheet.reason = "生管代換：掛錯道次又報了工";
+  await h.api.move.preview();
+  assert.equal(state.previews[0].body.p_reason, "生管代換：掛錯道次又報了工");
+  assert.equal(state.previews[0].body.p_pool_item_id, null, "planner-assigned (no claim) → null");
+  previewedAs(state, "preview_ok_next_step");
+  await h.runPoll();
+  await h.api.move.submit();
+  assert.equal(state.submits[0].body.p_reason, "生管代換：掛錯道次又報了工");
+});
+
+test("phase 3 the logged-in user changes: the open sheet closes and a late preview answer is ignored", async () => {
+  const state = { held: () => [claimedRow(3)] };
+  const h = harness({ move: true, order: reportedOrder(), backend: moveBackendOf(state), uuids: [S_UUID, P_UUID] });
+  await startMove(h, 2);
+  h.api.move.forgetUser();
+  assert.equal(h.moveSheetHtml(), "");
+  previewedAs(state, "preview_ok_next_step");
+  await h.runPoll();
+  assert.equal(h.api.move.state.sheet, null);
+  assert.equal(state.submits.length, 0);
 });
