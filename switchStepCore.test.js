@@ -1633,7 +1633,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   assert.match(config, /\n  enableSwitchStep: false,\n/);
   // 「上一道擋住」（2026-11-14，三個預設關的旗標＋說明、核心 script tag、看板空殼 section、.prev-step-* 樣式）也一併濾掉
   const prevStepLine = /enablePrevStep|hideLegacyReportForStationMachines|上一道擋住|A\/B 機台已開智慧報工|prev-step|prevStepNotifyCore\.js\?v=|id="prevStepBoard"/;
-  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|enableHmcPalletCard|hmcPalletCardMachines|B01\/B02 卡片六盤料號推算|換道次|enableReturnClaim 也要開才有效/.test(line)).join("\n"), show("config.js"), "config.js: only independently guarded HMC and switch-step flags");
+  assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|enableHmcPalletCard|hmcPalletCardMachines|B01\/B02 卡片六盤料號推算|換道次|enableReturnClaim 也要開才有效/.test(line) && !prevStepLine.test(line)).join("\n"), show("config.js"), "config.js: only independently guarded HMC and switch-step flags");
   assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=") && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags and the version string");
   const hmcStyles = read("styles.css").replace(/\.hmc-pallet-card \{[\s\S]*?\.hmc-pallet-row\.is-unmatched > b \{[^\n]+\}\n/, "");
   const filteredStyles = hmcStyles.split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line) && !prevStepLine.test(line)).join("\n");
