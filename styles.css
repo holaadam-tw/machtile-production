@@ -13428,3 +13428,13 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .switch-step-choice[aria-checked="true"] { border-color: var(--green-strong); background: var(--green-soft); }
 .switch-step-choice:disabled { opacity: 0.6; cursor: default; }
 .switch-step-started-notice { border-left: 4px solid #d97706; padding-left: 8px; font-weight: 700; }
+/* 上一道擋住：卡在哪一台＋通知生管（owner 2026-11-14；旗標 enablePrevStepBlockHint／enablePrevStepNotify） */
+.prev-step-block { margin-top: 8px; padding: 10px; border-radius: 6px; border: 1px solid #e0b252; background: #fff8e6; }
+.prev-step-block p { margin: 0; font-size: 14px; font-weight: 600; color: #6b4a00; }
+.prev-step-block .prev-step-notify { margin-top: 8px; }
+.prev-step-notify-status { margin-top: 6px !important; font-weight: 400 !important; }
+.prev-step-board { grid-column: 1 / -1; min-height: 0; }
+.prev-step-board[hidden] { display: none; }
+.prev-step-board-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.prev-step-board-row { padding: 10px; border: 1px solid #e0b252; border-radius: 6px; background: #fff8e6; }
+.prev-step-board-row p { margin: 4px 0; }
