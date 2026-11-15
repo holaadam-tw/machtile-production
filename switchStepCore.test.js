@@ -2533,8 +2533,10 @@ test("phase 3 flags: enableSwitchStepMove default false, switchStepMoveMachines 
   for (const flag of [undefined, false, "true", 1, null]) assert.equal(core.moveEnabled({ flag }), false, String(flag));
   assert.equal(core.moveEnabled(), false);
   const config = fs.readFileSync(path.join(__dirname, "config.js"), "utf8");
-  assert.match(config, /\n\s*enableSwitchStepMove: false,\r?\n/);
-  assert.match(config, /\n\s*switchStepMoveMachines: \[\],\r?\n/);
+  // 2026-11-15 rollout (owner pack 20261115-a05-move-enable): config.js may carry the A05-only phase 3 switch; the code default (moveEnabled) stays strict-true-only.
+  assert.match(config, /\n\s*enableSwitchStepMove: (false|true),\r?\n/);
+  if (/\n\s*enableSwitchStepMove: true,/.test(config)) assert.match(config, /\n\s*switchStepMoveMachines: \["A05"\],\r?\n/, "phase 3 on = A05 only");
+  else assert.match(config, /\n\s*switchStepMoveMachines: \[\],\r?\n/);
 });
 
 test("phase 3 visibility: same rules as phase 2 except it needs REPORTS (card done > 0 or a report row today); the two buttons never show together", () => {
