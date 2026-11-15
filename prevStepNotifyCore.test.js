@@ -24,7 +24,9 @@ test("flags default off in config.js and config.example.js", () => {
   for (const file of ["config.js", "config.example.js"]) {
     const source = fs.readFileSync(path.join(__dirname, file), "utf8");
     for (const flag of ["enablePrevStepBlockHint", "enablePrevStepNotify", "hideLegacyReportForStationMachines"]) {
-      assert.match(source, new RegExp(`\\n\\s*${flag}: false,`), `${file} ${flag}`);
+      // 2026-11-15 rollout: config.js may carry hint/notify = true (owner pack 20261115-prevstep-enable); config.example.js and hideLegacy stay false.
+      const allowOn = file === "config.js" && flag !== "hideLegacyReportForStationMachines";
+      assert.match(source, new RegExp(`\\n\\s*${flag}: ${allowOn ? "(false|true)" : "false"},`), `${file} ${flag}`);
     }
   }
   assert.equal(core.hintEnabled({}), false);
