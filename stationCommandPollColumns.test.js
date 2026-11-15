@@ -92,6 +92,10 @@ assert.ok(!COLUMNS.has("target_index_sn") && !COLUMNS.has("target_pool_item_id")
 for (const { name, list } of selects) {
   assert.doesNotMatch(list, /(?:^|,)target_(?:index_sn|pool_item_id)(?:,|$)/, `${name}: no select reads the switch_step-only columns`);
 }
+// switch_step phase 3 (move reported qty): the r3 columns expected_moved_good / expected_moved_fail (cloud r3 migration) are never selected
+// either; the preview poll reads preview_result (already in production) and the move result rides on legacy_snapshot.
+assert.ok(!COLUMNS.has("expected_moved_good") && !COLUMNS.has("expected_moved_fail"), "the r3 columns are not in the production list yet");
+for (const { name, list } of selects) assert.doesNotMatch(list, /(?:^|,)expected_moved_(?:good|fail)(?:,|$)/, `${name}: no select reads the r3-only columns`);
 const startedStationSelects = [...startedSection.matchAll(/station_commands\?select=([A-Za-z0-9_,:]+)/g)].map((m) => m[1]);
 assert.equal(startedStationSelects.length, 2, "the started section reads station_commands twice (command history for the pool key, unpooled notices)");
 assert.doesNotMatch(appSourceForRpc, /machtile_held_pool_claims\?|HELD_CLAIMS_RPC\}\?/, "the RPC is called without a query string (no select to cover)");
