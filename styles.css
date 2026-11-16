@@ -12000,6 +12000,22 @@ body .machtile-session-badge .machtile-session-toggle {
 .card-ct-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* 機台卡片「這台還掛 N 張」（owner 2026-10-02）：一台同時掛好幾張在站單時，列出全部、可切換卡片顯示哪一張（只改畫面）。 */
+.hmc-pallet-card { margin: -4px 0 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-soft); overflow: hidden; }
+.hmc-pallet-card > header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; padding: 9px 10px; background: var(--brand-blue-soft); }
+.hmc-pallet-card > header small, .hmc-pallet-card > p { color: var(--muted); font-size: 11px; }
+.hmc-pallet-card > p { margin: 0; padding: 10px; }
+.hmc-pallet-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: start; padding: 8px 10px; border-top: 1px solid var(--border); }
+.hmc-pallet-row > b { color: var(--brand-blue); font-size: 13px; }
+.hmc-pallet-row > ul { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; }
+.hmc-pallet-empty { color: var(--muted); font-size: 13px; }
+.hmc-pallet-order { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; padding: 7px 8px; border-radius: 8px; background: var(--surface); }
+.hmc-pallet-order > span { min-width: 0; }
+.hmc-pallet-order > span > strong, .hmc-pallet-order > span > small { display: block; overflow-wrap: anywhere; }
+.hmc-pallet-order > span > small { color: var(--muted); }
+.hmc-pallet-order > em { padding: 2px 7px; border-radius: 999px; background: var(--gray-soft); color: #475467; font-size: 11px; font-style: normal; font-weight: 700; }
+.hmc-pallet-order .card-order-progress { grid-column: 1 / -1; margin-top: 2px; }
+.hmc-pallet-row.is-unmatched { background: var(--amber-soft); }
+.hmc-pallet-row.is-unmatched > b { color: #7a4b00; }
 .machine-card-orders {
   margin: -4px 0 10px;
   border: 1px solid var(--border);
