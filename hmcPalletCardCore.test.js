@@ -9,11 +9,11 @@ test("one pallet can list several different hung parts", () => {
   assert.deepEqual(result.pallets[0].orders.map((x) => x.order.id), ["WO-1", "WO-2"]);
   assert.equal(result.unmatched.length, 0);
 });
-test("a part configured on two pallets is not guessed", () => {
+test("a part configured on two pallets is listed on both with all inferred pallet numbers", () => {
   const result = mapOrdersToPallets([entry("WO-X", "CPDG-06-01")], [pallet(2, "CPDG-06-01"), pallet(4, "CPDG-06-01")]);
-  assert.equal(result.pallets[1].orders.length, 0);
-  assert.equal(result.pallets[3].orders.length, 0);
-  assert.deepEqual(result.unmatched.map((x) => x.order.id), ["WO-X"]);
+  assert.deepEqual(result.pallets[1].orders.map((x) => [x.order.id, x.inferredPalletNos]), [["WO-X", [2, 4]]]);
+  assert.deepEqual(result.pallets[3].orders.map((x) => [x.order.id, x.inferredPalletNos]), [["WO-X", [2, 4]]]);
+  assert.equal(result.unmatched.length, 0);
 });
 test("an unknown part is placed under unmatched", () => {
   assert.deepEqual(mapOrdersToPallets([entry("WO-U", "UNKNOWN")], [pallet(1, "KNOWN")]).unmatched.map((x) => x.order.id), ["WO-U"]);

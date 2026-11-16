@@ -24,7 +24,7 @@ async function open(base, { flag = false, rpc = null } = {}) {
     const url = new URL(route.request().url());
     if (url.hostname !== "127.0.0.1") return route.abort();
     const relative = url.pathname.replace(/^\//, "") || "index.html";
-    if (relative === "config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${flag},hmcPalletCardMachines:["CNC-01"],supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
+    if (relative === "config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${flag},hmcPalletCardMachines:["CNC-02"],supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
     if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_card_read")) {
       if (rpc instanceof Error) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: rpc.message }) });
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(rpc) });
@@ -49,17 +49,22 @@ try {
     [{ palletNo: 1, slots: [{ part: { partNo: "A" } }, { part: { partNo: "B" } }] }, { palletNo: 2, slots: [{ part: { partNo: "X" } }] }, { palletNo: 4, slots: [{ part: { partNo: "X" } }] }]
   ));
   assert.deepEqual(mapped.pallets[0].orders.map((x) => x.order.id), ["WO-1", "WO-2"], "browser maps several parts to one pallet");
-  assert.deepEqual(mapped.unmatched.map((x) => x.order.id), ["WO-X"], "browser does not guess a duplicated pallet match");
+  assert.deepEqual(mapped.pallets[1].orders.map((x) => [x.order.id, x.inferredPalletNos]), [["WO-X", [2, 4]]], "browser maps a duplicated part to its first pallet");
+  assert.deepEqual(mapped.pallets[3].orders.map((x) => [x.order.id, x.inferredPalletNos]), [["WO-X", [2, 4]]], "browser maps a duplicated part to its second pallet");
+  assert.equal(mapped.unmatched.length, 0, "browser reserves unmatched for parts on no pallet");
   await before.context.close(); await after.context.close();
 
-  const success = await open(false, { flag: true, rpc: { ok: true, machine_code: "CNC-01", pallets: [
-    { pallet_no: 1, parts: ["SS-BUSH-118", "EXTRA-PART"] },
-    { pallet_no: 2, parts: [] }, { pallet_no: 3, parts: [] }, { pallet_no: 4, parts: [] }, { pallet_no: 5, parts: [] }, { pallet_no: 6, parts: [] },
+  const success = await open(false, { flag: true, rpc: { ok: true, machine_code: "CNC-02", pallets: [
+    { pallet_no: 1, parts: ["CU-RING-090", "EXTRA-PART"] },
+    { pallet_no: 2, parts: [] }, { pallet_no: 3, parts: [] }, { pallet_no: 4, parts: ["CU-RING-090"] }, { pallet_no: 5, parts: [] }, { pallet_no: 6, parts: [] },
   ] } });
-  const card = success.page.locator('[data-hmc-pallet-card="CNC-01"]');
+  const card = success.page.locator('[data-hmc-pallet-card="CNC-02"]');
   await card.locator('[data-hmc-pallet="1"]').waitFor();
   assert.doesNotMatch(await card.locator('[data-hmc-pallet="1"]').textContent(), /尚未登錄/, "flag on accepts a multi-part pallet response as configured");
   assert.match(await card.locator('[data-hmc-pallet="2"]').textContent(), /尚未登錄/, "only an ok empty pallet renders not configured");
+  assert.match(await card.locator('[data-hmc-pallet="1"]').textContent(), /銅套.*1 或 4 號盤.*推算/s, "first matching pallet renders the order, multi-pallet note, and inferred tag");
+  assert.match(await card.locator('[data-hmc-pallet="4"]').textContent(), /銅套.*1 或 4 號盤.*推算/s, "second matching pallet renders the same order, note, and inferred tag");
+  assert.equal(await card.locator('[data-hmc-pallet-unmatched]').count(), 0, "multi-pallet order is absent from unmatched");
   assert.equal(await success.page.evaluate(() => window.MachTileHmcPalletCardCore.mapOrdersToPallets(
     [{ order: { id: "WO-UNMAPPED", partNo: "NO-MATCH" } }],
     [{ palletNo: 1, slots: [{ part: { partNo: "SS-BUSH-118" } }, { part: { partNo: "EXTRA-PART" } }] }]
@@ -67,9 +72,9 @@ try {
   await success.context.close();
 
   const failed = await open(false, { flag: true, rpc: new Error("temporary") });
-  const failedCard = failed.page.locator('[data-hmc-pallet-card="CNC-01"]');
+  const failedCard = failed.page.locator('[data-hmc-pallet-card="CNC-02"]');
   await failedCard.getByText("固定工件設定暫時讀不到").waitFor();
   assert.doesNotMatch(await failedCard.textContent(), /尚未登錄|未對應/, "RPC failure renders only the read-error state");
   await failed.context.close();
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
-console.log("PASS: 9 HMC pallet-card browser assertions");
+console.log("PASS: 15 HMC pallet-card browser assertions");

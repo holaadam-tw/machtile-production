@@ -18,8 +18,11 @@
       const order = entry?.order || entry;
       const partNo = normalize(order?.partNo || order?.part_no || order?.drawing);
       const matches = partNo ? pallets.filter((pallet) => pallet.partNos.includes(partNo)) : [];
-      if (matches.length === 1) matches[0].orders.push(entry);
-      else unmatched.push(entry);
+      if (matches.length > 0) {
+        const inferredPalletNos = matches.map((pallet) => pallet.palletNo);
+        const mappedEntry = { ...entry, inferredPalletNos };
+        matches.forEach((pallet) => pallet.orders.push(mappedEntry));
+      } else unmatched.push(entry);
     }
     return { pallets, unmatched };
   }

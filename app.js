@@ -11826,7 +11826,10 @@ function machtileLoadHmcPalletCard(machine) {
 
 function machtileHmcPalletOrderMarkup(entry) {
   const order = entry?.order || entry || {};
-  return `<li class="hmc-pallet-order"><span><strong>${escapeHtml(order.part || order.partNo || order.id || "-")}</strong><small>${escapeHtml(order.id || "-")}</small></span>${machtileCardOrderProgressMarkup(order)}<em>${escapeHtml(machtileTranslate("hmc_pallet_inferred"))}</em></li>`;
+  const palletNos = Array.isArray(entry?.inferredPalletNos) ? entry.inferredPalletNos : [];
+  const separator = window.MachTileI18n?.getLanguage() === "vi" ? " hoặc " : " 或 ";
+  const multiMatch = palletNos.length > 1 ? `<small>${escapeHtml(machtileTranslate("hmc_pallet_multi_match", { pallets: palletNos.join(separator) }))}</small>` : "";
+  return `<li class="hmc-pallet-order"><span><strong>${escapeHtml(order.part || order.partNo || order.id || "-")}</strong><small>${escapeHtml(order.id || "-")}</small>${multiMatch}</span>${machtileCardOrderProgressMarkup(order)}<em>${escapeHtml(machtileTranslate("hmc_pallet_inferred"))}</em></li>`;
 }
 
 function machtileHmcPalletCardMarkup(machine) {

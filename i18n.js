@@ -78,6 +78,7 @@
       hmc_pallet_number: "{{number}}號盤",
       hmc_pallet_inferred: "推算",
       hmc_pallet_inferred_note: "依固定工件料號推算",
+      hmc_pallet_multi_match: "{{pallets}} 號盤",
       hmc_pallet_not_configured: "尚未登錄",
       hmc_pallet_unmatched: "未對應盤號",
       hmc_pallet_loading: "正在讀取固定工件設定…",
@@ -715,6 +716,7 @@
       hmc_pallet_number: "Pallet {{number}}", // _draft
       hmc_pallet_inferred: "Suy đoán", // _draft
       hmc_pallet_inferred_note: "Suy đoán theo mã chi tiết cố định", // _draft
+      hmc_pallet_multi_match: "Pallet {{pallets}}", // _draft
       hmc_pallet_not_configured: "Chưa đăng ký", // _draft
       hmc_pallet_unmatched: "Chưa khớp số pallet", // _draft
       hmc_pallet_loading: "Đang đọc cấu hình chi tiết cố định…", // _draft
