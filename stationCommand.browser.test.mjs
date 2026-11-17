@@ -424,7 +424,7 @@ const realErrors = (errors) => errors.filter((e) => !e.includes("CATALOG_ENDPOIN
 // 卡片裡的報工／完整單連結會帶頁面網址（對照組在 /__baseline/ 底下）→ 比較前把那段拿掉
 const gridHtml = (page) => page.evaluate(() => {
   const grid = document.getElementById("workOrderGrid").cloneNode(true);
-  grid.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove());
+  grid.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail], .job-part-number").forEach((el) => el.remove());
   return grid.innerHTML.replace(/\s+/g, " ").split("/__baseline/").join("/");
 });
 const firstDiff = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return `@${i}: …${a.slice(Math.max(0, i - 80), i + 80)}… vs …${b.slice(Math.max(0, i - 80), i + 80)}…`; };
@@ -526,7 +526,7 @@ for (const vp of ["desktop", "tablet", "phone"]) {
       const bBe = makeBackend();
       const b = await newPage(browser, vp, { backend: bBe, baseline: true, configExtra: 'stationCommandMachines: ["A04"],' });
       const rawCards = (pg) => pg.evaluate(() => [...document.querySelectorAll("#workOrderGrid .machine-tile-card")]
-        .map((c) => { const clone = c.cloneNode(true); clone.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove()); return { name: c.querySelector("h2")?.textContent.trim() || "", html: clone.outerHTML.split("/__baseline/").join("/") }; }));
+        .map((c) => { const clone = c.cloneNode(true); clone.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail], .job-part-number").forEach((el) => el.remove()); return { name: c.querySelector("h2")?.textContent.trim() || "", html: clone.outerHTML.split("/__baseline/").join("/").replace(/>\s+</g, "><") }; }));
       const mine = await rawCards(page);
       const theirs = await rawCards(b.page);
       const others = mine.filter((c) => !c.name.startsWith("A04"));

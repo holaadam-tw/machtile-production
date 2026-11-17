@@ -38,7 +38,7 @@ async function open(base, { flag = false, rpc = null } = {}) {
   await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid article").length > 0);
   return { context, page, errors };
 }
-const dom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard").forEach((node) => node.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); });
+const dom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard, .job-part-number, .report-part-number, .finish-part-number").forEach((node) => node.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); });
 try {
   const before = await open(true), after = await open(false);
   assert.equal(await dom(after.page), await dom(before.page), "flag off keeps the machine-card body DOM byte-identical to HEAD");

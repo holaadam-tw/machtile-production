@@ -1523,6 +1523,27 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
     '  if (config.startBackfillEnabled === true && (before !== after || beforeGapKey !== JSON.stringify(ds.gap ?? null))) machtileStationCmdUpdateBackfillUi();',
     '  if (config.startBackfillEnabled === true && before !== after) machtileStationCmdUpdateBackfillUi();'
   );
+  // Report auto-close + part-number card/header work is independently browser-tested.
+  current = current.replace('  // Close a routine single-station report only after Factory confirms it was applied.\n  reportAutoCloseOnSuccess: true,\n', '');
+  current = current.replace('    partNo: row.part_no || "",\n', '');
+  current = current.replace('          ${order.partNo ? `<small class="job-part-number"><span>${escapeHtml(machtileTranslate("part_number"))}</span><strong>${escapeHtml(order.partNo)}</strong></small>` : ""}\n', '');
+  current = current.replace('  const reportPartNo = $("#reportPartNo");\n  if (reportPartNo) {\n    reportPartNo.textContent = order.partNo || "";\n    reportPartNo.parentElement.hidden = !reportPartNo.textContent;\n  }\n', '');
+  current = current.replace('  const finishPartNo = $("#finishPartNo");\n  if (finishPartNo) {\n    finishPartNo.textContent = $("#reportPartNo")?.textContent || "";\n    finishPartNo.parentElement.hidden = !finishPartNo.textContent;\n  }\n', '');
+  current = current.replace('  return machtileStationReportSendFinal(code, args, { background: true, order, autoCloseEligible: !options.batch }).catch((error) => {',
+    '  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中", { note: machtileFirstStepOverrunText(flow, args) });\n  closeReport();\n  showToast("已送出，工廠寫入中");\n  return machtileStationReportSendFinal(code, args, { background: true, order }).catch((error) => {');
+  current = current.replace('  options = { ...options, autoCloseEligible: options.autoCloseEligible ?? Boolean(flow.singleReport && !flow.batchOrder) };\n', '');
+  current = current.replace('      machtileSingleStationReportAppliedUi(code, args, options, submittedOrder, total);', '      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");');
+  current = current.replace('      machtileSingleStationReportAppliedUi(code, resultArgs, options, submittedOrder, total);', '      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");');
+  current = current.replace('      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, args) });\n',
+    '      machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, args) });\n      if (options.background) showToast("工廠已完成寫入");\n');
+  current = current.replace('        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, resultArgs) });\n',
+    '        machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, resultArgs) });\n        showToast("工廠已完成寫入");\n');
+  {
+    const from = current.indexOf('function machtileSingleStationReportAppliedUi(');
+    const to = current.indexOf('async function machtileRecordSingleStationProductionReport(', from);
+    assert.ok(from >= 0 && to > from, "report applied UI helper appears exactly once");
+    current = current.slice(0, from) + current.slice(to);
+  }
   // 第 2 階段（已開工，enableSwitchStepStarted 預設關）先整段拿掉、掛點還原；它旗標關時每一個掛點都等於原字串
   // （Locks()＝false、Restore／HandleClick 直接 return／回 false、CardMarkup()＝""、ForgetUser 沒有東西可丟；下面第 2 階段的「flag off」測試逐一斷言）。
   const startedSection = norm(startedSource);
@@ -1653,13 +1674,13 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   const baseDeployed = JSON.parse(show("version.json")).version;
   const unversion = (text, version) => text.split(version).join("<VERSION>");
   assert.match(read("version.json").trim(), /^\{"version":"[^"]+","deploymentSequence":\d+\}$/);
-  const config = read("config.js");
+  const config = read("config.js").replace("  reportAutoCloseOnSuccess: true,\n", "");
   assert.match(config, /\n  enableSwitchStep: false,\n/);
   // 「上一道擋住」（2026-11-14，三個預設關的旗標＋說明、核心 script tag、看板空殼 section、.prev-step-* 樣式）也一併濾掉
   const prevStepLine = /enablePrevStep|hideLegacyReportForStationMachines|上一道擋住|A\/B 機台已開智慧報工|prev-step|prevStepNotifyCore\.js\?v=|id="prevStepBoard"/;
   assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|enableHmcPalletCard|hmcPalletCardMachines|B01\/B02 卡片六盤料號推算|換道次|enableReturnClaim 也要開才有效/.test(line) && !prevStepLine.test(line)).join("\n"), show("config.js"), "config.js: only independently guarded HMC and switch-step flags");
-  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=") && !line.includes("./reportTotalRefreshCore.js?v=") && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags and the version string");
-  const hmcStyles = read("styles.css").replace(/\.hmc-pallet-card \{[\s\S]*?\.hmc-pallet-row\.is-unmatched > b \{[^\n]+\}\n/, "");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=") && !line.includes("./reportTotalRefreshCore.js?v=") && !line.includes('id="reportPartNo"') && !line.includes('id="finishPartNo"') && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags, part-number rows, and the version string");
+  const hmcStyles = read("styles.css").replace(/\.hmc-pallet-card \{[\s\S]*?\.hmc-pallet-row\.is-unmatched > b \{[^\n]+\}\n/, "").split("\n").filter((line) => !/job-part-number|report-part-number|finish-part-number/.test(line)).join("\n");
   const filteredStyles = hmcStyles.split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line) && !prevStepLine.test(line)).join("\n");
   const baseStyles = show("styles.css");
   if (filteredStyles !== baseStyles) {
@@ -1668,7 +1689,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   }
   for (const file of ["i18n.js", "locales/zh-Hant.json", "locales/vi.json"]) {
     const removed = [], added = [];
-    const baseLines = show(file).split("\n"), nowLines = read(file).split("\n");
+    const baseLines = show(file).split("\n"), nowLines = read(file).split("\n").filter((line) => !/part_number|report_applied_success/.test(line));
     const baseSet = new Set(baseLines), nowSet = new Set(nowLines);
     baseLines.forEach((line) => { if (!nowSet.has(line)) removed.push(line); });
     nowLines.forEach((line) => { if (!baseSet.has(line)) added.push(line); });

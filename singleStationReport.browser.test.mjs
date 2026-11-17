@@ -197,6 +197,22 @@ await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.tex
 // Admin keeps the full smart-report detail (preview / hold confirm / reconcile) behind 技術細節.
 await page.evaluate(() => { machtileAuthState.role = "admin"; });
 await page.locator("[data-open-report]:visible").first().click();
+const partNumberCard = await page.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  const order = state.workOrders[0];
+  const host = document.createElement("div");
+  host.innerHTML = renderMachineCard({ ...machine, order });
+  return { text: host.querySelector(".job-part-number")?.textContent || "", partNo: order?.partNo || "" };
+});
+assert.equal(partNumberCard.partNo, "GQ7Q", "fixture part_no is already present in card order data");
+assert.match(partNumberCard.text, /GQ7Q/, "machine card renders the fixture part number");
+assert.equal(await page.locator("#reportPartNo").innerText(), "GQ7Q", "routine report header shows the part number");
+assert.equal(await page.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  const host = document.createElement("div");
+  host.innerHTML = renderMachineCard({ ...machine, order: { ...state.workOrders[0], partNo: "" } });
+  return host.querySelectorAll(".job-part-number").length;
+}), 0, "machine card hides the part-number line when part_no is empty");
 await page.locator('#reportForm [data-report-type="noon"]').click();
 assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
@@ -328,6 +344,19 @@ await page.evaluate(() => {
 });
 await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+await page.evaluate(() => { machtileStationReportState(machtileBatchRow("A04")).singleReport.overlayTotal = 960; });
+await page.evaluate(processId => {
+  window.__r3ImmediateCardProgress = [];
+  const refresh = machtileRefreshCardSections;
+  machtileRefreshCardSections = function () {
+    const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find(item => item.processId === processId);
+    const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+    const host = document.createElement("div");
+    host.innerHTML = renderMachineCard({ ...machine, order });
+    window.__r3ImmediateCardProgress.push(host.querySelector(".machine-metrics strong")?.textContent || "");
+    return refresh();
+  };
+}, processId);
 
 const confirm = page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
@@ -348,10 +377,12 @@ assert.equal(finalCommand.p_fail_qty, 2);
 assert.equal("p_previous_outsource_receipt_qty" in finalCommand, false, "flag off: final RPC body has no receipt keys");
 assert.equal("p_expected_doc4_fingerprint" in finalCommand, false, "flag off: final RPC body has no fingerprint key");
 assert.equal(calls.commands.some(command => "p_previous_outsource_receipt_qty" in command), false, "flag off: no RPC body carries receipt keys");
-assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "true", "confirmation closes the report sheet immediately");
-assert.match(await page.locator("#toast").innerText(), /已送出，工廠寫入中|工廠已完成寫入/, "background submission gives immediate or completed feedback");
+assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "false", "report sheet stays open while the Factory result is unknown");
 await page.evaluate(() => { selectedOrder = { id: "OTHER-WO", processId: "other-process", machine: "A01" }; });
 await page.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"));
+await page.waitForFunction(() => document.querySelector("#reportSheet")?.getAttribute("aria-hidden") === "true");
+assert.match(await page.locator("#toast").innerText(), /報工成功：良品 38 件、不良 2 件/, "applied report gives the quantity toast");
+assert.ok((await page.evaluate(() => window.__r3ImmediateCardProgress)).some(text => /960\/1000/.test(text)), "machine card progress updates immediately after success");
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
 assert.equal(calls.reports[0].process_id, processId, "switching machines during background submit still records the originally submitted order");
 assert.equal(calls.reports[0].completed_qty, 38);
@@ -418,6 +449,7 @@ assert.equal(finishOpenState.finishOpen, true, `finish card button opens indepen
 assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
 assert.equal(finishOpenState.activeReportType, "finish");
 assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
+assert.equal(await finishValidation.locator("#finishPartNo").innerText(), "GQ7Q", "finish header shows the part number");
 assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
 assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
@@ -970,6 +1002,7 @@ const oldBefore = calls.commands.length;
 await old.locator("#reportForm .submit-report").click();
 await old.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
 assert.match(await old.locator('[data-simple-report-status="warning"]').innerText(), /同一個料號已經有比較新的工單/);
+assert.equal(await old.locator("#reportSheet").getAttribute("aria-hidden"), "false", "ack-needed preview keeps the report sheet open");
 assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出");
 assert.equal(await old.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "old-order note field is shown");
 await old.locator("#reportForm .submit-report").click();
@@ -1042,6 +1075,7 @@ const blBefore = calls.commands.length;
 await bl.locator("#reportForm .submit-report").click();
 await bl.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
 assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0, "blocked preview never sends a final");
+assert.equal(await bl.locator("#reportSheet").getAttribute("aria-hidden"), "false", "refused preview keeps the report sheet open with its reason");
 // 958 on the machine, 920 already reported → 38 this time, only 30 left → the field may hold at most 950.
 const qtyMaxText = "這一道最多只能報 950 件（目前填 958 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。";
 assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText);

@@ -48,6 +48,7 @@ window.MACHTILE_CONFIG = {
   enableOutboxSubmit: false,
   // Default off: recover uncertain final reports by read-first, same-UUID idempotent resend.
   enableReportUncertainRecover: false,
+  reportAutoCloseOnSuccess: true,
   // 派工池接單：空陣列＝全部關；首波 pilot 可設 ["A01", "A03"]。
   dispatchPoolMachines: [],
   enableStandardFinishFlow: false,

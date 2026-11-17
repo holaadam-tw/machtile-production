@@ -25,6 +25,8 @@ const config = {
   enableOutboxSubmit: false,
   // Final smart-report uncertainty recovery. Default off: legacy blocking behavior is unchanged.
   enableReportUncertainRecover: false,
+  // Close a routine single-station report only after Factory confirms it was applied.
+  reportAutoCloseOnSuccess: true,
   // Owner 2026-10-29: simplified order detail sheet. Off keeps the legacy DOM unchanged.
   orderDetailSimplifyEnabled: false,
   cardCycleTimeWithoutStartEnabled: false,
@@ -10550,6 +10552,7 @@ function normalizeOrder(row) {
     tenantId: row.tenant_id || config.tenantId,
     customer: row.customer_name || row.customer_name_snapshot || "未指定客戶",
     part: row.part_name || "未命名零件",
+    partNo: row.part_no || "",
     drawing: row.drawing_no || row.part_no || "-",
     dueDate: row.due_date,
     process: row.current_process_name || "未指定製程",
@@ -18937,6 +18940,7 @@ function renderMachineCard(machine) {
         <span>${escapeHtml(machtileTranslate("current_work_order"))}</span>
         ${order ? `
           <strong class="job-order-highlight">${escapeHtml(order.id)} · ${escapeHtml(order.part)}</strong>${isOver ? machtileOverQtyTag(order) : ""}
+          ${order.partNo ? `<small class="job-part-number"><span>${escapeHtml(machtileTranslate("part_number"))}</span><strong>${escapeHtml(order.partNo)}</strong></small>` : ""}
           <small class="job-order-subline">${escapeHtml(order.customer)} · ${escapeHtml(machtileOperationLabel(order))}</small>
         ` : `
           <strong>${escapeHtml(machine.note || machtileTranslate("no_work_order"))}</strong>
@@ -25146,6 +25150,11 @@ function setSelectedOrder(order) {
   selectedOrder = order;
   $("#reportMachine").textContent = order.machine || UNASSIGNED_MACHINE;
   $("#reportPart").textContent = order.part;
+  const reportPartNo = $("#reportPartNo");
+  if (reportPartNo) {
+    reportPartNo.textContent = order.partNo || "";
+    reportPartNo.parentElement.hidden = !reportPartNo.textContent;
+  }
   $("#reportWorkNo").textContent = order.id;
   setReportDefaults(order);
 }
@@ -25223,6 +25232,11 @@ function openFinishReport(orderId, options = {}) {
   if (!$("#reportSheet")?.classList.contains("is-open") || activeReportType !== "finish") return;
   $("#finishMachine").textContent = $("#reportMachine")?.textContent || options.machine || "—";
   $("#finishPart").textContent = $("#reportPart")?.textContent || "—";
+  const finishPartNo = $("#finishPartNo");
+  if (finishPartNo) {
+    finishPartNo.textContent = $("#reportPartNo")?.textContent || "";
+    finishPartNo.parentElement.hidden = !finishPartNo.textContent;
+  }
   $("#finishWorkNo").textContent = $("#reportWorkNo")?.textContent || "—";
   $("#finishFormHost")?.append($("#reportForm"));
   $("#reportSheet").classList.remove("is-open");
@@ -27731,15 +27745,31 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
       reportCounterMeta: flow.singleReport?.reportCounterMeta ?? null }, crypto.randomUUID(), false,
     machtileBatchState.stationReportSettings.failReasonCodesByMachine[code] || []);
   } catch (error) { flow.error = error.message || "報工資料不完整。"; machtileRenderStationReportSurfaces(); return; }
-  machtileSetStationReportBackgroundStatus("已送出，工廠寫入中", { note: machtileFirstStepOverrunText(flow, args) });
-  closeReport();
-  showToast("已送出，工廠寫入中");
-  return machtileStationReportSendFinal(code, args, { background: true, order }).catch((error) => {
+  return machtileStationReportSendFinal(code, args, { background: true, order, autoCloseEligible: !options.batch }).catch((error) => {
     machtileSetStationReportBackgroundStatus(
       `工廠寫入結果未確認：${error?.message || error}。請勿重複報工並通知主管。`,
       { error: true },
     );
   });
+}
+
+function machtileSingleStationReportAppliedUi(code, args, options, submittedOrder, total) {
+  if (!options.autoCloseEligible) return;
+  if (Number.isFinite(Number(total))) {
+    machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
+    const sameOrder = (item) => item && ((submittedOrder?.processId && item.processId === submittedOrder.processId)
+      || (item.id === submittedOrder?.id && String(item.machine || code || "").toUpperCase() === String(code || "").toUpperCase()));
+    [submittedOrder, ...(state.workOrders || []), ...(state.assignedCardOrders || [])]
+      .filter(sameOrder).forEach((item) => { item.done = Number(total); });
+    machtileRefreshCardSections();
+  }
+  const good = Number(args?.p_good_qty || 0);
+  const fail = Number(args?.p_fail_qty || 0);
+  showToast(machtileTranslate(fail > 0 ? "report_applied_success_with_defect" : "report_applied_success", { good, fail }));
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const routineReport = flow.singleReport?.reportType === "noon";
+  const sameSheet = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase() === String(code || "").trim().toUpperCase();
+  if (config.reportAutoCloseOnSuccess !== false && routineReport && sameSheet) closeReport();
 }
 
 async function machtileRecordSingleStationProductionReport(code, args, submittedOrder = null) {
@@ -27793,7 +27823,7 @@ async function machtileStationReportFinalizeApplied(code, args, options = {}) {
       await machtileFinishCloseAfterAppliedReport(code, args, commandUuid);
       const submittedOrder = options.order || machtileStationReportOrderForCode(code);
       const total = flow.singleReport?.overlayTotal;
-      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
+      machtileSingleStationReportAppliedUi(code, args, options, submittedOrder, total);
       machtileRefreshCardAfterReportApplied(commandUuid);
     } catch (error) {
       failed = true;
@@ -27804,7 +27834,6 @@ async function machtileStationReportFinalizeApplied(code, args, options = {}) {
     }
     if (!failed) {
       machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, args) });
-      if (options.background) showToast("工廠已完成寫入");
     } else {
       machtileSetStationReportBackgroundStatus(flow.error, { error: true });
     }
@@ -27817,6 +27846,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
+  options = { ...options, autoCloseEligible: options.autoCloseEligible ?? Boolean(flow.singleReport && !flow.batchOrder) };
   flow.args = args;
   flow.phase = "submitting-report";
   flow.error = "";
@@ -27858,14 +27888,13 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
     if (applied) {
       const submittedOrder = options.order || machtileStationReportOrderForCode(code);
       const total = flow.singleReport?.overlayTotal;
-      if (Number.isFinite(Number(total))) machtileCardQtyOverlayRecord(submittedOrder, code, Number(total), "applied");
+      machtileSingleStationReportAppliedUi(code, resultArgs, options, submittedOrder, total);
       machtileRefreshCardAfterReportApplied(resultArgs.p_command_uuid);
     }
     if (options.background) {
       const background = document.getElementById("stationReportBackgroundStatus");
       if (applied && !followUpFailed) {
         machtileSetStationReportBackgroundStatus("工廠已完成寫入", { autoHideMs: 5000, note: machtileFirstStepOverrunText(flow, resultArgs) });
-        showToast("工廠已完成寫入");
       } else if (background) {
         machtileSetStationReportBackgroundStatus(
           flow.error || "工廠寫入失敗，請勿重複報工並通知主管。",
