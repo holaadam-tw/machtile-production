@@ -14,7 +14,8 @@ const { chromium } = mod.default || mod;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 const b01Map = {
   1: [{ partNos: ["SF-03-01"], label: "SF-03本體" }, { partNos: ["BG-03-01"], label: "BG-03本體" }, { partNos: ["EMPTY"], label: "空工件" }],
-  3: [{ partNos: ["DSHG-04-01"], label: "DSHG-04中座體(小流量)" }],
+  2: [{ partNos: ["CPDG-06-01"], label: "CPDG-06" }],
+  3: [{ partNos: ["DSHG-04-01"], label: "DSHG-04中座體(小流量)" }, { partNos: ["DSHG-04-02"], label: "DSHG-04" }],
   4: [{ partNos: ["HG-06-01"], label: "HG-06", default: true }],
 };
 function fixtureApp(source) {
@@ -29,6 +30,10 @@ function fixtureApp(source) {
   { id:"XX01202610140006", processId:"fixture-dshg", part:"DSHG-04中座體(小流量)", drawing:"DSHG-04-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:2, total:3 },
   { id:"BG-FULL", processId:"fixture-bg-full", part:"BG-03本體", drawing:"BG-03-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:10, total:10 },
   { id:"BG-OVER", processId:"fixture-bg-over", part:"BG-03本體", drawing:"BG-03-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:12, total:10 },
+  { id:"ROUND-87-159", processId:"fixture-round-87", part:"CPDG-06", drawing:"CPDG-06-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:87, total:159 },
+  { id:"ROUND-95-140", processId:"fixture-round-95", part:"DSHG-04", drawing:"DSHG-04-02", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:95, total:140 },
+  { id:"OVER-11-1", processId:"fixture-over-11", part:"未對應工件", drawing:"UNKNOWN-OVER-1", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:11, total:1 },
+  { id:"OVER-377-372", processId:"fixture-over-377", part:"未對應工件", drawing:"UNKNOWN-OVER-2", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:377, total:372 },
   { id:"XX-OTHER", processId:"fixture-other", part:"未對應工件", drawing:"UNKNOWN-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:1, total:9 }
 ];
 
@@ -102,13 +107,23 @@ try {
     assert.equal(await card.locator("[data-hmc-strip-panel]").count(), 0, "same chip collapses");
     await card.locator('[data-hmc-strip-chip="4"]').click();
     assert.match(await card.locator('[data-hmc-strip-panel="4"]').textContent(), /HG-06.*121\/215（56%）/s);
-    assert.match(await card.locator('[data-hmc-strip-chip="unmatched"]').textContent(), /其他 1/);
+    assert.match(await card.locator('[data-hmc-strip-chip="unmatched"]').textContent(), /其他 3/);
+    assert.ok((await card.locator('[data-hmc-strip-chip="unmatched"]').getAttribute("class")).includes("is-over"), "other chip gets the over-quantity red-border state");
+    assert.equal(await card.locator('[data-hmc-strip-chip="unmatched"] em').textContent(), "!", "other chip exposes the over-quantity mark");
     await card.locator('[data-hmc-strip-chip="3"]').click();
     assert.match(await card.locator('[data-hmc-strip-panel="3"]').textContent(), /DSHG-04中座體\(小流量\).*2\/3（67%）/s, "level one normally rounds 2/3 to 67%");
     await card.locator('[data-hmc-workpiece="3:3-1"]').click();
     assert.match(await card.locator('[data-hmc-workpiece-detail="3:3-1"]').textContent(), /2\/3（67%）/s, "level two normally rounds 2/3 to 67%");
+    await card.locator('[data-hmc-strip-chip="2"]').click();
+    assert.match(await card.locator('[data-hmc-strip-panel="2"]').textContent(), /87\/159（55%）/s, "87/159 is 55% at level one");
+    await card.locator('[data-hmc-workpiece="2:2-1"]').click();
+    assert.match(await card.locator('[data-hmc-workpiece-detail="2:2-1"]').textContent(), /87\/159（55%）/s, "87/159 is 55% at level two");
+    await card.locator('[data-hmc-strip-chip="3"]').click();
+    assert.match(await card.locator('[data-hmc-strip-panel="3"]').textContent(), /95\/140（68%）/s, "95/140 is 68% at level one");
+    await card.locator('[data-hmc-workpiece="3:3-2"]').click();
+    assert.match(await card.locator('[data-hmc-workpiece-detail="3:3-2"]').textContent(), /95\/140（68%）/s, "95/140 is 68% at level two");
     await card.locator('[data-hmc-strip-chip="unmatched"]').click();
-    await card.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').click();
+    await card.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').first().click();
     const rerendered = opened.page.locator('[data-hmc-pallet-strip="B01"]');
     await rerendered.locator('.card-orders-manual').waitFor();
     assert.equal(await rerendered.locator('.card-order-auto[data-card-pick="B01"][data-card-pick-key=""]').count(), 1, "manual marker and restore-auto action stay in strip header");
@@ -142,15 +157,37 @@ try {
   const vietnamese = await open(false, { card: true, strip: true, rpc, fixture: true, language: "vi" });
   const vietnameseCard = vietnamese.page.locator('[data-hmc-pallet-strip="B01"]');
   await vietnameseCard.locator('[data-hmc-strip-chip="unmatched"]').click();
-  await vietnameseCard.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').click();
+  await vietnameseCard.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').first().click();
   await vietnameseCard.locator('.card-orders-manual').waitFor();
   assert.equal((await vietnameseCard.locator('.card-orders-manual').textContent()).trim(), "Đang chuyển thủ công");
   assert.equal((await vietnameseCard.locator('.card-order-auto').textContent()).trim(), "Khôi phục tự động");
   await vietnamese.context.close();
 
-  const b02Empty = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: { ok: true, pallets: [] }, fixture: true });
-  await b02Empty.page.waitForTimeout(150);
-  assert.equal(await b02Empty.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "unmapped machine still requires non-empty RPC state for strip");
-  await b02Empty.context.close();
+  const fallbackCases = [
+    { name: "production-empty-parts", rpc: { ok: true, machine_code: "B02", pallets: [1, 2, 3, 4, 5, 6].map((pallet_no) => ({ items: [], parts: [], pallet_no })) } },
+    { name: "parts-without-current-order", rpc: { ok: true, machine_code: "B02", pallets: [{ pallet_no: 1, parts: ["NOT-A-CURRENT-ORDER"] }] } },
+  ];
+  for (const fallbackCase of fallbackCases) {
+    const oldList = await open(false, { card: false, strip: false, mapped: false, machineCode: "B02", rpc: fallbackCase.rpc, fixture: true });
+    const fallback = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: fallbackCase.rpc, fixture: true });
+    await fallback.page.waitForTimeout(150);
+    assert.equal(await fallback.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, `${fallbackCase.name}: no inferred strip`);
+    const oldCardHtml = await oldList.page.locator('[data-card-orders="B02"]').locator("xpath=ancestor::article").evaluate((node) => node.outerHTML);
+    const fallbackHtml = await fallback.page.locator('[data-card-orders="B02"]').locator("xpath=ancestor::article").evaluate((node) => node.outerHTML);
+    assert.equal(fallbackHtml, oldCardHtml, `${fallbackCase.name}: card HTML is exactly the old list`);
+    if (fallbackCase.name === "production-empty-parts") {
+      for (const viewport of [{ width: 360, height: 800 }, { width: 1280, height: 800 }]) {
+        await fallback.page.setViewportSize(viewport);
+        await fallback.page.locator('[data-card-orders="B02"]').locator("xpath=ancestor::article").screenshot({ path: path.join(outDir, `B02-fallback-${viewport.width}x${viewport.height}.png`) });
+      }
+    }
+    await oldList.context.close(); await fallback.context.close();
+  }
+
+  for (const viewport of [{ width: 360, height: 800 }, { width: 1280, height: 800 }]) {
+    const matching = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: b02Rpc, fixture: true, viewport });
+    await matching.page.locator('[data-hmc-pallet-strip="B02"]').screenshot({ path: path.join(outDir, `B02-inferred-${viewport.width}x${viewport.height}.png`) });
+    await matching.context.close();
+  }
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
 console.log("PASS: HMC pallet-card and pallet-strip browser assertions");

@@ -90,3 +90,28 @@ test("over-quantity order takes precedence over an earlier exactly-full order", 
   assert.equal(workpiece.statusOrder.id, "OVER");
   assert.equal(workpiece.statusOrder.done - workpiece.statusOrder.total, 2);
 });
+
+test("inferred strip requires at least one current order placed on an RPC pallet", () => {
+  const orders = [entry("CURRENT", "SF-03-01")];
+  const productionEmpty = [1, 2, 3, 4, 5, 6].map((palletNo) => pallet(palletNo));
+  assert.equal(inferredStripModel(orders, productionEmpty, null).pallets.some((item) => item.hasOrder), false);
+  assert.equal(inferredStripModel(orders, [pallet(1, "NOT-A-CURRENT-ORDER")], null).pallets.some((item) => item.hasOrder), false);
+  assert.equal(inferredStripModel(orders, [pallet(1, "SF-03-01")], null).pallets.some((item) => item.hasOrder), true);
+});
+
+test("unmatched group reports over-quantity when any hidden order is over", () => {
+  const result = configuredStripModel([
+    entry("OVER-11-1", "UNKNOWN-A", { done: 11, total: 1 }),
+    entry("OVER-377-372", "UNKNOWN-B", { done: 377, total: 372 }),
+  ], map, null);
+  assert.equal(result.hasUnmatched, true);
+  assert.equal(result.unmatchedIsOver, true);
+});
+
+test("specified partial quantities round consistently", () => {
+  const cases = [[87, 159, 55], [95, 140, 68]];
+  for (const [done, total, expected] of cases) {
+    const workpiece = configuredStripModel([entry(`${done}-${total}`, "SF-03-01", { done, total })], map, null).pallets[0].workpieces[0];
+    assert.equal(workpiece.percent, expected);
+  }
+});

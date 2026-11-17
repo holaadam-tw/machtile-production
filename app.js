@@ -11894,7 +11894,9 @@ function machtileHmcPalletStripReady(machine) {
   const code = String(machine.code || machine.name);
   if (config.hmcPalletMap?.[code]) return true;
   const cached = machtileHmcPalletCardState.get(code);
-  return (cached?.status === "ready" || cached?.status === "loading") && Array.isArray(cached.states) && cached.states.length > 0;
+  if ((cached?.status !== "ready" && cached?.status !== "loading") || !Array.isArray(cached.states) || !cached.states.length) return false;
+  const model = machtileHmcPalletCardCore.inferredStripModel(machine.cardOrders || [], cached.states, machine.order);
+  return model.pallets.some((pallet) => pallet.hasOrder);
 }
 
 function machtileHmcPalletStripMarkup(machine) {
@@ -11914,7 +11916,7 @@ function machtileHmcPalletStripMarkup(machine) {
     return `<button type="button" class="hmc-pallet-chip ${classes}" data-hmc-strip-chip="${key}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === key}"><b>${pallet.palletNo}</b><span>${escapeHtml(pallet.hasOrder ? machtileTranslate("hmc_pallet_strip_has_order") : machtileTranslate("hmc_pallet_strip_empty"))}</span>${pallet.inferred ? `<i aria-label="${escapeHtml(machtileTranslate("hmc_pallet_strip_inferred"))}">${escapeHtml(machtileTranslate("hmc_pallet_inferred"))}</i>` : ""}${pallet.isOver ? `<em>!</em>` : ""}</button>`;
   }).join("");
   const unmatchedKey = "unmatched";
-  const unmatchedChip = model.hasUnmatched ? `<button type="button" class="hmc-pallet-chip is-unmatched${openKey === unmatchedKey ? " is-open" : ""}" data-hmc-strip-chip="${unmatchedKey}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === unmatchedKey}"><b>${escapeHtml(machtileTranslate("hmc_pallet_strip_other", { count: model.unmatched.length }))}</b></button>` : "";
+  const unmatchedChip = model.hasUnmatched ? `<button type="button" class="hmc-pallet-chip is-unmatched${model.unmatchedIsOver ? " is-over" : ""}${openKey === unmatchedKey ? " is-open" : ""}" data-hmc-strip-chip="${unmatchedKey}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === unmatchedKey}"><b>${escapeHtml(machtileTranslate("hmc_pallet_strip_other", { count: model.unmatched.length }))}</b>${model.unmatchedIsOver ? `<em>!</em>` : ""}</button>` : "";
   const selectedPallet = model.pallets.find((pallet) => String(pallet.palletNo) === openKey);
   const panelContent = openKey === unmatchedKey
     ? model.unmatched.map((entry) => machtileHmcPalletStripOrderMarkup(entry, machine)).join("")

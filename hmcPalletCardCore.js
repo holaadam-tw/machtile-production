@@ -99,7 +99,11 @@
       return { ...pallet, workpieces, hasOrder: workpieces.some((workpiece) => workpiece.orderCount > 0),
         isActive: workpieces.some((workpiece) => workpiece.isActive), isOver: workpieces.some((workpiece) => workpiece.isOver), inferred };
     });
-    return { pallets: decorated, unmatched, hasUnmatched: unmatched.length > 0,
+    const unmatchedIsOver = unmatched.some((entry) => {
+      const order = orderOf(entry);
+      return Number(order.total) > 0 && Number(order.done) > Number(order.total);
+    });
+    return { pallets: decorated, unmatched, hasUnmatched: unmatched.length > 0, unmatchedIsOver,
       defaultOpen: String(decorated.find((pallet) => pallet.isActive)?.palletNo || "") };
   }
 
