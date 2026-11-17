@@ -424,7 +424,7 @@ const realErrors = (errors) => errors.filter((e) => !e.includes("CATALOG_ENDPOIN
 // 卡片裡的報工／完整單連結會帶頁面網址（對照組在 /__baseline/ 底下）→ 比較前把那段拿掉
 const gridHtml = (page) => page.evaluate(() => {
   const grid = document.getElementById("workOrderGrid").cloneNode(true);
-  grid.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove());
+  grid.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail], .job-part-number").forEach((el) => el.remove());
   return grid.innerHTML.replace(/\s+/g, " ").split("/__baseline/").join("/");
 });
 const firstDiff = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return `@${i}: …${a.slice(Math.max(0, i - 80), i + 80)}… vs …${b.slice(Math.max(0, i - 80), i + 80)}…`; };
@@ -526,7 +526,7 @@ for (const vp of ["desktop", "tablet", "phone"]) {
       const bBe = makeBackend();
       const b = await newPage(browser, vp, { backend: bBe, baseline: true, configExtra: 'stationCommandMachines: ["A04"],' });
       const rawCards = (pg) => pg.evaluate(() => [...document.querySelectorAll("#workOrderGrid .machine-tile-card")]
-        .map((c) => { const clone = c.cloneNode(true); clone.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail]").forEach((el) => el.remove()); return { name: c.querySelector("h2")?.textContent.trim() || "", html: clone.outerHTML.split("/__baseline/").join("/") }; }));
+        .map((c) => { const clone = c.cloneNode(true); clone.querySelectorAll(".program-strip, .machine-program-details, .machine-tile-actions, .machine-open-link[data-hmc-machine-detail], .job-part-number").forEach((el) => el.remove()); return { name: c.querySelector("h2")?.textContent.trim() || "", html: clone.outerHTML.split("/__baseline/").join("/").replace(/>\s+</g, "><") }; }));
       const mine = await rawCards(page);
       const theirs = await rawCards(b.page);
       const others = mine.filter((c) => !c.name.startsWith("A04"));
@@ -1894,17 +1894,32 @@ console.log("\n== 390px：連打三位數只局部更新，input identity 與完
 {
   const be = makeBackend({ dailyStartDone: false });
   be.procExtra["XX01202502050012"] = { qty_completed: 0 };
-  be.progressRows = [{ process_id: id(304), legacy_output: 140, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+  be.progressRows = [{ process_id: id(304), legacy_output: 0, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
   const { context, page } = await newPage(browser, "phone", { backend: be, configExtra: 'stationCommandMachines: ["A04"], startBackfillEnabled: true,' });
   await cardOf(page, "A04").locator('[data-station-cmd="start"]').click();
   await dailyField(page).waitFor();
   // 讀取完成時整張確認卡會重畫一次（main 既有行為）；這裡要驗的是「打字中」不重建 input
   await page.waitForFunction(() => { const b = document.querySelector("#machtileStationCmdSheet [data-station-cmd-confirm]"); return b && !b.disabled; });
   await page.evaluate(() => { window.__dailyInputIdentity = document.querySelector("[data-station-cmd-daily-qty]"); });
-  await dailyField(page).pressSequentially("159");
+  await dailyField(page).pressSequentially("327");
   ok(await page.evaluate(() => window.__dailyInputIdentity === document.querySelector("[data-station-cmd-daily-qty]")), "連打三位數後 input 元素 identity 不變");
   const typed = await dailyField(page).inputValue();
-  ok(typed === "159", "連打三位數後值完整保留為 159", typed);
+  ok(typed === "327", "three sequential keystrokes preserve value 327", typed);
+  ok(await dailyField(page).evaluate((el) => document.activeElement === el), "focus remains in the quantity input after typing 327");
+  ok((await sheet(page).locator("[data-station-cmd-start-gap]").innerText()).includes("327"), "backfill hint contains 327");
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).includes("327"), "backfill button contains 327");
+  await dailyField(page).press("End");
+  await dailyField(page).press("Backspace");
+  ok(await dailyField(page).inputValue() === "32", "backspace changes value to 32", await dailyField(page).inputValue());
+  ok((await sheet(page).locator("[data-station-cmd-start-gap]").innerText()).includes("32"), "backfill hint contains 32 after backspace");
+  ok((await sheet(page).locator("[data-station-cmd-confirm]").innerText()).includes("32"), "backfill button contains 32 after backspace");
+  await sheet(page).locator("[data-station-cmd-backfill-edit]").click();
+  ok(await dailyField(page).evaluate((el) => document.activeElement === el), "edit button returns focus to the quantity input");
+  await dailyField(page).fill("");
+  await dailyField(page).pressSequentially("0");
+  ok(await dailyField(page).inputValue() === "0", "clear then type 0 preserves value 0", await dailyField(page).inputValue());
+  ok(await sheet(page).locator("[data-station-cmd-start-gap]").count() === 0 && await sheet(page).locator("[data-station-cmd-backfill-edit]").count() === 0,
+    "backfill block disappears when input equals reported 0");
   await context.close();
 }
 

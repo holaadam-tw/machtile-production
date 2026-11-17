@@ -8,6 +8,9 @@
 
   const dictionaries = {
     "zh-Hant": {
+      part_number: "料號",
+      report_applied_success: "報工成功：良品 {{good}} 件",
+      report_applied_success_with_defect: "報工成功：良品 {{good}} 件、不良 {{fail}} 件",
       app_update_available: "有新版本",
       app_update_button: "更新",
       outsource_receipt_question: "上一道〈{{step}}〉委外還沒收貨，回來幾件？",
@@ -648,6 +651,9 @@
       switch_step_move_why_preview_timeout: "工廠太久沒有算出會怎麼搬。",
     },
     vi: {
+      part_number: "Mã linh kiện",
+      report_applied_success: "Báo công thành công: {{good}} hàng tốt",
+      report_applied_success_with_defect: "Báo công thành công: {{good}} hàng tốt, {{fail}} hàng lỗi",
       app_update_available: "Có phiên bản mới",
       app_update_button: "Cập nhật",
       outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",

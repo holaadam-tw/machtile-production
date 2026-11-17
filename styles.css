@@ -11319,6 +11319,11 @@ body.report-work-route-mode .machtile-route-brand-bar {
 .machine-job-strip strong.job-order-highlight { font-size: 18px; }
 .machine-job-strip small,
 .machine-job-strip small.job-order-subline { font-size: 13px; }
+.machine-job-strip .job-part-number { display: flex; align-items: baseline; gap: 6px; }
+.machine-job-strip .job-part-number strong { font-family: var(--font-mono, ui-monospace, monospace); font-size: 15px; }
+.report-part-number, .finish-part-number { display: flex; align-items: baseline; gap: 6px; }
+.report-part-number[hidden], .finish-part-number[hidden] { display: none; }
+.report-part-number code, .finish-part-number code { color: var(--text); font-weight: 800; }
 .program-strip { border-color: var(--border); background: var(--surface-soft); }
 .program-strip strong { font-size: 14px; }
 .machine-metrics > div { border: 1px solid var(--border); background: var(--surface-soft); }
