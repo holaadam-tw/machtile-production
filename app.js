@@ -8439,9 +8439,13 @@ function reportCounterCalculation() {
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
 }
 
-async function machtileRefreshReportTotalState(order = selectedOrder) {
+async function machtileRefreshReportTotalState(order = selectedOrder, options = {}) {
   const processId = String(order?.processId || "");
   reportTotalState = { status: "loading", reported: null, failReported: null, start: null, processId };
+  if (activeReportType === "finish") {
+    finishReportedState = { status: "loading", quantity: null, processId };
+    machtileRenderFinishReportedState();
+  }
   updateReportCounterPreview();
   try {
     const [totals, rows] = await window.MachTileReportTotalRefreshCore.retryRefresh(() => Promise.all([
@@ -8456,7 +8460,7 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     reportTotalState = { status: "ready", reported: Number(totals.goodDone), failReported: machtileReportedFailOrNull(totals), start: start?.qty ?? null, processId };
     finishReportedState = { status: "ready", quantity: Number(totals.goodDone), processId };
     const completedInput = $("#completedQty");
-    if (activeReportType === "finish" && completedInput && completedInput.value === "") {
+    if (options.prefill === true && activeReportType === "finish" && completedInput && completedInput.value === "") {
       completedInput.value = String(machtileReportedCounterBaseline(totals));
       machtileRenderShortCompletion(order);
     }
@@ -8465,7 +8469,13 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     return reportTotalState;
   } catch (error) {
     console.warn("report total verification unavailable", error);
-    if (String(selectedOrder?.processId || "") === processId) reportTotalState = { status: "error", reported: null, failReported: null, start: null, processId };
+    if (String(selectedOrder?.processId || "") === processId) {
+      reportTotalState = { status: "error", reported: null, failReported: null, start: null, processId };
+      if (activeReportType === "finish") {
+        finishReportedState = { status: "error", quantity: null, processId };
+        machtileRenderFinishReportedState();
+      }
+    }
     updateReportCounterPreview();
     return null;
   }
@@ -15249,7 +15259,7 @@ function machtileStandardFinishSetClaimResult(code, view, record = null) {
   machtileRenderStationReportSurfaces();
   if (view?.phase === "applied") {
     const step = flow.close.nextStep?.nextIndexSn ?? flow.close.claim?.indexSn ?? "—";
-    showToast(`接單成功：第 ${step} 道`);
+    showToast(machtileTranslate("standard_finish_claim_step_success", { step }));
     const ownsSheet = Boolean(record?.standardFinishClaimSheetToken)
       && record.standardFinishClaimSheetToken === machtileReportSheetOpenToken
       && machtileFinishSheetOpenFor(code);
@@ -16588,6 +16598,7 @@ function machtileStationCmdFinish(code, view) {
   if (view.phase === "applied" && refreshOccupation) {
     void machtileRefreshAfterApplied(code, record.commandType);
   }
+  if (view.phase === "applied" && record.commandType === "claim_next" && record.standardFinishClaim) return;
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
@@ -25294,6 +25305,13 @@ function openReport(orderId, options = {}) {
     showToast("這張工單尚未指派機台，不能開啟報工入口");
     return;
   }
+  const reportMachine = order?.machine || machineName;
+  machtileStationCmdSyncReportTabs(reportMachine);
+  const requestedType = options.reportType || "workStart";
+  const availableType = machtileStationCmdCore
+    ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
+    : requestedType;
+  activeReportType = reportTypeMeta[availableType] ? availableType : "workStart";
   if (order) {
     setSelectedOrder(order);
   } else if (machineName) {
@@ -25302,14 +25320,8 @@ function openReport(orderId, options = {}) {
     $("#reportPart").textContent = "尚未指派工單";
     $("#reportWorkNo").textContent = "待指派";
   }
-  const reportMachine = order?.machine || machineName;
-  machtileStationCmdSyncReportTabs(reportMachine);
-  const requestedType = options.reportType || "workStart";
-  const availableType = machtileStationCmdCore
-    ? machtileStationCmdCore.reportTypeForMachine(requestedType, machtileStationCmdFlag(), reportMachine)
-    : requestedType;
   setReportType(availableType);
-  if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(availableType)) void machtileRefreshReportTotalState(order);
+  if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(availableType)) void machtileRefreshReportTotalState(order, { prefill: true });
   if (availableType === "finish" && config.reportTotalSemanticsEnabled !== true) void machtileLoadFinishReportedQty(order);
   updateReportCounterPreview();
   if (!order) setReportDefaults(null);
@@ -25330,6 +25342,9 @@ function machtileRestoreReportForm() {
 }
 
 function openFinishReport(orderId, options = {}) {
+  const machineCode = String(options.machine || "").trim().toUpperCase();
+  const flow = machineCode ? machtileStationReportState(machtileBatchRow(machineCode)) : null;
+  if (flow?.close?.phase === "applied" && !["pending", "error"].includes(flow.close?.claim?.phase)) flow.close = null;
   openReport(orderId, { ...options, reportType: "finish" });
   if (!$("#reportSheet")?.classList.contains("is-open") || activeReportType !== "finish") return;
   $("#finishMachine").textContent = $("#reportMachine")?.textContent || options.machine || "—";
@@ -26813,13 +26828,13 @@ function machtileRenderSingleStationReportBase() {
     const processNo = flow.close.identity?.indexSn ?? order.stationStep ?? "—";
     const cumulative = flow.singleReport?.overlayTotal ?? order.done ?? "—";
     const nextLine = claimable
-      ? `<p class="finish-success-next">下一道：第 ${escapeHtml(next.nextIndexSn ?? "—")} 道 ${escapeHtml(next.nextName || "—")}，可做 ${escapeHtml(next.availableQty ?? "—")} 件</p>` : "";
+      ? `<p class="finish-success-next">${escapeHtml(machtileTranslate("finish_success_next", { step: next.nextIndexSn ?? "—", name: next.nextName || "—", quantity: next.availableQty ?? "—" }))}</p>` : "";
     const claimBusy = flow.close.claim?.phase === "pending";
     const claimStatus = flow.close.claim
       ? `<p class="standard-finish-claim-status" role="${flow.close.claim.phase === "error" ? "alert" : "status"}">${escapeHtml(flow.close.claim.message)}</p>` : "";
     holder.hidden = false;
     holder.innerHTML = `<section class="finish-success-panel" data-standard-finish-case="${escapeHtml(next?.case || "none")}" role="status">
-      <h3>✅ 完工成功</h3><p>第 ${escapeHtml(processNo)} 道 ${escapeHtml(order.process || "—")} / 本道累計 ${escapeHtml(cumulative)} 件</p>
+      <h3>${escapeHtml(machtileTranslate("finish_success_title"))}</h3><p>${escapeHtml(machtileTranslate("finish_success_detail", { step: processNo, process: order.process || "—", quantity: cumulative }))}</p>
       ${nextLine}${claimStatus}<div class="station-report-actions">
       ${claimable ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claim_pending") : machtileTranslate("standard_finish_claim"))}</button>` : ""}
       <button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claim_pending") : machtileTranslate("standard_finish_other_order"))}</button>
@@ -30113,6 +30128,10 @@ function bindEvents() {
       return;
     }
     if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }
+    if (config.reportTotalSemanticsEnabled === true && activeReportType === "finish" && $("#completedQty")?.value.trim() === "") {
+      machtileShowReportSubmitError("請輸入機台顯示總數。");
+      return;
+    }
     if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(activeReportType)) {
       const fresh = await machtileRefreshReportTotalState(selectedOrder);
       if (!fresh) {

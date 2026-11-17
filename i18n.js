@@ -238,6 +238,10 @@
       standard_finish_claiming: "正在請工廠派到這台…",
       standard_finish_claim_pending: "接單中…",
       standard_finish_claim_success: "接單成功，可以直接開工。",
+      standard_finish_claim_step_success: "接單成功：第 {{step}} 道",
+      finish_success_title: "✅ 完工成功",
+      finish_success_detail: "第 {{step}} 道 {{process}} / 本道累計 {{quantity}} 件",
+      finish_success_next: "下一道：第 {{step}} 道 {{name}}，可做 {{quantity}} 件",
       standard_finish_combo_title: "接下一道並開工",
       standard_finish_combo_question: "第 {{done}} 道已完工。要接第 {{next}} 道（共 {{total}} 道，可做 {{available}} 件）並馬上開工嗎？",
       standard_finish_combo_claim_start: "接並開工",
@@ -899,6 +903,10 @@
       standard_finish_claiming: "Đang yêu cầu nhà máy giao cho máy này…",
       standard_finish_claim_pending: "Đang nhận việc…", // _draft
       standard_finish_claim_success: "Đã nhận việc; có thể bắt đầu ngay.",
+      standard_finish_claim_step_success: "Đã nhận công đoạn {{step}} thành công.", // _draft
+      finish_success_title: "✅ Hoàn tất thành công", // _draft
+      finish_success_detail: "Công đoạn {{step}} {{process}} / Tổng công đoạn này {{quantity}} sản phẩm", // _draft
+      finish_success_next: "Công đoạn tiếp theo: công đoạn {{step}} {{name}}, có thể làm {{quantity}} sản phẩm", // _draft
       standard_finish_combo_title: "Nhận công đoạn kế tiếp và bắt đầu",
       standard_finish_combo_question: "Công đoạn {{done}} đã hoàn tất. Nhận công đoạn {{next}} (tổng {{total}} công đoạn, có thể làm {{available}} sản phẩm) và bắt đầu ngay?",
       standard_finish_combo_claim_start: "Nhận và bắt đầu",
