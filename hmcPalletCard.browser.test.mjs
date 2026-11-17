@@ -8,7 +8,13 @@ import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = process.env.MACHTILE_E2E_OUT_DIR || path.join(root, ".e2e-out");
 await mkdir(outDir, { recursive: true });
-const baseFiles = new Map(["index.html", "app.js", "i18n.js", "styles.css"].map((file) => [file, childProcess.execFileSync("git", ["show", `86231d0:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));
+let baselineRef;
+try { baselineRef = childProcess.execFileSync("git", ["rev-parse", "--verify", "origin/main^{commit}"], { cwd: root, encoding: "utf8" }).trim(); }
+catch {
+  baselineRef = process.env.MACHTILE_FLAG_OFF_BASE;
+  if (!baselineRef) throw new Error("origin/main is unavailable; set MACHTILE_FLAG_OFF_BASE to the flag-off baseline commit");
+}
+const baseFiles = new Map(["index.html", "app.js", "i18n.js", "styles.css"].map((file) => [file, childProcess.execFileSync("git", ["show", `${baselineRef}:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));
 const mod = await import(pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE || "D:/04_SoftNet/temp-playwright-deps-20261008/node_modules/playwright/index.mjs").href);
 const { chromium } = mod.default || mod;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
@@ -78,7 +84,7 @@ const rpc = { ok: true, machine_code: "B01", pallets: [1, 2, 3, 4, 5, 6].map((pa
 try {
   for (const flags of [{ card: false, strip: false, rpc: null }, { card: true, strip: false, rpc: { ok: true, pallets: [] } }]) {
     const baseline = await open(true, flags), flagOff = await open(false, flags);
-    assert.equal(await dom(flagOff.page), await dom(baseline.page), "flag-off/old-flag DOM stays byte-identical to main 86231d0");
+    assert.equal(await dom(flagOff.page), await dom(baseline.page), `flag-off/old-flag DOM stays byte-identical to main ${baselineRef}`);
     assert.equal(await flagOff.page.locator("[data-hmc-pallet-strip]").count(), 0);
     assert.deepEqual(flagOff.errors, []);
     await baseline.context.close(); await flagOff.context.close();
@@ -140,12 +146,12 @@ try {
   assert.equal(failed.rpcCalls(), 0, "mapped machine does not call pallet RPC");
   await failed.context.close();
 
-  const b02Rpc = { ok: true, machine_code: "B02", pallets: [{ pallet_no: 1, parts: ["SF-03-01"] }, ...[2, 3, 4, 5, 6].map((pallet_no) => ({ pallet_no, parts: [] }))] };
+  const b02Rpc = { ok: true, machine_code: "B02", pallets: [{ pallet_no: 1, parts: ["SF-03-01", "BG-03-01"] }, ...[2, 3, 4, 5, 6].map((pallet_no) => ({ pallet_no, parts: [] }))] };
   const inferred = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: b02Rpc, fixture: true });
   const inferredCard = inferred.page.locator('[data-hmc-pallet-strip="B02"]');
   await inferredCard.waitFor();
-  assert.match(await inferredCard.locator('[data-hmc-strip-chip="1"] i').textContent(), /推算/);
-  assert.ok(await inferredCard.locator('[data-hmc-strip-chip="1"] i').evaluate((node) => parseFloat(getComputedStyle(node).fontSize) >= 11), "inferred badge is at least 11px");
+  assert.match(await inferredCard.locator('.hmc-pallet-strip-inferred').textContent(), /推算/);
+  assert.equal(await inferredCard.locator('.hmc-pallet-chip i').count(), 0, "inferred mark appears once in the header, never on a chip");
   await inferredCard.locator('[data-hmc-workpiece="1:SF-03-01"]').click();
   const before = await inferredCard.evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
   await inferred.page.evaluate(() => { const now = Date.now(); Date.now = () => now + 31000; renderWorkOrders(); });
@@ -153,6 +159,39 @@ try {
   const during = await inferred.page.locator('[data-hmc-pallet-strip="B02"]').last().evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
   assert.deepEqual(during, before, "31-second reload keeps strip, open pallet/workpiece, and layout height");
   await inferred.context.close();
+
+  const advanceRefresh = async (page, milliseconds = 31000) => {
+    await page.evaluate((delta) => { const now = Date.now(); Date.now = () => now + delta; renderWorkOrders(); }, milliseconds);
+    await page.waitForTimeout(100);
+  };
+  const intermittent = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("temporary-1"), b02Rpc, new Error("temporary-2")], fixture: true });
+  await intermittent.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  for (const expectedCall of [2, 3, 4]) {
+    await advanceRefresh(intermittent.page);
+    assert.equal(await intermittent.page.locator('[data-hmc-pallet-strip="B02"]').count(), 1, `ok/fail sequence keeps strip after RPC call ${expectedCall}`);
+    assert.equal(await intermittent.page.locator('[data-card-orders="B02"]').count(), 0, `ok/fail sequence never shows old list after RPC call ${expectedCall}`);
+  }
+  await intermittent.context.close();
+
+  const neverSucceeded = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: new Error("unavailable"), fixture: true });
+  await neverSucceeded.page.waitForTimeout(150);
+  assert.equal(await neverSucceeded.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "never-succeeded failure uses old list");
+  assert.equal(await neverSucceeded.page.locator('[data-card-orders="B02"]').count(), 1, "never-succeeded failure keeps old list available");
+  await neverSucceeded.context.close();
+
+  const expired = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("expired")], fixture: true });
+  await expired.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  await advanceRefresh(expired.page, 10 * 60 * 1000 + 1);
+  assert.equal(await expired.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "success older than ten minutes falls back after failure");
+  assert.equal(await expired.page.locator('[data-card-orders="B02"]').count(), 1, "expired success restores old list");
+  await expired.context.close();
+
+  const f1AfterGood = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, { ok: true, machine_code: "B02", pallets: [1, 2, 3, 4, 5, 6].map((pallet_no) => ({ pallet_no, parts: [] })) }], fixture: true });
+  await f1AfterGood.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  await advanceRefresh(f1AfterGood.page);
+  assert.equal(await f1AfterGood.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "successful F1 response falls back immediately after a good response");
+  assert.equal(await f1AfterGood.page.locator('[data-card-orders="B02"]').count(), 1, "successful F1 response shows old list");
+  await f1AfterGood.context.close();
 
   const vietnamese = await open(false, { card: true, strip: true, rpc, fixture: true, language: "vi" });
   const vietnameseCard = vietnamese.page.locator('[data-hmc-pallet-strip="B01"]');
@@ -184,10 +223,37 @@ try {
     await oldList.context.close(); await fallback.context.close();
   }
 
-  for (const viewport of [{ width: 360, height: 800 }, { width: 1280, height: 800 }]) {
+  for (const viewport of [{ width: 360, height: 800 }, { width: 800, height: 1280 }, { width: 1280, height: 800 }]) {
     const matching = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: b02Rpc, fixture: true, viewport });
-    await matching.page.locator('[data-hmc-pallet-strip="B02"]').screenshot({ path: path.join(outDir, `B02-inferred-${viewport.width}x${viewport.height}.png`) });
+    const strip = matching.page.locator('[data-hmc-pallet-strip="B02"]');
+    await strip.waitFor();
+    const activeOver = strip.locator('[data-hmc-strip-chip="1"]');
+    const classes = await activeOver.getAttribute("class");
+    assert.match(classes, /is-active/, `${viewport.width}px current pallet class`);
+    assert.match(classes, /is-over/, `${viewport.width}px over-quantity class`);
+    const marks = await activeOver.locator('b, em, i').evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); const style = getComputedStyle(node); return { tag: node.tagName, left: box.left, right: box.right, top: box.top, bottom: box.bottom, fontSize: parseFloat(style.fontSize), color: style.color, backgroundColor: style.backgroundColor }; }));
+    assert.ok(marks.every((mark) => mark.fontSize >= 11), `${viewport.width}px number and marks are at least 11px`);
+    for (let a = 0; a < marks.length; a += 1) for (let b = a + 1; b < marks.length; b += 1) {
+      const intersects = marks[a].left < marks[b].right && marks[a].right > marks[b].left && marks[a].top < marks[b].bottom && marks[a].bottom > marks[b].top;
+      assert.equal(intersects, false, `${viewport.width}px ${marks[a].tag}/${marks[b].tag} boxes do not intersect: ${JSON.stringify(marks)}`);
+    }
+    const overMark = marks.find((mark) => mark.tag === "EM");
+    assert.equal(overMark.color, "rgb(255, 255, 255)", `${viewport.width}px over mark uses contrast-safe white text`);
+    assert.equal(overMark.backgroundColor, "rgb(180, 35, 24)", `${viewport.width}px over mark uses contrast-safe red badge`);
+    const chipBoxes = await strip.locator('.hmc-pallet-chip:not(.is-unmatched)').evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { y: box.y, height: box.height }; }));
+    assert.ok(chipBoxes.every((box) => box.height >= 44), `${viewport.width}px inferred chips stay 44px high`);
+    assert.ok(chipBoxes.every((box) => Math.abs(box.y - chipBoxes[0].y) < 1), `${viewport.width}px six inferred chips stay in one row`);
+    assert.equal(await strip.locator('.hmc-pallet-strip-chips').evaluate((node) => node.scrollWidth <= node.clientWidth), true, `${viewport.width}px inferred chips do not overflow`);
+    await strip.screenshot({ path: path.join(outDir, `B02-inferred-over-current-${viewport.width}x${viewport.height}.png`) });
     await matching.context.close();
   }
+
+  const stale = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("stale-1"), new Error("stale-2"), new Error("stale-3")], fixture: true, viewport: { width: 800, height: 1280 } });
+  await stale.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  await advanceRefresh(stale.page); await advanceRefresh(stale.page); await advanceRefresh(stale.page);
+  const staleStrip = stale.page.locator('[data-hmc-pallet-strip="B02"]');
+  assert.match(await staleStrip.locator('.hmc-pallet-strip-stale').textContent(), /資料可能已過期/, "third consecutive failure shows stale-data hint");
+  await staleStrip.screenshot({ path: path.join(outDir, "B02-stale-hint-800x1280.png") });
+  await stale.context.close();
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
 console.log("PASS: HMC pallet-card and pallet-strip browser assertions");

@@ -91,6 +91,7 @@
       hmc_pallet_strip_empty: "空盤",
       hmc_pallet_strip_empty_detail: "這個交換盤目前沒有工單。",
       hmc_pallet_strip_inferred: "盤號由固定工件資料推算",
+      hmc_pallet_strip_stale: "資料可能已過期",
       hmc_pallet_strip_part_name: "品名",
       hmc_pallet_strip_work_order: "工單號",
       hmc_pallet_strip_process: "製程",
@@ -756,6 +757,7 @@
       hmc_pallet_strip_empty: "Trống", // _draft
       hmc_pallet_strip_empty_detail: "Pallet này hiện không có lệnh sản xuất.", // _draft
       hmc_pallet_strip_inferred: "Số pallet được suy đoán từ dữ liệu chi tiết cố định", // _draft
+      hmc_pallet_strip_stale: "Dữ liệu có thể đã cũ", // _draft
       hmc_pallet_strip_part_name: "Tên chi tiết", // _draft
       hmc_pallet_strip_work_order: "Số lệnh", // _draft
       hmc_pallet_strip_process: "Công đoạn", // _draft
