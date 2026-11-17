@@ -12052,7 +12052,7 @@ body .machtile-session-badge .machtile-session-toggle {
 .hmc-pallet-chip.is-active { border-color: var(--brand-blue); background: var(--brand-blue); color: #fff; box-shadow: inset 0 -4px 0 #fff; }
 .hmc-pallet-chip.is-over { border-color: #dc2626; color: #b42318; }
 .hmc-pallet-chip.is-open { outline: 3px solid rgba(21, 112, 239, .24); outline-offset: 1px; }
-.hmc-pallet-chip i, .hmc-pallet-chip em { position: absolute; top: 1px; right: 2px; font-size: 8px; font-style: normal; font-weight: 900; }
+.hmc-pallet-chip i, .hmc-pallet-chip em { position: absolute; top: 1px; right: 2px; font-size: 11px; line-height: 1; font-style: normal; font-weight: 900; }
 .hmc-pallet-chip em { color: #b42318; }
 .hmc-pallet-chip.is-inferred em { right: 12px; }
 .hmc-pallet-chip.is-unmatched { grid-column: 1 / -1; grid-template-columns: auto auto; justify-content: center; min-height: 44px; border-style: dashed; background: var(--amber-soft); color: #7a4b00; }
@@ -12183,7 +12183,7 @@ body .machtile-session-badge .machtile-session-toggle {
 }
 /* 「恢復自動」維持 #50 的樣式 */
 .card-order-auto {
-  min-height: 36px;
+  min-height: 44px;
   padding: 4px 10px;
   border: 1px solid var(--brand-blue);
   border-radius: var(--radius);

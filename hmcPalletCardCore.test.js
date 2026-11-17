@@ -76,3 +76,17 @@ test("aggregate and order detail use floor rounding, including 689/536, and exac
   assert.equal(full.isOver, false);
   assert.equal(full.statusOrder.id, "FULL");
 });
+
+test("not-yet-full aggregate uses normal rounding like order detail", () => {
+  const workpiece = configuredStripModel([entry("PARTIAL", "SF-03-01", { done: 2, total: 3 })], map, null).pallets[0].workpieces[0];
+  assert.equal(workpiece.percent, 67);
+});
+
+test("over-quantity order takes precedence over an earlier exactly-full order", () => {
+  const workpiece = configuredStripModel([
+    entry("FULL", "SF-03-01", { done: 10, total: 10 }),
+    entry("OVER", "SF-03-01", { done: 12, total: 10 }),
+  ], map, null).pallets[0].workpieces[0];
+  assert.equal(workpiece.statusOrder.id, "OVER");
+  assert.equal(workpiece.statusOrder.done - workpiece.statusOrder.total, 2);
+});

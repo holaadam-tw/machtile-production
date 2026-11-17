@@ -84,11 +84,14 @@
         const total = entries.reduce((sum, entry) => sum + Number(orderOf(entry).total || 0), 0);
         const statusEntry = entries.find((entry) => {
           const order = orderOf(entry);
+          return Number(order.total) > 0 && Number(order.done) > Number(order.total);
+        }) || entries.find((entry) => {
+          const order = orderOf(entry);
           return Number(order.total) > 0 && Number(order.done) >= Number(order.total);
         });
         const statusOrder = statusEntry ? orderOf(statusEntry) : null;
         return { ...workpiece, orders: entries, orderCount: entries.length, done, total,
-          percent: total > 0 ? Math.floor((done / total) * 100) : 0,
+          percent: total > 0 ? (done >= total ? Math.floor((done / total) * 100) : Math.round((done / total) * 100)) : 0,
           isActive: Boolean(activeKey && entries.some((entry) => orderKey(entry) === activeKey)),
           isFull: Boolean(statusOrder), statusOrder,
           isOver: entries.some((entry) => Number(orderOf(entry).total) > 0 && Number(orderOf(entry).done) > Number(orderOf(entry).total)) };

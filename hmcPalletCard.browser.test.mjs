@@ -13,7 +13,7 @@ const mod = await import(pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE ||
 const { chromium } = mod.default || mod;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 const b01Map = {
-  1: [{ partNos: ["SF-03-01"], label: "SF-03本體" }, { partNos: ["BG-03-01"], label: "BG-03本體" }],
+  1: [{ partNos: ["SF-03-01"], label: "SF-03本體" }, { partNos: ["BG-03-01"], label: "BG-03本體" }, { partNos: ["EMPTY"], label: "空工件" }],
   3: [{ partNos: ["DSHG-04-01"], label: "DSHG-04中座體(小流量)" }],
   4: [{ partNos: ["HG-06-01"], label: "HG-06", default: true }],
 };
@@ -26,7 +26,9 @@ function fixtureApp(source) {
     .replace(/done: 8,\r?\n    total: 20,/, 'done: 42,\n    total: 135,')
     .replace(/\r?\n\];\r?\n\r?\nconst baseMachines = \[/, `
   { id:"XX01202610140007", processId:"fixture-hg", part:"HG-06本體", drawing:"HG-06-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:121, total:215 },
-  { id:"XX01202610140006", processId:"fixture-dshg", part:"DSHG-04中座體(小流量)", drawing:"DSHG-04-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:95, total:140 },
+  { id:"XX01202610140006", processId:"fixture-dshg", part:"DSHG-04中座體(小流量)", drawing:"DSHG-04-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:2, total:3 },
+  { id:"BG-FULL", processId:"fixture-bg-full", part:"BG-03本體", drawing:"BG-03-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:10, total:10 },
+  { id:"BG-OVER", processId:"fixture-bg-over", part:"BG-03本體", drawing:"BG-03-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:12, total:10 },
   { id:"XX-OTHER", processId:"fixture-other", part:"未對應工件", drawing:"UNKNOWN-01", machine:"B01", process:"CNC 銑削", processStatus:"pending", workStatus:"in_progress", done:1, total:9 }
 ];
 
@@ -39,7 +41,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
-async function open(base, { card = false, strip = false, mapped = true, machineCode = "B01", rpc = null, rpcSequence = null, fixture = false, viewport = { width: 1280, height: 800 } } = {}) {
+async function open(base, { card = false, strip = false, mapped = true, machineCode = "B01", rpc = null, rpcSequence = null, fixture = false, language = "zh-Hant", viewport = { width: 1280, height: 800 } } = {}) {
   let rpcCalls = 0;
   const context = await browser.newContext({ serviceWorkers: "block", viewport });
   await context.route("**/*", async (route) => {
@@ -59,6 +61,7 @@ async function open(base, { card = false, strip = false, mapped = true, machineC
     return route.fallback();
   });
   const page = await context.newPage();
+  await page.addInitScript((value) => localStorage.setItem("machtile.language", value), language);
   const errors = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded" });
   try { await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid article").length > 0, null, { timeout: 5000 }); }
@@ -84,9 +87,12 @@ try {
     const boxes = await card.locator('.hmc-pallet-chip:not([data-hmc-strip-chip="unmatched"])').evaluateAll((nodes) => nodes.map((node) => { const { y, height } = node.getBoundingClientRect(); return { y, height }; }));
     assert.ok(boxes.every((box) => box.height >= 44), "44px touch targets");
     assert.ok(boxes.every((box) => Math.abs(box.y - boxes[0].y) < 1), "chips do not wrap");
+    assert.equal(await card.locator('.hmc-pallet-strip-chips').evaluate((node) => node.scrollWidth <= node.clientWidth), true, "six chips do not overflow");
+    assert.ok(await card.locator('[data-hmc-strip-chip="1"] em').evaluate((node) => parseFloat(getComputedStyle(node).fontSize) >= 11), "over-quantity badge is at least 11px");
     assert.equal(await card.locator('[data-hmc-strip-panel="1"]').count(), 1, "current pallet expands by default");
     assert.match(await card.locator('[data-hmc-strip-panel="1"]').textContent(), /SF-03本體.*42\/135（31%）/s);
-    const emptyRow = card.locator('[data-hmc-workpiece="1:1-2"]');
+    assert.match(await card.locator('[data-hmc-strip-panel="1"]').textContent(), /BG-03本體.*22\/20（110%）.*超量 \+2/s, "aggregate row prefers over-quantity label");
+    const emptyRow = card.locator('[data-hmc-workpiece="1:1-3"]');
     assert.equal(await emptyRow.isDisabled(), true, "empty workpiece is greyed and not tappable");
     await card.locator('[data-hmc-workpiece="1:1-1"]').click();
     assert.equal(await card.locator('[data-hmc-workpiece-detail="1:1-1"] [data-hmc-strip-order]').count(), 1, "level two opens per-order details");
@@ -97,11 +103,18 @@ try {
     await card.locator('[data-hmc-strip-chip="4"]').click();
     assert.match(await card.locator('[data-hmc-strip-panel="4"]').textContent(), /HG-06.*121\/215（56%）/s);
     assert.match(await card.locator('[data-hmc-strip-chip="unmatched"]').textContent(), /其他 1/);
+    await card.locator('[data-hmc-strip-chip="3"]').click();
+    assert.match(await card.locator('[data-hmc-strip-panel="3"]').textContent(), /DSHG-04中座體\(小流量\).*2\/3（67%）/s, "level one normally rounds 2/3 to 67%");
+    await card.locator('[data-hmc-workpiece="3:3-1"]').click();
+    assert.match(await card.locator('[data-hmc-workpiece-detail="3:3-1"]').textContent(), /2\/3（67%）/s, "level two normally rounds 2/3 to 67%");
     await card.locator('[data-hmc-strip-chip="unmatched"]').click();
     await card.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').click();
     const rerendered = opened.page.locator('[data-hmc-pallet-strip="B01"]');
     await rerendered.locator('.card-orders-manual').waitFor();
     assert.equal(await rerendered.locator('.card-order-auto[data-card-pick="B01"][data-card-pick-key=""]').count(), 1, "manual marker and restore-auto action stay in strip header");
+    assert.equal((await rerendered.locator('.card-orders-manual').textContent()).trim(), "手動切換中", "manual wording matches the old list");
+    assert.equal((await rerendered.locator('.card-order-auto').textContent()).trim(), "恢復自動");
+    assert.ok(await rerendered.locator('.card-order-auto').evaluate((node) => node.getBoundingClientRect().height >= 44), "restore-auto action is at least 44px tall");
     assert.deepEqual(opened.errors, []);
     await opened.context.close();
   }
@@ -117,6 +130,7 @@ try {
   const inferredCard = inferred.page.locator('[data-hmc-pallet-strip="B02"]');
   await inferredCard.waitFor();
   assert.match(await inferredCard.locator('[data-hmc-strip-chip="1"] i').textContent(), /推算/);
+  assert.ok(await inferredCard.locator('[data-hmc-strip-chip="1"] i').evaluate((node) => parseFloat(getComputedStyle(node).fontSize) >= 11), "inferred badge is at least 11px");
   await inferredCard.locator('[data-hmc-workpiece="1:SF-03-01"]').click();
   const before = await inferredCard.evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
   await inferred.page.evaluate(() => { const now = Date.now(); Date.now = () => now + 31000; renderWorkOrders(); });
@@ -124,6 +138,15 @@ try {
   const during = await inferred.page.locator('[data-hmc-pallet-strip="B02"]').last().evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
   assert.deepEqual(during, before, "31-second reload keeps strip, open pallet/workpiece, and layout height");
   await inferred.context.close();
+
+  const vietnamese = await open(false, { card: true, strip: true, rpc, fixture: true, language: "vi" });
+  const vietnameseCard = vietnamese.page.locator('[data-hmc-pallet-strip="B01"]');
+  await vietnameseCard.locator('[data-hmc-strip-chip="unmatched"]').click();
+  await vietnameseCard.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').click();
+  await vietnameseCard.locator('.card-orders-manual').waitFor();
+  assert.equal((await vietnameseCard.locator('.card-orders-manual').textContent()).trim(), "Đang chuyển thủ công");
+  assert.equal((await vietnameseCard.locator('.card-order-auto').textContent()).trim(), "Khôi phục tự động");
+  await vietnamese.context.close();
 
   const b02Empty = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: { ok: true, pallets: [] }, fixture: true });
   await b02Empty.page.waitForTimeout(150);

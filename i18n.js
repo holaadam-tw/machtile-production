@@ -97,6 +97,8 @@
       hmc_pallet_strip_last_activity: "最後活動",
       hmc_pallet_strip_current: "目前顯示",
       hmc_pallet_strip_switch: "切換顯示",
+      hmc_pallet_strip_manual: "手動切換中",
+      hmc_pallet_strip_restore_auto: "恢復自動",
       hmc_pallet_strip_no_order: "沒有工單",
       hmc_pallet_strip_order_count: "{{count}} 張",
       hmc_pallet_strip_shared: "與盤 {{number}} 一起",
@@ -756,6 +758,8 @@
       hmc_pallet_strip_last_activity: "Hoạt động gần nhất", // _draft
       hmc_pallet_strip_current: "Đang hiển thị", // _draft
       hmc_pallet_strip_switch: "Chuyển hiển thị", // _draft
+      hmc_pallet_strip_manual: "Đang chuyển thủ công", // _draft
+      hmc_pallet_strip_restore_auto: "Khôi phục tự động", // _draft
       hmc_pallet_strip_no_order: "Không có lệnh", // _draft
       hmc_pallet_strip_order_count: "{{count}} lệnh", // _draft
       hmc_pallet_strip_shared: "Cùng pallet {{number}}", // _draft
