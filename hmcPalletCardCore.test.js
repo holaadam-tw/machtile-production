@@ -1,25 +1,55 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mapOrdersToPallets } = require("./hmcPalletCardCore.js");
-const entry = (id, partNo) => ({ order: { id, partNo } });
+const { mapOrdersToPallets, inferredStripModel, configuredStripModel } = require("./hmcPalletCardCore.js");
+const entry = (id, partNo, extra = {}) => ({ order: { id, processId: `${id}-P`, partNo, ...extra } });
 const pallet = (palletNo, ...partNos) => ({ palletNo, slots: partNos.map((partNo, i) => ({ slotId: `slot-${i + 1}`, part: { partNo } })) });
-test("one pallet can list several different hung parts", () => {
-  const result = mapOrdersToPallets([entry("WO-1", "SF-03-01"), entry("WO-2", "BG-03-01")], [pallet(1, "SF-03-01", "BG-03-01")]);
-  assert.deepEqual(result.pallets[0].orders.map((x) => x.order.id), ["WO-1", "WO-2"]);
-  assert.equal(result.unmatched.length, 0);
-});
-test("a part configured on two pallets is not guessed", () => {
-  const result = mapOrdersToPallets([entry("WO-X", "CPDG-06-01")], [pallet(2, "CPDG-06-01"), pallet(4, "CPDG-06-01")]);
-  assert.equal(result.pallets[1].orders.length, 0);
-  assert.equal(result.pallets[3].orders.length, 0);
+const map = {
+  1: [{ partNos: ["SF-03-01"], label: "SF-03本體" }, { partNos: ["EMPTY"], label: "空工件" }],
+  2: [{ partNos: ["CPDG-06-01"], label: "CPDG-06", default: true }, { partNos: ["HG-06-01"], label: "HG-06", default: false }, { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 5 }],
+  4: [{ partNos: ["CPDG-06-01"], label: "CPDG-06", default: false }, { partNos: ["HG-06-01"], label: "HG-06", default: true }],
+  5: [{ partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 2 }],
+};
+
+test("RPC inferred mapping retains unique pallets and unmatched orders", () => {
+  const result = mapOrdersToPallets([entry("WO-1", "SF-03-01"), entry("WO-X", "UNKNOWN")], [pallet(1, "SF-03-01")]);
+  assert.deepEqual(result.pallets[0].orders.map((x) => x.order.id), ["WO-1"]);
   assert.deepEqual(result.unmatched.map((x) => x.order.id), ["WO-X"]);
+  assert.equal(inferredStripModel([entry("WO-1", "SF-03-01")], [pallet(1, "SF-03-01")], null).pallets[0].inferred, true);
 });
-test("an unknown part is placed under unmatched", () => {
-  assert.deepEqual(mapOrdersToPallets([entry("WO-U", "UNKNOWN")], [pallet(1, "KNOWN")]).unmatched.map((x) => x.order.id), ["WO-U"]);
+
+test("configured map applies defaults, explicit alternates, dual pallets, and other", () => {
+  const orders = [
+    entry("CP-DEFAULT", "CPDG-06-01"), entry("CP-ALT", "CPDG-06-01", { palletNo: 4 }),
+    entry("HG-DEFAULT", "HG-06-01"), entry("HG-ALT", "HG-06-01", { palletNo: 2 }),
+    entry("DUAL", "MPW-01-01"), entry("OTHER", "UNKNOWN"),
+  ];
+  const result = configuredStripModel(orders, map, null);
+  const ids = (palletNo, label) => result.pallets[palletNo - 1].workpieces.find((x) => x.label === label).orders.map((x) => x.order.id);
+  assert.deepEqual(ids(2, "CPDG-06"), ["CP-DEFAULT"]);
+  assert.deepEqual(ids(4, "CPDG-06"), ["CP-ALT"]);
+  assert.deepEqual(ids(4, "HG-06"), ["HG-DEFAULT"]);
+  assert.deepEqual(ids(2, "HG-06"), ["HG-ALT"]);
+  assert.deepEqual(ids(2, "MPW-01"), ["DUAL"]);
+  assert.deepEqual(ids(5, "MPW-01"), ["DUAL"]);
+  assert.deepEqual(result.unmatched.map((x) => x.order.id), ["OTHER"]);
+  assert.equal(result.pallets[1].inferred, false);
 });
-test("missing configuration leaves all pallets unconfigured and keeps orders unmatched", () => {
-  const result = mapOrdersToPallets([entry("WO-1", "SF-03-01")], []);
-  assert.ok(result.pallets.every((x) => x.configured === false));
-  assert.deepEqual(result.unmatched.map((x) => x.order.id), ["WO-1"]);
+
+test("workpiece rows aggregate multiple orders, preserve empty rows, and select active pallet by default", () => {
+  const first = entry("SF-A", "SF-03-01", { done: 42, total: 135 });
+  const second = entry("SF-B", "SF-03-01", { done: 8, total: 15 });
+  const result = configuredStripModel([first, second], map, first.order);
+  const workpieces = result.pallets[0].workpieces;
+  assert.deepEqual({ count: workpieces[0].orderCount, done: workpieces[0].done, total: workpieces[0].total, percent: workpieces[0].percent }, { count: 2, done: 50, total: 150, percent: 33 });
+  assert.equal(workpieces[1].orderCount, 0);
+  assert.equal(result.defaultOpen, "1");
+});
+
+test("dual-pallet display does not mutate or multiply input totals", () => {
+  const dual = entry("DUAL", "MPW-01-01", { done: 3, total: 10 });
+  const result = configuredStripModel([dual], map, dual.order);
+  assert.equal(result.pallets[1].workpieces.find((x) => x.label === "MPW-01").done, 3);
+  assert.equal(result.pallets[4].workpieces.find((x) => x.label === "MPW-01").done, 3);
+  assert.equal(dual.order.done, 3);
 });
