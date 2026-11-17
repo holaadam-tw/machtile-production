@@ -85,6 +85,24 @@
       hmc_pallet_unmatched: "未對應盤號",
       hmc_pallet_loading: "正在讀取固定工件設定…",
       hmc_pallet_read_error: "固定工件設定暫時讀不到",
+      hmc_pallet_strip_title: "交換盤",
+      hmc_pallet_strip_hint: "點盤號查看內容，再點一次收合",
+      hmc_pallet_strip_has_order: "有工單",
+      hmc_pallet_strip_empty: "空盤",
+      hmc_pallet_strip_empty_detail: "這個交換盤目前沒有工單。",
+      hmc_pallet_strip_inferred: "盤號由固定工件資料推算",
+      hmc_pallet_strip_part_name: "品名",
+      hmc_pallet_strip_work_order: "工單號",
+      hmc_pallet_strip_process: "製程",
+      hmc_pallet_strip_last_activity: "最後活動",
+      hmc_pallet_strip_current: "目前顯示",
+      hmc_pallet_strip_switch: "切換顯示",
+      hmc_pallet_strip_manual: "手動切換中",
+      hmc_pallet_strip_restore_auto: "恢復自動",
+      hmc_pallet_strip_no_order: "沒有工單",
+      hmc_pallet_strip_order_count: "{{count}} 張",
+      hmc_pallet_strip_shared: "與盤 {{number}} 一起",
+      hmc_pallet_strip_other: "其他 {{count}}",
       machine_details: "機台詳情",
       machine_status: "機台 · {{status}}",
       work_order_status: "工單 · {{status}}",
@@ -732,6 +750,24 @@
       hmc_pallet_unmatched: "Chưa khớp số pallet", // _draft
       hmc_pallet_loading: "Đang đọc cấu hình chi tiết cố định…", // _draft
       hmc_pallet_read_error: "Tạm thời không đọc được cấu hình chi tiết cố định", // _draft
+      hmc_pallet_strip_title: "Pallet", // _draft
+      hmc_pallet_strip_hint: "Chạm số pallet để xem; chạm lại để thu gọn", // _draft
+      hmc_pallet_strip_has_order: "Có lệnh", // _draft
+      hmc_pallet_strip_empty: "Trống", // _draft
+      hmc_pallet_strip_empty_detail: "Pallet này hiện không có lệnh sản xuất.", // _draft
+      hmc_pallet_strip_inferred: "Số pallet được suy đoán từ dữ liệu chi tiết cố định", // _draft
+      hmc_pallet_strip_part_name: "Tên chi tiết", // _draft
+      hmc_pallet_strip_work_order: "Số lệnh", // _draft
+      hmc_pallet_strip_process: "Công đoạn", // _draft
+      hmc_pallet_strip_last_activity: "Hoạt động gần nhất", // _draft
+      hmc_pallet_strip_current: "Đang hiển thị", // _draft
+      hmc_pallet_strip_switch: "Chuyển hiển thị", // _draft
+      hmc_pallet_strip_manual: "Đang chuyển thủ công", // _draft
+      hmc_pallet_strip_restore_auto: "Khôi phục tự động", // _draft
+      hmc_pallet_strip_no_order: "Không có lệnh", // _draft
+      hmc_pallet_strip_order_count: "{{count}} lệnh", // _draft
+      hmc_pallet_strip_shared: "Cùng pallet {{number}}", // _draft
+      hmc_pallet_strip_other: "Khác {{count}}", // _draft
       machine_details: "Chi tiết máy",
       machine_status: "Máy · {{status}}",
       work_order_status: "Lệnh · {{status}}",

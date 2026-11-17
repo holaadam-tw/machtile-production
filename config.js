@@ -136,7 +136,47 @@ window.MACHTILE_CONFIG = {
   enableSwitchStepStarted: true,
   // B01/B02 卡片六盤料號推算；預設關閉，僅讀既有 hmc_fixed_read。
   enableHmcPalletCard: false,
+  enableHmcPalletStrip: false,
   hmcPalletCardMachines: ["B01", "B02"],
+  hmcPalletMap: {
+    B01: {
+      1: [
+        { partNos: ["BG-03-01"], label: "BG-03本體" },
+        { partNos: ["SF-03-01"], label: "SF-03本體" },
+        { partNos: ["SKF-03-01"], label: "SKF-03本體" },
+      ],
+      2: [
+        { partNos: ["A37-R01-04"], label: "A37搖籃" },
+        { partNos: ["A56-R01-03"], label: "A56搖籃" },
+        { partNos: ["A16-R01-04"], label: "A16／A22搖籃" },
+        { partNos: ["CPDG-06-01", "CPDG-06-01(新型)"], label: "CPDG-06", default: true },
+        { partNos: ["HG-06-01"], label: "HG-06", default: false },
+        { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 5 },
+        { partNos: ["MSW-01Y-01"], label: "MSW-01-Y", dual: true, sharedWith: 5 },
+      ],
+      3: [{ partNos: ["DSHG-04-01"], label: "DSHG-04中座體(小流量)" }],
+      4: [
+        { partNos: ["CPDG-03-01"], label: "CPDG-03" },
+        { partNos: ["CPDG-06-01", "CPDG-06-01(新型)"], label: "CPDG-06", default: false },
+        { partNos: ["HCG-06-01"], label: "HCG-06" },
+        { partNos: ["HG-06-01"], label: "HG-06", default: true },
+      ],
+      5: [
+        { partNos: ["A16-R01-01"], label: "A16本體" },
+        { partNos: ["AR16-R01-01"], label: "AR16/AR22泵浦本體" },
+        { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 2 },
+        { partNos: ["MSW-01Y-01"], label: "MSW-01-Y", dual: true, sharedWith: 2 },
+        { partNos: ["SF-06-01"], label: "SF-06本體" },
+        { partNos: ["SF-06T-01"], label: "SF-06T本體" },
+        { partNos: ["THF-06-01"], label: "THF-06本體" },
+      ],
+      6: [
+        { partNos: ["BG-06-01"], label: "BG-06本體" },
+        { partNos: ["DSHG-04-02"], label: "DSHG-04中座平蓋" },
+        { partNos: ["MCA-06-01"], label: "MCA-06本體" },
+      ],
+    },
+  },
   // 換道次（已開工）開放的機台（預設 []＝一台都沒有）；enableSwitchStepStarted 也要開，而且機台代號要在這裡才出按鈕。
   switchStepStartedMachines: ["A05"],
   // 換道次（已開工）：不在待做池的道次也列出來（標「不在待做池」）。預設關；要跟工廠 SwitchStepAllowUnpooledTarget 一起開。
