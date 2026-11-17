@@ -1,6 +1,8 @@
 // Copy this file to config.js and fill values for Supabase Cloud.
 // Do not commit real service role keys into frontend code.
 window.MACHTILE_CONFIG = {
+  // 單站智慧報工：停止輸入約 800ms 後先在背景送預覽；不會自動送正式報工。
+  reportBackgroundPreviewEnabled: true,
   cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,

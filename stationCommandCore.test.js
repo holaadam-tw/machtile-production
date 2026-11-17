@@ -442,7 +442,8 @@ const claimBound = c.statusView({ status: "applied", legacy_snapshot: { claim_ne
 eq("claim applied 帶回綁定工單與 canonical 步序", [claimBound.claimNext.orderNo, claimBound.claimNext.indexSn], [order.id, 6]);
 const claimTaken = c.statusView({ status: "rejected", reject_code: "ALREADY_CLAIMED", legacy_snapshot: { claim_next: { claimed_machine_code: "A05" } } }, "claim_next", 0);
 eq("applier rejected 從 legacy_snapshot 帶回實際接走機台", [claimTaken.code, claimTaken.claimNext.claimedMachineCode], ["ALREADY_CLAIMED", "A05"]);
-eq("pendingRecord 保存 claim 冪等重試資料", c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true }).standardFinishClaim, true);
+const pendingClaim = c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true, standardFinishComboIntent: "claim-start", standardFinishClaimSheetToken: "sheet-7" });
+eq("pendingRecord 保存 claim 冪等重試資料", [pendingClaim.standardFinishClaim, pendingClaim.standardFinishComboIntent, pendingClaim.standardFinishClaimSheetToken], [true, "claim-start", "sheet-7"]);
 
 console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET） ==");
 {

@@ -3035,6 +3035,24 @@ body.route-mode {
   margin-bottom: 14px;
 }
 
+/* All scrollable dialog headers share one persistent close affordance. */
+.sheet-panel > .sheet-header,
+[role="dialog"] > header,
+.card-selection-panel > header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--surface, #fff);
+}
+.sheet-panel > .sheet-header .icon-button,
+[role="dialog"] > header button,
+.card-selection-panel > header button { min-width: 44px; min-height: 44px; }
+.report-form.is-finish-success > :not(#singleStationReportPanel) { display: none !important; }
+.finish-success-panel { display: grid; gap: 12px; padding: 20px; border: 2px solid #279563; border-radius: 16px; background: #f0fdf4; }
+.finish-success-panel h3, .finish-success-panel p { margin: 0; }
+.finish-success-panel h3 { font-size: 1.5rem; color: #166534; }
+.finish-success-next { font-weight: 800; }
+
 .machine-admin-content {
   display: grid;
   gap: 14px;

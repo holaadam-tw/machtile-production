@@ -111,6 +111,7 @@ window.MACHTILE_CONFIG = {
   // 開工計數高於系統已報時，開工 applied 後沿用卡片報工路徑補報差額。
   startBackfillEnabled: true,
   reportTotalSemanticsEnabled: true,
+  reportBackgroundPreviewEnabled: true,
   reportCounterMetaRpcEnabled: false,
   reportQtyJumpWarnEnabled: true,
   homeOvertimeCardEnabled: true,
