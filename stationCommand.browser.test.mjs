@@ -2637,6 +2637,10 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
     ok(shown.includes(outcome.status === "applied" ? "完工成功" : expected), `${label} → 完工畫面顯示完成結果`, shown);
   }
+  await page.evaluate(() => { window.MachTileI18n.setLanguage("vi"); machtileRenderStationReportSurfaces(); });
+  const viFinishSuccess = (await page.locator("#finishSheet .finish-success-panel").innerText()).replace(/\s+/g, " ").trim();
+  ok(viFinishSuccess.includes("Hoàn tất thành công") && viFinishSuccess.includes("Tổng công đoạn này"), "vi renders the localized finish-success title and detail", viFinishSuccess);
+  await page.evaluate(() => { window.MachTileI18n.setLanguage("zh-Hant"); machtileRenderStationReportSurfaces(); });
   const originalCloseUuid = "11111111-1111-4111-8111-111111111111";
   const closeRecord = { commandUuid: originalCloseUuid, commandType: "close", machineCode: "A04", orderNo: "XX01202502050012", step: 5,
     partNo: "HCG-06-01", manufactureIiId: "MII-1", expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "MATERIAL_SHORT", note: "缺料" },
@@ -2788,7 +2792,17 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   });
   be.mode = "applied";
   await page.evaluate(() => { selectedOrder = { ...selectedOrder, id: "WRONG-SELECTED-ORDER", drawing: "WRONG-DRAWING" }; });
-  await page.evaluate(() => { window.__claimToastCount = 0; const original = showToast; showToast = (...args) => { if (String(args[0] || "").includes("接單成功")) window.__claimToastCount += 1; return original(...args); }; });
+  await page.evaluate(() => {
+    window.__claimToasts = [];
+    const originalToast = showToast;
+    window.__originalClaimToast = originalToast;
+    showToast = (...args) => {
+      const message = String(args[0] || "");
+      window.__claimToasts.push(message);
+      if (message.includes("接單成功")) void machtileStandardFinishClaim("A04");
+      return originalToast(...args);
+    };
+  });
   await page.evaluate(() => machtileStandardFinishClaim("A04"));
   await page.waitForFunction(() => machtileStationCmd.pending.A04?.commandType === "claim_next"
     || machtileStationReportState(machtileBatchRow("A04")).close?.claim?.phase === "applied"
@@ -2803,7 +2817,9 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   await page.evaluate(() => machtileStandardFinishClaim("A04"));
   await page.waitForTimeout(100);
   ok(be.submits.filter(item => item.p_command_type === "claim_next").length === afterAppliedClaimCount, "claim applied 後不能送出第二筆 claim_next");
-  ok(await page.evaluate(() => window.__claimToastCount) === 1, "claim applied 結果只處理一次、只顯示一個 toast");
+  const claimToasts = await page.evaluate(() => window.__claimToasts);
+  ok(claimToasts.length === 1 && claimToasts[0].includes("接單成功"), "immediate-applied claim shows only the specific success toast", JSON.stringify(claimToasts));
+  await page.evaluate(() => { showToast = window.__originalClaimToast; });
 
   await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
   await page.waitForTimeout(300);

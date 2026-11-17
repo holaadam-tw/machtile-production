@@ -439,11 +439,17 @@ await finishValidation.evaluate(() => {
 });
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').count(), 1, "enabled finish flag shows one machine-card finish button");
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').innerText(), "完工");
-await finishValidation.locator('.machine-report-button:visible').click();
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "first finish open after page load prefills the fresh reported machine total");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
 assert.equal(await finishValidation.locator('.report-type-tab[data-report-type="noon"]').getAttribute("class").then(value => value.includes("active")), true, "machine-card report button opens directly on routine report");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "routine report keeps today's zero default");
 await finishValidation.evaluate(() => closeReport());
 await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
-await finishValidation.waitForTimeout(200);
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish open after routine report prefills the fresh reported machine total");
 const finishOpenState = await finishValidation.evaluate(() => ({ finishOpen: document.querySelector("#finishSheet")?.classList.contains("is-open"), reportOpen: document.querySelector("#reportSheet")?.classList.contains("is-open"), activeReportType, formHost: document.querySelector("#reportForm")?.parentElement?.id, toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
 assert.equal(finishOpenState.finishOpen, true, `finish card button opens independent finish screen: ${JSON.stringify(finishOpenState)}`);
 assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
@@ -453,6 +459,19 @@ assert.equal(await finishValidation.locator("#finishPartNo").innerText(), "GQ7Q"
 assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
 assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.reload({ waitUntil: "domcontentloaded" });
+await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await finishValidation.waitForFunction(() => state.workOrders?.length && state.machines?.length);
+await finishValidation.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish open after reload prefills the fresh reported machine total");
 assert.match(await finishValidation.locator("#shortCompletionSection").innerText(), /80/, "short-completion prompt shows the actual plan gap");
 await finishValidation.locator("#completedQty").fill("1000");
 assert.equal(await finishValidation.locator("#shortCompletionSection").isHidden(), true, "total completed quantity at plan hides short completion");
@@ -882,12 +901,24 @@ await bgOwner.evaluate(() => {
 });
 await bgOwner.waitForTimeout(100);
 const ownerWritesAt = calls.reports.length + calls.closeCommands.length;
-await bgOwner.evaluate(async ({ orderId, processId }) => {
-  closeReport();
-  await openFinishReport(orderId, { machine: "A04", processId });
+await bgOwner.evaluate(() => closeReport());
+await bgOwner.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+await bgOwner.locator('[data-open-report-type="finish"]:visible').click();
+await bgOwner.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+await bgOwner.locator("#completedQty").fill("920");
+await bgOwner.evaluate(() => {
+  window.__zeroFinishBranchEntries = 0;
+  window.__savedRefreshReportTotalState = machtileRefreshReportTotalState;
+  machtileRefreshReportTotalState = (...args) => { window.__zeroFinishBranchEntries += 1; return window.__savedRefreshReportTotalState(...args); };
   window.__releasePendingGate(false);
-}, { orderId: workOrderId, processId });
+});
 await bgOwner.evaluate(async () => { await window.__staleBackgroundRun; machtileHasPendingReport = window.__savedHasPendingReport; });
+assert.equal(await bgOwner.evaluate(() => window.__zeroFinishBranchEntries), 0, "stale noon background run never enters the zero-finish branch after the real card opens finish");
 assert.equal(calls.reports.length + calls.closeCommands.length, ownerWritesAt, "stale background run cannot reach zero-finish real writes without a submit tap");
 await bgOwner.close();
 
