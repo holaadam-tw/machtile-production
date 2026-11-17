@@ -53,3 +53,26 @@ test("dual-pallet display does not mutate or multiply input totals", () => {
   assert.equal(result.pallets[4].workpieces.find((x) => x.label === "MPW-01").done, 3);
   assert.equal(dual.order.done, 3);
 });
+
+test("progress uses the list floor rule and any over-quantity order flags its workpiece and pallet", () => {
+  const result = configuredStripModel([
+    entry("OVER", "SF-03-01", { done: 12, total: 10 }),
+    entry("ZERO", "SF-03-01", { done: 0, total: 10 }),
+  ], map, null);
+  const workpiece = result.pallets[0].workpieces[0];
+  assert.deepEqual({ done: workpiece.done, total: workpiece.total, percent: workpiece.percent }, { done: 12, total: 20, percent: 60 });
+  assert.equal(workpiece.isOver, true);
+  assert.equal(result.pallets[0].isOver, true);
+  assert.equal(workpiece.statusOrder.id, "OVER");
+});
+
+test("aggregate and order detail use floor rounding, including 689/536, and exact full has a marker source", () => {
+  const over = configuredStripModel([entry("OVER", "SF-03-01", { done: 689, total: 536 })], map, null).pallets[0].workpieces[0];
+  assert.equal(over.percent, 128);
+  assert.equal(over.statusOrder.id, "OVER");
+  const full = configuredStripModel([entry("FULL", "SF-03-01", { done: 10, total: 10 })], map, null).pallets[0].workpieces[0];
+  assert.equal(full.percent, 100);
+  assert.equal(full.isFull, true);
+  assert.equal(full.isOver, false);
+  assert.equal(full.statusOrder.id, "FULL");
+});

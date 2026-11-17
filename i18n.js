@@ -744,22 +744,22 @@
       hmc_pallet_unmatched: "Chưa khớp số pallet", // _draft
       hmc_pallet_loading: "Đang đọc cấu hình chi tiết cố định…", // _draft
       hmc_pallet_read_error: "Tạm thời không đọc được cấu hình chi tiết cố định", // _draft
-      hmc_pallet_strip_title: "Pallet",
-      hmc_pallet_strip_hint: "Chạm số pallet để xem; chạm lại để thu gọn",
-      hmc_pallet_strip_has_order: "Có lệnh",
-      hmc_pallet_strip_empty: "Trống",
-      hmc_pallet_strip_empty_detail: "Pallet này hiện không có lệnh sản xuất.",
-      hmc_pallet_strip_inferred: "Số pallet được suy đoán từ dữ liệu chi tiết cố định",
-      hmc_pallet_strip_part_name: "Tên chi tiết",
-      hmc_pallet_strip_work_order: "Số lệnh",
-      hmc_pallet_strip_process: "Công đoạn",
-      hmc_pallet_strip_last_activity: "Hoạt động gần nhất",
-      hmc_pallet_strip_current: "Đang hiển thị",
-      hmc_pallet_strip_switch: "Chuyển hiển thị",
-      hmc_pallet_strip_no_order: "Không có lệnh",
-      hmc_pallet_strip_order_count: "{{count}} lệnh",
-      hmc_pallet_strip_shared: "Cùng pallet {{number}}",
-      hmc_pallet_strip_other: "Khác {{count}}",
+      hmc_pallet_strip_title: "Pallet", // _draft
+      hmc_pallet_strip_hint: "Chạm số pallet để xem; chạm lại để thu gọn", // _draft
+      hmc_pallet_strip_has_order: "Có lệnh", // _draft
+      hmc_pallet_strip_empty: "Trống", // _draft
+      hmc_pallet_strip_empty_detail: "Pallet này hiện không có lệnh sản xuất.", // _draft
+      hmc_pallet_strip_inferred: "Số pallet được suy đoán từ dữ liệu chi tiết cố định", // _draft
+      hmc_pallet_strip_part_name: "Tên chi tiết", // _draft
+      hmc_pallet_strip_work_order: "Số lệnh", // _draft
+      hmc_pallet_strip_process: "Công đoạn", // _draft
+      hmc_pallet_strip_last_activity: "Hoạt động gần nhất", // _draft
+      hmc_pallet_strip_current: "Đang hiển thị", // _draft
+      hmc_pallet_strip_switch: "Chuyển hiển thị", // _draft
+      hmc_pallet_strip_no_order: "Không có lệnh", // _draft
+      hmc_pallet_strip_order_count: "{{count}} lệnh", // _draft
+      hmc_pallet_strip_shared: "Cùng pallet {{number}}", // _draft
+      hmc_pallet_strip_other: "Khác {{count}}", // _draft
       machine_details: "Chi tiết máy",
       machine_status: "Máy · {{status}}",
       work_order_status: "Lệnh · {{status}}",

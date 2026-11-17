@@ -6,9 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const outDir = "D:/04_SoftNet/ops/codex-inbox/20261117-1940-pallet-strip";
+const outDir = process.env.MACHTILE_E2E_OUT_DIR || path.join(root, ".e2e-out");
 await mkdir(outDir, { recursive: true });
-const baseFiles = new Map(["index.html", "app.js", "i18n.js", "styles.css"].map((file) => [file, childProcess.execFileSync("git", ["show", `HEAD:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));
+const baseFiles = new Map(["index.html", "app.js", "i18n.js", "styles.css"].map((file) => [file, childProcess.execFileSync("git", ["show", `86231d0:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));
 const mod = await import(pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE || "D:/04_SoftNet/temp-playwright-deps-20261008/node_modules/playwright/index.mjs").href);
 const { chromium } = mod.default || mod;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
@@ -39,18 +39,23 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
-async function open(base, { card = false, strip = false, rpc = null, viewport = { width: 1280, height: 800 } } = {}) {
+async function open(base, { card = false, strip = false, mapped = true, machineCode = "B01", rpc = null, rpcSequence = null, fixture = false, viewport = { width: 1280, height: 800 } } = {}) {
+  let rpcCalls = 0;
   const context = await browser.newContext({ serviceWorkers: "block", viewport });
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.hostname !== "127.0.0.1") return route.abort();
     const relative = url.pathname.replace(/^\//, "") || "index.html";
-    if (relative === "config.js") return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${card},enableHmcPalletStrip:${strip},hmcPalletCardMachines:["B01"],hmcPalletMap:${JSON.stringify({ B01: b01Map })},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
-    if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_card_read")) return rpc instanceof Error
-      ? route.fulfill({ status: 503, contentType: mime[".json"], body: JSON.stringify({ message: rpc.message }) })
-      : route.fulfill({ contentType: mime[".json"], body: JSON.stringify(rpc) });
+    if (relative === "config.js") return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${card},enableHmcPalletStrip:${strip},hmcPalletCardMachines:["${machineCode}"],hmcPalletMap:${JSON.stringify(mapped ? { [machineCode]: b01Map } : {})},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
+    if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_card_read")) {
+      const response = Array.isArray(rpcSequence) ? rpcSequence[Math.min(rpcCalls++, rpcSequence.length - 1)] : rpc;
+      if (response?.delay) await new Promise((resolve) => setTimeout(resolve, response.delay));
+      return response instanceof Error
+        ? route.fulfill({ status: 503, contentType: mime[".json"], body: JSON.stringify({ message: response.message }) })
+        : route.fulfill({ contentType: mime[".json"], body: JSON.stringify(response?.body ?? response) });
+    }
     if (base && baseFiles.has(relative)) return route.fulfill({ contentType: mime[path.extname(relative)], body: baseFiles.get(relative) });
-    if (!base && relative === "app.js" && (card || strip)) return route.fulfill({ contentType: mime[".js"], body: fixtureApp(await readFile(path.join(root, relative), "utf8")) });
+    if (!base && relative === "app.js" && fixture) return route.fulfill({ contentType: mime[".js"], body: fixtureApp(await readFile(path.join(root, relative), "utf8")).replaceAll('machine:"B01"', `machine:"${machineCode}"`).replaceAll('machine: "B01"', `machine: "${machineCode}"`) });
     return route.fallback();
   });
   const page = await context.newPage();
@@ -58,19 +63,21 @@ async function open(base, { card = false, strip = false, rpc = null, viewport = 
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded" });
   try { await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid article").length > 0, null, { timeout: 5000 }); }
   catch (error) { throw new Error(`fixture did not render: ${errors.join(" | ") || error.message}`); }
-  return { context, page, errors };
+  return { context, page, errors, rpcCalls: () => rpcCalls };
 }
 const dom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard, .job-part-number, .report-part-number, .finish-part-number").forEach((node) => node.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); });
 const rpc = { ok: true, machine_code: "B01", pallets: [1, 2, 3, 4, 5, 6].map((pallet_no) => ({ pallet_no, parts: [] })) };
 try {
-  const baseline = await open(true), flagOff = await open(false);
-  assert.equal(await dom(flagOff.page), await dom(baseline.page), "flag off stays byte-identical to HEAD");
-  assert.equal(await flagOff.page.locator("[data-hmc-pallet-strip]").count(), 0);
-  assert.deepEqual(flagOff.errors, []);
-  await baseline.context.close(); await flagOff.context.close();
+  for (const flags of [{ card: false, strip: false, rpc: null }, { card: true, strip: false, rpc: { ok: true, pallets: [] } }]) {
+    const baseline = await open(true, flags), flagOff = await open(false, flags);
+    assert.equal(await dom(flagOff.page), await dom(baseline.page), "flag-off/old-flag DOM stays byte-identical to main 86231d0");
+    assert.equal(await flagOff.page.locator("[data-hmc-pallet-strip]").count(), 0);
+    assert.deepEqual(flagOff.errors, []);
+    await baseline.context.close(); await flagOff.context.close();
+  }
 
   for (const viewport of [{ width: 360, height: 800 }, { width: 1280, height: 800 }]) {
-    const opened = await open(false, { card: true, strip: true, rpc, viewport });
+    const opened = await open(false, { card: true, strip: true, rpc, fixture: true, viewport });
     const card = opened.page.locator('[data-hmc-pallet-strip="B01"]');
     await card.waitFor();
     assert.equal(await card.locator('[data-hmc-strip-chip]:not([data-hmc-strip-chip="unmatched"])').count(), 6);
@@ -84,20 +91,43 @@ try {
     await card.locator('[data-hmc-workpiece="1:1-1"]').click();
     assert.equal(await card.locator('[data-hmc-workpiece-detail="1:1-1"] [data-hmc-strip-order]').count(), 1, "level two opens per-order details");
     assert.match(await card.locator('[data-hmc-workpiece-detail="1:1-1"]').textContent(), /XX01202610290003/);
-    await card.screenshot({ path: path.join(outDir, `pallet-strip-r2-${viewport.width}x${viewport.height}.png`) });
+    await card.screenshot({ path: path.join(outDir, `pallet-strip-r3-${viewport.width}x${viewport.height}.png`) });
     await card.locator('[data-hmc-strip-chip="1"]').click();
     assert.equal(await card.locator("[data-hmc-strip-panel]").count(), 0, "same chip collapses");
     await card.locator('[data-hmc-strip-chip="4"]').click();
     assert.match(await card.locator('[data-hmc-strip-panel="4"]').textContent(), /HG-06.*121\/215（56%）/s);
     assert.match(await card.locator('[data-hmc-strip-chip="unmatched"]').textContent(), /其他 1/);
+    await card.locator('[data-hmc-strip-chip="unmatched"]').click();
+    await card.locator('[data-hmc-strip-panel="unmatched"] .card-order-pick').click();
+    const rerendered = opened.page.locator('[data-hmc-pallet-strip="B01"]');
+    await rerendered.locator('.card-orders-manual').waitFor();
+    assert.equal(await rerendered.locator('.card-order-auto[data-card-pick="B01"][data-card-pick-key=""]').count(), 1, "manual marker and restore-auto action stay in strip header");
     assert.deepEqual(opened.errors, []);
     await opened.context.close();
   }
 
-  const failed = await open(false, { card: true, strip: true, rpc: new Error("temporary") });
+  const failed = await open(false, { card: true, strip: true, mapped: true, rpc: new Error("temporary"), fixture: true });
   await failed.page.waitForTimeout(150);
-  assert.equal(await failed.page.locator('[data-hmc-pallet-strip="B01"]').count(), 0, "failure has no misleading strip");
-  assert.ok(await failed.page.getByText("SF-03本體", { exact: true }).count() >= 1, "failure preserves today's card");
+  assert.equal(await failed.page.locator('[data-hmc-pallet-strip="B01"]').count(), 1, "mapped machine renders without RPC data");
+  assert.equal(failed.rpcCalls(), 0, "mapped machine does not call pallet RPC");
   await failed.context.close();
+
+  const b02Rpc = { ok: true, machine_code: "B02", pallets: [{ pallet_no: 1, parts: ["SF-03-01"] }, ...[2, 3, 4, 5, 6].map((pallet_no) => ({ pallet_no, parts: [] }))] };
+  const inferred = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: b02Rpc, fixture: true });
+  const inferredCard = inferred.page.locator('[data-hmc-pallet-strip="B02"]');
+  await inferredCard.waitFor();
+  assert.match(await inferredCard.locator('[data-hmc-strip-chip="1"] i').textContent(), /推算/);
+  await inferredCard.locator('[data-hmc-workpiece="1:SF-03-01"]').click();
+  const before = await inferredCard.evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
+  await inferred.page.evaluate(() => { const now = Date.now(); Date.now = () => now + 31000; renderWorkOrders(); });
+  await inferred.page.waitForTimeout(50);
+  const during = await inferred.page.locator('[data-hmc-pallet-strip="B02"]').last().evaluate((node) => ({ height: node.getBoundingClientRect().height, panel: node.querySelector('[data-hmc-strip-panel]')?.getAttribute('data-hmc-strip-panel'), detail: node.querySelector('[data-hmc-workpiece-detail]')?.getAttribute('data-hmc-workpiece-detail') }));
+  assert.deepEqual(during, before, "31-second reload keeps strip, open pallet/workpiece, and layout height");
+  await inferred.context.close();
+
+  const b02Empty = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: { ok: true, pallets: [] }, fixture: true });
+  await b02Empty.page.waitForTimeout(150);
+  assert.equal(await b02Empty.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "unmapped machine still requires non-empty RPC state for strip");
+  await b02Empty.context.close();
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
 console.log("PASS: HMC pallet-card and pallet-strip browser assertions");

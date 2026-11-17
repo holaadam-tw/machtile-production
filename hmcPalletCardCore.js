@@ -82,10 +82,16 @@
         const entries = workpiece.orders || [];
         const done = entries.reduce((sum, entry) => sum + Number(orderOf(entry).done || 0), 0);
         const total = entries.reduce((sum, entry) => sum + Number(orderOf(entry).total || 0), 0);
+        const statusEntry = entries.find((entry) => {
+          const order = orderOf(entry);
+          return Number(order.total) > 0 && Number(order.done) >= Number(order.total);
+        });
+        const statusOrder = statusEntry ? orderOf(statusEntry) : null;
         return { ...workpiece, orders: entries, orderCount: entries.length, done, total,
-          percent: total > 0 ? Math.round((done / total) * 100) : 0,
+          percent: total > 0 ? Math.floor((done / total) * 100) : 0,
           isActive: Boolean(activeKey && entries.some((entry) => orderKey(entry) === activeKey)),
-          isOver: total > 0 && done > total };
+          isFull: Boolean(statusOrder), statusOrder,
+          isOver: entries.some((entry) => Number(orderOf(entry).total) > 0 && Number(orderOf(entry).done) > Number(orderOf(entry).total)) };
       });
       return { ...pallet, workpieces, hasOrder: workpieces.some((workpiece) => workpiece.orderCount > 0),
         isActive: workpieces.some((workpiece) => workpiece.isActive), isOver: workpieces.some((workpiece) => workpiece.isOver), inferred };
