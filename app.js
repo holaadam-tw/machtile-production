@@ -15027,6 +15027,8 @@ function machtileFinishComboWrite(code, value) {
   try { localStorage.setItem(MACHTILE_FINISH_COMBO_KEY, JSON.stringify(all)); } catch { /* local-only recovery hint */ }
 }
 
+const machtileStandardFinishHandledClaims = new Set();
+
 function machtileFinishCloseSetResult(code, view, record = null) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
@@ -15135,6 +15137,10 @@ function machtileStandardFinishErrorCode(error) {
 function machtileStandardFinishSetClaimResult(code, view, record = null) {
   const flow = machtileStationReportState(machtileBatchRow(code));
   const combo = machtileFinishComboRead()[code];
+  const claimKey = view?.phase === "applied" ? String(record?.commandUuid || "") : "";
+  if (claimKey && machtileStandardFinishHandledClaims.has(claimKey)) return;
+  if (claimKey) machtileStandardFinishHandledClaims.add(claimKey);
+  if (view?.phase === "applied" || (view?.terminal && view?.phase !== "pending")) machtileFinishComboWrite(code, null);
   if (!flow.close?.nextStep) {
     if (view?.phase === "applied" && record?.standardFinishClaim) showToast(machtileTranslate("standard_finish_claim_success"));
     if (view?.phase === "applied" && combo?.intent === "claim-start" && combo.stage === "claim") {
@@ -15152,7 +15158,7 @@ function machtileStandardFinishSetClaimResult(code, view, record = null) {
   }
   const claimedMachine = view?.claimNext?.claimedMachineCode;
   flow.close.claim = view?.phase === "applied"
-    ? { phase: "applied", message: machtileTranslate("standard_finish_claim_success"), canStart: view?.claimNext?.canStart === true,
+    ? { phase: "applied", message: machtileTranslate("standard_finish_claim_success"), canStart: view?.claimNext?.canStart === true, commandUuid: record?.commandUuid || null,
       orderNo: view?.claimNext?.orderNo || flow.close.identity?.orderNo || null,
       indexSn: view?.claimNext?.indexSn || flow.close.nextStep?.nextIndexSn || null }
     : view?.phase === "pending" ? { phase: "pending", message: machtileTranslate("standard_finish_claiming") }
@@ -15212,7 +15218,7 @@ async function machtileStandardFinishAutoStart(code, claimed) {
 async function machtileStandardFinishClaim(code, intent = "claim-only") {
   const flow = machtileStationReportState(machtileBatchRow(code));
   const next = flow.close?.nextStep;
-  if (!machtileStandardFinishEnabled(code) || next?.case !== "same_class_here" || !next.canClaimHere || !next.poolItemId || flow.close.claim?.phase === "pending") return;
+  if (!machtileStandardFinishEnabled(code) || next?.case !== "same_class_here" || !next.canClaimHere || !next.poolItemId || ["pending", "applied"].includes(flow.close.claim?.phase)) return;
   const identity = flow.close?.identity;
   if (!identity?.orderNo || !identity?.partNo) return;
   let uuid = flow.close.claim?.retry ? flow.close.claim.commandUuid : "";
@@ -15230,7 +15236,8 @@ async function machtileStandardFinishClaim(code, intent = "claim-only") {
       const errorCode = machtileStandardFinishErrorCode(error);
       const businessReject = ["ALREADY_CLAIMED", "NOT_ELIGIBLE", "STALE", "CLAIM_NEXT_DISABLED"].includes(errorCode);
       const retry = info.retry && !businessReject;
-      flow.close.claim = { phase: "error", message: retry ? machtileTranslate("standard_finish_network_error") : machtileStandardFinishClaimText(errorCode, error?.message), commandUuid: uuid, retry, businessReject };
+      if (flow.close) flow.close.claim = { phase: "error", message: retry ? machtileTranslate("standard_finish_network_error") : machtileStandardFinishClaimText(errorCode, error?.message), commandUuid: uuid, retry, businessReject };
+      if (businessReject) machtileFinishComboWrite(code, null);
       machtileRenderStationReportSurfaces();
       return retry ? { recordExtra: { standardFinishClaim: true } } : null;
     },
@@ -25265,7 +25272,8 @@ function openFinishReport(orderId, options = {}) {
 function closeReport() {
   const closingMachineCode = String(machtileSingleStationReportState.machineCode || "").trim().toUpperCase();
   const closingFlow = closingMachineCode ? machtileStationReportState(machtileBatchRow(closingMachineCode)) : null;
-  if (closingFlow) closingFlow.close = null;
+  // claim_next 尚未確認時保留 owner state，讓網路錯誤可保存 pending 並繼續輪詢。
+  if (closingFlow && closingFlow.close?.claim?.phase !== "pending") closingFlow.close = null;
   clearTimeout(machtileBackgroundPreview.timer);
   Object.assign(machtileBackgroundPreview, { timer: null, queued: false, fingerprint: "", count: 0, formKey: "" });
   machtileReportSheetOpenToken = "";
@@ -26719,7 +26727,7 @@ function machtileRenderSingleStationReportBase() {
   document.getElementById("reportForm")?.classList.toggle("is-finish-success", Boolean(finished));
   if (finished && row && order) {
     const next = flow.close.nextStep;
-    const claimable = next?.case === "same_class_here" && next.canClaimHere && next.poolItemId
+    const claimable = next?.case === "same_class_here" && next.canClaimHere && next.poolItemId && flow.close.claim?.phase !== "applied"
       && (flow.close.claim?.phase !== "error" || flow.close.claim?.retry === true);
     const processNo = flow.close.identity?.indexSn ?? order.stationStep ?? "—";
     const cumulative = flow.singleReport?.overlayTotal ?? order.done ?? "—";
@@ -26732,9 +26740,9 @@ function machtileRenderSingleStationReportBase() {
     holder.innerHTML = `<section class="finish-success-panel" data-standard-finish-case="${escapeHtml(next?.case || "none")}" role="status">
       <h3>✅ 完工成功</h3><p>第 ${escapeHtml(processNo)} 道 ${escapeHtml(order.process || "—")} / 本道累計 ${escapeHtml(cumulative)} 件</p>
       ${nextLine}${claimStatus}<div class="station-report-actions">
-      ${claimable ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claiming") : machtileTranslate("standard_finish_claim"))}</button>` : ""}
-      <button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claiming") : machtileTranslate("standard_finish_other_order"))}</button>
-      <button type="button" class="secondary-action station-report-action" data-standard-finish-skip="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claiming") : machtileTranslate("standard_finish_skip"))}</button></div></section>`;
+      ${claimable ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claim_pending") : machtileTranslate("standard_finish_claim"))}</button>` : ""}
+      <button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claim_pending") : machtileTranslate("standard_finish_other_order"))}</button>
+      <button type="button" class="secondary-action station-report-action" data-standard-finish-skip="${escapeHtml(code)}"${claimBusy ? " disabled" : ""}>${escapeHtml(claimBusy ? machtileTranslate("standard_finish_claim_pending") : machtileTranslate("standard_finish_skip"))}</button></div></section>`;
     submit.hidden = true;
     return;
   }
@@ -27176,14 +27184,22 @@ async function machtileRunBackgroundPreview(fingerprint) {
   const code = machtileSingleStationReportState.machineCode;
   if (machtileStationCmd.pending[code]) return;
   if (machtileBackgroundPreview.count >= 2) return;
+  const sheetToken = machtileReportSheetOpenToken;
+  const reportType = activeReportType;
+  const owner = { fingerprint, sheetToken, reportType, code };
+  const flow = machtileStationReportState(machtileBatchRow(code));
+  const card = machtileStationReportCore()?.resultCard(flow?.result);
+  if (flow?.phase === "blocked" || machtileSimpleReportFinalUncertain(flow, card)) return;
+  const before = { phase: flow.phase, preview: flow.preview, result: flow.result, args: flow.args, error: flow.error };
   machtileBackgroundPreview.count += 1;
   machtileBackgroundPreview.inFlight = true;
   try {
-    await machtileStationReportSubmitPreview(code, { background: true });
+    await machtileStationReportSubmitPreview(code, { background: true, backgroundOwner: owner });
     if (fingerprint !== machtileBackgroundPreviewFingerprint()) machtileInvalidateBackgroundPreview();
   } finally {
-    const flow = machtileStationReportState(machtileBatchRow(code));
-    if (["preview-timeout", "blocked"].includes(flow.phase) || flow.error) {
+    const producedFailure = (["preview-timeout", "blocked"].includes(flow.phase) && flow.phase !== before.phase)
+      || (flow.error && flow.error !== before.error);
+    if (producedFailure) {
       flow.phase = "idle";
       flow.preview = null;
       flow.result = null;
@@ -27539,6 +27555,11 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
   const order = singleOrder || machtileBatchSelectedOrder(code);
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
+  const backgroundStillOwns = () => !options.background || (options.backgroundOwner?.code === machtileSingleStationReportState.machineCode
+    && options.backgroundOwner.sheetToken === machtileReportSheetOpenToken
+    && options.backgroundOwner.reportType === activeReportType
+    && options.backgroundOwner.fingerprint === machtileBackgroundPreviewFingerprint());
+  if (!backgroundStillOwns()) return;
   if (options.batch && order) flow.batchOrder = order;
   // 批次頁不可沿用單台報工留下的 reportType/finish 等狀態（否則可能送出關站）
   if (options.batch) flow.singleReport = null;
@@ -27563,8 +27584,10 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
   }
   try {
     if (await machtileHasPendingReport(code, order)) { block("這台還有報工在送出中，請等它送完再報"); return; }
+    if (!backgroundStillOwns()) return;
     if (config.reportTotalSemanticsEnabled === true) {
       const totals = await machtileFreshReportedTotals(order);
+      if (!backgroundStillOwns()) return;
       const reported = Number(totals.goodDone);
       const failReported = machtileReportedFailOrNull(totals);
       machtileBatchState.freshReportedByProcess.set(String(order.processId), reported);
@@ -27578,6 +27601,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     }
   } catch (error) { block(machtileTranslate("report_total_unavailable")); return; }
   if (singleOrder) {
+    if (!backgroundStillOwns()) return;
     const reportType = activeReportType === "finish" ? "finish" : "noon";
     let shortCompletion = null;
     try { if (reportType === "finish") shortCompletion = machtileShortCompletionValue(order); }
@@ -27613,6 +27637,7 @@ async function machtileStationReportSubmitPreview(code, options = {}) {
     // 已報已等於總完成數：不捏造 1 件給智慧報工（其合約要求合計至少 1）。
     // 仍建立 completed_qty=0 的正式 finish 紀錄，再沿用既有 close command 收尾。
     if (reportType === "finish" && Number(row.good) === 0 && Number(row.bad) === 0) {
+      if (!backgroundStillOwns()) return;
       const zeroCommandUuid = crypto.randomUUID();
       flow.phase = "submitting-report";
       flow.error = "";

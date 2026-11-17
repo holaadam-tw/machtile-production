@@ -140,6 +140,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     mode: "hold",             // 輪詢回覆：hold（pending→claimed）／applied／rejected／expired
     reject: { code: "ORDER_MISMATCH", message: "Manufacture.OrderNO=XX01202509300001 IndexSN=2" },
     abortNextSubmit: false,
+    submitDelayMs: 0,
     hangSubmit: false,        // 送出的 RPC 不回（測逾時）
     serverSkewMs: 0,          // 伺服器時間＝真實時間－這個值（模擬平板時鐘快）
     procOverride: {},         // 開卡重讀工序時改寫某台的列（例：已離站、沒有料號）
@@ -200,6 +201,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       be.stationReads++;
       const body = JSON.parse(req.postData() || "{}");
       be.submits.push(body);
+      if (be.submitDelayMs) await new Promise((resolve) => setTimeout(resolve, be.submitDelayMs));
       if (be.rpcMissing) return json(404, { code: "PGRST202", message: "Could not find the function public.machtile_submit_station_command" });
       if (be.abortNextSubmit) { be.abortNextSubmit = false; return route.abort("failed"); }
       if (be.submitError) return json(400, { code: "P0001", message: be.submitError, details: null, hint: null });
@@ -1901,7 +1903,7 @@ console.log("\n== 390px：連打三位數只局部更新，input identity 與完
   // 讀取完成時整張確認卡會重畫一次（main 既有行為）；這裡要驗的是「打字中」不重建 input
   await page.waitForFunction(() => { const b = document.querySelector("#machtileStationCmdSheet [data-station-cmd-confirm]"); return b && !b.disabled; });
   await page.evaluate(() => { window.__dailyInputIdentity = document.querySelector("[data-station-cmd-daily-qty]"); });
-  await dailyField(page).pressSequentially("327");
+  await dailyField(page).pressSequentially("327", { delay: 50 });
   ok(await page.evaluate(() => window.__dailyInputIdentity === document.querySelector("[data-station-cmd-daily-qty]")), "連打三位數後 input 元素 identity 不變");
   const typed = await dailyField(page).inputValue();
   ok(typed === "327", "three sequential keystrokes preserve value 327", typed);
@@ -2624,6 +2626,8 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     await page.evaluate((row) => {
       machtileSingleStationReportState.loading = false;
       machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+      const flow = machtileStationReportState(machtileBatchRow("A04"));
+      flow.close ||= { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
       const view = MachTileStationCommandCore.statusView(row, "close", 0);
       machtileFinishCloseSetResult("A04", view);
       machtileRenderStationReportSurfaces();
@@ -2712,6 +2716,18 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
       identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 },
     };
   });
+  const restoreCloseThroughRealFlow = async () => {
+    be.mode = "applied";
+    await page.evaluate(async () => {
+      const flow = machtileStationReportState(machtileBatchRow("A04"));
+      flow.singleReport = { ...(flow.singleReport || {}), reportType: "finish" };
+      flow.result = { command_type: "report", command_uuid: crypto.randomUUID(), status: "applied", applied_at: new Date().toISOString() };
+      await machtileFinishCloseAfterAppliedReport("A04", { p_expected_order_no: "XX01202502050012", p_expected_part_no: "HCG-06-01", p_expected_index_sn: 5,
+        p_manufacture_ii_id: "C011E0ZE2YZJ", p_expected_simulation_id: "SIM-A04" }, crypto.randomUUID());
+      await machtileStationCmdPoll("A04");
+    });
+    await page.waitForFunction(() => !machtileStationCmd.pending.A04, null, { timeout: 10000 });
+  };
   const scenarios = [
     ["same_class_here", { next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 }],
     ["other_class", { next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: false, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 }],
@@ -2760,10 +2776,10 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   await page.evaluate(() => machtileCloseCardSelection());
   await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
   await page.waitForTimeout(300);
+  await restoreCloseThroughRealFlow();
   await page.evaluate(() => {
     machtileSingleStationReportState.loading = false;
     machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
-    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
   });
 
   await page.evaluate(() => {
@@ -2772,19 +2788,29 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   });
   be.mode = "applied";
   await page.evaluate(() => { selectedOrder = { ...selectedOrder, id: "WRONG-SELECTED-ORDER", drawing: "WRONG-DRAWING" }; });
-  await page.locator("#finishSheet [data-standard-finish-claim]").click();
+  await page.evaluate(() => { window.__claimToastCount = 0; const original = showToast; showToast = (...args) => { if (String(args[0] || "").includes("接單成功")) window.__claimToastCount += 1; return original(...args); }; });
+  await page.evaluate(() => machtileStandardFinishClaim("A04"));
+  await page.waitForFunction(() => machtileStationCmd.pending.A04?.commandType === "claim_next"
+    || machtileStationReportState(machtileBatchRow("A04")).close?.claim?.phase === "applied"
+    || document.getElementById("finishSheet")?.getAttribute("aria-hidden") === "true");
+  await page.evaluate(() => { if (machtileStationCmd.pending.A04?.commandType === "claim_next") return machtileStationCmdPoll("A04"); });
   await page.waitForFunction(() => document.getElementById("finishSheet")?.getAttribute("aria-hidden") === "true", null, { timeout: 10000 });
   ok(be.submits.at(-1)?.p_command_type === "claim_next" && be.submits.at(-1)?.p_pool_item_id === "pool-next-1"
     && be.submits.at(-1)?.p_expected_order_no === "XX01202502050012" && be.submits.at(-1)?.p_expected_part_no === "HCG-06-01",
   "claim_next payload 使用 close 保存的真實工單與料號，不受 selectedOrder 漂移影響", JSON.stringify(be.submits.at(-1)));
   ok(be.submits.filter(item => item.p_command_type === "start").length === 0, "claim 成功關閉且不自動開工");
+  const afterAppliedClaimCount = be.submits.filter(item => item.p_command_type === "claim_next").length;
+  await page.evaluate(() => machtileStandardFinishClaim("A04"));
+  await page.waitForTimeout(100);
+  ok(be.submits.filter(item => item.p_command_type === "claim_next").length === afterAppliedClaimCount, "claim applied 後不能送出第二筆 claim_next");
+  ok(await page.evaluate(() => window.__claimToastCount) === 1, "claim applied 結果只處理一次、只顯示一個 toast");
 
   await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
   await page.waitForTimeout(300);
+  await restoreCloseThroughRealFlow();
   await page.evaluate(() => {
     machtileSingleStationReportState.loading = false;
     machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
-    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
   });
 
   const failureCases = [
@@ -2820,11 +2846,31 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
 
   await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
   await page.waitForTimeout(300);
+  await restoreCloseThroughRealFlow();
   await page.evaluate(() => {
     machtileSingleStationReportState.loading = false;
     machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
-    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
   });
+
+  // claim in-flight 時按 ✕，隨後網路失敗：不得拋錯，仍保存同 uuid pending 並輪詢。
+  be.submitDelayMs = 250;
+  be.abortNextSubmit = true;
+  const pageErrorsBeforeClosePending = realErrors(errors).length;
+  await page.evaluate(() => {
+    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6 精銑", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
+    machtileRenderStationReportSurfaces();
+  });
+  await page.locator("#finishSheet [data-standard-finish-claim]").click();
+  await page.waitForFunction(() => machtileStationReportState(machtileBatchRow("A04")).close?.claim?.phase === "pending");
+  await page.evaluate(() => closeReport());
+  await page.waitForFunction(() => machtileStationCmd.pending.A04?.standardFinishClaim === true, null, { timeout: 10000 });
+  ok(realErrors(errors).length === pageErrorsBeforeClosePending, "claim pending 後按 ✕＋網路錯誤不拋 TypeError", realErrors(errors).slice(pageErrorsBeforeClosePending).join(" | "));
+  ok(await page.evaluate(() => machtileStationCmd.pending.A04?.poolItemId === "pool-next-1"), "關閉後網路錯誤仍保存 claim pending 並輪詢");
+  be.submitDelayMs = 0;
+  await page.evaluate(() => { delete machtileStationCmd.pending.A04; machtileStationCmdSavePending(); machtileFinishComboWrite("A04", null); });
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(300);
+  await restoreCloseThroughRealFlow();
 
   be.abortNextSubmit = true;
   await page.evaluate(() => {
@@ -3025,7 +3071,7 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
       flow.result = { command_type: "report", command_uuid: reportUuid, status: "applied", applied_at: new Date().toISOString() };
       flow.close = null;
       await machtileFinishCloseAfterAppliedReport("A04", { p_expected_order_no: "XX01202502050012", p_expected_part_no: "HCG-06-01", p_expected_index_sn: 5,
-        p_manufacture_ii_id: "C011E0ZE2YZJ", p_expected_simulation_id: "SIM-E2E-A04" }, reportUuid);
+        p_manufacture_ii_id: "C011E0ZE2YZJ", p_expected_simulation_id: "SIM-A04" }, reportUuid);
     }, { reportUuid });
     ok(be.submits.length === before + 1 && be.submits.at(-1).p_command_type === "close", `完工後送出一筆關站（${reportUuid.slice(0, 4)}）`);
     const uuid = be.submits.at(-1).p_command_uuid;
@@ -3102,6 +3148,23 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   await pollTo("applied", bgUuid);
   ok(await page.locator("#reportSheet.is-open").count() === 1, "別台的報工畫面開著：A04 關站 applied 不會把它關掉");
   await page.evaluate(() => closeReport());
+
+  // reviewer r2：三種離開完成面板的方式都走真實 close flow；重開完工／報工必須是正常表單。
+  for (const [action, selector] of [["other", "[data-standard-finish-other]"], ["skip", "[data-standard-finish-skip]"], ["x", null]]) {
+    await openFinish();
+    const actionUuid = await sendCloseFromSheet(crypto.randomUUID());
+    await pollTo("applied", actionUuid);
+    await page.locator("#finishSheet .finish-success-panel").waitFor();
+    if (selector) await page.locator(`#finishSheet ${selector}`).click(); else await page.evaluate(() => closeReport());
+    if (action === "other") await page.evaluate(() => { try { machtileCloseCardSelection(); } catch {} });
+    await openFinish();
+    ok(await page.locator("#finishSheet .finish-success-panel").count() === 0 && await page.locator("#completedQty").isVisible(), `[${action}] 重開完工是正常數量表單`);
+    await page.evaluate(() => closeReport());
+    await page.evaluate(({ orderId, processId }) => openReport(orderId, { machine: "A04", processId, reportType: "noon" }), { orderId: procs[1].wo, processId: id(304) });
+    await page.waitForTimeout(300);
+    ok(await page.locator("#reportSheet .finish-success-panel").count() === 0 && await page.locator("#completedQty").isVisible(), `[${action}] 重開報工是正常數量表單`);
+    await page.evaluate(() => closeReport());
+  }
   ok(realErrors(errors).length === 0, "完工關站情境沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

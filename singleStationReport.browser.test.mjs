@@ -852,6 +852,45 @@ const bgChangedAt = calls.commands.length;
   assert.deepEqual(calls.commands.slice(bgSubmitAt).map(c => c.p_preview), [true, false], "after the background cap, submit performs the current preview and final");
 await bg.close();
 
+// M3：背景預覽不得清掉既有的「請勿重送」或 submit-path blocked guard。
+const bgGuard = await openOperatorPage();
+await bgGuard.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = true;
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "blocked";
+  flow.args = { p_command_uuid: "guard-submit-uuid" };
+  flow.error = "舊 MES 已套用但 App 後續紀錄失敗：請勿重送數量";
+  machtileRenderStationReportSurfaces();
+});
+const guardCallsAt = calls.commands.length;
+await bgGuard.locator("#completedQty").fill("962");
+await bgGuard.waitForTimeout(1100);
+assert.equal(calls.commands.length, guardCallsAt, "background preview does not run over an existing do-not-resend guard");
+assert.deepEqual(await bgGuard.evaluate(() => { const f = machtileStationReportState(machtileBatchRow("A04")); return [f.phase, f.args?.p_command_uuid, f.error]; }),
+  ["blocked", "guard-submit-uuid", "舊 MES 已套用但 App 後續紀錄失敗：請勿重送數量"], "retyping preserves the existing submit-path warning and args");
+await bgGuard.close();
+
+// L1：背景 await 期間關閉／切到完工，舊 noon run 必須失去 owner，不能走 zero-finish 真實寫入。
+const bgOwner = await openOperatorPage();
+await bgOwner.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = true;
+  window.__savedHasPendingReport = machtileHasPendingReport;
+  window.__pendingGate = new Promise((resolve) => { window.__releasePendingGate = resolve; });
+  machtileHasPendingReport = async () => window.__pendingGate;
+  const fingerprint = machtileBackgroundPreviewFingerprint();
+  window.__staleBackgroundRun = machtileRunBackgroundPreview(fingerprint);
+});
+await bgOwner.waitForTimeout(100);
+const ownerWritesAt = calls.reports.length + calls.closeCommands.length;
+await bgOwner.evaluate(async ({ orderId, processId }) => {
+  closeReport();
+  await openFinishReport(orderId, { machine: "A04", processId });
+  window.__releasePendingGate(false);
+}, { orderId: workOrderId, processId });
+await bgOwner.evaluate(async () => { await window.__staleBackgroundRun; machtileHasPendingReport = window.__savedHasPendingReport; });
+assert.equal(calls.reports.length + calls.closeCommands.length, ownerWritesAt, "stale background run cannot reach zero-finish real writes without a submit tap");
+await bgOwner.close();
+
 const bgOff = await openOperatorPage();
 await bgOff.evaluate(() => {
   config.reportBackgroundPreviewEnabled = false;

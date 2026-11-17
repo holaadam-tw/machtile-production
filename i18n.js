@@ -218,6 +218,7 @@
       standard_finish_qty: "可做 {{available}}／計畫 {{plan}} 件",
       standard_finish_claim: "接下一道",
       standard_finish_claiming: "正在請工廠派到這台…",
+      standard_finish_claim_pending: "接單中…",
       standard_finish_claim_success: "接單成功，可以直接開工。",
       standard_finish_combo_title: "接下一道並開工",
       standard_finish_combo_question: "第 {{done}} 道已完工。要接第 {{next}} 道（共 {{total}} 道，可做 {{available}} 件）並馬上開工嗎？",
@@ -251,6 +252,7 @@
       pick_order_confirm: "把 {{order}} 第 {{step}} 道掛到 {{machine}}？（掛上後要再按開工才算開始）",
       standard_finish_start: "開工",
       standard_finish_other_order: "選其他工單",
+      standard_finish_skip: "先不接，回首頁",
       abnormal_report: "異常回報",
       inspection_status_loading: "檢驗狀態讀取中",
       inspection_status_error: "檢驗狀態讀取失敗",
@@ -859,6 +861,7 @@
       standard_finish_qty: "Có thể làm {{available}} / kế hoạch {{plan}} sản phẩm",
       standard_finish_claim: "Nhận công đoạn kế tiếp",
       standard_finish_claiming: "Đang yêu cầu nhà máy giao cho máy này…",
+      standard_finish_claim_pending: "Đang nhận việc…", // _draft
       standard_finish_claim_success: "Đã nhận việc; có thể bắt đầu ngay.",
       standard_finish_combo_title: "Nhận công đoạn kế tiếp và bắt đầu",
       standard_finish_combo_question: "Công đoạn {{done}} đã hoàn tất. Nhận công đoạn {{next}} (tổng {{total}} công đoạn, có thể làm {{available}} sản phẩm) và bắt đầu ngay?",
@@ -892,6 +895,7 @@
       pick_order_confirm: "Gắn lệnh {{order}} công đoạn {{step}} vào máy {{machine}}? (Sau khi gắn phải bấm “Bắt đầu” mới tính là bắt đầu)", // _draft
       standard_finish_start: "Bắt đầu",
       standard_finish_other_order: "Chọn lệnh khác",
+      standard_finish_skip: "Chưa nhận, về trang chủ", // _draft
       abnormal_report: "Báo cáo bất thường",
       inspection_status_loading: "Đang tải trạng thái kiểm tra", // _draft
       inspection_status_error: "Không thể tải trạng thái kiểm tra", // _draft

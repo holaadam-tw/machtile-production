@@ -594,6 +594,8 @@
       finishCloseSheetToken: text(rec.finishCloseSheetToken) || null,
       poolItemId: text(rec.poolItemId) || null,
       standardFinishClaim: rec.standardFinishClaim === true,
+      standardFinishComboIntent: text(rec.standardFinishComboIntent) || null,
+      standardFinishClaimSheetToken: text(rec.standardFinishClaimSheetToken) || null,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
