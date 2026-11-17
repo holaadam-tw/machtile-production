@@ -8440,10 +8440,13 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
   reportTotalState = { status: "loading", reported: null, failReported: null, start: null, processId };
   updateReportCounterPreview();
   try {
-    const [totals, rows] = await Promise.all([
-      machtileFreshReportedTotals(order),
-      supabaseFetch(`production_reports?select=report_type,report_payload,created_at&process_id=eq.${encodeURIComponent(processId)}&report_date=eq.${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1`),
-    ]);
+    const [totals, rows] = await window.MachTileReportTotalRefreshCore.retryRefresh(() => Promise.all([
+        machtileFreshReportedTotals(order),
+        supabaseFetch(`production_reports?select=report_type,report_payload,created_at&process_id=eq.${encodeURIComponent(processId)}&report_date=eq.${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1`),
+      ]), async () => {
+        const applied = await machtileLoadCardLegacyProgress(machtileDeferredLoadGeneration);
+        if (applied !== false) machtileRefreshCardSections();
+      }, { retries: 2, delayMs: 1000 });
     if (String(selectedOrder?.processId || "") !== processId) return null;
     const start = window.MachTileReportCounterCore.latestBaseline(Array.isArray(rows) ? rows : []);
     reportTotalState = { status: "ready", reported: Number(totals.goodDone), failReported: machtileReportedFailOrNull(totals), start: start?.qty ?? null, processId };
@@ -14601,8 +14604,9 @@ async function machtileFreshReportedTotals(order) {
   if (!process || !progressRow) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
   const progress = machtileBatchCore()?.cardProgress(Number(process.qty_completed || 0), progressRow, Date.now());
   if (!progress || !Number.isFinite(Number(progress.done))) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
-  const shown = order?.progressSource;
-  if (shown?.source && shown.source !== progress.source) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+  const adoption = window.MachTileReportTotalRefreshCore.adoptFreshProgress(order, progress);
+  if (!adoption.adopted) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+  if (adoption.sourceChanged) renderWorkOrders();
   return { goodDone: Math.max(0, Number(progress.done)), failDone: progress.legacyKnown && Number.isFinite(Number(progress.totalFail)) ? Math.max(0, Number(progress.totalFail)) : null };
 }
 // 開工補報比的是機台計數：總數語意開著時基準＝已報良品＋已報不良（機台計數含不良，owner 2026-10-31）；關著維持只看良品
@@ -16209,6 +16213,7 @@ document.addEventListener("input", (event) => {
   if (!ds || ds.state !== "ask") return;
   ds.value = input.value;
   const before = ds.gap ? "greater" : ds.less ? "less" : "equal";
+  const beforeGapKey = JSON.stringify(ds.gap ?? null);
   ds.gap = ds.reportedVerified === true ? machtileStationCmdCore.startQtyGap(input.value, ds.reportedQty) : null;
   const numeric = Number(input.value);
   ds.less = ds.reportedVerified === true && Number.isInteger(numeric) && numeric >= 0 && numeric < Number(ds.reportedQty);
@@ -16220,7 +16225,8 @@ document.addEventListener("input", (event) => {
     document.querySelector("#machtileStationCmdSheet [data-station-cmd-daily-error]")?.remove();
   }
   const after = ds.gap ? "greater" : ds.less ? "less" : "equal";
-  if (config.startBackfillEnabled === true && before !== after) machtileStationCmdUpdateBackfillUi();
+  // 2026-11-17 owner：打 327 提示／按鈕停在「補報 3 件」— 件數變了也要重畫（不只在大於／小於／相等切換時）
+  if (config.startBackfillEnabled === true && (before !== after || beforeGapKey !== JSON.stringify(ds.gap ?? null))) machtileStationCmdUpdateBackfillUi();
 });
 
 function machtileStationCmdUpdateBackfillUi() {

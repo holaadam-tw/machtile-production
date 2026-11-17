@@ -1499,6 +1499,30 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   current = current.slice(0, hmcStart) + "\n" + current.slice(hmcEnd);
   current = current.replace('  machtileHmcPalletCardState.clear();\n', '');
   current = current.replace('      ${machtileHmcPalletCardMarkup(machine)}${machtileCardOrdersMarkup(machine)}', '      ${machtileCardOrdersMarkup(machine)}');
+  // Report-total refresh is independently covered. Restore its two app.js changes
+  // before this historical switch-step byte-identity comparison.
+  current = current.replace(`    const [totals, rows] = await window.MachTileReportTotalRefreshCore.retryRefresh(() => Promise.all([
+        machtileFreshReportedTotals(order),
+        supabaseFetch(\`production_reports?select=report_type,report_payload,created_at&process_id=eq.\${encodeURIComponent(processId)}&report_date=eq.\${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1\`),
+      ]), async () => {
+        const applied = await machtileLoadCardLegacyProgress(machtileDeferredLoadGeneration);
+        if (applied !== false) machtileRefreshCardSections();
+      }, { retries: 2, delayMs: 1000 });`, `    const [totals, rows] = await Promise.all([
+      machtileFreshReportedTotals(order),
+      supabaseFetch(\`production_reports?select=report_type,report_payload,created_at&process_id=eq.\${encodeURIComponent(processId)}&report_date=eq.\${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1\`),
+    ]);`);
+  current = current.replace(`  const adoption = window.MachTileReportTotalRefreshCore.adoptFreshProgress(order, progress);
+  if (!adoption.adopted) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+  if (adoption.sourceChanged) renderWorkOrders();`, `  const shown = order?.progressSource;
+  if (shown?.source && shown.source !== progress.source) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));`);
+  // Daily-start backfill hint refresh is independently browser-tested. Restore
+  // its input-handler change before this historical switch-step comparison.
+  current = current.replace('  const beforeGapKey = JSON.stringify(ds.gap ?? null);\n', '');
+  current = current.replace('  // 2026-11-17 owner：打 327 提示／按鈕停在「補報 3 件」— 件數變了也要重畫（不只在大於／小於／相等切換時）\n', '');
+  current = current.replace(
+    '  if (config.startBackfillEnabled === true && (before !== after || beforeGapKey !== JSON.stringify(ds.gap ?? null))) machtileStationCmdUpdateBackfillUi();',
+    '  if (config.startBackfillEnabled === true && before !== after) machtileStationCmdUpdateBackfillUi();'
+  );
   // 第 2 階段（已開工，enableSwitchStepStarted 預設關）先整段拿掉、掛點還原；它旗標關時每一個掛點都等於原字串
   // （Locks()＝false、Restore／HandleClick 直接 return／回 false、CardMarkup()＝""、ForgetUser 沒有東西可丟；下面第 2 階段的「flag off」測試逐一斷言）。
   const startedSection = norm(startedSource);
@@ -1634,7 +1658,7 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
   // 「上一道擋住」（2026-11-14，三個預設關的旗標＋說明、核心 script tag、看板空殼 section、.prev-step-* 樣式）也一併濾掉
   const prevStepLine = /enablePrevStep|hideLegacyReportForStationMachines|上一道擋住|A\/B 機台已開智慧報工|prev-step|prevStepNotifyCore\.js\?v=|id="prevStepBoard"/;
   assert.equal(config.split("\n").filter((line) => !/enableSwitchStep|switchStepStarted|switchStepMove|enableHmcPalletCard|hmcPalletCardMachines|B01\/B02 卡片六盤料號推算|換道次|enableReturnClaim 也要開才有效/.test(line) && !prevStepLine.test(line)).join("\n"), show("config.js"), "config.js: only independently guarded HMC and switch-step flags");
-  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=") && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags and the version string");
+  assert.equal(unversion(read("index.html"), deployed).split("\n").filter((line) => !line.includes("./switchStepCore.js?v=") && !line.includes("./hmcPalletCardCore.js?v=") && !line.includes("./reportTotalRefreshCore.js?v=") && !prevStepLine.test(line)).join("\n"), unversion(show("index.html"), baseDeployed), "index.html: only independently guarded core script tags and the version string");
   const hmcStyles = read("styles.css").replace(/\.hmc-pallet-card \{[\s\S]*?\.hmc-pallet-row\.is-unmatched > b \{[^\n]+\}\n/, "");
   const filteredStyles = hmcStyles.split("\n").filter((line) => !/switch-step|換道次確認卡/.test(line) && !prevStepLine.test(line)).join("\n");
   const baseStyles = show("styles.css");
