@@ -12077,7 +12077,7 @@ function machtileDispatchPoolSectionMarkup(machine) {
     const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
     return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}">
         <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
-        <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}</span>
+        <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}${item.part_no ? ` · 料號 ${escapeHtml(item.part_no)}` : ""}</span>
         <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
         <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
         <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
@@ -15083,11 +15083,7 @@ function machtileFinishCloseOwnsOpenSheet(code, record) {
 function machtileFinishCloseAfterFinalResult(code, view, ownsSheet) {
   const machine = String(code || "").trim().toUpperCase();
   const flow = machtileStationReportState(machtileBatchRow(machine));
-  if (ownsSheet && view?.phase === "applied" && !flow.close?.nextStep) {
-    machtileSetStationReportBackgroundStatus(`${machine} ${flow.close?.title || view.title}`, { autoHideMs: 8000 });
-    closeReport();
-    return;
-  }
+  // 成功後一律留在精簡完成面板，讓作業員明確選擇下一步。
   machtileRenderStationReportSurfaces();
 }
 
@@ -15163,6 +15159,13 @@ function machtileStandardFinishSetClaimResult(code, view) {
       ? machtileTranslate("standard_finish_already_claimed_machine", { machine: claimedMachine })
       : machtileStandardFinishClaimText(view?.code, view?.detail), businessReject: true };
   machtileRenderStationReportSurfaces();
+  if (view?.phase === "applied") {
+    const step = flow.close.nextStep?.nextIndexSn ?? flow.close.claim?.indexSn ?? "—";
+    showToast(`接單成功：第 ${step} 道`);
+    closeReport();
+    void loadFromSupabase({ preserveDepartmentOnFailure: true }).then(() => { deriveMachines(); renderAll(); });
+    return;
+  }
   if (view?.phase === "applied" && combo?.intent === "claim-start" && combo.stage === "claim") {
     if (view?.claimNext?.canStart !== true) {
       machtileFinishComboWrite(code, { ...combo, stage: "start-error", message: "CAN_START_FALSE" });
@@ -26692,6 +26695,28 @@ function machtileRenderSingleStationReportBase() {
   machtileUpdateReportFailReason();
   const row = machtileSyncSingleStationReportRow();
   const flow = row ? machtileStationReportState(row) : null;
+  const finished = flow?.close?.phase === "applied";
+  document.getElementById("reportForm")?.classList.toggle("is-finish-success", Boolean(finished));
+  if (finished && row && order) {
+    const next = flow.close.nextStep;
+    const claimable = next?.case === "same_class_here" && next.canClaimHere && next.poolItemId
+      && (flow.close.claim?.phase !== "error" || flow.close.claim?.retry === true);
+    const processNo = flow.close.identity?.indexSn ?? order.stationStep ?? "—";
+    const cumulative = flow.singleReport?.overlayTotal ?? order.done ?? "—";
+    const nextLine = claimable
+      ? `<p class="finish-success-next">下一道：第 ${escapeHtml(next.nextIndexSn ?? "—")} 道 ${escapeHtml(next.nextName || "—")}，可做 ${escapeHtml(next.availableQty ?? "—")} 件</p>` : "";
+    const claimStatus = flow.close.claim?.phase === "error"
+      ? `<p class="standard-finish-claim-status" role="alert">${escapeHtml(flow.close.claim.message)}</p>` : "";
+    holder.hidden = false;
+    holder.innerHTML = `<section class="finish-success-panel" data-standard-finish-case="${escapeHtml(next?.case || "none")}" role="status">
+      <h3>✅ 完工成功</h3><p>第 ${escapeHtml(processNo)} 道 ${escapeHtml(order.process || "—")} / 本道累計 ${escapeHtml(cumulative)} 件</p>
+      ${nextLine}${claimStatus}<div class="station-report-actions">
+      ${claimable ? `<button type="button" class="primary-action station-report-action" data-standard-finish-claim="${escapeHtml(code)}">接下一道</button>` : ""}
+      <button type="button" class="secondary-action station-report-action" data-standard-finish-other="${escapeHtml(code)}">選其他工單</button>
+      <button type="button" class="secondary-action station-report-action" data-standard-finish-skip="${escapeHtml(code)}">先不接，回首頁</button></div></section>`;
+    submit.hidden = true;
+    return;
+  }
   if (row && order && machtileSimpleReportActive()) {
     // 作業員簡化畫面：同一顆主按鈕永遠留著（預覽 → 代收貨 → 正式送出），技術內容只給管理員。
     submit.hidden = false;
@@ -27000,6 +27025,7 @@ async function machtileSimpleReportPrimary(code) {
 }
 
 async function machtileSimpleReportPrimaryRun(code) {
+  clearTimeout(machtileBackgroundPreview.timer);
   const core = machtileStationReportCore();
   // 批次頁的共用列計算會把同一台的 row.good 清掉（例如打備註時）；送出前一律照畫面重新同步。
   machtileSyncSingleStationReportRow();
@@ -27023,6 +27049,10 @@ async function machtileSimpleReportPrimaryRun(code) {
   }
   const previewMatches = flow.phase === "previewed" && flow.preview && flow.preview.command_uuid === flow.args?.p_command_uuid
     && Number(flow.args?.p_good_qty) === Number(row.good) && Number(flow.args?.p_fail_qty) === Number(row.bad || 0);
+  if (previewMatches && card?.kind === "previewed" && !flow.error) {
+    await machtileStationReportSubmitFinal(code);
+    return;
+  }
   if (previewMatches && card?.kind === "preview-soft" && !flow.error) {
     // L3 #3：舊單確認沒寫原因 → 留在「確認沒錯，送出」狀態並提示寫原因，不重新預覽繞圈。
     if (card.guardCode === "OLD_ORDER_NEWER_OPEN" && !String(row.reportNote || "").trim()) {
@@ -27088,6 +27118,51 @@ function machtileHandleSimpleReportChange(event) {
   if (event.type === "change" && t.closest("#machtileOperatorList")) {
     machtileSingleStationReportState.operatorTouched = true;
     machtileApplySimpleReportChrome();
+    machtileScheduleBackgroundPreview();
+  }
+}
+
+// 單站背景預覽：最多一筆執行中及一筆待送。輸入改變後，舊結果立即失效；
+// 已在路上的回應若 fingerprint 不再相同，也不會留成可正式送出的預覽。
+const machtileBackgroundPreview = { timer: null, inFlight: false, queued: false, fingerprint: "" };
+function machtileBackgroundPreviewFingerprint() {
+  const order = selectedOrder;
+  if (!order || !machtileSingleStationReportActive() || !machtileSimpleReportActive()) return "";
+  return JSON.stringify({ order: order.processId || order.id, type: activeReportType,
+    total: document.getElementById("completedQty")?.value ?? "", defect: document.getElementById("defectQty")?.value ?? "",
+    reporters: machtileSelectedOperators(machtileBatchState.actorId).slice().sort() });
+}
+function machtileInvalidateBackgroundPreview() {
+  const code = machtileSingleStationReportState.machineCode;
+  const flow = code ? machtileStationReportState(machtileBatchRow(code)) : null;
+  if (flow && ["previewed", "waiting-preview", "submitting-preview"].includes(flow.phase)) {
+    flow.phase = "idle"; flow.preview = null; flow.result = null; flow.args = null; flow.error = "";
+  }
+}
+function machtileScheduleBackgroundPreview() {
+  clearTimeout(machtileBackgroundPreview.timer);
+  const fingerprint = machtileBackgroundPreviewFingerprint();
+  machtileBackgroundPreview.fingerprint = fingerprint;
+  machtileInvalidateBackgroundPreview();
+  if (config.reportBackgroundPreviewEnabled !== true || !fingerprint) return;
+  if (validateReportForm(activeReportType) || machtileValidateOperatorSelection(machtileSingleStationReportState.machineCode)) return;
+  machtileBackgroundPreview.timer = setTimeout(() => void machtileRunBackgroundPreview(fingerprint), 800);
+}
+async function machtileRunBackgroundPreview(fingerprint) {
+  if (!fingerprint || fingerprint !== machtileBackgroundPreviewFingerprint()) return;
+  if (machtileBackgroundPreview.inFlight) { machtileBackgroundPreview.queued = true; return; }
+  machtileBackgroundPreview.inFlight = true;
+  const code = machtileSingleStationReportState.machineCode;
+  try {
+    await machtileStationReportSubmitPreview(code, { background: true });
+    if (fingerprint !== machtileBackgroundPreviewFingerprint()) machtileInvalidateBackgroundPreview();
+  } finally {
+    machtileBackgroundPreview.inFlight = false;
+    if (machtileBackgroundPreview.queued) {
+      machtileBackgroundPreview.queued = false;
+      const latest = machtileBackgroundPreviewFingerprint();
+      if (latest) void machtileRunBackgroundPreview(latest);
+    }
   }
 }
 
@@ -28900,6 +28975,8 @@ function machtileHandleBatchClick(event) {
   if (finishDecline) { machtileFinishComboWrite(finishDecline.dataset.standardFinishDecline, { intent: "declined", stage: "declined", at: Date.now() }); closeReport(); return true; }
   const finishOther = event.target.closest("[data-standard-finish-other]");
   if (finishOther) { const code = finishOther.dataset.standardFinishOther; closeReport(); machtileOpenCardSelection(code, { poolOnly: !machtileCanEditSchedule() }); return true; }
+  const finishSkip = event.target.closest("[data-standard-finish-skip]");
+  if (finishSkip) { closeReport(); return true; }
   const finishStart = event.target.closest("[data-standard-finish-start]");
   if (finishStart) {
     const code = finishStart.dataset.standardFinishStart;
@@ -29271,6 +29348,13 @@ function handleLocalReport(completed, defects, options = {}) {
 }
 
 function bindEvents() {
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter((dialog) => dialog.getClientRects().length);
+    const dialog = dialogs.at(-1);
+    const close = dialog?.querySelector('[data-close-card-selection],[data-station-cmd-close],[data-close-switch-step],[data-close-hmc-fixed],[data-close-finish],[data-close-report],[data-close-detail],[data-close-flow],.icon-button[aria-label="關閉"]');
+    if (close) { event.preventDefault(); close.click(); }
+  });
   // 卡片「這台還掛 N 張」展開／收起 → 記住（toggle 不會冒泡，用 capture 收）
   document.addEventListener("toggle", (event) => {
     const box = event.target;
@@ -29627,7 +29711,7 @@ function bindEvents() {
       machtileSetCardPick(cardPickButton.dataset.cardPick, cardPickButton.dataset.cardPickKey || "");
       return;
     }
-    if (event.target.closest("[data-close-card-selection]")) { machtileCloseCardSelection(); return; }
+    if (event.target.closest("[data-close-card-selection]") || event.target.matches(".card-selection-overlay")) { machtileCloseCardSelection(); return; }
     const cardSelectOpen = event.target.closest("[data-card-select-open]");
     if (cardSelectOpen) { machtileOpenCardSelection(cardSelectOpen.dataset.cardSelectOpen); return; }
     const cardPoolOpen = event.target.closest("[data-card-pool-open]");
@@ -29799,6 +29883,7 @@ function bindEvents() {
       updateNoonAdvice();
       updateReportCounterPreview();
       machtileUpdateReportFailReason();
+      machtileScheduleBackgroundPreview();
     });
   });
 
@@ -29812,6 +29897,7 @@ function bindEvents() {
       updateReportCounterPreview();
       if (id === "completedQty" || id === "defectQty") machtileRenderShortCompletion(selectedOrder);
       if (id === "defectQty") machtileUpdateReportFailReason();
+      if (id === "completedQty" || id === "defectQty") machtileScheduleBackgroundPreview();
     });
   });
 

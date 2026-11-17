@@ -506,7 +506,11 @@ assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
 assert.deepEqual(calls.closeCommands[0].p_short_completion, { reason_code: "MATERIAL_SHORT", note: "" }, "APP fixture uses the cloud RPC parameter and Factory JSON field names");
-assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "true", "finish confirmation closes immediately while factory work continues");
+assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "false", "successful finish stays open on the post-finish choice panel");
+assert.equal(await finishValidation.locator("#finishSheet .finish-success-panel").isVisible(), true, "post-finish panel replaces the form");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-other]").isVisible(), true, "no claimable next step offers another order");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-skip]").isVisible(), true, "no claimable next step offers return home");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-claim]").count(), 0, "no claimable next step hides claim action");
 assert.match(await finishValidation.locator("#stationReportBackgroundStatus").innerText(), /工廠已完成寫入/, "successful background finish shows a temporary completion status");
 assert.equal(await finishValidation.evaluate(() => {
   const flow = machtileStationReportState(machtileBatchRow("A04"));
@@ -819,6 +823,37 @@ const sheetShot = async (op, name) => {
   await op.locator("#reportSheet .report-panel").screenshot({ path: path.join(implShots, name) });
 };
 
+// APP batch 2：停打 800ms 背景預覽；只保留最新 fingerprint，按送出只再送 final；旗標關維持舊流程。
+const bg = await openOperatorPage();
+await bg.evaluate(() => { config.reportBackgroundPreviewEnabled = true; });
+const bgBefore = calls.commands.length;
+await bg.locator("#completedQty").fill("959");
+await bg.waitForTimeout(1100);
+assert.equal(calls.commands.slice(bgBefore).filter(c => c.p_preview).length, 1, "background typing debounce sends exactly one preview");
+await bg.locator("#completedQty").fill("959");
+await bg.waitForTimeout(100);
+await bg.locator("#completedQty").fill("960");
+const bgChangedAt = calls.commands.length;
+await bg.waitForTimeout(1100);
+assert.equal(calls.commands.slice(bgChangedAt).filter(c => c.p_preview).length, 1, "changed value discards/queues stale work and previews only the latest value");
+const bgSubmitAt = calls.commands.length;
+await bg.locator("#reportForm .submit-report").click();
+await bg.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+assert.deepEqual(calls.commands.slice(bgSubmitAt).map(c => c.p_preview), [false], "ready background preview means the button sends final only");
+await bg.close();
+
+const bgOff = await openOperatorPage();
+await bgOff.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = false;
+  clearTimeout(machtileBackgroundPreview.timer);
+  machtileInvalidateBackgroundPreview();
+});
+const bgOffAt = calls.commands.length;
+await bgOff.locator("#completedQty").fill("959");
+await bgOff.waitForTimeout(1100);
+assert.equal(calls.commands.length, bgOffAt, "background preview flag off preserves old no-preview-before-submit behavior");
+await bgOff.close();
+
 // ① 一般報工：沒有智慧報工字樣、一行摘要、大總數、良品提示、報工人＝開工的人、一顆送出鈕
 const op = await openOperatorPage();
 const formText = await op.locator("#reportForm").innerText();
@@ -992,7 +1027,7 @@ await bad.locator("#defectQty").fill("2");
 const badFinals = calls.commands.filter(c => !c.p_preview).length;
 await bad.evaluate(() => machtileStationReportSubmitFinal("A04"));
 assert.equal(calls.commands.filter(c => !c.p_preview).length, badFinals, "changed defects after preview → no final");
-assert.match(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).error), /已報數量已改變/);
+assert.equal(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).preview), null, "changed defects discard the stale preview immediately");
 await bad.close();
 
 // L3 #3：舊單確認（OLD_ORDER_NEWER_OPEN）沒寫原因 → 留在確認狀態、提示寫原因，不重新預覽；寫了才送出。

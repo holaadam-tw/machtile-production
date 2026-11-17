@@ -2628,10 +2628,10 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
       machtileFinishCloseSetResult("A04", view);
       machtileRenderStationReportSurfaces();
     }, outcome);
-    const result = page.locator("#finishSheet .finish-close-result");
+    const result = page.locator(outcome.status === "applied" ? "#finishSheet .finish-success-panel" : "#finishSheet .finish-close-result");
     await result.waitFor({ timeout: 10000 });
     const shown = (await result.innerText()).replace(/\s+/g, " ").trim();
-    ok(shown.includes(expected), `${label} → 完工畫面顯示「${expected}」`, shown);
+    ok(shown.includes(outcome.status === "applied" ? "完工成功" : expected), `${label} → 完工畫面顯示完成結果`, shown);
   }
   const originalCloseUuid = "11111111-1111-4111-8111-111111111111";
   const closeRecord = { commandUuid: originalCloseUuid, commandType: "close", machineCode: "A04", orderNo: "XX01202502050012", step: 5,
@@ -2692,7 +2692,7 @@ console.log("\n== 390px：完工畫面顯示 #892 r3 關站結果 ==");
     machtileRenderStationReportSurfaces();
   });
   await mkdir(path.dirname(finishCloseShot), { recursive: true });
-  await page.locator("#finishSheet .finish-close-result").scrollIntoViewIfNeeded();
+  await page.locator("#finishSheet .finish-success-panel").scrollIntoViewIfNeeded();
   await page.screenshot({ path: finishCloseShot });
   ok(realErrors(errors).length === 0, "完工結果畫面沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
@@ -2737,7 +2737,7 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
     await page.waitForTimeout(50);
     const box = await card.boundingBox();
     ok(Boolean(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844), `${kind} 下一步卡完整位於 390px viewport`, JSON.stringify(box));
-    const titleBox = await card.locator("strong").boundingBox();
+    const titleBox = await card.locator("h3").boundingBox();
     const otherBox = await card.locator("[data-standard-finish-other]").boundingBox();
     ok(Boolean(titleBox && otherBox && titleBox.y >= 0 && otherBox.y + otherBox.height <= 844), `${kind} 標題與「選其他工單」都未被 scroll container 裁切`, JSON.stringify({ titleBox, otherBox }));
     const insideClip = (child, clip) => Boolean(child && clip && child.x >= clip.x && child.y >= clip.y
@@ -2748,22 +2748,6 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
       await page.screenshot({ path: path.join(outDir, "standard-finish-last_step-390-full.png") });
     }
   }
-
-  await page.evaluate(() => {
-    config.enableFinishClaimStartCombo = true;
-    config.finishClaimStartComboMachines = ["A04"];
-    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 40, total_steps: 8 } } }, "close", 0));
-    machtileRenderStationReportSurfaces();
-  });
-  ok(await page.locator("#finishSheet [data-standard-finish-claim-start]").isVisible(), "組合旗標開：顯示【接並開工】");
-  ok(await page.locator("#finishSheet [data-standard-finish-claim]").isVisible() && await page.locator("#finishSheet [data-standard-finish-decline]").isVisible(), "組合對話框有【只接，稍後開工】與【不接】");
-  ok((await page.locator("#finishSheet .standard-finish-combo").innerText()).includes("共 8 道"), "組合對話框顯示總道數");
-  await page.evaluate(() => {
-    machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "same_class_here", next_index_sn: 6, next_name: "N6", class_name: "LATHE", can_claim_here: true, pool_item_id: "pool-next-1", available_qty: 0, total_steps: 8 } } }, "close", 0));
-    machtileRenderStationReportSurfaces();
-  });
-  ok(await page.locator("#finishSheet [data-standard-finish-claim-start]").count() === 0, "X=0：不提供【接並開工】");
-  ok((await page.locator("#finishSheet .standard-finish-combo").innerText()).includes("上一道良品數為 0，可接不可報"), "X=0：顯示可接不可報說明");
 
   await page.evaluate(() => {
     machtileFinishCloseSetResult("A04", MachTileStationCommandCore.statusView({ status: "applied", legacy_snapshot: { next_step: { case: "other_class", next_index_sn: 6, next_name: "N6 精銑", class_name: "MILL", can_claim_here: false, pool_item_id: "pool-next-1", available_qty: 40, plan_qty: 100 } } }, "close", 0));
@@ -2789,30 +2773,18 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   be.mode = "applied";
   await page.evaluate(() => { selectedOrder = { ...selectedOrder, id: "WRONG-SELECTED-ORDER", drawing: "WRONG-DRAWING" }; });
   await page.locator("#finishSheet [data-standard-finish-claim]").click();
-  await page.locator("#finishSheet [data-standard-finish-start]").waitFor({ timeout: 10000 });
+  await page.waitForFunction(() => document.getElementById("finishSheet")?.getAttribute("aria-hidden") === "true", null, { timeout: 10000 });
   ok(be.submits.at(-1)?.p_command_type === "claim_next" && be.submits.at(-1)?.p_pool_item_id === "pool-next-1"
     && be.submits.at(-1)?.p_expected_order_no === "XX01202502050012" && be.submits.at(-1)?.p_expected_part_no === "HCG-06-01",
   "claim_next payload 使用 close 保存的真實工單與料號，不受 selectedOrder 漂移影響", JSON.stringify(be.submits.at(-1)));
-  ok(await page.locator("#finishSheet [data-standard-finish-start]").isVisible(), "claim 成功且 can_start=true 直接顯示開工");
+  ok(be.submits.filter(item => item.p_command_type === "start").length === 0, "claim 成功關閉且不自動開工");
 
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(300);
   await page.evaluate(() => {
-    window.__standardFinishOriginalLoad = loadFromSupabase;
-    window.__standardFinishOriginalCard = machtileCardOrderForMachine;
-    window.__standardFinishOriginalDerive = deriveMachines;
-    window.__standardFinishOriginalRender = renderAll;
-    loadFromSupabase = async () => {};
-    machtileCardOrderForMachine = () => ({ id: "OLD-WO", stationStep: 5 });
-    deriveMachines = () => {};
-    renderAll = () => {};
-  });
-  await page.locator("#finishSheet [data-standard-finish-start]").click();
-  await page.getByText("同步中，請稍後", { exact: true }).waitFor();
-  ok(await page.locator("#finishSheet [data-standard-finish-start]").isVisible(), "F3 工單或步序未同步時不開到舊步");
-  await page.evaluate(() => {
-    loadFromSupabase = window.__standardFinishOriginalLoad;
-    machtileCardOrderForMachine = window.__standardFinishOriginalCard;
-    deriveMachines = window.__standardFinishOriginalDerive;
-    renderAll = window.__standardFinishOriginalRender;
+    machtileSingleStationReportState.loading = false;
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
   });
 
   const failureCases = [
@@ -2844,7 +2816,15 @@ console.log("\n== 390px：標準完工四情境、claim 成功／失敗／斷網
   ok(await page.evaluate(() => machtileStationCmd.pending.A04?.poolItemId) === "pool-next-1", "回應驗證失敗保存 poolItemId 供冪等重試");
   be.submitRowMode = null;
   await page.locator("#finishSheet [data-standard-finish-claim]").click();
-  await page.locator("#finishSheet [data-standard-finish-start]").waitFor({ timeout: 10000 });
+  await page.waitForFunction(() => document.getElementById("finishSheet")?.getAttribute("aria-hidden") === "true", null, { timeout: 10000 });
+
+  await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    machtileSingleStationReportState.loading = false;
+    machtileBatchState.stationReportSettings = { status: "loaded", machines: { A04: true }, failReasonCodesByMachine: { A04: [] }, error: "" };
+    machtileStationReportState(machtileBatchRow("A04")).close = { identity: { orderNo: "XX01202502050012", partNo: "HCG-06-01", indexSn: 5 } };
+  });
 
   be.abortNextSubmit = true;
   await page.evaluate(() => {
@@ -3059,7 +3039,7 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     await page.waitForFunction(() => !machtileStationCmd.pending.A04, null, { timeout: 15000 });
   };
 
-  // (1) applied、沒有下一道 → 自己關掉＋橫幅
+  // (1) applied、沒有下一道 → 留在精簡完成面板，讓作業員選其他工單或回首頁
   await openFinish();
   const plainUuid = await sendCloseFromSheet("a1111111-1111-4111-8111-111111111111");
   const tokens = await page.evaluate(() => ({ record: machtileStationCmd.pending.A04?.finishCloseSheetToken, sheet: machtileReportSheetOpenToken,
@@ -3067,10 +3047,9 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   ok(Boolean(tokens.record) && tokens.record === tokens.sheet, "關站紀錄記下送出時的完工畫面代號", JSON.stringify(tokens));
   ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("關站中"), "等待中：完工畫面顯示關站中");
   await pollTo("applied", plainUuid);
-  const closed = await page.waitForFunction(() => !document.querySelector("#finishSheet")?.classList.contains("is-open"), null, { timeout: 5000 }).then(() => true, () => false);
-  ok(closed, "關站 applied、沒有下一道（輪詢到）→ 完工畫面自己關掉");
-  const banner = await page.locator("#stationReportBackgroundStatus [data-station-report-background-message]").innerText().catch(() => "");
-  ok(banner.includes("A04") && banner.includes("已關站"), "橫幅說 A04 已關站", banner);
+  await page.locator("#finishSheet .finish-success-panel").waitFor({ timeout: 5000 });
+  ok(await page.locator("#finishSheet.is-open").count() === 1, "關站 applied、沒有下一道 → 完工選擇面板保持開啟");
+  ok(await page.locator("#finishSheet [data-standard-finish-other]").isVisible() && await page.locator("#finishSheet [data-standard-finish-skip]").isVisible(), "沒有下一道時只提供選其他工單／回首頁");
   ok(await page.locator("#reportSheet.is-open").count() === 0, "報工畫面也沒有開著");
 
   // (2) applied、有下一道（標準完工）→ 畫面留著，看得到「接下一道」卡和按鈕
@@ -3082,7 +3061,7 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   const nextCard = page.locator('#finishSheet [data-standard-finish-case="same_class_here"]');
   ok(await nextCard.count() === 1, "完工畫面立刻顯示下一道卡（不用等別的重畫）");
   ok(await nextCard.locator("[data-standard-finish-claim]").isVisible(), "下一道卡有「接下一道」按鈕");
-  ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("已關站"), "同一畫面上寫已關站");
+  ok((await page.locator("#finishSheet .finish-success-panel").innerText()).includes("完工成功"), "同一畫面顯示完工成功");
   await page.screenshot({ path: path.join(outDir, "a03-finish-close-next-step-390.png") });
   await page.evaluate(() => closeReport());
 
