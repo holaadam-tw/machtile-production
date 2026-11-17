@@ -8437,9 +8437,13 @@ function reportCounterCalculation() {
   return window.MachTileReportCounterCore.calculate($("#completedQty")?.value, reportCounterEffectiveBaseline());
 }
 
-async function machtileRefreshReportTotalState(order = selectedOrder) {
+async function machtileRefreshReportTotalState(order = selectedOrder, options = {}) {
   const processId = String(order?.processId || "");
   reportTotalState = { status: "loading", reported: null, failReported: null, start: null, processId };
+  if (activeReportType === "finish") {
+    finishReportedState = { status: "loading", quantity: null, processId };
+    machtileRenderFinishReportedState();
+  }
   updateReportCounterPreview();
   try {
     const [totals, rows] = await window.MachTileReportTotalRefreshCore.retryRefresh(() => Promise.all([
@@ -8454,7 +8458,7 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     reportTotalState = { status: "ready", reported: Number(totals.goodDone), failReported: machtileReportedFailOrNull(totals), start: start?.qty ?? null, processId };
     finishReportedState = { status: "ready", quantity: Number(totals.goodDone), processId };
     const completedInput = $("#completedQty");
-    if (activeReportType === "finish" && completedInput && completedInput.value === "") {
+    if (options.prefill === true && activeReportType === "finish" && completedInput && completedInput.value === "") {
       completedInput.value = String(machtileReportedCounterBaseline(totals));
       machtileRenderShortCompletion(order);
     }
@@ -8463,7 +8467,13 @@ async function machtileRefreshReportTotalState(order = selectedOrder) {
     return reportTotalState;
   } catch (error) {
     console.warn("report total verification unavailable", error);
-    if (String(selectedOrder?.processId || "") === processId) reportTotalState = { status: "error", reported: null, failReported: null, start: null, processId };
+    if (String(selectedOrder?.processId || "") === processId) {
+      reportTotalState = { status: "error", reported: null, failReported: null, start: null, processId };
+      if (activeReportType === "finish") {
+        finishReportedState = { status: "error", quantity: null, processId };
+        machtileRenderFinishReportedState();
+      }
+    }
     updateReportCounterPreview();
     return null;
   }
@@ -15168,7 +15178,7 @@ function machtileStandardFinishSetClaimResult(code, view, record = null) {
   machtileRenderStationReportSurfaces();
   if (view?.phase === "applied") {
     const step = flow.close.nextStep?.nextIndexSn ?? flow.close.claim?.indexSn ?? "—";
-    showToast(`接單成功：第 ${step} 道`);
+    showToast(machtileTranslate("standard_finish_claim_step_success", { step }));
     const ownsSheet = Boolean(record?.standardFinishClaimSheetToken)
       && record.standardFinishClaimSheetToken === machtileReportSheetOpenToken
       && machtileFinishSheetOpenFor(code);
@@ -25230,7 +25240,7 @@ function openReport(orderId, options = {}) {
     $("#reportWorkNo").textContent = "待指派";
   }
   setReportType(availableType);
-  if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(availableType)) void machtileRefreshReportTotalState(order);
+  if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(availableType)) void machtileRefreshReportTotalState(order, { prefill: true });
   if (availableType === "finish" && config.reportTotalSemanticsEnabled !== true) void machtileLoadFinishReportedQty(order);
   updateReportCounterPreview();
   if (!order) setReportDefaults(null);
@@ -25253,7 +25263,7 @@ function machtileRestoreReportForm() {
 function openFinishReport(orderId, options = {}) {
   const machineCode = String(options.machine || "").trim().toUpperCase();
   const flow = machineCode ? machtileStationReportState(machtileBatchRow(machineCode)) : null;
-  if (flow?.close?.phase === "applied" && flow.close?.claim?.phase !== "pending") flow.close = null;
+  if (flow?.close?.phase === "applied" && !["pending", "error"].includes(flow.close?.claim?.phase)) flow.close = null;
   openReport(orderId, { ...options, reportType: "finish" });
   if (!$("#reportSheet")?.classList.contains("is-open") || activeReportType !== "finish") return;
   $("#finishMachine").textContent = $("#reportMachine")?.textContent || options.machine || "—";
@@ -30020,6 +30030,10 @@ function bindEvents() {
       return;
     }
     if (machtileReturnClaimBlockMessage(selectedOrder.machine)) { machtileShowReportSubmitError(machtileReturnClaimBlockMessage(selectedOrder.machine)); return; }
+    if (config.reportTotalSemanticsEnabled === true && activeReportType === "finish" && $("#completedQty")?.value.trim() === "") {
+      machtileShowReportSubmitError("請輸入機台顯示總數。");
+      return;
+    }
     if (config.reportTotalSemanticsEnabled === true && ["noon", "finish"].includes(activeReportType)) {
       const fresh = await machtileRefreshReportTotalState(selectedOrder);
       if (!fresh) {

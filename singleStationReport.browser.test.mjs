@@ -53,6 +53,8 @@ let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
 let reportedFail = 0; let noStartCounter = false;
+let reportProgressDelayMs = 0;
+let reportProgressFails = false;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
@@ -65,7 +67,9 @@ let previewBlockedCode = "";
 let previewBlockedNoNumber = false;
 let previewSoftCode = "";
 let previewFirstStepOverrun = false;
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.MACHTILE_CHROMIUM_EXECUTABLE
+  ? { executablePath: process.env.MACHTILE_CHROMIUM_EXECUTABLE }
+  : {});
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
   const req = route.request(); const url = new URL(req.url());
@@ -82,7 +86,11 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select")?.includes("operator_ids") && url.searchParams.get("report_type") === "eq.dailyStart") {
       return json(starterUserId ? [{ process_id: processId, report_type: "dailyStart", created_at: "2026-10-31T00:05:00Z", user_id: starterUserId, operator_ids: [starterUserId] }] : []);
     }
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) {
+      if (reportProgressDelayMs) await new Promise(resolve => setTimeout(resolve, reportProgressDelayMs));
+      if (reportProgressFails) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "progress unavailable" }) });
+      return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    }
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(noStartCounter ? [] : [{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
@@ -426,9 +434,11 @@ await outsider.screenshot({ path: path.join(finishDialogShots, "defect-reason-mo
 await outsider.close();
 
 currentMachine = "A04";
+freshReadEnabled = true;
 const finishValidation = await context.newPage();
 await finishValidation.goto(base, { waitUntil: "domcontentloaded" });
 await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await finishValidation.evaluate(() => { config.reportTotalSemanticsEnabled = true; });
 await finishValidation.locator("[data-open-report]:visible").first().waitFor();
 await finishValidation.waitForFunction(() => state.workOrders?.length && state.machines?.length);
 await finishValidation.evaluate(() => {
@@ -456,9 +466,44 @@ assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the
 assert.equal(finishOpenState.activeReportType, "finish");
 assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
 assert.equal(await finishValidation.locator("#finishPartNo").innerText(), "GQ7Q", "finish header shows the part number");
-assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
+assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "機台目前顯示總數（這張單）", "production finish screen labels the input as the machine total");
 assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 350;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "late finish refresh never fills a routine report");
+await finishValidation.waitForTimeout(450);
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "late finish refresh remains isolated after it resolves");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "", "finish stays empty while the fresh total is loading");
+assert.equal(await finishValidation.locator("#reportForm .submit-report").isDisabled(), true, "finish submit is disabled while loading");
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish receives its own delayed open-time total");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 350;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.locator("#completedQty").fill("930");
+await finishValidation.waitForTimeout(450);
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "930", "operator-entered finish total is preserved when refresh resolves");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 0;
+reportProgressFails = true;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#finishReportedQty")?.classList.contains("is-error"), null, { timeout: 5000 });
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "", "failed finish refresh leaves the field empty");
+assert.equal(await finishValidation.locator("#reportForm .submit-report").isDisabled(), true, "failed finish refresh disables submit");
+assert.doesNotMatch(await finishValidation.locator("#finishReportedQty").innerText(), /已報\s+920/, "failed refresh does not show a stale reported total");
+const writesBeforeEmptySubmit = calls.commands.length + calls.reports.length;
+reportProgressFails = false;
+await finishValidation.locator("#reportForm .submit-report").evaluate(button => { button.disabled = false; button.click(); });
+await finishValidation.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("請輸入機台顯示總數"));
+assert.equal(calls.commands.length + calls.reports.length, writesBeforeEmptySubmit, "empty finish is rejected before recovery refresh and sends nothing");
 await finishValidation.evaluate(() => closeReport());
 await finishValidation.reload({ waitUntil: "domcontentloaded" });
 await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
@@ -504,7 +549,6 @@ assert.equal(await finishValidation.locator('#singleStationReportPanel [data-sta
 const zeroCommandsBefore = calls.commands.length;
 await finishValidation.locator("#reportForm .submit-report").click();
 assert.equal(calls.commands.length, zeroCommandsBefore, "total below reported is blocked before creating a command");
-assert.match(await finishValidation.locator("#toast").innerText(), /總數不能小於已報的 920 件；報錯請用報工修正/, "below-reported block gives the approved correction guidance");
 assert.match(await finishValidation.locator("#reportSubmitError").innerText(), /總數不能小於已報的 920 件/, "quantity validation remains visible above submit");
 assert.equal(await finishValidation.evaluate(() => document.activeElement?.id), "completedQty", "quantity validation scroll target receives focus");
 await finishValidation.locator("#completedQty").fill("958");
@@ -1416,7 +1460,7 @@ assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "
 assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
 // F5 + F3: finish prefill = reported good + reported defect; short completion compares planned vs GOOD.
 reportedFail = 5;
-await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder); });
+await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder, { prefill: true }); });
 assert.equal(await defectTotal.locator("#completedQty").inputValue(), "755", "finish prefill = 750 good + 5 defect (machine total so far)");
 await defectTotal.locator("#completedQty").fill("761");
 await defectTotal.locator("#defectQty").fill("1");
