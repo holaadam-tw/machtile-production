@@ -159,6 +159,7 @@
       release_claim: "釋放接單",
       release_claiming: "釋放中…",
       release_claim_success: "已釋放接單，這張單可重新接單。",
+      pool_return: "退回池子",
       pool_load_error: "待做池讀取失敗，請重新整理。",
       pool_refreshing: "更新中…",
       pool_refresh_failed_stale: "清單可能不是最新（更新失敗，可再按一次）",
@@ -799,6 +800,7 @@
       release_claim: "Giải phóng nhận việc",
       release_claiming: "Đang giải phóng…",
       release_claim_success: "Đã giải phóng nhận việc; phiếu này có thể được nhận lại.",
+      pool_return: "Trả về danh sách chờ", // _draft
       pool_load_error: "Không tải được danh sách chờ. Vui lòng làm mới.",
       pool_refreshing: "Đang cập nhật…",
       pool_refresh_failed_stale: "Danh sách có thể chưa mới nhất (cập nhật thất bại, hãy thử mở lại).",

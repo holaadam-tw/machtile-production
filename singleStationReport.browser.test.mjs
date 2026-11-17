@@ -826,6 +826,12 @@ const sheetShot = async (op, name) => {
 // APP batch 2：停打 800ms 背景預覽；只保留最新 fingerprint，按送出只再送 final；旗標關維持舊流程。
 const bg = await openOperatorPage();
 await bg.evaluate(() => { config.reportBackgroundPreviewEnabled = true; });
+const bgBusyAt = calls.commands.length;
+await bg.evaluate(() => { machtileStationCmd.pending.A04 = { commandType: "start" }; });
+await bg.locator("#completedQty").fill("958");
+await bg.waitForTimeout(1100);
+assert.equal(calls.commands.length, bgBusyAt, "background preview waits while this tablet has another command pending for the machine");
+await bg.evaluate(() => { delete machtileStationCmd.pending.A04; });
 const bgBefore = calls.commands.length;
 await bg.locator("#completedQty").fill("959");
 await bg.waitForTimeout(1100);
@@ -834,12 +840,16 @@ await bg.locator("#completedQty").fill("959");
 await bg.waitForTimeout(100);
 await bg.locator("#completedQty").fill("960");
 const bgChangedAt = calls.commands.length;
-await bg.waitForTimeout(1100);
-assert.equal(calls.commands.slice(bgChangedAt).filter(c => c.p_preview).length, 1, "changed value discards/queues stale work and previews only the latest value");
-const bgSubmitAt = calls.commands.length;
-await bg.locator("#reportForm .submit-report").click();
-await bg.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
-assert.deepEqual(calls.commands.slice(bgSubmitAt).map(c => c.p_preview), [false], "ready background preview means the button sends final only");
+  await bg.waitForTimeout(1100);
+  assert.equal(calls.commands.slice(bgChangedAt).filter(c => c.p_preview).length, 1, "changed value discards/queues stale work and previews only the latest value");
+  const bgCappedAt = calls.commands.length;
+  await bg.locator("#completedQty").fill("961");
+  await bg.waitForTimeout(1100);
+  assert.equal(calls.commands.length, bgCappedAt, "a report form sends at most two background previews");
+  const bgSubmitAt = calls.commands.length;
+  await bg.locator("#reportForm .submit-report").click();
+  await bg.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+  assert.deepEqual(calls.commands.slice(bgSubmitAt).map(c => c.p_preview), [true, false], "after the background cap, submit performs the current preview and final");
 await bg.close();
 
 const bgOff = await openOperatorPage();
