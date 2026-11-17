@@ -14608,7 +14608,12 @@ async function machtileFreshReportedTotals(order) {
   const progress = machtileBatchCore()?.cardProgress(Number(process.qty_completed || 0), progressRow, Date.now());
   if (!progress || !Number.isFinite(Number(progress.done))) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
   const adoption = window.MachTileReportTotalRefreshCore.adoptFreshProgress(order, progress);
-  if (!adoption.adopted) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+  if (!adoption.adopted) {
+    const unavailable = new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+    // legacy -> app 降級：不自動重載重試（重載後卡片也會變 app 來源、等於默默採用較低基準）；維持擋下，由人重新整理確認
+    if (adoption.sourceChanged) unavailable.noRetry = true;
+    throw unavailable;
+  }
   if (adoption.sourceChanged) renderWorkOrders();
   return { goodDone: Math.max(0, Number(progress.done)), failDone: progress.legacyKnown && Number.isFinite(Number(progress.totalFail)) ? Math.max(0, Number(progress.totalFail)) : null };
 }

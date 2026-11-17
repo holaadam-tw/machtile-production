@@ -6,6 +6,9 @@
   function adoptFreshProgress(order, progress) {
     if (!order || !progress || !Number.isFinite(Number(progress.done))) return { adopted: false, sourceChanged: false };
     const sourceChanged = Boolean(order.progressSource?.source && order.progressSource.source !== progress.source);
+    // 2026-11-17 review: only the app -> legacy switch (factory snapshot arrived after the card loaded) is adopted.
+    // legacy -> app would silently lower the baseline if the snapshot row disappeared (over-report risk) -> stay fail-closed.
+    if (sourceChanged && order.progressSource.source === "legacy") return { adopted: false, sourceChanged: true };
     order.done = Math.max(0, Number(progress.done));
     order.progressSource = progress;
     return { adopted: true, sourceChanged };
@@ -20,7 +23,7 @@
       try { return await operation(attempt); }
       catch (error) {
         lastError = error;
-        if (attempt >= retries) break;
+        if (attempt >= retries || (error && error.noRetry === true)) break;
         await reload(attempt + 1, error);
         await sleep(delayMs);
       }

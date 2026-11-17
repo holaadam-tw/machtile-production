@@ -6,6 +6,11 @@ const progress = { source: "legacy", done: 50, legacyKnown: true, totalFail: 2 }
 assert.deepEqual(adoptFreshProgress(order, progress), { adopted: true, sourceChanged: true });
 assert.equal(order.done, 50, "fresh quantity replaces the stale card quantity");
 assert.equal(order.progressSource, progress, "fresh source becomes authoritative");
+{ const legacyOrder = { done: 200, progressSource: { source: "legacy", done: 200 } };
+  assert.deepEqual(adoptFreshProgress(legacyOrder, { source: "app", done: 50 }), { adopted: false, sourceChanged: true }, "legacy -> app downgrade stays fail-closed");
+  assert.equal(legacyOrder.done, 200, "baseline untouched on refused downgrade"); assert.equal(legacyOrder.progressSource.source, "legacy"); }
+{ const sameOrder = { done: 10, progressSource: { source: "legacy", done: 10 } };
+  assert.deepEqual(adoptFreshProgress(sameOrder, { source: "legacy", done: 12 }), { adopted: true, sourceChanged: false }); assert.equal(sameOrder.done, 12); }
 assert.deepEqual(adoptFreshProgress(order, { source: "legacy", done: NaN }), { adopted: false, sourceChanged: false }, "non-finite progress stays fail-closed");
 
 (async () => {
@@ -25,5 +30,8 @@ assert.deepEqual(adoptFreshProgress(order, { source: "legacy", done: NaN }), { a
   calls = 0;
   await assert.rejects(() => retryRefresh(async () => { calls += 1; throw new Error("still unavailable"); }, async () => {}, { retries: 2, delayMs: 0 }), /still unavailable/);
   assert.equal(calls, 3, "failure is exposed only after retries are exhausted");
+  calls = 0; let reloaded = 0;
+  await assert.rejects(() => retryRefresh(async () => { calls += 1; const e = new Error("downgrade"); e.noRetry = true; throw e; }, async () => { reloaded += 1; }, { retries: 2, delayMs: 0 }), /downgrade/);
+  assert.equal(calls, 1, "noRetry errors are not retried"); assert.equal(reloaded, 0, "no card reload on a refused downgrade");
   console.log("PASS report total refresh core: source adoption and bounded retry");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

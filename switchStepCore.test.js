@@ -1512,7 +1512,12 @@ test("app.js minus the switch-step section and its listed hooks is byte-identica
       supabaseFetch(\`production_reports?select=report_type,report_payload,created_at&process_id=eq.\${encodeURIComponent(processId)}&report_date=eq.\${machtileFactoryDateIso()}&report_type=eq.dailyStart&order=created_at.desc&limit=1\`),
     ]);`);
   current = current.replace(`  const adoption = window.MachTileReportTotalRefreshCore.adoptFreshProgress(order, progress);
-  if (!adoption.adopted) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+  if (!adoption.adopted) {
+    const unavailable = new Error(machtileTranslate("takeover_stop_progress_unavailable"));
+    // legacy -> app 降級：不自動重載重試（重載後卡片也會變 app 來源、等於默默採用較低基準）；維持擋下，由人重新整理確認
+    if (adoption.sourceChanged) unavailable.noRetry = true;
+    throw unavailable;
+  }
   if (adoption.sourceChanged) renderWorkOrders();`, `  const shown = order?.progressSource;
   if (shown?.source && shown.source !== progress.source) throw new Error(machtileTranslate("takeover_stop_progress_unavailable"));`);
   // Daily-start backfill hint refresh is independently browser-tested. Restore
