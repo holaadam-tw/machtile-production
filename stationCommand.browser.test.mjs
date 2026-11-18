@@ -150,7 +150,7 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     listReads: 0,             // 工序清單（work_orders!inner）讀取次數＝重載次數
     otherWrites: [],
     // 選工單／開工分開（2026-10-26）用：派工池列、接單請求、機台課別、工序 status（工單號 → status；預設 pending）
-    poolItems, poolClaims: [], poolReads: 0, poolVisibleAfterRead: 0, withDepartments, procStatus: { ...procStatus }, extraCards,
+    poolItems, poolClaims: [], poolReads: 0, poolStatusReads: 0, poolVisibleAfterRead: 0, poolApplied: false, poolClaimStatus: "", withDepartments, procStatus: { ...procStatus }, extraCards,
     // 停工對話框（報工＋停工一次）：machtile_submit_stop_report 的 body；procExtra＝工單號 → 工序列額外欄位（simulation_id、qty_completed）
     stopReportSubmits: [], stopReportAckMissing: false, procExtra: {},
     // 停工對話框開啟前會擋住尚未 applied 的 report；recentReports 可模擬同一道的 station_commands。
@@ -250,7 +250,10 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
     }
     if (p === "/rest/v1/rpc/takeover_candidates") return json(200, be.takeoverCandidates);
     if (p === "/rest/v1/dispatch_pool_items") {
-      if (!q.includes("status=eq.waiting")) return json(200, []);
+      if (!q.includes("status=eq.waiting")) {
+        be.poolStatusReads += 1;
+        return json(200, be.poolClaims.map((claim) => ({ source_key: claim.p_source_key, status: be.poolClaimStatus || (be.poolApplied ? "gone" : "claimed") })));
+      }
       be.poolReads += 1;
       if (be.poolVisibleAfterRead && be.poolReads < be.poolVisibleAfterRead) return json(200, []);
       return json(200, be.poolItems.filter((item) => !be.poolClaims.some((c) => c.p_source_key === item.source_key)));
@@ -296,10 +299,12 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
       return json(200, procs.map((x) => {
         const c = cards.find((k) => k.work_order_no === x.wo);
         const machineCode = be.procMachine[x.wo] || x.machine;
+        const claimedPool = be.poolItems.find((item) => item.work_order_no === x.wo && be.poolClaims.some((claim) => claim.p_source_key === item.source_key));
         return {
           id: c.current_process_id, tenant_id: T, process_order: x.step, process_name: x.proc, process_type: "cnc", status: be.procStatus[x.wo] || "pending",
           off_station_at: null, qty_completed: 0, queue_order: null, manufacture_ii_id: x.manufactureIiId ?? null, ...(be.procExtra[x.wo] || {}),
-          work_orders: { id: c.id, work_order_no: x.wo, part_no: x.partNo, part_name: x.part, quantity: x.qty, due_date: c.due_date, status: "in_progress" },
+          work_orders: { id: c.id, work_order_no: x.wo, part_no: x.partNo, part_name: x.part, quantity: x.qty, due_date: c.due_date, status: "in_progress",
+            legacy_mes_source: claimedPool ? "dispatch_pool" : null, external_ref: claimedPool?.source_key || null },
           machines: machines.find((m) => m.machine_code === machineCode),
         };
       }));
@@ -1226,9 +1231,59 @@ console.log("\n== 390px：選工單／開工分開 — 空機台「選工單」�
   page.on("dialog", (d) => d.accept());
   ok(be.submits.length === 0 && be.takeoverSubmits.length === 0, "選新單只掛單：沒有送開工或接手指令");
   await page.waitForFunction(() => machtileCardOrderForMachine("A02")?.id === "XX01202609020008", null, { timeout: 10000 }).catch(() => {});
-  ok(await a02.locator('[data-station-cmd="start"]').count() === 1, "選新單後 A02 出現「開工」");
+  ok(await a02.locator('[data-station-cmd="start"]').count() === 1, "選新單後 A02 出現開工位置");
+  ok(await a02.locator('[data-station-cmd="start"]').isDisabled() && (await a02.locator('[data-station-cmd="start"]').innerText()).trim() === "接單處理中，工廠確認後才能開工（約 1 分鐘）",
+    "接單尚未套用 → 開工停用並顯示等待工廠標籤");
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    order.processStatus = "paused"; order.done = 1; renderWorkOrders();
+  });
+  ok(await a02.locator('[data-station-cmd="start"]').isEnabled(), "claimed 列但工序已執行且 done > 0 → 不阻擋開工");
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    order.processStatus = "pending"; order.done = 0;
+    machtilePendingClaimFirstSeen.set(machtilePendingClaimKey("A02", order), Date.now() - MACHTILE_PENDING_CLAIM_MAX_MS - 1);
+    renderWorkOrders();
+  });
+  ok(await a02.locator('[data-station-cmd="start"]').isEnabled() && await a02.locator('[data-pending-claim-stale]').count() === 1,
+    "pending 超過三分鐘 → 開工恢復並提示找生管確認");
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    machtilePendingClaimFirstSeen.set(machtilePendingClaimKey("A02", order), Date.now()); renderWorkOrders();
+  });
   ok(await a02.locator('[data-station-cmd="stop"], [data-pick-order-open], .machine-report-button, .machine-finish-button').count() === 0, "選新單後 A02 只剩「開工」");
   await page.screenshot({ path: path.join(outDir, "phone-pick-after-new-start-only.png") });
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    const view = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "STATION_NOT_SET", reject_message: "A02 目前沒有掛工單" }, "start", 0);
+    machtileStartRejectWrite("A02", MachTileStationCommandCore.startRejectRecord({ machineCode: "A02", orderNo: order.id, step: order.stationStep, view, rejectMessage: "A02 目前沒有掛工單", at: Date.now() }));
+    renderWorkOrders();
+  });
+  ok((await a02.locator('[data-station-cmd-start-reject="STATION_NOT_SET"]').innerText()).trim() === "工廠還在處理接單，請稍候再按開工",
+    "接單處理中遭 STATION_NOT_SET → 不叫作業員找生管");
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    order.dispatchPoolStatus = "rejected"; machtileRecentPoolClaims.delete("A02"); renderWorkOrders();
+  });
+  ok(await a02.locator('[data-station-cmd="start"]').isEnabled()
+    && (await a02.locator('[data-station-cmd-start-reject="STATION_NOT_SET"]').innerText()).includes("請找生管"),
+    "接單已 rejected → 開工恢復且 STATION_NOT_SET 走原本找生管文字");
+  await page.evaluate(() => {
+    const order = machtileCardOrderForMachine("A02");
+    order.dispatchPoolStatus = "claimed";
+    machtileRecentPoolClaims.set("A02", { sourceKey: order.dispatchPoolSourceKey, orderNo: order.id, step: Number(order.stationStep), at: Date.now() });
+    machtilePendingClaimFirstSeen.set(machtilePendingClaimKey("A02", order), Date.now()); renderWorkOrders(); machtileSyncPendingClaimPoll();
+  });
+  const statusReadsBeforeAutoApply = be.poolStatusReads;
+  setTimeout(() => { be.poolApplied = true; }, 250);
+  await page.waitForFunction(() => {
+    const card = [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].find(item => item.querySelector('h2')?.textContent.trim() === "A02");
+    const button = card?.querySelector('[data-station-cmd="start"]');
+    return button && !button.disabled && button.textContent.trim() === "開工";
+  }, null, { timeout: 6000, polling: 100 });
+  ok(await a02.locator('[data-station-cmd="start"]').isEnabled() && (await a02.locator('[data-station-cmd="start"]').innerText()).trim() === "開工",
+    "工廠套用接單後由真實 App 狀態輪詢 → 6 秒內開工自動恢復");
+  ok(be.poolStatusReads > statusReadsBeforeAutoApply, "自動恢復只重讀既有 dispatch pool 狀態查詢");
   // 開工送出等待中 → 開工鍵停用（pending 停用）
   await a02.locator('[data-station-cmd="start"]').click();
   await sheet(page).locator("[data-station-cmd-confirm]:not([disabled])").waitFor();

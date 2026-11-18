@@ -1368,7 +1368,7 @@ test("card-details load: the held-key lookup runs concurrently with the dispatch
   assert.equal(staleDone.done, true);
   assert.equal(stale.orders[0].dispatchPoolStatus, undefined);
   // 接線：卡片明細那一步照舊只傳 generation（第二個參數只有函式自己用）
-  assert.equal([...appSource.matchAll(/machtileLoadAssignedDispatchPoolStatuses\(/g)].length, 3, "definition, the card-details caller, and the function's own status-only call");
+  assert.equal([...appSource.matchAll(/machtileLoadAssignedDispatchPoolStatuses\(/g)].length, 4, "definition, card-details caller, return-claim status-only call, and bounded pending-claim poll");
   assert.equal([...appSource.matchAll(/await machtileLoadAssignedDispatchPoolStatuses\(generation\);/g)].length, 1);
 });
 

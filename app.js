@@ -461,6 +461,9 @@ function machtileSyncBatchEntryVisibility() {
 }
 
 function machtileClearDepartmentData() {
+  machtileStopPendingClaimPoll();
+  machtileCancelProcessFlowReload();
+  machtileProcessFlowLoadGeneration += 1;
   machtileCloseProcessFlow();
   machtileProcessFlows = new Map();
   machtileFlowVisibilityState.byRole = null; machtileFlowVisibilityState.status = "default";
@@ -10819,6 +10822,11 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSeco
 // Full routing is independent of the cards view (which only contains active station rows).
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
+let machtileProcessFlowRetryTimer = null;
+let machtileProcessFlowLoadGeneration = 0;
+let machtileProcessFlowRetryCount = 0;
+const MACHTILE_ROUTE_RETRY_DELAYS_MS = [500, 1500];
+const MACHTILE_ROUTE_RELOAD_DELAYS_MS = [30, 60, 120].map(seconds => seconds * 1000);
 const MACHTILE_ROUTE_MISSING_STORAGE_KEY = "machtileRouteMissingSession";
 const MACHTILE_ROUTE_MISSING_TTL_MS = 10 * 60 * 1000;
 const MACHTILE_ROUTE_ASSET_VERSION = new URL(
@@ -10843,35 +10851,46 @@ async function machtileReadRouteSteps(orderNos) {
     try { record = JSON.parse(stored); } catch (error) { /* Old or corrupt cache expires. */ }
     if (machtileRouteMissingValid(record, sessionKey)) {
       machtileMissingRouteSession = record;
-      return [];
+      return { rows: [], missing: true, failed: false };
     }
     machtileMissingRouteSession = null;
     machtileRemoveStorageValue(sessionStorage, MACHTILE_ROUTE_MISSING_STORAGE_KEY);
   } else if (machtileRouteMissingValid(machtileMissingRouteSession, sessionKey)) {
-    return []; // Storage unavailable: keep the same bounded in-memory fallback.
+    return { rows: [], missing: true, failed: false }; // Storage unavailable: keep the same bounded in-memory fallback.
   }
   const list = orderNos.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(',');
-  try {
-    const rows = await supabaseFetch(config.enableOutsourceStatusStrip === true
-      ? `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at,outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`
-      : `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
-    if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
-    return rows;
-  } catch (error) {
-    if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
-      machtileMissingRouteSession = {sessionKey, version:MACHTILE_ROUTE_ASSET_VERSION, at:Date.now()};
-      try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, JSON.stringify(machtileMissingRouteSession)); }
-      catch (storageError) { /* Private-mode fallback remains in memory. */ }
-      console.warn('display route table unavailable for this login; use existing process records only');
-      return [];
+  for (let attempt = 0; attempt <= MACHTILE_ROUTE_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      // Production work_order_route_steps does not have outsource_* columns. Keep the flag-off query
+      // as the production contract; enableOutsourceStatusStrip is guarded by a regression test.
+      const rows = await supabaseFetch(config.enableOutsourceStatusStrip === true
+        ? `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at,outsource_vendor_name,outsource_sent_qty,outsource_returned_qty,outsource_unconfirmed_qty,outsource_closed_without_receipt_qty,outsource_oldest_open_sent_at,outsource_synced_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`
+        : `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&work_order_no=in.(${list})&order=step_no.asc&limit=12801`);
+      if (!Array.isArray(rows) || rows.length>12800) throw new Error('display route invalid/truncated');
+      return { rows, missing: false, failed: false };
+    } catch (error) {
+      if (/^(?:404\s)|PGRST205\b/.test(String(error?.message || ""))) {
+        machtileMissingRouteSession = {sessionKey, version:MACHTILE_ROUTE_ASSET_VERSION, at:Date.now()};
+        try { sessionStorage.setItem(MACHTILE_ROUTE_MISSING_STORAGE_KEY, JSON.stringify(machtileMissingRouteSession)); }
+        catch (storageError) { /* Private-mode fallback remains in memory. */ }
+        console.warn('display route table unavailable for this login; use existing process records only');
+        return { rows: [], missing: true, failed: false };
+      }
+      if (attempt < MACHTILE_ROUTE_RETRY_DELAYS_MS.length) {
+        await new Promise(resolve => setTimeout(resolve, MACHTILE_ROUTE_RETRY_DELAYS_MS[attempt]));
+        continue;
+      }
+      console.warn('display route unavailable after retries',error);
+      return { rows: [], missing: false, failed: true };
     }
-    console.warn('display route unavailable; use existing process records only',error);
-    return []; // Never preserve stale display metadata after a failed refresh.
   }
 }
 async function machtileLoadProcessFlows() {
+  const loadGeneration = ++machtileProcessFlowLoadGeneration;
+  const deferredGeneration = machtileDeferredLoadGeneration;
+  const previous = machtileProcessFlows;
   const next = new Map();
-  machtileProcessFlows = next;
+  let anyRouteChunkFailed = false;
   const nos = [...new Set(state.workOrders.map(o => o.id).filter(Boolean))];
   const chunks = [];
   for (let i = 0; i < nos.length; i += 50) chunks.push(nos.slice(i, i + 50));
@@ -10883,7 +10902,9 @@ async function machtileLoadProcessFlows() {
       const list = chunk.map(no => `"${encodeURIComponent(String(no).replace(/"/g, ""))}"`).join(",");
       const rows = await supabaseFetch(`work_orders?select=id,work_order_no,quantity,work_order_processes(id,machine_id,process_order,process_name,process_type,status,qty_completed,qty_defect)&work_order_no=in.(${list})`);
       if (!Array.isArray(rows)) throw new Error("invalid route response");
-      const displayRoutes = await machtileReadRouteSteps(chunk);
+      const routeRead = await machtileReadRouteSteps(chunk);
+      const displayRoutes = routeRead.rows;
+      if (routeRead.failed) anyRouteChunkFailed = true;
       const ids = rows.flatMap(o => (o.work_order_processes || []).map(p => p.id));
       // Same snapshot as the card's 完成進度: reuse rows the card already loaded; fetch only the rest.
       const cardRows = machtileCardPickState.progressByProcess || new Map();
@@ -10904,6 +10925,10 @@ async function machtileLoadProcessFlows() {
       const byMachine = new Map((state.machineMasters || []).map(m => [m.id, m.code]));
       const departmentByMachine = new Map((state.machineMasters || []).map(m => [m.id, m.department]));
       for (const row of rows) {
+        if (routeRead.failed) {
+          next.set(row.work_order_no, previous.get(row.work_order_no) || { quantity: row.quantity, processes: [], auditAvailable: false, unavailable: true });
+          continue;
+        }
         const processes = (row.work_order_processes || []).map(p => {
           const report = progress.get(String(p.id));
           return {...p, machine_department: p.machine_id ? departmentByMachine.get(p.machine_id) || null : null,
@@ -10922,7 +10947,28 @@ async function machtileLoadProcessFlows() {
     }
   }
   await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, () => worker()));
+  if (loadGeneration !== machtileProcessFlowLoadGeneration || deferredGeneration !== machtileDeferredLoadGeneration) return;
+  machtileProcessFlows = next;
+  if (!anyRouteChunkFailed) {
+    machtileProcessFlowRetryCount = 0;
+    if (machtileProcessFlowRetryTimer) clearTimeout(machtileProcessFlowRetryTimer);
+    machtileProcessFlowRetryTimer = null;
+  } else if (!machtileProcessFlowRetryTimer && machtileProcessFlowRetryCount < MACHTILE_ROUTE_RELOAD_DELAYS_MS.length) {
+    const retryGeneration = deferredGeneration;
+    const delay = MACHTILE_ROUTE_RELOAD_DELAYS_MS[machtileProcessFlowRetryCount++];
+    machtileProcessFlowRetryTimer = setTimeout(() => {
+      machtileProcessFlowRetryTimer = null;
+      if (retryGeneration !== machtileDeferredLoadGeneration) return;
+      void machtileLoadProcessFlows();
+    }, delay);
+  }
   machtileRefreshOpenProcessFlow();
+}
+
+function machtileCancelProcessFlowReload() {
+  if (machtileProcessFlowRetryTimer) clearTimeout(machtileProcessFlowRetryTimer);
+  machtileProcessFlowRetryTimer = null;
+  machtileProcessFlowRetryCount = 0;
 }
 
 // 製程路線顯示層級（owner 2026-10-06）：每個角色在「機台卡片」上看得到多少製程路線。
@@ -10995,6 +11041,7 @@ function machtileCardNextQueued(machine, order) {
 function machtileProcessFlowMarkup(order, { compact = true, level = "full", machine = null } = {}) {
   if (!order || level === "hidden") return "";
   const route = machtileProcessFlows.get(order.id);
+  if (route?.unavailable) return `<p class="process-flow-empty" data-no-detail>${escapeHtml(machtileTranslate("process_route_unavailable"))}</p>`;
   if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
   return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
     compact, visibility: level,
@@ -11023,6 +11070,7 @@ function machtileCloseProcessFlow() {
 function machtileOpenProcessFlow(orderNo,currentId) {
   if (machtileStrictMode() && !machtileDepartmentAccess) return;
   const route=machtileProcessFlows.get(orderNo);
+  if (route?.unavailable) { showToast(machtileTranslate("process_route_unavailable")); return; }
   if (!route || !window.MachTileProcessFlow) { showToast('製程路線尚未驗證，請重新整理。'); return; }
   machtileCloseProcessFlow();
   machtileFlowReturnFocus=document.activeElement;
@@ -11042,10 +11090,10 @@ function machtileRefreshOpenProcessFlow() {
   const route=machtileProcessFlows.get(dialog.dataset.orderNo);
   const old=dialog.querySelector('.process-flow,.process-flow-empty');
   if(!old)return;
-  dialog.querySelector('.process-flow-dialog > p').textContent=route
+  dialog.querySelector('.process-flow-dialog > p').textContent=route?.unavailable ? machtileTranslate("process_route_unavailable") : route
     ?`共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。`:'製程路線尚未驗證。';
   const hadFocus=old.contains(document.activeElement);
-  old.outerHTML=route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
+  old.outerHTML=route?.unavailable?`<p class="process-flow-empty">${escapeHtml(machtileTranslate("process_route_unavailable"))}</p>`:route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
     outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
     ...machtileProcessFlowOptions(dialog.dataset.orderNo,route.auditAvailable)}):'<p class="process-flow-empty">製程路線讀取失敗；不顯示舊資料，請重新整理。</p>';
   if(hadFocus)dialog.querySelector('[data-close-flow]').focus();
@@ -11273,7 +11321,11 @@ async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDef
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
     const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
     if (generation !== machtileDeferredLoadGeneration) return;
-    orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
+    orders.forEach(order => {
+      order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || "";
+      if (order.dispatchPoolStatus === "rejected") machtileRecentPoolClaims.delete(String(order.machine || "").trim().toUpperCase());
+    });
+    machtileSyncPendingClaimPoll();
   } catch (error) {
     // Fail closed: an unverified claim must never expose a return action.
     console.warn("dispatch pool assigned status unavailable; hiding return actions", error);
@@ -12295,6 +12347,12 @@ async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = nu
   try {
     const args = machtileDispatchPoolCore.claimArgs(sourceKey, machineCode);
     await supabaseFetch("rpc/dispatch_pool_claim", { method: "POST", body: JSON.stringify(args), ...(switchStep ? switchStep.request : null) });
+    if (!switchStep && typeof machtileRecentPoolClaims !== "undefined") {
+      const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
+      machtileRecentPoolClaims.set(String(machineCode).trim().toUpperCase(), {
+        sourceKey: String(sourceKey), orderNo: String(item?.work_order_no || ""), step: Number(item?.process_order), at: Date.now(),
+      });
+    }
     if (switchStep) switchStep.claimed = true;
     await (switchStep ? switchStep.reload() : loadFromSupabase({ preserveDepartmentOnFailure: true }));
     deriveMachines();
@@ -14854,6 +14912,65 @@ function machtilePickStartEnabled(code) {
 // 本機剛 applied 的開工／停工（同單同道次）：雲端重讀前卡片先跟著換按鈕。機台代號 → { type, orderNo, step }
 const machtilePickStartLocal = {};
 const machtileInstantStartPending = {};
+const machtileRecentPoolClaims = new Map();
+const MACHTILE_RECENT_POOL_CLAIM_MS = 2 * 60 * 1000;
+const machtilePendingClaimFirstSeen = new Map();
+let machtilePendingClaimPollTimer = null;
+let machtilePendingClaimPollStartedAt = 0;
+const MACHTILE_PENDING_CLAIM_POLL_MS = 5 * 1000;
+const MACHTILE_PENDING_CLAIM_MAX_MS = 3 * 60 * 1000;
+function machtilePendingClaimKey(code, order) { return `${String(code || "").trim().toUpperCase()}|${String(order?.dispatchPoolSourceKey || "")}`; }
+function machtilePoolClaimContext(code, order) {
+  if (!order) return { pending: false, recent: false, stale: false };
+  const key = String(code || "").trim().toUpperCase();
+  const claimKey = machtilePendingClaimKey(code, order);
+  const rawPending = Boolean(order.dispatchPoolSourceKey) && order.dispatchPoolStatus === "claimed"
+    && order.processStatus === "pending" && Number(order.done || 0) <= 0;
+  if (rawPending && !machtilePendingClaimFirstSeen.has(claimKey)) {
+    const recentAt = Number(machtileRecentPoolClaims.get(key)?.at);
+    machtilePendingClaimFirstSeen.set(claimKey, Number.isFinite(recentAt) ? recentAt : Date.now());
+  }
+  const pendingAge = rawPending ? Date.now() - Number(machtilePendingClaimFirstSeen.get(claimKey)) : 0;
+  const stale = rawPending && pendingAge >= MACHTILE_PENDING_CLAIM_MAX_MS;
+  const pending = rawPending && !stale;
+  if (!rawPending) machtilePendingClaimFirstSeen.delete(claimKey);
+  const recent = machtileRecentPoolClaims.get(key);
+  const sameRecent = Boolean(recent) && String(recent.orderNo) === String(order.id || "")
+    && (!Number.isFinite(recent.step) || Number(recent.step) === Number(order.stationStep))
+    && Date.now() - Number(recent.at) <= MACHTILE_RECENT_POOL_CLAIM_MS;
+  if (recent && !sameRecent && Date.now() - Number(recent.at) > MACHTILE_RECENT_POOL_CLAIM_MS) machtileRecentPoolClaims.delete(key);
+  return { pending, recent: sameRecent, stale };
+}
+function machtilePendingClaimOrders() {
+  return (Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : []).filter(order => {
+    return machtilePoolClaimContext(order.machine, order).pending;
+  });
+}
+function machtileStopPendingClaimPoll() {
+  if (machtilePendingClaimPollTimer) clearTimeout(machtilePendingClaimPollTimer);
+  machtilePendingClaimPollTimer = null;
+  machtilePendingClaimPollStartedAt = 0;
+  machtilePendingClaimFirstSeen.clear();
+}
+function machtileSyncPendingClaimPoll() {
+  if (!machtilePendingClaimOrders().length) {
+    if (machtilePendingClaimPollTimer) clearTimeout(machtilePendingClaimPollTimer);
+    machtilePendingClaimPollTimer = null; machtilePendingClaimPollStartedAt = 0;
+    return;
+  }
+  if (machtilePendingClaimPollTimer) return;
+  if (!machtilePendingClaimPollStartedAt) machtilePendingClaimPollStartedAt = Date.now();
+  if (Date.now() - machtilePendingClaimPollStartedAt >= MACHTILE_PENDING_CLAIM_MAX_MS) return;
+  const generation = machtileDeferredLoadGeneration;
+  machtilePendingClaimPollTimer = setTimeout(async () => {
+    machtilePendingClaimPollTimer = null;
+    if (generation !== machtileDeferredLoadGeneration) return;
+    await machtileLoadAssignedDispatchPoolStatuses(generation, true);
+    if (generation !== machtileDeferredLoadGeneration) return;
+    deriveMachines(); renderWorkOrders();
+    machtileSyncPendingClaimPoll();
+  }, MACHTILE_PENDING_CLAIM_POLL_MS);
+}
 function machtilePickStartPhase(machine, order) {
   const code = machtileStationCmdMachineCode(machine);
   const local = machtilePickStartLocal[code];
@@ -15023,8 +15140,12 @@ function machtileStartRejectNoticeFor(code, order) {
   const core = machtileStationCmdCore;
   if (!core || typeof core.startRejectNotice !== "function" || !order) return null;
   const record = machtileStartRejectRead()[String(code || "").trim().toUpperCase()];
-  return record ? core.startRejectNotice(record, { machineCode: code, orderNo: order.id, step: order.stationStep,
+  const notice = record ? core.startRejectNotice(record, { machineCode: code, orderNo: order.id, step: order.stationStep,
     commandRows: [...(state.dailyStationStartRows || []), ...(state.localStationStartRows || [])], now: new Date() }) : null;
+  if (notice?.code === "STATION_NOT_SET" && (machtilePoolClaimContext(code, order).pending || machtilePoolClaimContext(code, order).recent)) {
+    return { ...notice, pendingClaimText: machtileTranslate("pending_claim_reject_text"), detail: "" };
+  }
+  return notice;
 }
 const machtileStationCmd = {
   availability: "off",        // off（旗標關）／probing／ready／missing
@@ -15494,6 +15615,7 @@ function machtileStationCmdParts(machine) {
   // 選工單／開工分開：旗標開＋站別指令閘門過（沒掛單也算）才改成依階段出按鈕
   const pickActive = Boolean(machtileTakeoverCore) && machtilePickStartEnabled(code) && (gate.ok || gate.reason === "no_order");
   const pickPhase = pickActive ? machtilePickStartPhase(machine, gate.ok ? order : null) : "";
+  const poolClaim = machtilePoolClaimContext(code, order);
   // 有一筆在等（例：重新整理後、卡片換了單）也要顯示，按鈕才有理由鎖住
   if (!gate.ok && !pickActive && !(pending && machtileStationCmdActiveFor(code))) return none;
   const last = machtileStationCmd.lastResult[code];
@@ -15513,7 +15635,7 @@ function machtileStationCmdParts(machine) {
     line = `<p class="station-cmd-status is-wait" data-station-cmd-status role="status">${escapeHtml(label[pending.commandType] || machtileTranslate("takeover_stop_title"))}：${escapeHtml(view.title)}${view.late ? `　${escapeHtml(view.text)}` : ""}${releaseNote ? `　（${escapeHtml(releaseNote.text)}）` : ""}</p>`;
   } else if (startReject && !(last && last.at > startReject.at)) {
     const notice = startReject.notice;
-    line = `<p class="station-cmd-status is-bad station-cmd-start-reject" data-station-cmd-status data-station-cmd-start-reject="${escapeHtml(notice.code || "")}" role="alert">${escapeHtml(machtileTranslate(notice.key, notice.params))}${notice.detail ? `<small data-station-cmd-start-reject-detail>${escapeHtml(machtileTranslate("start_reject_detail", { detail: notice.detail }))}</small>` : ""}</p>`;
+    line = `<p class="station-cmd-status is-bad station-cmd-start-reject" data-station-cmd-status data-station-cmd-start-reject="${escapeHtml(notice.code || "")}" role="alert">${escapeHtml(notice.pendingClaimText || machtileTranslate(notice.key, notice.params))}${notice.detail ? `<small data-station-cmd-start-reject-detail>${escapeHtml(machtileTranslate("start_reject_detail", { detail: notice.detail }))}</small>` : ""}</p>`;
   } else if (last) {
     line = `<p class="station-cmd-status is-${escapeHtml(last.view.tone)}" data-station-cmd-status role="status">${escapeHtml(last.view.title)}${last.view.phase === "applied" ? "" : `：${escapeHtml(last.view.text)}`}</p>`;
   }
@@ -15533,10 +15655,11 @@ function machtileStationCmdParts(machine) {
     startedToday: machtilePickStartedToday(machine, gate.ok ? order : null),
     overtimeStartVisible: startState.overtime === true && startState.visible === true,
   }) : [];
-  const startLabel = machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
+  const startLabel = poolClaim.pending ? machtileTranslate("pending_claim_start_label") : machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
   const resolvedStartButton = startState.visible ? `
-          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
+          <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken || poolClaim.pending ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
   if (startState.reason === "pending_timeout") line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(machtileTranslate("start_unconfirmed_retry"))}</p>`;
+  if (poolClaim.stale) line = `<p class="station-cmd-status is-warn" data-station-cmd-status data-pending-claim-stale role="status">${escapeHtml(machtileTranslate("pending_claim_stale_hint"))}</p>`;
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
@@ -15689,7 +15812,7 @@ async function machtileStationCmdOpen(type, code, returnFocus) {
   const gate = core.eligibility({ flag: machtileStationCmdFlag(), role: machtileActualRole(), isBridge: machtileDepartmentAccess?.is_bridge === true,
     availability: machtileStationCmd.availability, machineCode: code, order, isUnassignedBucket: machine?.isUnassignedBucket });
   const pending = machtileStationCmd.pending[code];
-  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending)) || machtileReturnClaimLocks(code)) return;
+  if (!gate.ok || (pending && !machtileStationCmdUnlocked(pending)) || machtileReturnClaimLocks(code) || (type === "start" && machtilePoolClaimContext(code, order).pending)) return;
   let uuid;
   try { uuid = core.newUuid(window.crypto); } catch (error) { showToast("這台平板太舊，不能用 App 開工／停工，請改用電子紙"); return; }
   const others = Number(machine?.cardOtherCount || 0);
@@ -21357,7 +21480,7 @@ async function machtileInitWorkOrderModule() {
     showPrefillNote("查詢中…");
     try {
       const record = await machtileWoFetchByNo(normalized);
-      const displayRoutes = await machtileReadRouteSteps([normalized]);
+      const displayRoutes = (await machtileReadRouteSteps([normalized])).rows;
       if (record) {
         try { record.displayProcesses=window.MachTileProcessFlow.mergeRoute(displayRoutes,record.processes,normalized); }
         catch(error) { console.warn('management route fallback',error);record.displayProcesses=record.processes; }
@@ -25782,7 +25905,9 @@ function renderSimplifiedDetail(order, detail) {
     reported: process.reported ?? process.qty_completed ?? null,
     machine_code: process.machine_code || (String(process.process_name || "") === String(order.process || "") ? order.machine : ""),
   }));
-  const route = loadedRoute || (legacyRouteProcesses.length ? { quantity: Number(order.total) || null, processes: legacyRouteProcesses, auditAvailable: false } : null);
+  const route = (!loadedRoute || loadedRoute.unavailable) && legacyRouteProcesses.length
+    ? { quantity: Number(order.total) || null, processes: legacyRouteProcesses, auditAvailable: false }
+    : loadedRoute || null;
   const routeVisibility = machtileFlowVisibilityLevel();
   const routeOptions = machtileProcessFlowOptions(order.id, route?.auditAvailable);
   if (routeVisibility !== "full") delete routeOptions.canPreplan;

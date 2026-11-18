@@ -157,6 +157,10 @@
     "value": "Bắt đầu tăng ca",
     "_draft": true
   },
+  "pending_claim_start_label": { "value": "Đang xử lý nhận việc; chỉ bắt đầu sau khi nhà máy xác nhận (khoảng 1 phút)", "_draft": true },
+  "pending_claim_reject_text": { "value": "Nhà máy vẫn đang xử lý nhận việc; vui lòng chờ rồi bấm bắt đầu lại", "_draft": true },
+  "pending_claim_stale_hint": { "value": "Lệnh vẫn chưa được áp dụng; vui lòng nhờ điều độ xác nhận. Bạn có thể thử bắt đầu lại.", "_draft": true },
+  "process_route_unavailable": { "value": "Không đọc được tuyến công đoạn; hệ thống sẽ tự thử lại sau", "_draft": true },
   "card_qty_syncing": { "value": "Vừa báo công, đang đồng bộ", "_draft": true },
   "card_qty_sync_slow": { "value": "Đồng bộ chậm, vui lòng tải lại sau", "_draft": true },
   "start_unconfirmed_retry": { "value": "Lần mở máy trước chưa được xác nhận, vui lòng kiểm tra rồi bấm lại", "_draft": true },
