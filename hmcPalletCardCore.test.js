@@ -1,6 +1,8 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
 const { mapOrdersToPallets, inferredStripModel, configuredStripModel } = require("./hmcPalletCardCore.js");
 const entry = (id, partNo, extra = {}) => ({ order: { id, processId: `${id}-P`, partNo, ...extra } });
 const pallet = (palletNo, ...partNos) => ({ palletNo, slots: partNos.map((partNo, i) => ({ slotId: `slot-${i + 1}`, part: { partNo } })) });
@@ -10,6 +12,32 @@ const map = {
   4: [{ partNos: ["CPDG-06-01"], label: "CPDG-06", default: false }, { partNos: ["HG-06-01"], label: "HG-06", default: true }],
   5: [{ partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 2 }],
 };
+const configContext = { window: {} };
+vm.runInNewContext(fs.readFileSync(require.resolve("./config.js"), "utf8"), configContext);
+const productionMap = configContext.window.MACHTILE_CONFIG.hmcPalletMap;
+
+const resolvedPallets = (machineMap, partNo) => configuredStripModel([entry(partNo, partNo)], machineMap, null).pallets
+  .filter((item) => item.workpieces.some((workpiece) => workpiece.orders.length))
+  .map((item) => item.palletNo);
+
+test("B02 owner-approved parts resolve to exactly the expected pallets", () => {
+  const expected = {
+    "EDG-01-01": [1], "SBG-03(06)-02-L": [1, 5], "SBG-03(06)-02-R": [1, 5], "SBP-03(06)-02": [1],
+    "SBSG-03(06)-01-L": [1], "SBSG-03(06)-01-PT-1": [1], "SBSG-03(06)-01-2B2": [1, 5],
+    "SBSG-03(06)-01-R": [1, 5], "SBSG-03(06)-01-PT": [1, 5], "DG-01-01": [2, 6],
+    "DT-02-01": [2, 6], "EFBG-03-01": [2], "MPW-01-01": [2], "SBG-03-01": [3],
+    "AR16-R01-04": [3], "AR22-R01-01": [3, 6], "CPDG-03-02": [3], "CPDG-03-03": [3],
+    "HCG-03-03-01": [3], "HCG-03-03": [3], "CPDG-06-02": [4], "CPDG-06-03": [4],
+    "HCG-03-01": [4, 5], "HCG-06-03-1": [4], "HG-03-01": [4, 5], "P16-R01-04A": [4],
+    "P22-R01-01A": [4], "DG-02-01": [6], "DT-01-01": [6], "SBG-06-01": [6],
+  };
+  for (const [partNo, pallets] of Object.entries(expected)) assert.deepEqual(resolvedPallets(productionMap.B02, partNo), pallets, partNo);
+});
+
+test("B01 MSW aliases both resolve to pallets 2 and 5", () => {
+  assert.deepEqual(resolvedPallets(productionMap.B01, "MSW-01-01"), [2, 5]);
+  assert.deepEqual(resolvedPallets(productionMap.B01, "MSW-01Y-01"), [2, 5]);
+});
 
 test("RPC inferred mapping retains unique pallets and unmatched orders", () => {
   const result = mapOrdersToPallets([entry("WO-1", "SF-03-01"), entry("WO-X", "UNKNOWN")], [pallet(1, "SF-03-01")]);
