@@ -43,6 +43,8 @@ window.MACHTILE_CONFIG = {
   // Keep true for static hosts without SPA route fallback.
   // QR will use /?route=/m/report&machine=CNC-01 instead of /m/report?machine=CNC-01.
   useQueryRoutesForFieldReports: true,
+  // Compare-only cloud capability read; legacy decisions always win.
+  enableMachineCapabilityDualRead: false,
   useSupabase: false,
   // CNC field-report offline outbox (default false). true routes 現場報工
   // submit through the offline-first idempotent outbox seam (needs
