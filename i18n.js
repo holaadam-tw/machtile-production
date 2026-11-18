@@ -64,6 +64,10 @@
       report: "報工",
       start_work: "開工",
       overtime_start_work: "加班開工",
+      pending_claim_start_label: "接單處理中，工廠確認後才能開工（約 1 分鐘）",
+      pending_claim_reject_text: "工廠還在處理接單，請稍候再按開工",
+      pending_claim_stale_hint: "接單仍未套用，請找生管確認；你可再次嘗試開工",
+      process_route_unavailable: "製程路線讀取失敗，稍後自動重試",
       card_qty_syncing: "剛報工，同步中",
       card_qty_sync_slow: "同步較慢，請稍後重新整理",
       start_unconfirmed_retry: "上次開工尚未確認，請確認後再按",
@@ -730,6 +734,10 @@
       report: "Báo cáo",
       start_work: "Bắt đầu",
       overtime_start_work: "Bắt đầu tăng ca",
+      pending_claim_start_label: "Đang xử lý nhận việc; chỉ bắt đầu sau khi nhà máy xác nhận (khoảng 1 phút)", // _draft
+      pending_claim_reject_text: "Nhà máy vẫn đang xử lý nhận việc; vui lòng chờ rồi bấm bắt đầu lại", // _draft
+      pending_claim_stale_hint: "Lệnh vẫn chưa được áp dụng; vui lòng nhờ điều độ xác nhận. Bạn có thể thử bắt đầu lại.", // _draft
+      process_route_unavailable: "Không đọc được tuyến công đoạn; hệ thống sẽ tự thử lại sau", // _draft
       card_qty_syncing: "Vừa báo công, đang đồng bộ",
       card_qty_sync_slow: "Đồng bộ chậm, vui lòng tải lại sau",
       start_unconfirmed_retry: "Lần mở máy trước chưa được xác nhận, vui lòng kiểm tra rồi bấm lại",

@@ -7,6 +7,16 @@ const appSource = fs.readFileSync(require.resolve('./app.js'), 'utf8');
 const baseRouteSelect = appSource.match(/config\.enableOutsourceStatusStrip === true[\s\S]*?: `work_order_route_steps\?select=([^`]+)`/g)?.[0] || '';
 check(baseRouteSelect.includes('outsource_vendor_name') && appSource.includes(': `work_order_route_steps?select=work_order_no,step_no,operation_name,station_no,station_codes,is_outsourced,is_confirmed,supplier_no,supplier_name,source_updated_at&'),
   'outsource status flag alone selects production-missing outsource_* columns; production flag-off query stays column-safe');
+check(appSource.includes('loadGeneration !== machtileProcessFlowLoadGeneration || deferredGeneration !== machtileDeferredLoadGeneration')
+  && appSource.includes('machtileProcessFlowLoadGeneration += 1;'),
+  'stale process-flow loads cannot publish after a newer load or department clear');
+check(appSource.includes('MACHTILE_ROUTE_RELOAD_DELAYS_MS = [30, 60, 120]')
+  && appSource.includes('machtileProcessFlowRetryCount < MACHTILE_ROUTE_RELOAD_DELAYS_MS.length')
+  && appSource.includes('machtileCancelProcessFlowReload();'),
+  'route auto-reload is capped at three backoff retries and cleared with department data');
+check(appSource.includes('(!loadedRoute || loadedRoute.unavailable) && legacyRouteProcesses.length')
+  && appSource.includes('route?.unavailable ? machtileTranslate("process_route_unavailable")'),
+  'unavailable routes use order-detail legacy fallback and full-dialog unavailable text');
 const rows = Array.from({length:8}, (_,i)=>({id:`p${i+1}`,process_order:i+1,process_name:`測試工序${i+1}`,process_type:'cnc',machine_code:'A01',status:i===0?'completed':i===1?'running':'pending',reported:i===0?100:i===1?48:0}));
 rows[4] = {...rows[4],process_type:'outsourced',supplier_code:'TEST-VENDOR'};
 check(flow.steps(rows,'p2').length===8,'eight real steps retained');

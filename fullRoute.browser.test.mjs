@@ -105,6 +105,9 @@ try {
   ok(await dialog.locator('.process-flow-step').count()===9,'full dialog retains 7+ steps');
   ok((await dialog.innerText()).includes('委外：測試委外廠商')&&(await dialog.innerText()).includes('委外狀態無資料'),'vendor but no invented outsource status');
   ok((await dialog.innerText()).includes('B03、B04、B05、B06')&&(await dialog.innerText()).includes('BOM 未發行'),'shared machines and unpublished BOM warning render');
+  await page.evaluate(()=>{window.__routeBeforeUnavailable=machtileProcessFlows.get('TEST-SAME');machtileProcessFlows.set('TEST-SAME',{processes:[],unavailable:true});machtileRefreshOpenProcessFlow();});
+  ok((await dialog.innerText()).includes('製程路線讀取失敗，稍後自動重試')&&!(await dialog.innerText()).includes('共 0 道'),'open full-route dialog shows unavailable text, never a zero-step count');
+  await page.evaluate(()=>{machtileProcessFlows.set('TEST-SAME',window.__routeBeforeUnavailable);delete window.__routeBeforeUnavailable;machtileRefreshOpenProcessFlow();});
   ok((await dialog.locator('[data-flow-process="'+id(302)+'"]').innerText()).includes('已完成'),'actual completed status retained');
   ok((await dialog.locator('[data-flow-process="'+id(303)+'"]').innerText()).includes('已報 4690 / 5000'),'same card/flow quantity snapshot');
   ok(await dialog.locator('[data-flow-process="route:TEST-SAME:5"] select,[data-flow-process="route:TEST-SAME:5"] button').count()===0,'outsource has no assignment controls');

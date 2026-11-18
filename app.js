@@ -461,6 +461,9 @@ function machtileSyncBatchEntryVisibility() {
 }
 
 function machtileClearDepartmentData() {
+  machtileStopPendingClaimPoll();
+  machtileCancelProcessFlowReload();
+  machtileProcessFlowLoadGeneration += 1;
   machtileCloseProcessFlow();
   machtileProcessFlows = new Map();
   machtileFlowVisibilityState.byRole = null; machtileFlowVisibilityState.status = "default";
@@ -10820,8 +10823,10 @@ async function loadFromSupabase({ preserveDepartmentOnFailure = false, deferSeco
 // Refresh atomically per order and clear stale routes before every load. No assignment writes.
 let machtileProcessFlows = new Map();
 let machtileProcessFlowRetryTimer = null;
+let machtileProcessFlowLoadGeneration = 0;
+let machtileProcessFlowRetryCount = 0;
 const MACHTILE_ROUTE_RETRY_DELAYS_MS = [500, 1500];
-const MACHTILE_ROUTE_RELOAD_DELAY_MS = 30 * 1000;
+const MACHTILE_ROUTE_RELOAD_DELAYS_MS = [30, 60, 120].map(seconds => seconds * 1000);
 const MACHTILE_ROUTE_MISSING_STORAGE_KEY = "machtileRouteMissingSession";
 const MACHTILE_ROUTE_MISSING_TTL_MS = 10 * 60 * 1000;
 const MACHTILE_ROUTE_ASSET_VERSION = new URL(
@@ -10881,6 +10886,8 @@ async function machtileReadRouteSteps(orderNos) {
   }
 }
 async function machtileLoadProcessFlows() {
+  const loadGeneration = ++machtileProcessFlowLoadGeneration;
+  const deferredGeneration = machtileDeferredLoadGeneration;
   const previous = machtileProcessFlows;
   const next = new Map();
   let anyRouteChunkFailed = false;
@@ -10940,14 +10947,28 @@ async function machtileLoadProcessFlows() {
     }
   }
   await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, () => worker()));
+  if (loadGeneration !== machtileProcessFlowLoadGeneration || deferredGeneration !== machtileDeferredLoadGeneration) return;
   machtileProcessFlows = next;
-  if (anyRouteChunkFailed && !machtileProcessFlowRetryTimer) {
+  if (!anyRouteChunkFailed) {
+    machtileProcessFlowRetryCount = 0;
+    if (machtileProcessFlowRetryTimer) clearTimeout(machtileProcessFlowRetryTimer);
+    machtileProcessFlowRetryTimer = null;
+  } else if (!machtileProcessFlowRetryTimer && machtileProcessFlowRetryCount < MACHTILE_ROUTE_RELOAD_DELAYS_MS.length) {
+    const retryGeneration = deferredGeneration;
+    const delay = MACHTILE_ROUTE_RELOAD_DELAYS_MS[machtileProcessFlowRetryCount++];
     machtileProcessFlowRetryTimer = setTimeout(() => {
       machtileProcessFlowRetryTimer = null;
+      if (retryGeneration !== machtileDeferredLoadGeneration) return;
       void machtileLoadProcessFlows();
-    }, MACHTILE_ROUTE_RELOAD_DELAY_MS);
+    }, delay);
   }
   machtileRefreshOpenProcessFlow();
+}
+
+function machtileCancelProcessFlowReload() {
+  if (machtileProcessFlowRetryTimer) clearTimeout(machtileProcessFlowRetryTimer);
+  machtileProcessFlowRetryTimer = null;
+  machtileProcessFlowRetryCount = 0;
 }
 
 // 製程路線顯示層級（owner 2026-10-06）：每個角色在「機台卡片」上看得到多少製程路線。
@@ -11020,7 +11041,7 @@ function machtileCardNextQueued(machine, order) {
 function machtileProcessFlowMarkup(order, { compact = true, level = "full", machine = null } = {}) {
   if (!order || level === "hidden") return "";
   const route = machtileProcessFlows.get(order.id);
-  if (route?.unavailable) return '<p class="process-flow-empty" data-no-detail>製程路線讀取失敗，稍後自動重試</p>';
+  if (route?.unavailable) return `<p class="process-flow-empty" data-no-detail>${escapeHtml(machtileTranslate("process_route_unavailable"))}</p>`;
   if (!route || !window.MachTileProcessFlow) return '<p class="process-flow-empty" data-no-detail>製程路線尚未驗證</p>';
   return window.MachTileProcessFlow.render(route.processes, {quantity: route.quantity, currentId: order.processId,
     compact, visibility: level,
@@ -11049,6 +11070,7 @@ function machtileCloseProcessFlow() {
 function machtileOpenProcessFlow(orderNo,currentId) {
   if (machtileStrictMode() && !machtileDepartmentAccess) return;
   const route=machtileProcessFlows.get(orderNo);
+  if (route?.unavailable) { showToast(machtileTranslate("process_route_unavailable")); return; }
   if (!route || !window.MachTileProcessFlow) { showToast('製程路線尚未驗證，請重新整理。'); return; }
   machtileCloseProcessFlow();
   machtileFlowReturnFocus=document.activeElement;
@@ -11068,10 +11090,10 @@ function machtileRefreshOpenProcessFlow() {
   const route=machtileProcessFlows.get(dialog.dataset.orderNo);
   const old=dialog.querySelector('.process-flow,.process-flow-empty');
   if(!old)return;
-  dialog.querySelector('.process-flow-dialog > p').textContent=route
+  dialog.querySelector('.process-flow-dialog > p').textContent=route?.unavailable ? machtileTranslate("process_route_unavailable") : route
     ?`共 ${route.processes.length} 道；藍框為目前道。左右滑動可看完整上下游。`:'製程路線尚未驗證。';
   const hadFocus=old.contains(document.activeElement);
-  old.outerHTML=route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
+  old.outerHTML=route?.unavailable?`<p class="process-flow-empty">${escapeHtml(machtileTranslate("process_route_unavailable"))}</p>`:route?window.MachTileProcessFlow.render(route.processes,{quantity:route.quantity,currentId:dialog.dataset.currentId||null,alignCurrent:false,
     outsourceStatusEnabled: config.enableOutsourceStatusStrip === true, outsourceLabels: machtileOutsourceStatusLabels(),
     ...machtileProcessFlowOptions(dialog.dataset.orderNo,route.auditAvailable)}):'<p class="process-flow-empty">製程路線讀取失敗；不顯示舊資料，請重新整理。</p>';
   if(hadFocus)dialog.querySelector('[data-close-flow]').focus();
@@ -11299,7 +11321,11 @@ async function machtileLoadAssignedDispatchPoolStatuses(generation = machtileDef
     if (!Array.isArray(rows)) throw new Error("dispatch_pool_items status response invalid");
     const statusByKey = new Map(rows.map(row => [String(row.source_key || ""), String(row.status || "")]));
     if (generation !== machtileDeferredLoadGeneration) return;
-    orders.forEach(order => { order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || ""; });
+    orders.forEach(order => {
+      order.dispatchPoolStatus = statusByKey.get(order.dispatchPoolSourceKey) || "";
+      if (order.dispatchPoolStatus === "rejected") machtileRecentPoolClaims.delete(String(order.machine || "").trim().toUpperCase());
+    });
+    machtileSyncPendingClaimPoll();
   } catch (error) {
     // Fail closed: an unverified claim must never expose a return action.
     console.warn("dispatch pool assigned status unavailable; hiding return actions", error);
@@ -14888,18 +14914,62 @@ const machtilePickStartLocal = {};
 const machtileInstantStartPending = {};
 const machtileRecentPoolClaims = new Map();
 const MACHTILE_RECENT_POOL_CLAIM_MS = 2 * 60 * 1000;
-const MACHTILE_PENDING_CLAIM_LABEL = "接單處理中，工廠確認後才能開工（約 1 分鐘）";
-const MACHTILE_PENDING_CLAIM_REJECT_TEXT = "工廠還在處理接單，請稍候再按開工";
+const machtilePendingClaimFirstSeen = new Map();
+let machtilePendingClaimPollTimer = null;
+let machtilePendingClaimPollStartedAt = 0;
+const MACHTILE_PENDING_CLAIM_POLL_MS = 5 * 1000;
+const MACHTILE_PENDING_CLAIM_MAX_MS = 3 * 60 * 1000;
+function machtilePendingClaimKey(code, order) { return `${String(code || "").trim().toUpperCase()}|${String(order?.dispatchPoolSourceKey || "")}`; }
 function machtilePoolClaimContext(code, order) {
-  if (!order) return { pending: false, recent: false };
+  if (!order) return { pending: false, recent: false, stale: false };
   const key = String(code || "").trim().toUpperCase();
-  const pending = Boolean(order.dispatchPoolSourceKey) && order.dispatchPoolStatus === "claimed";
+  const claimKey = machtilePendingClaimKey(code, order);
+  const rawPending = Boolean(order.dispatchPoolSourceKey) && order.dispatchPoolStatus === "claimed"
+    && order.processStatus === "pending" && Number(order.done || 0) <= 0;
+  if (rawPending && !machtilePendingClaimFirstSeen.has(claimKey)) {
+    const recentAt = Number(machtileRecentPoolClaims.get(key)?.at);
+    machtilePendingClaimFirstSeen.set(claimKey, Number.isFinite(recentAt) ? recentAt : Date.now());
+  }
+  const pendingAge = rawPending ? Date.now() - Number(machtilePendingClaimFirstSeen.get(claimKey)) : 0;
+  const stale = rawPending && pendingAge >= MACHTILE_PENDING_CLAIM_MAX_MS;
+  const pending = rawPending && !stale;
+  if (!rawPending) machtilePendingClaimFirstSeen.delete(claimKey);
   const recent = machtileRecentPoolClaims.get(key);
   const sameRecent = Boolean(recent) && String(recent.orderNo) === String(order.id || "")
     && (!Number.isFinite(recent.step) || Number(recent.step) === Number(order.stationStep))
     && Date.now() - Number(recent.at) <= MACHTILE_RECENT_POOL_CLAIM_MS;
   if (recent && !sameRecent && Date.now() - Number(recent.at) > MACHTILE_RECENT_POOL_CLAIM_MS) machtileRecentPoolClaims.delete(key);
-  return { pending, recent: sameRecent };
+  return { pending, recent: sameRecent, stale };
+}
+function machtilePendingClaimOrders() {
+  return (Array.isArray(state.assignedCardOrders) ? state.assignedCardOrders : []).filter(order => {
+    return machtilePoolClaimContext(order.machine, order).pending;
+  });
+}
+function machtileStopPendingClaimPoll() {
+  if (machtilePendingClaimPollTimer) clearTimeout(machtilePendingClaimPollTimer);
+  machtilePendingClaimPollTimer = null;
+  machtilePendingClaimPollStartedAt = 0;
+  machtilePendingClaimFirstSeen.clear();
+}
+function machtileSyncPendingClaimPoll() {
+  if (!machtilePendingClaimOrders().length) {
+    if (machtilePendingClaimPollTimer) clearTimeout(machtilePendingClaimPollTimer);
+    machtilePendingClaimPollTimer = null; machtilePendingClaimPollStartedAt = 0;
+    return;
+  }
+  if (machtilePendingClaimPollTimer) return;
+  if (!machtilePendingClaimPollStartedAt) machtilePendingClaimPollStartedAt = Date.now();
+  if (Date.now() - machtilePendingClaimPollStartedAt >= MACHTILE_PENDING_CLAIM_MAX_MS) return;
+  const generation = machtileDeferredLoadGeneration;
+  machtilePendingClaimPollTimer = setTimeout(async () => {
+    machtilePendingClaimPollTimer = null;
+    if (generation !== machtileDeferredLoadGeneration) return;
+    await machtileLoadAssignedDispatchPoolStatuses(generation, true);
+    if (generation !== machtileDeferredLoadGeneration) return;
+    deriveMachines(); renderWorkOrders();
+    machtileSyncPendingClaimPoll();
+  }, MACHTILE_PENDING_CLAIM_POLL_MS);
 }
 function machtilePickStartPhase(machine, order) {
   const code = machtileStationCmdMachineCode(machine);
@@ -15073,7 +15143,7 @@ function machtileStartRejectNoticeFor(code, order) {
   const notice = record ? core.startRejectNotice(record, { machineCode: code, orderNo: order.id, step: order.stationStep,
     commandRows: [...(state.dailyStationStartRows || []), ...(state.localStationStartRows || [])], now: new Date() }) : null;
   if (notice?.code === "STATION_NOT_SET" && (machtilePoolClaimContext(code, order).pending || machtilePoolClaimContext(code, order).recent)) {
-    return { ...notice, pendingClaimText: MACHTILE_PENDING_CLAIM_REJECT_TEXT, detail: "" };
+    return { ...notice, pendingClaimText: machtileTranslate("pending_claim_reject_text"), detail: "" };
   }
   return notice;
 }
@@ -15585,10 +15655,11 @@ function machtileStationCmdParts(machine) {
     startedToday: machtilePickStartedToday(machine, gate.ok ? order : null),
     overtimeStartVisible: startState.overtime === true && startState.visible === true,
   }) : [];
-  const startLabel = poolClaim.pending ? MACHTILE_PENDING_CLAIM_LABEL : machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
+  const startLabel = poolClaim.pending ? machtileTranslate("pending_claim_start_label") : machtileTranslate(startState.overtime ? "overtime_start_work" : "start_work");
   const resolvedStartButton = startState.visible ? `
           <button type="button" class="station-cmd-button is-start" data-no-detail data-station-cmd="start" data-station-cmd-machine="${escapeHtml(code)}" title="舊 MES 開工（會先出確認卡）" ${locked || taken || poolClaim.pending ? "disabled" : ""}>${escapeHtml(startLabel)}</button>` : "";
   if (startState.reason === "pending_timeout") line = `<p class="station-cmd-status is-warn" data-station-cmd-status role="status">${escapeHtml(machtileTranslate("start_unconfirmed_retry"))}</p>`;
+  if (poolClaim.stale) line = `<p class="station-cmd-status is-warn" data-station-cmd-status data-pending-claim-stale role="status">${escapeHtml(machtileTranslate("pending_claim_stale_hint"))}</p>`;
   // 「舊 MES」小標放在狀態字前面，免得「已開工」跟底部「今日尚未開工」（App 自己的開工紀錄）看起來打架
   const status = line ? `<div class="station-cmd-footline" data-no-detail data-station-cmd-footline="${escapeHtml(code)}"><span class="station-cmd-footlabel">舊 MES</span>${line}${retry}</div>
       ` : "";
@@ -25834,7 +25905,9 @@ function renderSimplifiedDetail(order, detail) {
     reported: process.reported ?? process.qty_completed ?? null,
     machine_code: process.machine_code || (String(process.process_name || "") === String(order.process || "") ? order.machine : ""),
   }));
-  const route = loadedRoute || (legacyRouteProcesses.length ? { quantity: Number(order.total) || null, processes: legacyRouteProcesses, auditAvailable: false } : null);
+  const route = (!loadedRoute || loadedRoute.unavailable) && legacyRouteProcesses.length
+    ? { quantity: Number(order.total) || null, processes: legacyRouteProcesses, auditAvailable: false }
+    : loadedRoute || null;
   const routeVisibility = machtileFlowVisibilityLevel();
   const routeOptions = machtileProcessFlowOptions(order.id, route?.auditAvailable);
   if (routeVisibility !== "full") delete routeOptions.canPreplan;
