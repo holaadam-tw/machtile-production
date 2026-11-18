@@ -12143,7 +12143,7 @@ function machtileCloseCardSelection() {
 const machtileDispatchPoolCore = typeof window === "undefined" ? null : window.MachTileDispatchPoolCore;
 const MACHTILE_DISPATCH_POOL_OPEN_REFRESH_MS = 10_000;
 const machtileDispatchPoolState = {
-  status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", openRefreshByMachine: new Map(), requestSequence: 0,
+  status: "idle", items: [], error: "", claimBusy: "", claimMessage: "", expandedOrders: new Set(), confirm: null, openRefreshByMachine: new Map(), requestSequence: 0,
 };
 const machtilePostAppliedRefresh = { retryMs: 10000, maxRetries: 3, timers: {}, retries: {}, syncing: new Set(), exhausted: new Set() };
 
@@ -12207,44 +12207,83 @@ function machtileDispatchPoolForMachine(machine) {
   }, { hideNotEligible: !machtileCanEditSchedule() });
 }
 
+function machtileDispatchPoolPrevious(item) {
+  const step = Number(item?.process_order || 0);
+  if (step <= 1) return null;
+  const orderNo = String(item?.work_order_no || "");
+  const routePrevious = machtileProcessFlows.get(orderNo)?.processes?.find(process =>
+    Number(process?.process_order ?? process?.stationStep) === step - 1);
+  if (routePrevious) {
+    const status = String(routePrevious.status || routePrevious.processStatus || "").toLowerCase();
+    const reported = routePrevious.reported;
+    return { step: step - 1, known: true,
+      good: reported !== null && reported !== undefined && Number.isFinite(Number(reported)) ? Number(reported) : null,
+      closed: ["completed", "closed", "done"].includes(status) || Boolean(routePrevious.off_station_at || routePrevious.offStationAt),
+      machine: String(routePrevious.machine_code || routePrevious.machine || routePrevious.machineCode || "") };
+  }
+  const previous = (Array.isArray(state?.workOrders) ? state.workOrders : [])
+    .find(order => String(order?.id || order?.work_order_no || "") === orderNo
+      && Number(order?.stationStep ?? order?.process_order) === step - 1);
+  if (!previous) {
+    // Previous step still waiting unclaimed in the pool (no machine yet) = never started, so nothing reported.
+    const pooledPrevious = (Array.isArray(machtileDispatchPoolState?.items) ? machtileDispatchPoolState.items : [])
+      .find(row => String(row?.work_order_no || "") === orderNo && Number(row?.process_order) === step - 1
+        && String(row?.status || "waiting").toLowerCase() === "waiting");
+    if (pooledPrevious) return { step: step - 1, known: true, good: 0, closed: false, machine: "" };
+    return { step: step - 1, known: false, good: null, closed: false, machine: "" };
+  }
+  const status = String(previous.processStatus || previous.status || "").toLowerCase();
+  return { step: step - 1, known: true,
+    good: previous.done !== null && previous.done !== undefined && Number.isFinite(Number(previous.done)) ? Number(previous.done) : null,
+    closed: ["completed", "closed", "done"].includes(status) || Boolean(previous.offStationAt || previous.off_station_at),
+    machine: String(previous.machine || previous.machineCode || "") };
+}
+
+function machtileDispatchPoolRowMarkup(item, machine, { later = false } = {}) {
+  const core = machtileDispatchPoolCore;
+  const u = core.urgencyOf(item);
+  const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
+  const machineCode = machine?.code || machine?.name || "";
+  const multiStations = Array.isArray(config.multiStationMachines) ? config.multiStationMachines.map(String) : [];
+  const machineState = { machineCode, stationMode: multiStations.includes(String(machineCode)) ? "multi" : "single",
+    status: machine?.status, hasOrder: Boolean(machine?.order), order: machine?.order || null };
+  const claim = core.claimState(item, machineState, config.dispatchPoolMachines);
+  const replace = core.replaceStoppedState(item, machineState, machtileDepartmentAccess?.role || machtileAuthState.role, config.dispatchPoolMachines);
+  const canRelease = core.canRelease(machtileDepartmentAccess?.role || machtileAuthState.role);
+  const busy = Boolean(machtileDispatchPoolState.claimBusy), disabled = !claim.enabled || busy;
+  const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
+  const previous = machtileDispatchPoolPrevious(item);
+  const previousLine = !previous || previous.closed || !previous.machine ? "" : machtileTranslate("pool_previous_machine", {
+    step: previous.step, machine: previous.machine, count: previous.good === null ? "?" : previous.good,
+  });
+  return `<li class="pool-item${later ? " is-later" : ""}${item.eligibleHere ? "" : " is-not-eligible"}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}">
+      ${previousLine ? `<small class="pool-previous">${escapeHtml(previousLine)}</small>` : ""}
+      <div class="pool-row-main"><span class="pool-step-badge${later ? " is-later" : ""}">${escapeHtml(machtileTranslate("pool_step_badge", { step: item.process_order }))}</span><div class="pool-row-content">
+      <div class="pool-item-head"><strong>${escapeHtml(item.work_order_no)}</strong><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
+      <strong class="pool-process-name">${escapeHtml(core.displayName(item.operation_name))}</strong>
+      <span>${escapeHtml(core.displayName(item.part_name))}${item.part_no ? ` · ${escapeHtml(machtileTranslate("part_number_value", { part: item.part_no }))}` : ""}</span>
+      <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
+      <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span></div></div>
+      <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
+      ${replace.visible ? `<button type="button" class="pool-replace-stopped-action" data-pool-replace-stopped="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${!replace.enabled || busy ? "disabled" : ""} title="${escapeHtml(replace.reason)}">改掛此單（不關站）</button>` : ""}
+      ${canRelease ? `<button type="button" class="pool-release-action" data-pool-release="${escapeHtml(item.source_key)}" ${busy ? "disabled" : ""}>${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("release_claiming") : machtileTranslate("release_claim")}</button>` : ""}
+      ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}</li>`;
+}
+
 function machtileDispatchPoolSectionMarkup(machine) {
   const core = machtileDispatchPoolCore;
   const status = machtileDispatchPoolState.status;
   if (!core || status === "idle" || status === "missing") return "";
   const pool = machtileDispatchPoolForMachine(machine);
   const synced = core.latestSyncedAt(pool.items);
-  const canRelease = core.canRelease(machtileDepartmentAccess?.role || machtileAuthState.role);
   const openRefresh = machtileDispatchPoolOpenRefreshState(machine);
   const refreshMessage = openRefresh?.status === "loading"
     ? machtileTranslate("pool_refreshing")
     : openRefresh?.status === "error" ? machtileTranslate("pool_refresh_failed_stale") : "";
-  const items = pool.items.map(item => {
-    const u = core.urgencyOf(item);
-    const eligible = (Array.isArray(item.eligible_machine_codes) ? item.eligible_machine_codes : []).join("、");
-    const machineCode = machine?.code || machine?.name || "";
-    const multiStations = Array.isArray(config.multiStationMachines) ? config.multiStationMachines.map(String) : [];
-    const machineState = {
-      machineCode,
-      stationMode: multiStations.includes(String(machineCode)) ? "multi" : "single",
-      status: machine?.status,
-      hasOrder: Boolean(machine?.order),
-      order: machine?.order || null,
-    };
-    const claim = core.claimState(item, machineState, config.dispatchPoolMachines);
-    const replace = core.replaceStoppedState(item, machineState, machtileDepartmentAccess?.role || machtileAuthState.role, config.dispatchPoolMachines);
-    const busy = Boolean(machtileDispatchPoolState.claimBusy);
-    const disabled = !claim.enabled || busy;
-    const reason = busy ? machtileTranslate("claim_processing") : claim.reason;
-    return `<li class="pool-item${item.eligibleHere ? "" : " is-not-eligible"}" data-pick-search-item data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}" data-pool-key="${escapeHtml(item.source_key)}">
-        <div class="pool-item-head"><span class="pool-urgency is-u${u || 0}" data-pool-urgency="${u || ""}">${escapeHtml(core.urgencyLabel(item))}</span><strong>${escapeHtml(item.work_order_no)}</strong>${item.source_status === "returned" ? `<span class="pool-returned">${escapeHtml(machtileTranslate("returned_waiting_claim"))}</span>` : ""}</div>
-        <span>${escapeHtml(machtileOperationLabel({ process_order: item.process_order, process_name: core.displayName(item.operation_name) }))} · ${escapeHtml(core.displayName(item.part_name))}${item.part_no ? ` · 料號 ${escapeHtml(item.part_no)}` : ""}</span>
-        <span>${escapeHtml(machtileTranslate("quantity_due_aps", { quantity: core.quantityText(item.quantity), due: core.dueText(item.due_date), start: core.plannedStartText(item.planned_start) }))}</span>
-        <span class="pool-eligible">${escapeHtml(machtileTranslate("eligible_machines", { machines: eligible }))}${item.eligibleHere ? "" : escapeHtml(machtileTranslate("not_in_list", { machine: machine.name }))}</span>
-        <button type="button" data-pool-claim="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${disabled ? "disabled" : ""} aria-disabled="${disabled ? "true" : "false"}" title="${escapeHtml(reason)}">${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("claiming") : machtileTranslate("claim")}</button>
-        ${replace.visible ? `<button type="button" class="pool-replace-stopped-action" data-pool-replace-stopped="${escapeHtml(item.source_key)}" data-pool-machine="${escapeHtml(machineCode)}" ${!replace.enabled || busy ? "disabled" : ""} title="${escapeHtml(replace.reason)}">改掛此單（不關站）</button>` : ""}
-        ${canRelease ? `<button type="button" class="pool-release-action" data-pool-release="${escapeHtml(item.source_key)}" ${busy ? "disabled" : ""}>${busy && machtileDispatchPoolState.claimBusy === item.source_key ? machtileTranslate("release_claiming") : machtileTranslate("release_claim")}</button>` : ""}
-        ${reason ? `<small class="pool-claim-reason">${escapeHtml(reason)}</small>` : ""}
-      </li>`;
+  const items = core.groupClaimableItems(pool.items).map(group => {
+    const orderNo = String(group.main?.work_order_no || ""), expanded = machtileDispatchPoolState.expandedOrders.has(orderNo);
+    const summary = group.later.length ? `<button type="button" class="pool-later-summary" data-pool-expand="${escapeHtml(orderNo)}" aria-expanded="${expanded ? "true" : "false"}">${escapeHtml(machtileTranslate("pool_later_summary", { count: group.later.length, steps: group.later.map(x => `N${x.process_order} ${core.displayName(x.operation_name)}`).join("、") }))}</button>` : "";
+    return machtileDispatchPoolRowMarkup(group.main, machine) + summary + (expanded ? group.later.map(item => machtileDispatchPoolRowMarkup(item, machine, { later: true })).join("") : group.later.map(item => `<li hidden data-pick-search-item data-collapsed-pool-order="${escapeHtml(orderNo)}" data-pick-search-order="${escapeHtml(item.work_order_no)}" data-pick-search-part-no="${escapeHtml(item.part_no || "")}" data-pick-search-part-name="${escapeHtml(item.part_name || "")}" data-pick-search-process="${escapeHtml(item.operation_name || "")}"></li>`).join(""));
   }).join("");
   const machineCode = String(machine?.code || machine?.name || "");
   const empty = status === "error"
@@ -12330,6 +12369,32 @@ function machtileUpdateDispatchPoolSelection(machineCode) {
   machtilePickOrderUpdateEmpty(holder);
   machtilePickOrderApplySearch(holder);
   return true;
+}
+
+function machtileOpenDispatchPoolConfirm(sourceKey, machineCode) {
+  const item = machtileDispatchPoolState.items.find(x => String(x?.source_key || "") === String(sourceKey));
+  if (!item) return;
+  const previous = machtileDispatchPoolPrevious(item);
+  const red = Boolean(previous && previous.known && !previous.closed && Number(previous.good) === 0);
+  const note = !previous ? "" : red
+    ? machtileTranslate("pool_claim_previous_zero", { previous: previous.step, step: item.process_order })
+    : previous.good !== null ? machtileTranslate("pool_claim_previous_reported", { count: previous.good }) : "";
+  machtileDispatchPoolState.confirm = { sourceKey, machineCode };
+  const old = document.getElementById("machtilePoolClaimConfirm");
+  if (old) old.remove();
+  document.body.insertAdjacentHTML("beforeend", `<div class="card-selection-overlay pool-claim-confirm-overlay" id="machtilePoolClaimConfirm" role="dialog" aria-modal="true" aria-labelledby="poolClaimConfirmTitle">
+    <section class="pool-claim-confirm${red ? " is-danger" : ""}">
+      <h2 id="poolClaimConfirmTitle">${escapeHtml(machtileTranslate("pool_claim_confirm_title", { step: item.process_order, process: machtileDispatchPoolCore.displayName(item.operation_name) }))}</h2>
+      <p><strong>${escapeHtml(item.work_order_no)}</strong></p><p>${escapeHtml([item.part_no, item.part_name].filter(Boolean).join(" · "))}</p>
+      ${note ? `<p class="pool-claim-confirm-note">${escapeHtml(note)}</p>` : ""}
+      <div class="pool-claim-confirm-actions"><button type="button" data-pool-confirm-claim>${escapeHtml(machtileTranslate("pool_claim_confirm"))}</button><button type="button" data-pool-cancel-claim>${escapeHtml(machtileTranslate("cancel"))}</button></div>
+    </section></div>`);
+  document.querySelector("[data-pool-confirm-claim]")?.focus();
+}
+
+function machtileCloseDispatchPoolConfirm() {
+  document.getElementById("machtilePoolClaimConfirm")?.remove();
+  machtileDispatchPoolState.confirm = null;
 }
 
 async function machtileClaimDispatchPool(sourceKey, machineCode, switchStep = null) {
@@ -15030,7 +15095,9 @@ function machtilePickOrderApplySearch(holder) {
   holder.dataset.pickSearch = query;
   const activePane = holder.querySelector('[data-pick-pane]:not([hidden])');
   const items = [...(activePane?.querySelectorAll("[data-pick-search-item]") || [])];
+  const countableItems = items.filter(element => !element.dataset.collapsedPoolOrder);
   let matches = 0;
+  let expandOrder = "";
   items.forEach((element) => {
     const matched = machtileDispatchPoolCore.matchesOrderSearch({
       work_order_no: element.dataset.pickSearchOrder,
@@ -15039,13 +15106,19 @@ function machtilePickOrderApplySearch(holder) {
       operation_name: element.dataset.pickSearchProcess,
     }, query);
     element.hidden = !matched;
-    if (matched) matches += 1;
+    if (matched && query && element.dataset.collapsedPoolOrder) expandOrder = element.dataset.collapsedPoolOrder;
+    if (matched && !element.dataset.collapsedPoolOrder) matches += 1;
   });
+  if (expandOrder && !machtileDispatchPoolState.expandedOrders.has(expandOrder)) {
+    machtileDispatchPoolState.expandedOrders.add(expandOrder);
+    machtileUpdateDispatchPoolSelection(holder.dataset.machineCode || holder.dataset.machine);
+    return;
+  }
   const count = holder.querySelector("[data-pick-order-search-count]");
-  if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: items.length });
+  if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: countableItems.length });
   holder.querySelectorAll("[data-pick-order-search-clear]").forEach(button => { button.hidden = !query; });
   const noMatches = holder.querySelector("[data-pick-order-search-empty]");
-  if (noMatches) noMatches.hidden = !(Boolean(query) && items.length > 0 && matches === 0);
+  if (noMatches) noMatches.hidden = !(Boolean(query) && countableItems.length > 0 && matches === 0);
 }
 function machtilePickOrderClearSearch(holder) {
   const input = holder?.querySelector("[data-pick-order-search]");
@@ -30044,7 +30117,22 @@ function bindEvents() {
     if (cardPoolOpen) { machtileOpenCardSelection(cardPoolOpen.dataset.cardPoolOpen, { poolOnly: true }); return; }
     const poolClaim = event.target.closest("[data-pool-claim]");
     if (poolClaim) {
-      void machtileClaimDispatchPool(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
+      machtileOpenDispatchPoolConfirm(poolClaim.dataset.poolClaim, poolClaim.dataset.poolMachine);
+      return;
+    }
+    const poolExpand = event.target.closest("[data-pool-expand]");
+    if (poolExpand) {
+      const orderNo = poolExpand.dataset.poolExpand;
+      if (machtileDispatchPoolState.expandedOrders.has(orderNo)) machtileDispatchPoolState.expandedOrders.delete(orderNo);
+      else machtileDispatchPoolState.expandedOrders.add(orderNo);
+      machtileUpdateDispatchPoolSelection(poolExpand.closest("#machtileCardSelection")?.dataset.machineCode);
+      return;
+    }
+    if (event.target.closest("[data-pool-cancel-claim]") || event.target.matches(".pool-claim-confirm-overlay")) { machtileCloseDispatchPoolConfirm(); return; }
+    if (event.target.closest("[data-pool-confirm-claim]")) {
+      const pending = machtileDispatchPoolState.confirm;
+      machtileCloseDispatchPoolConfirm();
+      if (pending) void machtileClaimDispatchPool(pending.sourceKey, pending.machineCode);
       return;
     }
     const poolReplace = event.target.closest("[data-pool-replace-stopped]");

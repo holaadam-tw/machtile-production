@@ -38,6 +38,26 @@
     return (Array.isArray(items) ? items : []).filter(item => matchesOrderSearch(item, query));
   }
 
+  function processOrderOf(item) {
+    const n = Number(item && (item.process_order ?? item.stationStep));
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
+
+  // 同一工單在同一台機可接的待做列只露出最前一道；後續道次由畫面收合。
+  function groupClaimableItems(items) {
+    const groups = new Map();
+    for (const item of Array.isArray(items) ? items : []) {
+      const orderNo = text(item && (item.work_order_no ?? item.orderNo ?? item.id));
+      if (!groups.has(orderNo)) groups.set(orderNo, []);
+      groups.get(orderNo).push(item);
+    }
+    return [...groups.values()].map(rows => {
+      const sorted = rows.slice().sort((a, b) => processOrderOf(a) - processOrderOf(b));
+      const main = sorted.find(row => row?.eligibleHere === true) || sorted[0];
+      return { main, later: sorted.filter(row => row !== main) };
+    }).sort((a, b) => compareItems(a.main, b.main));
+  }
+
   function departmentCodeOf(departmentName) {
     return DEPARTMENT_CODE_BY_NAME[text(departmentName)] || "";
   }
@@ -271,5 +291,7 @@
     normalizeSearchText,
     matchesOrderSearch,
     filterOrderSearch,
+    processOrderOf,
+    groupClaimableItems,
   });
 });
