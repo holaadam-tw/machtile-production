@@ -10551,10 +10551,24 @@ async function machtileSupabaseFetchRequest(path, options = {}) {
 
 async function supabaseFetch(path, options = {}) {
   const isRpc = String(path || "").split("?")[0].startsWith("rpc/");
+  const timeoutMs = Number(options.timeoutMs || 0);
+  let timeoutId = null;
+  let requestOptions = options;
+  if (timeoutMs > 0) {
+    const controller = new AbortController();
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort(options.signal.reason);
+      else options.signal.addEventListener("abort", () => controller.abort(options.signal.reason), { once: true });
+    }
+    timeoutId = setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs);
+    const { timeoutMs: _timeoutMs, ...rest } = options;
+    requestOptions = { ...rest, signal: controller.signal };
+  }
   if (isRpc) machtileRpcInFlight += 1;
   try {
-    return await machtileSupabaseFetchRequest(path, options);
+    return await machtileSupabaseFetchRequest(path, requestOptions);
   } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
     if (isRpc) machtileRpcInFlight = Math.max(0, machtileRpcInFlight - 1);
   }
 }
@@ -11865,6 +11879,7 @@ const machtileHmcPalletWorkpieceOpen = new Map();
 const MACHTILE_HMC_PALLET_CARD_REFRESH_MS = 30000;
 const MACHTILE_HMC_PALLET_CARD_STALE_MS = 10 * 60 * 1000;
 const MACHTILE_HMC_PALLET_CARD_STALE_FAILURES = 3;
+const MACHTILE_HMC_PALLET_CARD_TIMEOUT_MS = 15000;
 
 function machtileHmcPalletCardEnabled(machine) {
   const code = String(machine?.code || machine?.name || "");
@@ -11881,11 +11896,12 @@ function machtileLoadHmcPalletCard(machine) {
   const code = String(machine.code || machine.name);
   if (machtileHmcPalletStripEnabled(machine) && config.hmcPalletMap?.[code]) return;
   const cached = machtileHmcPalletCardState.get(code);
-  if (cached && (cached.status === "loading" || Date.now() - cached.loadedAt < MACHTILE_HMC_PALLET_CARD_REFRESH_MS)) return;
+  if (cached && (cached.status === "loading" || performance.now() - cached.loadedAt < MACHTILE_HMC_PALLET_CARD_REFRESH_MS)) return;
   machtileHmcPalletCardState.set(code, { status: "loading", states: cached?.states || [], loadedAt: cached?.loadedAt || 0, lastSuccessAt: cached?.lastSuccessAt || 0, failures: cached?.failures || 0 });
   void supabaseFetch("rpc/hmc_pallet_card_read", {
     method: "POST",
     body: JSON.stringify({ p_machine_code: code }),
+    timeoutMs: MACHTILE_HMC_PALLET_CARD_TIMEOUT_MS,
   }).then((result) => {
     if (result?.ok !== true || !Array.isArray(result.pallets)) throw new Error("HMC_PALLET_CARD_READ_FAILED");
     const states = result.pallets.map((pallet) => ({
@@ -11895,11 +11911,11 @@ function machtileLoadHmcPalletCard(machine) {
         part: { partNo },
       })),
     }));
-    const now = Date.now();
+    const now = performance.now();
     machtileHmcPalletCardState.set(code, { status: "ready", states, loadedAt: now, lastSuccessAt: now, failures: 0 });
   }).catch(() => {
     const previous = machtileHmcPalletCardState.get(code) || cached;
-    const now = Date.now();
+    const now = performance.now();
     const lastSuccessAt = Number(previous?.lastSuccessAt || 0);
     const keepLastSuccess = lastSuccessAt > 0 && now - lastSuccessAt < MACHTILE_HMC_PALLET_CARD_STALE_MS;
     machtileHmcPalletCardState.set(code, {
@@ -11990,7 +12006,7 @@ function machtileHmcPalletStripMarkup(machine) {
   const manual = machine.cardPickBasis === "manual";
   const headerControls = manual ? `<span class="hmc-pallet-strip-controls"><span class="card-orders-manual">${escapeHtml(machtileTranslate("hmc_pallet_strip_manual"))}</span><button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machine.name)}" data-card-pick-key="">${escapeHtml(machtileTranslate("hmc_pallet_strip_restore_auto"))}</button></span>` : "";
   const inferredLabel = !machineMap ? `<span class="hmc-pallet-strip-inferred">${escapeHtml(machtileTranslate("hmc_pallet_strip_inferred"))}</span>` : "";
-  const staleHint = !machineMap && cached.status === "stale" && cached.failures >= MACHTILE_HMC_PALLET_CARD_STALE_FAILURES ? `<span class="hmc-pallet-strip-stale" role="status">${escapeHtml(machtileTranslate("hmc_pallet_strip_stale"))}</span>` : "";
+  const staleHint = !machineMap && cached.failures >= MACHTILE_HMC_PALLET_CARD_STALE_FAILURES ? `<span class="hmc-pallet-strip-stale" role="status">${escapeHtml(machtileTranslate("hmc_pallet_strip_stale"))}</span>` : "";
   return `<section class="hmc-pallet-strip-card" data-no-detail data-hmc-pallet-strip="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_strip_title"))}</strong>${headerControls}<small>${inferredLabel}${staleHint}${escapeHtml(machtileTranslate("hmc_pallet_strip_hint"))}</small></header><div class="hmc-pallet-strip-chips">${chips}${unmatchedChip}</div>${panel}</section>`;
 }
 
