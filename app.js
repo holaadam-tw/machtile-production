@@ -12224,7 +12224,14 @@ function machtileDispatchPoolPrevious(item) {
   const previous = (Array.isArray(state?.workOrders) ? state.workOrders : [])
     .find(order => String(order?.id || order?.work_order_no || "") === orderNo
       && Number(order?.stationStep ?? order?.process_order) === step - 1);
-  if (!previous) return { step: step - 1, known: false, good: null, closed: false, machine: "" };
+  if (!previous) {
+    // Previous step still waiting unclaimed in the pool (no machine yet) = never started, so nothing reported.
+    const pooledPrevious = (Array.isArray(machtileDispatchPoolState?.items) ? machtileDispatchPoolState.items : [])
+      .find(row => String(row?.work_order_no || "") === orderNo && Number(row?.process_order) === step - 1
+        && String(row?.status || "waiting").toLowerCase() === "waiting");
+    if (pooledPrevious) return { step: step - 1, known: true, good: 0, closed: false, machine: "" };
+    return { step: step - 1, known: false, good: null, closed: false, machine: "" };
+  }
   const status = String(previous.processStatus || previous.status || "").toLowerCase();
   return { step: step - 1, known: true,
     good: previous.done !== null && previous.done !== undefined && Number.isFinite(Number(previous.done)) ? Number(previous.done) : null,
