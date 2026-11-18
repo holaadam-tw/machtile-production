@@ -53,8 +53,9 @@
     }
     return [...groups.values()].map(rows => {
       const sorted = rows.slice().sort((a, b) => processOrderOf(a) - processOrderOf(b));
-      return { main: sorted[0], later: sorted.slice(1) };
-    });
+      const main = sorted.find(row => row?.eligibleHere === true) || sorted[0];
+      return { main, later: sorted.filter(row => row !== main) };
+    }).sort((a, b) => compareItems(a.main, b.main));
   }
 
   function departmentCodeOf(departmentName) {

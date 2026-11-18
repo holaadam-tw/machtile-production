@@ -236,6 +236,32 @@ try {
     ok(await claimedEarlier.page.locator('[data-pool-key="STEP-CLARITY-N1"]').count() === 0 && await claimedEarlier.page.locator('[data-pool-key="STEP-CLARITY-N2"]').count() === 1, 'claimed N1 is absent and N2 is main');
     ok((await claimedEarlier.page.locator('.pool-previous').innerText()).includes('上一道 N1 由 A01 在做，已報 3 件'), 'N2 main row explains the earlier machine and report count');
     await claimedEarlier.ctx.close();
+
+    // Planner sees non-eligible context, but the main row must still be the first step claimable on A03.
+    poolResponseRows = [
+      { ...sameOrderRows[0], source_key: 'PLANNER-W3-N1', work_order_no: 'W3', eligible_machine_codes: ['A01'], urgency: 1 },
+      { ...sameOrderRows[1], source_key: 'PLANNER-W3-N2', work_order_no: 'W3', eligible_machine_codes: ['A03'], urgency: 2 },
+    ];
+    access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+    const plannerContext = await openApp('planner', 1280);
+    await plannerContext.page.evaluate(() => {
+      machtileProcessFlows.set('W3', { quantity: 20, processes: [
+        { process_order: 1, status: 'running', reported: 0, machine_code: 'A01' },
+        { process_order: 2, status: 'pending', reported: null, machine_code: 'A03' },
+      ] });
+      machtileOpenCardSelection('A03', { pickOrder: true, refreshPool: false });
+    });
+    ok(await plannerContext.page.locator('[data-card-selection-pool] [data-pool-key]:visible').first().getAttribute('data-pool-key') === 'PLANNER-W3-N2', 'planner A03: claimable N2 is the main row');
+    ok(await plannerContext.page.locator('[data-card-selection-pool] [data-pool-key="PLANNER-W3-N1"]:visible').count() === 0, 'planner A03: non-eligible N1 stays collapsed as context');
+    ok((await plannerContext.page.locator('.pool-previous').innerText()).includes('上一道 N1 由 A01 在做，已報 0 件'), 'route process supplies previous machine and a genuine zero report');
+    const plannerSearchCount = await plannerContext.page.locator('[data-pick-order-search-count]').innerText();
+    ok(plannerSearchCount.includes('符合 1／全部 1 張'), `collapsed pool context is not double-counted in the search total (${plannerSearchCount})`);
+    await plannerContext.page.evaluate(() => {
+      machtileProcessFlows.get('W3').processes[0].reported = null;
+      machtileOpenCardSelection('A03', { pickOrder: true, refreshPool: false });
+    });
+    ok((await plannerContext.page.locator('.pool-previous').innerText()).includes('已報 ? 件'), 'unknown route report remains unknown instead of becoming zero');
+    await plannerContext.ctx.close();
     poolResponseRows = poolRows; dispatchPoolMachines = [];
   }
 

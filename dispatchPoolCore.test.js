@@ -36,8 +36,23 @@ const grouped = c.groupClaimableItems([
   item({ work_order_no: "WO-1", process_order: 2 }),
   item({ work_order_no: "WO-1", process_order: 1 }),
 ]);
-eq("同單最低道次是主列", grouped.map(g => [g.main.work_order_no, g.main.process_order, g.later.map(x => x.process_order)]), [["WO-2", 3, []], ["WO-1", 1, [2]]]);
-eq("不改原列", grouped[1].main === grouped[1].later[0], false);
+eq("同單最低道次是主列，群組依主列排序", grouped.map(g => [g.main.work_order_no, g.main.process_order, g.later.map(x => x.process_order)]), [["WO-1", 1, [2]], ["WO-2", 3, []]]);
+eq("不改原列", grouped[0].main === grouped[0].later[0], false);
+const groupedByMain = c.groupClaimableItems([
+  item({ work_order_no: "W1", process_order: 1, urgency: 3 }),
+  item({ work_order_no: "W1", process_order: 2, urgency: 1 }),
+  item({ work_order_no: "W2", process_order: 1, urgency: 2 }),
+]);
+eq("群組依主列排序，不受先看到的後續道次影響", groupedByMain.map(g => g.main.work_order_no), ["W2", "W1"]);
+const claimableMain = c.groupClaimableItems([
+  item({ work_order_no: "W3", process_order: 1, urgency: 1, eligibleHere: false }),
+  item({ work_order_no: "W3", process_order: 2, urgency: 2, eligibleHere: true }),
+]);
+eq("生管畫面以本機可接的最低道次為主列", [claimableMain[0].main.process_order, claimableMain[0].later.map(x => x.process_order)], [2, [1]]);
+eq("完全沒有本機可接列時才退回最低道次", c.groupClaimableItems([
+  item({ work_order_no: "W4", process_order: 2, eligibleHere: false }),
+  item({ work_order_no: "W4", process_order: 1, eligibleHere: false }),
+])[0].main.process_order, 1);
 
 console.log("== itemsForMachine（同課）==");
 const pool = [item({ work_order_no: "L1" }), item({ work_order_no: "M1", department_code: "MILL", eligible_machine_codes: ["B03"] }),

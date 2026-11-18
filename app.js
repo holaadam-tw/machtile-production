@@ -12211,12 +12211,23 @@ function machtileDispatchPoolPrevious(item) {
   const step = Number(item?.process_order || 0);
   if (step <= 1) return null;
   const orderNo = String(item?.work_order_no || "");
+  const routePrevious = machtileProcessFlows.get(orderNo)?.processes?.find(process =>
+    Number(process?.process_order ?? process?.stationStep) === step - 1);
+  if (routePrevious) {
+    const status = String(routePrevious.status || routePrevious.processStatus || "").toLowerCase();
+    const reported = routePrevious.reported;
+    return { step: step - 1, known: true,
+      good: reported !== null && reported !== undefined && Number.isFinite(Number(reported)) ? Number(reported) : null,
+      closed: ["completed", "closed", "done"].includes(status) || Boolean(routePrevious.off_station_at || routePrevious.offStationAt),
+      machine: String(routePrevious.machine_code || routePrevious.machine || routePrevious.machineCode || "") };
+  }
   const previous = (Array.isArray(state?.workOrders) ? state.workOrders : [])
     .find(order => String(order?.id || order?.work_order_no || "") === orderNo
       && Number(order?.stationStep ?? order?.process_order) === step - 1);
   if (!previous) return { step: step - 1, known: false, good: null, closed: false, machine: "" };
   const status = String(previous.processStatus || previous.status || "").toLowerCase();
-  return { step: step - 1, known: true, good: Number.isFinite(Number(previous.done)) ? Number(previous.done) : null,
+  return { step: step - 1, known: true,
+    good: previous.done !== null && previous.done !== undefined && Number.isFinite(Number(previous.done)) ? Number(previous.done) : null,
     closed: ["completed", "closed", "done"].includes(status) || Boolean(previous.offStationAt || previous.off_station_at),
     machine: String(previous.machine || previous.machineCode || "") };
 }
@@ -15077,6 +15088,7 @@ function machtilePickOrderApplySearch(holder) {
   holder.dataset.pickSearch = query;
   const activePane = holder.querySelector('[data-pick-pane]:not([hidden])');
   const items = [...(activePane?.querySelectorAll("[data-pick-search-item]") || [])];
+  const countableItems = items.filter(element => !element.dataset.collapsedPoolOrder);
   let matches = 0;
   let expandOrder = "";
   items.forEach((element) => {
@@ -15088,7 +15100,7 @@ function machtilePickOrderApplySearch(holder) {
     }, query);
     element.hidden = !matched;
     if (matched && query && element.dataset.collapsedPoolOrder) expandOrder = element.dataset.collapsedPoolOrder;
-    if (matched) matches += 1;
+    if (matched && !element.dataset.collapsedPoolOrder) matches += 1;
   });
   if (expandOrder && !machtileDispatchPoolState.expandedOrders.has(expandOrder)) {
     machtileDispatchPoolState.expandedOrders.add(expandOrder);
@@ -15096,10 +15108,10 @@ function machtilePickOrderApplySearch(holder) {
     return;
   }
   const count = holder.querySelector("[data-pick-order-search-count]");
-  if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: items.length });
+  if (count) count.textContent = machtileTranslate("pick_order_search_count", { matches, total: countableItems.length });
   holder.querySelectorAll("[data-pick-order-search-clear]").forEach(button => { button.hidden = !query; });
   const noMatches = holder.querySelector("[data-pick-order-search-empty]");
-  if (noMatches) noMatches.hidden = !(Boolean(query) && items.length > 0 && matches === 0);
+  if (noMatches) noMatches.hidden = !(Boolean(query) && countableItems.length > 0 && matches === 0);
 }
 function machtilePickOrderClearSearch(holder) {
   const input = holder?.querySelector("[data-pick-order-search]");
