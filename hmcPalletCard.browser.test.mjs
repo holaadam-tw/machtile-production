@@ -18,6 +18,7 @@ const baseFiles = new Map(["index.html", "app.js", "i18n.js", "styles.css"].map(
 const mod = await import(pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE || "D:/04_SoftNet/temp-playwright-deps-20261008/node_modules/playwright/index.mjs").href);
 const { chromium } = mod.default || mod;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
+const forceBaseCode = process.env.MACHTILE_HMC_FORCE_BASE === "1";
 const b01Map = {
   1: [{ partNos: ["SF-03-01"], label: "SF-03本體" }, { partNos: ["BG-03-01"], label: "BG-03本體" }, { partNos: ["EMPTY"], label: "空工件" }],
   2: [{ partNos: ["CPDG-06-01"], label: "CPDG-06" }],
@@ -52,7 +53,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
-async function open(base, { card = false, strip = false, mapped = true, machineCode = "B01", rpc = null, rpcSequence = null, fixture = false, language = "zh-Hant", viewport = { width: 1280, height: 800 } } = {}) {
+async function open(base, { card = false, strip = false, mapped = true, machineCode = "B01", rpc = null, rpcSequence = null, fixture = false, language = "zh-Hant", viewport = { width: 1280, height: 800 }, fastPalletTimeout = false } = {}) {
   let rpcCalls = 0;
   const context = await browser.newContext({ serviceWorkers: "block", viewport });
   await context.route("**/*", async (route) => {
@@ -62,16 +63,22 @@ async function open(base, { card = false, strip = false, mapped = true, machineC
     if (relative === "config.js") return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:${card},enableHmcPalletStrip:${strip},hmcPalletCardMachines:["${machineCode}"],hmcPalletMap:${JSON.stringify(mapped ? { [machineCode]: b01Map } : {})},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
     if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_card_read")) {
       const response = Array.isArray(rpcSequence) ? rpcSequence[Math.min(rpcCalls++, rpcSequence.length - 1)] : rpc;
+      if (response?.never) return new Promise(() => {});
       if (response?.delay) await new Promise((resolve) => setTimeout(resolve, response.delay));
       return response instanceof Error
         ? route.fulfill({ status: 503, contentType: mime[".json"], body: JSON.stringify({ message: response.message }) })
         : route.fulfill({ contentType: mime[".json"], body: JSON.stringify(response?.body ?? response) });
     }
-    if (base && baseFiles.has(relative)) return route.fulfill({ contentType: mime[path.extname(relative)], body: baseFiles.get(relative) });
+    if (forceBaseCode && relative === "app.js" && fixture) return route.fulfill({ contentType: mime[".js"], body: fixtureApp(baseFiles.get(relative).toString("utf8")).replaceAll('machine:"B01"', `machine:"${machineCode}"`).replaceAll('machine: "B01"', `machine: "${machineCode}"`) });
+    if ((base || forceBaseCode) && baseFiles.has(relative)) return route.fulfill({ contentType: mime[path.extname(relative)], body: baseFiles.get(relative) });
     if (!base && relative === "app.js" && fixture) return route.fulfill({ contentType: mime[".js"], body: fixtureApp(await readFile(path.join(root, relative), "utf8")).replaceAll('machine:"B01"', `machine:"${machineCode}"`).replaceAll('machine: "B01"', `machine: "${machineCode}"`) });
     return route.fallback();
   });
   const page = await context.newPage();
+  if (fastPalletTimeout) await page.addInitScript(() => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => nativeSetTimeout(callback, delay === 15000 && window.__machtileFastPalletTimeout ? 20 : delay, ...args);
+  });
   await page.addInitScript((value) => localStorage.setItem("machtile.language", value), language);
   const errors = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded" });
@@ -161,7 +168,18 @@ try {
   await inferred.context.close();
 
   const advanceRefresh = async (page, milliseconds = 31000) => {
-    await page.evaluate((delta) => { const now = Date.now(); Date.now = () => now + delta; renderWorkOrders(); }, milliseconds);
+    await page.evaluate((delta) => {
+      window.__machtileTestMonotonicOffset = (window.__machtileTestMonotonicOffset || 0) + delta;
+      if (!window.__machtileTestDateNow) {
+        window.__machtileTestDateNow = Date.now.bind(Date);
+        Date.now = () => window.__machtileTestDateNow() + window.__machtileTestMonotonicOffset;
+      }
+      if (!window.__machtileTestPerformanceNow) {
+        window.__machtileTestPerformanceNow = performance.now.bind(performance);
+        Object.defineProperty(performance, "now", { configurable: true, value: () => window.__machtileTestPerformanceNow() + window.__machtileTestMonotonicOffset });
+      }
+      renderWorkOrders();
+    }, milliseconds);
     await page.waitForTimeout(100);
   };
   const intermittent = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("temporary-1"), b02Rpc, new Error("temporary-2")], fixture: true });
@@ -248,12 +266,41 @@ try {
     await matching.context.close();
   }
 
-  const stale = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("stale-1"), new Error("stale-2"), new Error("stale-3")], fixture: true, viewport: { width: 800, height: 1280 } });
+  for (const font of ["sans-serif", "monospace"]) {
+    const stressed = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpc: b02Rpc, fixture: true, viewport: { width: 360, height: 800 } });
+    await stressed.page.addStyleTag({ content: `html { font-size: 115%; } .hmc-pallet-chip { font-family: ${font}; }` });
+    const gap = await stressed.page.locator('[data-hmc-strip-chip="1"]').evaluate((node) => {
+      const number = node.querySelector("b").getBoundingClientRect();
+      const badge = node.querySelector("em").getBoundingClientRect();
+      return badge.left - number.right;
+    });
+    assert.ok(gap >= 2, `360px at 115% with ${font} keeps at least 2px between pallet number and badge; gap=${gap}`);
+    await stressed.context.close();
+  }
+
+  const stale = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, new Error("stale-1"), new Error("stale-2"), new Error("stale-3"), { delay: 300, body: b02Rpc }], fixture: true, viewport: { width: 800, height: 1280 } });
   await stale.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
   await advanceRefresh(stale.page); await advanceRefresh(stale.page); await advanceRefresh(stale.page);
   const staleStrip = stale.page.locator('[data-hmc-pallet-strip="B02"]');
   assert.match(await staleStrip.locator('.hmc-pallet-strip-stale').textContent(), /資料可能已過期/, "third consecutive failure shows stale-data hint");
+  await advanceRefresh(stale.page);
+  assert.equal(await staleStrip.locator('.hmc-pallet-strip-stale').count(), 1, "stale hint remains visible while the retry is loading");
   await staleStrip.screenshot({ path: path.join(outDir, "B02-stale-hint-800x1280.png") });
   await stale.context.close();
+
+  const hung = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, { never: true }], fixture: true, fastPalletTimeout: true });
+  await hung.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  await hung.page.evaluate(() => { window.__machtileFastPalletTimeout = true; });
+  await advanceRefresh(hung.page, 10 * 60 * 1000 + 1);
+  await hung.page.locator('[data-card-orders="B02"]').waitFor({ timeout: 1000 });
+  assert.equal(await hung.page.locator('[data-hmc-pallet-strip="B02"]').count(), 0, "timed-out pallet RPC falls back after the simulated stale window");
+  await hung.context.close();
+
+  const monotonic = await open(false, { card: true, strip: true, mapped: false, machineCode: "B02", rpcSequence: [b02Rpc, b02Rpc], fixture: true });
+  await monotonic.page.locator('[data-hmc-pallet-strip="B02"]').waitFor();
+  await monotonic.page.evaluate(() => { const now = Date.now(); Date.now = () => now - 60 * 60 * 1000; });
+  await advanceRefresh(monotonic.page);
+  assert.equal(monotonic.rpcCalls(), 2, "refresh age uses the monotonic clock when the wall clock moves backward");
+  await monotonic.context.close();
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
 console.log("PASS: HMC pallet-card and pallet-strip browser assertions");
