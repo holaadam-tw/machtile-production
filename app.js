@@ -15091,8 +15091,17 @@ function machtilePickOrderUpdateEmpty(holder) {
 function machtilePickOrderApplySearch(holder) {
   if (!holder || holder.dataset.pickOrder !== "true" || !machtileDispatchPoolCore) return;
   const input = holder.querySelector("[data-pick-order-search]");
-  const query = input?.value || holder.dataset.pickSearch || "";
+  const query = input ? input.value : (holder.dataset.pickSearch || "");
   holder.dataset.pickSearch = query;
+  const autoExpandedOrders = holder._pickSearchAutoExpandedOrders instanceof Set
+    ? holder._pickSearchAutoExpandedOrders
+    : (holder._pickSearchAutoExpandedOrders = new Set());
+  if (!query && autoExpandedOrders.size) {
+    autoExpandedOrders.forEach(orderNo => machtileDispatchPoolState.expandedOrders.delete(orderNo));
+    autoExpandedOrders.clear();
+    machtileUpdateDispatchPoolSelection(holder.dataset.machineCode || holder.dataset.machine);
+    return;
+  }
   const activePane = holder.querySelector('[data-pick-pane]:not([hidden])');
   const items = [...(activePane?.querySelectorAll("[data-pick-search-item]") || [])];
   const countableItems = items.filter(element => !element.dataset.collapsedPoolOrder);
@@ -15109,8 +15118,15 @@ function machtilePickOrderApplySearch(holder) {
     if (matched && query && element.dataset.collapsedPoolOrder) expandOrder = element.dataset.collapsedPoolOrder;
     if (matched && !element.dataset.collapsedPoolOrder) matches += 1;
   });
+  // A 「同單後面還有…」 summary belongs to its order's main row: hide it whenever that main row is hidden by the search.
+  (activePane?.querySelectorAll(".pool-later-summary[data-pool-expand]") || []).forEach((summary) => {
+    const orderNo = summary.dataset.poolExpand;
+    summary.hidden = !items.some(element => !element.dataset.collapsedPoolOrder && !element.hidden
+      && !element.classList.contains("is-later") && element.dataset.pickSearchOrder === orderNo);
+  });
   if (expandOrder && !machtileDispatchPoolState.expandedOrders.has(expandOrder)) {
     machtileDispatchPoolState.expandedOrders.add(expandOrder);
+    autoExpandedOrders.add(expandOrder);
     machtileUpdateDispatchPoolSelection(holder.dataset.machineCode || holder.dataset.machine);
     return;
   }

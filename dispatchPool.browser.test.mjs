@@ -262,6 +262,30 @@ try {
     });
     ok((await plannerContext.page.locator('.pool-previous').innerText()).includes('已報 ? 件'), 'unknown route report remains unknown instead of becoming zero');
     await plannerContext.ctx.close();
+
+    // Owner 11/18 screenshot: searching hid the main rows but left other orders' 「同單後面還有…」 lines visible.
+    poolResponseRows = [
+      sameOrderRows[0], sameOrderRows[1],
+      { ...sameOrderRows[0], source_key: 'SUMMARY-W9-N1', work_order_no: 'W9OTHER', part_no: 'SLC-150-01-02' },
+      { ...sameOrderRows[1], source_key: 'SUMMARY-W9-N2', work_order_no: 'W9OTHER', part_no: 'SLC-150-01-02' },
+    ];
+    access = { tenant_id: tenant, role: 'planner', all_departments: true, is_bridge: false, department_codes: ['LATHE', 'MILL'] };
+    const summaryContext = await openApp('planner', 1280);
+    await summaryContext.page.evaluate(() => machtileOpenCardSelection('A02', { pickOrder: true, refreshPool: false }));
+    ok(await summaryContext.page.locator('.pool-later-summary:visible').count() === 2, 'summary lines: one per two-step order before searching');
+    await summaryContext.page.locator('[data-pick-order-search]').fill('W9OTHER');
+    ok(await summaryContext.page.locator(`.pool-later-summary[data-pool-expand="${sameOrderRows[0].work_order_no}"]:visible`).count() === 0,
+      'summary lines: a non-matching order\'s 「同單後面還有」 line is hidden with its main row');
+    ok(await summaryContext.page.locator('[data-pool-key="SUMMARY-W9-N1"]:visible').count() === 1, 'summary lines: the matching order main row stays visible');
+    ok(await summaryContext.page.locator('[data-pool-key="SUMMARY-W9-N2"]:visible').count() === 1, 'summary lines: search temporarily expands a matching collapsed step');
+    await summaryContext.page.locator('[data-pick-order-search-clear]:visible').first().click();
+    await summaryContext.page.waitForFunction(() => document.querySelectorAll('.pool-later-summary:not([hidden])').length === 2, null, { timeout: 3000 }).catch(() => {});
+    const afterClear = await summaryContext.page.evaluate(() => [...document.querySelectorAll('.pool-later-summary')].map(el => `${el.dataset.poolExpand}:${el.hidden ? 'hidden' : 'shown'}`).join(',')
+      + ' | rows=' + [...document.querySelectorAll('[data-pick-search-item]')].map(el => `${el.dataset.pickSearchOrder}/${el.className}/${el.hidden ? 'h' : 's'}/${el.dataset.collapsedPoolOrder || ''}/${el.closest('[data-pick-pane]')?.dataset.pickPane || '-'}`).join(';'));
+    ok(await summaryContext.page.locator('.pool-later-summary:visible').count() === 2, `summary lines: clearing the search shows them again (${afterClear})`);
+    ok(await summaryContext.page.locator('.pool-item:not(.is-later):visible').count() === 2, 'summary lines: clearing the search restores every main row');
+    ok(await summaryContext.page.locator('.pool-item.is-later:visible').count() === 0, 'summary lines: clearing the search restores the pre-search collapsed state');
+    await summaryContext.ctx.close();
     poolResponseRows = poolRows; dispatchPoolMachines = [];
   }
 
