@@ -135,8 +135,8 @@ window.MACHTILE_CONFIG = {
   // 換道次 第 2 階段開之前要先有：雲端 migration 20261114090000 已套＋switch_step_enabled=true、工廠 SwitchStepApplierEnabled＋機台名單。
   enableSwitchStepStarted: true,
   // B01/B02 卡片六盤料號推算；預設關閉，僅讀既有 hmc_fixed_read。
-  enableHmcPalletCard: false,
-  enableHmcPalletStrip: false,
+  enableHmcPalletCard: true,
+  enableHmcPalletStrip: true,
   hmcPalletCardMachines: ["B01", "B02"],
   hmcPalletMap: {
     B01: {
