@@ -166,7 +166,7 @@ window.MACHTILE_CONFIG = {
         { partNos: ["AR16-R01-01"], label: "AR16/AR22泵浦本體" },
         { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 2 },
         { partNos: ["MSW-01-01", "MSW-01Y-01"], label: "MSW-01／MSW-01-Y", dual: true, sharedWith: 2 },
-        { partNos: ["SF-06-01"], label: "SF-06本體" },
+        { partNos: ["SF-06-01", "SF-06(內內)-01", "SF-06(外外)-01"], label: "SF-06本體(內外／內內／外外)" },
         { partNos: ["SF-06T-01"], label: "SF-06T本體" },
         { partNos: ["THF-06-01"], label: "THF-06本體" },
       ],

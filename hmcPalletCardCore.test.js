@@ -39,6 +39,12 @@ test("B01 MSW aliases both resolve to pallets 2 and 5", () => {
   assert.deepEqual(resolvedPallets(productionMap.B01, "MSW-01Y-01"), [2, 5]);
 });
 
+test("B01 SF-06 body aliases all resolve to pallet 5", () => {
+  for (const partNo of ["SF-06-01", "SF-06(內內)-01", "SF-06(外外)-01"]) {
+    assert.deepEqual(resolvedPallets(productionMap.B01, partNo), [5], partNo);
+  }
+});
+
 test("RPC inferred mapping retains unique pallets and unmatched orders", () => {
   const result = mapOrdersToPallets([entry("WO-1", "SF-03-01"), entry("WO-X", "UNKNOWN")], [pallet(1, "SF-03-01")]);
   assert.deepEqual(result.pallets[0].orders.map((x) => x.order.id), ["WO-1"]);
