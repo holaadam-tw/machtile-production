@@ -1215,15 +1215,14 @@ console.log("\n== 390px：選工單／開工分開 — 空機台「選工單」�
   ok(!(await panel.locator("[data-pick-order-empty]").isVisible()), "兩頁都有單 → 不顯示「目前沒有可做的工單」");
   await panel.locator('[data-pick-tab="new"]').click();
   await page.screenshot({ path: path.join(outDir, "phone-pick-new-order.png") });
-  // 接單前確認框：取消 → 零送出
-  const dialogs = [];
-  page.removeAllListeners("dialog");
-  page.on("dialog", (d) => { dialogs.push(d.message()); return dialogs.length === 1 ? d.dismiss() : d.accept(); });
+  // 接單前確認 sheet：取消 → 零送出
   await panel.locator(`[data-pool-claim="${poolItem.source_key}"]`).click();
-  await page.waitForTimeout(300);
-  ok(dialogs[0] === "把 XX01202609020008 第 2 道掛到 A02？（掛上後要再按開工才算開始）", "接單前跳確認框（單號／道次／機台＋要再按開工）", dialogs[0]);
-  ok(be.poolClaims.length === 0 && await panel.isVisible(), "確認框按取消 → 沒送 dispatch_pool_claim、面板還在");
+  const claimSheet = page.locator("#machtilePoolClaimConfirm");
+  ok((await claimSheet.innerText()).includes(`你要接的是 第 2 道 ${poolItem.operation_name}`) && (await claimSheet.innerText()).includes("XX01202609020008"), "接單前跳確認 sheet（單號／道次／工序）");
+  await claimSheet.locator("[data-pool-cancel-claim]").click();
+  ok(be.poolClaims.length === 0 && await panel.isVisible(), "確認 sheet 按取消 → 沒送 dispatch_pool_claim、面板還在");
   await panel.locator(`[data-pool-claim="${poolItem.source_key}"]`).click();
+  await page.locator("[data-pool-confirm-claim]").click();
   await page.waitForFunction(() => document.querySelector("#machtileCardSelection") === null, null, { timeout: 10000 });
   ok(be.poolClaims.length === 1 && JSON.stringify(be.poolClaims[0]) === JSON.stringify({ p_source_key: poolItem.source_key, p_machine_code: "A02" }),
     "確認後 → 新工單走原本 dispatch_pool_claim（payload 不變）", JSON.stringify(be.poolClaims));

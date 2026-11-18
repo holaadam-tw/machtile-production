@@ -179,6 +179,14 @@
       claiming: "接單中…",
       claim_processing: "接單處理中",
       claim_success: "接單成功，工單已進入這台機台。",
+      pool_step_badge: "第 {{step}} 道",
+      pool_later_summary: "同單後面還有 {{count}} 道（{{steps}}）",
+      pool_previous_machine: "上一道 N{{step}} 由 {{machine}} 在做，已報 {{count}} 件",
+      pool_claim_confirm_title: "你要接的是 第 {{step}} 道 {{process}}",
+      pool_claim_confirm: "確認接單",
+      pool_claim_previous_zero: "上一道 N{{previous}} 還沒有報工，你要接的是 N{{step}}，確定嗎？",
+      pool_claim_previous_reported: "上一道已報 {{count}} 件，這一道最多可做 {{count}} 件",
+      part_number_value: "料號 {{part}}",
       release_claim: "釋放接單",
       release_claiming: "釋放中…",
       release_claim_success: "已釋放接單，這張單可重新接單。",
@@ -849,6 +857,14 @@
       claiming: "Đang nhận việc…",
       claim_processing: "Đang xử lý nhận việc",
       claim_success: "Nhận việc thành công. Lệnh đã được đưa vào máy này.",
+      pool_step_badge: "Công đoạn {{step}}", // _draft
+      pool_later_summary: "Cùng lệnh còn {{count}} công đoạn sau（{{steps}}）", // _draft
+      pool_previous_machine: "Công đoạn trước N{{step}} đang được làm tại {{machine}}, đã báo {{count}} sản phẩm", // _draft
+      pool_claim_confirm_title: "Bạn sắp nhận công đoạn {{step}} {{process}}", // _draft
+      pool_claim_confirm: "Xác nhận nhận việc", // _draft
+      pool_claim_previous_zero: "Công đoạn trước N{{previous}} chưa báo sản lượng; bạn đang nhận N{{step}}, xác nhận?", // _draft
+      pool_claim_previous_reported: "Công đoạn trước đã báo {{count}} sản phẩm; công đoạn này làm tối đa {{count}} sản phẩm", // _draft
+      part_number_value: "Mã chi tiết {{part}}", // _draft
       release_claim: "Giải phóng nhận việc",
       release_claiming: "Đang giải phóng…",
       release_claim_success: "Đã giải phóng nhận việc; phiếu này có thể được nhận lại.",

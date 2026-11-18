@@ -30,6 +30,15 @@ eq("同條件依工單、步序", c.sortItems([item({ process_order: 3 }), item(
 eq("不改原陣列", (() => { const a = [item({ urgency: 4 }), item({ urgency: 1 })]; c.sortItems(a); return a[0].urgency; })(), 4);
 eq("非陣列 → 空", c.sortItems(null), []);
 
+console.log("== groupClaimableItems（同單只露出最前一道）==");
+const grouped = c.groupClaimableItems([
+  item({ work_order_no: "WO-2", process_order: 3 }),
+  item({ work_order_no: "WO-1", process_order: 2 }),
+  item({ work_order_no: "WO-1", process_order: 1 }),
+]);
+eq("同單最低道次是主列", grouped.map(g => [g.main.work_order_no, g.main.process_order, g.later.map(x => x.process_order)]), [["WO-2", 3, []], ["WO-1", 1, [2]]]);
+eq("不改原列", grouped[1].main === grouped[1].later[0], false);
+
 console.log("== itemsForMachine（同課）==");
 const pool = [item({ work_order_no: "L1" }), item({ work_order_no: "M1", department_code: "MILL", eligible_machine_codes: ["B03"] }),
   item({ work_order_no: "L2", urgency: 1, eligible_machine_codes: ["A05"] })];
