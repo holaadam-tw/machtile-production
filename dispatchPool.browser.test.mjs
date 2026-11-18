@@ -126,6 +126,7 @@ async function openApp(role, width) {
   return { ctx, page };
 }
 const poolKeys = page => page.locator('#machtileCardSelection [data-card-selection-pool] [data-pool-key]').evaluateAll(xs => xs.map(x => x.getAttribute('data-pool-key')));
+const confirmPoolClaim = async page => page.locator('[data-pool-confirm-claim]').click();
 
 try {
   ok(/dispatchPoolMachines:\s*\["A01",\s*"A02",\s*"A03",\s*"A04",\s*"A05",\s*"B01",\s*"B02",\s*"B03",\s*"B04",\s*"B05",\s*"B06"\]/.test(rolloutConfig), 'rollout config enables all lathes A01-A05 and all machining centers B01-B06');
@@ -184,6 +185,60 @@ try {
   }
   poolResponsePlan = [];
 
+  // Pool step clarity: group same-order waiting steps, expand search hits, and confirm before the unchanged claim RPC.
+  {
+    const sameOrderRows = [
+      { ...poolRows[1], source_key: 'STEP-CLARITY-N1', work_order_no: 'XX01202610290001', process_order: 1, operation_name: 'CNC精車加工工序1', eligible_machine_codes: ['A02'] },
+      { ...poolRows[0], source_key: 'STEP-CLARITY-N2', work_order_no: 'XX01202610290001', process_order: 2, operation_name: 'CNC精車加工工序2', eligible_machine_codes: ['A02'] },
+    ];
+    poolMode = 'rows'; poolResponseRows = sameOrderRows; dispatchPoolMachines = ['A02']; claimWinner = ''; claimRequests = [];
+    access = { tenant_id: tenant, role: 'operator', all_departments: false, is_bridge: false, department_codes: ['LATHE'] };
+    for (const width of [360, 1280]) {
+      const { ctx, page } = await openApp('operator', width);
+      await page.locator('[data-card-pool-open="A02"]').click();
+      ok(await page.locator('[data-pool-key]:visible').count() === 1 && await page.locator('[data-pool-key="STEP-CLARITY-N1"]:visible').count() === 1, `${width}: same order has one N1 main row`);
+      ok((await page.locator('[data-pool-expand]').innerText()).includes('同單後面還有 1 道') && (await page.locator('[data-pool-expand]').innerText()).includes('N2 CNC精車加工工序2'), `${width}: collapsed N2 summary names the later step`);
+      ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${width}: step hierarchy has no horizontal overflow`);
+      await page.screenshot({ path: path.join(out, `pool-list-${width}x800.png`), clip: { x: 0, y: 0, width, height: 800 } });
+      if (width === 360) {
+        await page.locator('[data-pool-key="STEP-CLARITY-N1"] [data-pool-claim]').click();
+        ok((await page.locator('#machtilePoolClaimConfirm').innerText()).includes('你要接的是 第 1 道 CNC精車加工工序1'), 'N1 confirm identifies exact step');
+        await page.screenshot({ path: path.join(out, 'confirm-n1-360x800.png'), clip: { x: 0, y: 0, width: 360, height: 800 } });
+        const beforeCancel = claimRequests.length;
+        await page.locator('[data-pool-cancel-claim]').click();
+        ok(claimRequests.length === beforeCancel, 'cancel sends no claim request');
+        await page.locator('[data-pool-expand]').click();
+        await page.evaluate(() => state.workOrders.push({ id: 'XX01202610290001', stationStep: 1, processStatus: 'running', done: 7, machine: 'A01' }));
+        await page.locator('[data-pool-key="STEP-CLARITY-N2"] [data-pool-claim]').click();
+        ok((await page.locator('#machtilePoolClaimConfirm').innerText()).includes('上一道已報 7 件，這一道最多可做 7 件'), 'N2 reported confirm shows available quantity');
+        await page.screenshot({ path: path.join(out, 'confirm-n2-reported-360x800.png'), clip: { x: 0, y: 0, width: 360, height: 800 } });
+        await page.locator('[data-pool-cancel-claim]').click();
+        await page.evaluate(() => { state.workOrders.find(x => x.id === 'XX01202610290001').done = 0; });
+        await page.locator('[data-pool-key="STEP-CLARITY-N2"] [data-pool-claim]').click();
+        ok(await page.locator('.pool-claim-confirm.is-danger').count() === 1 && (await page.locator('#machtilePoolClaimConfirm').innerText()).includes('上一道 N1 還沒有報工'), 'N2 zero-report confirm is red and explicit');
+        await page.screenshot({ path: path.join(out, 'confirm-n2-red-360x800.png'), clip: { x: 0, y: 0, width: 360, height: 800 } });
+        await page.locator('[data-pool-cancel-claim]').click();
+        await page.evaluate(() => {
+          const holder = document.getElementById('machtileCardSelection');
+          holder.dataset.pickOrder = 'true';
+          holder.insertAdjacentHTML('afterbegin', '<input data-pick-order-search>');
+        });
+        await page.locator('[data-pick-order-search]').fill('工序2');
+        ok(await page.locator('[data-pool-key="STEP-CLARITY-N2"]:visible').count() === 1, 'search hit expands the collapsed N2 row');
+      }
+      await ctx.close();
+    }
+    // Earlier N1 is already on A01, so N2 becomes the main row and explains where N1 is running.
+    poolResponseRows = [sameOrderRows[1]];
+    const claimedEarlier = await openApp('operator', 360);
+    await claimedEarlier.page.evaluate(() => state.workOrders.push({ id: 'XX01202610290001', stationStep: 1, processStatus: 'running', done: 3, machine: 'A01' }));
+    await claimedEarlier.page.locator('[data-card-pool-open="A02"]').click();
+    ok(await claimedEarlier.page.locator('[data-pool-key="STEP-CLARITY-N1"]').count() === 0 && await claimedEarlier.page.locator('[data-pool-key="STEP-CLARITY-N2"]').count() === 1, 'claimed N1 is absent and N2 is main');
+    ok((await claimedEarlier.page.locator('.pool-previous').innerText()).includes('上一道 N1 由 A01 在做，已報 3 件'), 'N2 main row explains the earlier machine and report count');
+    await claimedEarlier.ctx.close();
+    poolResponseRows = poolRows; dispatchPoolMachines = [];
+  }
+
   // Pick-order search filters locally and an in-place dispatch-pool refresh preserves value and focus.
   {
     poolMode = 'rows'; poolResponseRows = poolRows; poolQueries = [];
@@ -237,6 +292,7 @@ try {
     await page.waitForFunction(() => !document.querySelector('[data-pool-refresh-status]'));
     const readsBeforeClaim = poolQueries.filter(q => q.includes('status=eq.waiting')).length;
     await page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]').click();
+    await confirmPoolClaim(page);
     await page.waitForFunction(() => document.querySelector('[data-pool-claim-message]')?.textContent.trim());
     await page.waitForFunction(() => !machtileDispatchPoolState.claimBusy);
     const readsAfterClaim = poolQueries.filter(q => q.includes('status=eq.waiting')).length;
@@ -259,11 +315,11 @@ try {
     const first = page.locator('#machtileCardSelection [data-pool-key="01|TESTNEED0002|TEST-SIM-2"]');
     ok((await first.locator('[data-pool-urgency]').innerText()) === '緊急 1' && await first.locator('.pool-urgency.is-u1').count() === 1, `${width}: urgency badge`);
     const firstText = await first.innerText();
-    ok(firstText.includes('N1 車削') && firstText.includes('測試套') && firstText.includes('退回待接'), `${width}: work order, operation, part, returned flag`);
+    ok(firstText.includes('第 1 道') && firstText.includes('車削') && firstText.includes('測試套') && firstText.includes('退回待接'), `${width}: prominent step, operation, part, returned flag`);
     ok(firstText.includes('數量 未提供') && firstText.includes('交期 10/30') && firstText.includes('APS 預計開始 未提供'), `${width}: unknown qty / planned start shown as 未提供 (no guessed values)`);
     ok(firstText.includes('可做機台 A02') && firstText.includes('A01 不在清單') && await first.evaluate(x => x.classList.contains('is-not-eligible')), `${width}: eligibility of this machine shown`);
     const second = await page.locator('#machtileCardSelection [data-pool-key="01|TESTNEED0001|TEST-SIM-1"]').innerText();
-    ok(second.includes('N2 CNC車床加工-1/2') && second.includes('數量 120') && second.includes('交期 10/20') && !second.includes('不在清單'), `${width}: second item details`);
+    ok(second.includes('第 2 道') && second.includes('CNC車床加工-1/2') && second.includes('數量 120') && second.includes('交期 10/20') && !second.includes('不在清單'), `${width}: second item details`);
     const claims = page.locator('#machtileCardSelection [data-pool-claim]');
     ok(await claims.count() === 2 && (await claims.evaluateAll(xs => xs.every(x => x.disabled && x.textContent.includes('接單')))) && (await page.locator('.pool-claim-reason').allInnerTexts()).every(x => x.includes('尚未開放')), `${width}: default-empty flag disables every claim with a reason`);
     const before = mutations.length, poolReads = poolQueries.length;
@@ -426,6 +482,7 @@ try {
     const reclaim = next.page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]');
     ok(await reclaim.isEnabled(), 'after return: another eligible idle machine can reclaim');
     await reclaim.click();
+    await confirmPoolClaim(next.page);
     await next.page.waitForFunction(() => document.body.innerText.includes('接單成功'));
     ok(claimRequests.length === 1 && claimRequests[0].p_machine_code === 'A02', 'claim→return→another-machine reclaim browser flow completes');
     await next.ctx.close();
@@ -442,6 +499,7 @@ try {
     const rightButton = right.page.locator('[data-pool-key="01|TESTNEED0001|TEST-SIM-1"] [data-pool-claim]');
     ok(await leftButton.isEnabled() && await rightButton.isEnabled(), 'race: both empty eligible pilot machines can attempt the same item');
     await Promise.all([leftButton.click(), rightButton.click()]);
+    await Promise.all([confirmPoolClaim(left.page), confirmPoolClaim(right.page)]);
     await Promise.all([
       left.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被別台接走')),
       right.page.waitForFunction(() => document.body.innerText.includes('接單成功') || document.body.innerText.includes('已被別台接走')),
