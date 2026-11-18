@@ -19,6 +19,8 @@ const config = {
   fieldReportBaseUrl: "",
   useQueryRoutesForFieldReports: true,
   useSupabase: false,
+  // Compare cloud machine capabilities with legacy config only. Never changes decisions.
+  enableMachineCapabilityDualRead: false,
   // CNC field-report offline outbox (2026-07-11 wiring plan). false = the
   // direct production_reports POST stays byte-identical; true routes
   // submitReport through the offline-first idempotent outbox seam.
@@ -10571,6 +10573,45 @@ async function supabaseFetch(path, options = {}) {
     if (timeoutId !== null) clearTimeout(timeoutId);
     if (isRpc) machtileRpcInFlight = Math.max(0, machtileRpcInFlight - 1);
   }
+}
+
+const MACHTILE_CAPABILITY_REFRESH_MS = 10 * 60 * 1000;
+const MACHTILE_CAPABILITY_TIMEOUT_MS = 15000;
+let machtileCapabilityTimer = null;
+const machtileCapabilityState = { status: "off", fetches: 0, mismatches: 0, lastError: "", lastFetchedAt: 0, revision: null };
+
+function machtilePublishCapabilityStatus(extra = {}) {
+  Object.assign(machtileCapabilityState, extra);
+  window.__machtileCapMismatch = { ...machtileCapabilityState };
+}
+
+async function machtileRefreshMachineCapabilities() {
+  if (config.enableMachineCapabilityDualRead !== true) return;
+  const core = window.MachTileMachineCapabilityCore;
+  if (!core || !(config.useSupabase && config.supabaseUrl && config.supabaseAnonKey)) {
+    machtilePublishCapabilityStatus({ status: "unavailable", lastError: "client unavailable" });
+    return;
+  }
+  try {
+    const payload = await supabaseFetch("rpc/machtile_get_machine_capabilities", {
+      method: "POST", body: JSON.stringify({ p_machine_codes: null }), timeoutMs: MACHTILE_CAPABILITY_TIMEOUT_MS,
+    });
+    const comparison = core.compare(config, payload);
+    comparison.mismatches.forEach((item) => console.debug("machine capability mismatch", item));
+    machtilePublishCapabilityStatus({ status: comparison.status, fetches: machtileCapabilityState.fetches + 1,
+      mismatches: machtileCapabilityState.mismatches + comparison.mismatches.length, lastError: "",
+      lastFetchedAt: Date.now(), revision: payload?.revision ?? null });
+  } catch (error) {
+    console.debug("machine capability dual-read unavailable", error?.message || error);
+    machtilePublishCapabilityStatus({ status: "error", fetches: machtileCapabilityState.fetches + 1,
+      lastError: String(error?.message || error || "unknown error"), lastFetchedAt: Date.now() });
+  }
+}
+
+function machtileEnsureMachineCapabilityDualRead() {
+  if (config.enableMachineCapabilityDualRead !== true || machtileCapabilityTimer) return;
+  void machtileRefreshMachineCapabilities();
+  machtileCapabilityTimer = window.setInterval(() => { void machtileRefreshMachineCapabilities(); }, MACHTILE_CAPABILITY_REFRESH_MS);
 }
 
 function normalizeOrder(row) {
@@ -30814,6 +30855,7 @@ async function machtileResumeInit() {
   }
 
   renderAll();
+  machtileEnsureMachineCapabilityDualRead();
   machtileEnsureHmcRuntimePolling();
   applyInitialRoute();
   startDemo();

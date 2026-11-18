@@ -38,6 +38,8 @@ window.MACHTILE_CONFIG = {
   enableFileUpload: true,
   fieldReportBaseUrl: "https://your-production-host.example.com/",
   useQueryRoutesForFieldReports: true,
+  // Compare-only cloud capability read; legacy decisions always win.
+  enableMachineCapabilityDualRead: false,
   useTenantHeaderAuth: true,
   useSupabase: false,
   useHmcWorklistSupabase: true,

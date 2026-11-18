@@ -25,6 +25,7 @@ window.MACHTILE_CONFIG = {
   enableFileUpload: true,
   fieldReportBaseUrl: "https://app.machtile.com/",
   useQueryRoutesForFieldReports: true,
+  enableMachineCapabilityDualRead: false,
   useTenantHeaderAuth: true,
   useSupabase: true,
   useHmcWorklistSupabase: true,
