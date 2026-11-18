@@ -11811,6 +11811,8 @@ const machtileHmcPalletCardState = new Map();
 const machtileHmcPalletStripOpen = new Map();
 const machtileHmcPalletWorkpieceOpen = new Map();
 const MACHTILE_HMC_PALLET_CARD_REFRESH_MS = 30000;
+const MACHTILE_HMC_PALLET_CARD_STALE_MS = 10 * 60 * 1000;
+const MACHTILE_HMC_PALLET_CARD_STALE_FAILURES = 3;
 
 function machtileHmcPalletCardEnabled(machine) {
   const code = String(machine?.code || machine?.name || "");
@@ -11828,7 +11830,7 @@ function machtileLoadHmcPalletCard(machine) {
   if (machtileHmcPalletStripEnabled(machine) && config.hmcPalletMap?.[code]) return;
   const cached = machtileHmcPalletCardState.get(code);
   if (cached && (cached.status === "loading" || Date.now() - cached.loadedAt < MACHTILE_HMC_PALLET_CARD_REFRESH_MS)) return;
-  machtileHmcPalletCardState.set(code, { status: "loading", states: cached?.states || [], loadedAt: cached?.loadedAt || 0 });
+  machtileHmcPalletCardState.set(code, { status: "loading", states: cached?.states || [], loadedAt: cached?.loadedAt || 0, lastSuccessAt: cached?.lastSuccessAt || 0, failures: cached?.failures || 0 });
   void supabaseFetch("rpc/hmc_pallet_card_read", {
     method: "POST",
     body: JSON.stringify({ p_machine_code: code }),
@@ -11841,9 +11843,20 @@ function machtileLoadHmcPalletCard(machine) {
         part: { partNo },
       })),
     }));
-    machtileHmcPalletCardState.set(code, { status: "ready", states, loadedAt: Date.now() });
+    const now = Date.now();
+    machtileHmcPalletCardState.set(code, { status: "ready", states, loadedAt: now, lastSuccessAt: now, failures: 0 });
   }).catch(() => {
-    machtileHmcPalletCardState.set(code, { status: "error", states: [], loadedAt: Date.now() });
+    const previous = machtileHmcPalletCardState.get(code) || cached;
+    const now = Date.now();
+    const lastSuccessAt = Number(previous?.lastSuccessAt || 0);
+    const keepLastSuccess = lastSuccessAt > 0 && now - lastSuccessAt < MACHTILE_HMC_PALLET_CARD_STALE_MS;
+    machtileHmcPalletCardState.set(code, {
+      status: keepLastSuccess ? "stale" : "error",
+      states: keepLastSuccess ? previous.states : [],
+      loadedAt: now,
+      lastSuccessAt,
+      failures: Number(previous?.failures || 0) + 1,
+    });
   }).finally(() => {
     try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("HMC pallet card re-render failed", error); }
   });
@@ -11894,7 +11907,7 @@ function machtileHmcPalletStripReady(machine) {
   const code = String(machine.code || machine.name);
   if (config.hmcPalletMap?.[code]) return true;
   const cached = machtileHmcPalletCardState.get(code);
-  if ((cached?.status !== "ready" && cached?.status !== "loading") || !Array.isArray(cached.states) || !cached.states.length) return false;
+  if (!(["ready", "loading", "stale"].includes(cached?.status)) || !Array.isArray(cached.states) || !cached.states.length) return false;
   const model = machtileHmcPalletCardCore.inferredStripModel(machine.cardOrders || [], cached.states, machine.order);
   return model.pallets.some((pallet) => pallet.hasOrder);
 }
@@ -11913,7 +11926,7 @@ function machtileHmcPalletStripMarkup(machine) {
   const chips = model.pallets.map((pallet) => {
     const key = String(pallet.palletNo);
     const classes = [pallet.hasOrder ? "has-order" : "is-empty", pallet.isActive ? "is-active" : "", pallet.isOver ? "is-over" : "", pallet.inferred ? "is-inferred" : "", openKey === key ? "is-open" : ""].filter(Boolean).join(" ");
-    return `<button type="button" class="hmc-pallet-chip ${classes}" data-hmc-strip-chip="${key}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === key}"><b>${pallet.palletNo}</b><span>${escapeHtml(pallet.hasOrder ? machtileTranslate("hmc_pallet_strip_has_order") : machtileTranslate("hmc_pallet_strip_empty"))}</span>${pallet.inferred ? `<i aria-label="${escapeHtml(machtileTranslate("hmc_pallet_strip_inferred"))}">${escapeHtml(machtileTranslate("hmc_pallet_inferred"))}</i>` : ""}${pallet.isOver ? `<em>!</em>` : ""}</button>`;
+    return `<button type="button" class="hmc-pallet-chip ${classes}" data-hmc-strip-chip="${key}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === key}"><b>${pallet.palletNo}</b><span>${escapeHtml(pallet.hasOrder ? machtileTranslate("hmc_pallet_strip_has_order") : machtileTranslate("hmc_pallet_strip_empty"))}</span>${pallet.isOver ? `<em>!</em>` : ""}</button>`;
   }).join("");
   const unmatchedKey = "unmatched";
   const unmatchedChip = model.hasUnmatched ? `<button type="button" class="hmc-pallet-chip is-unmatched${model.unmatchedIsOver ? " is-over" : ""}${openKey === unmatchedKey ? " is-open" : ""}" data-hmc-strip-chip="${unmatchedKey}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === unmatchedKey}"><b>${escapeHtml(machtileTranslate("hmc_pallet_strip_other", { count: model.unmatched.length }))}</b>${model.unmatchedIsOver ? `<em>!</em>` : ""}</button>` : "";
@@ -11924,7 +11937,9 @@ function machtileHmcPalletStripMarkup(machine) {
   const panel = !openKey ? "" : `<div class="hmc-pallet-strip-panel" data-hmc-strip-panel="${escapeHtml(openKey)}">${panelContent || `<p>${escapeHtml(machtileTranslate("hmc_pallet_strip_empty_detail"))}</p>`}</div>`;
   const manual = machine.cardPickBasis === "manual";
   const headerControls = manual ? `<span class="hmc-pallet-strip-controls"><span class="card-orders-manual">${escapeHtml(machtileTranslate("hmc_pallet_strip_manual"))}</span><button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machine.name)}" data-card-pick-key="">${escapeHtml(machtileTranslate("hmc_pallet_strip_restore_auto"))}</button></span>` : "";
-  return `<section class="hmc-pallet-strip-card" data-no-detail data-hmc-pallet-strip="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_strip_title"))}</strong>${headerControls}<small>${escapeHtml(machtileTranslate("hmc_pallet_strip_hint"))}</small></header><div class="hmc-pallet-strip-chips">${chips}${unmatchedChip}</div>${panel}</section>`;
+  const inferredLabel = !machineMap ? `<span class="hmc-pallet-strip-inferred">${escapeHtml(machtileTranslate("hmc_pallet_strip_inferred"))}</span>` : "";
+  const staleHint = !machineMap && cached.status === "stale" && cached.failures >= MACHTILE_HMC_PALLET_CARD_STALE_FAILURES ? `<span class="hmc-pallet-strip-stale" role="status">${escapeHtml(machtileTranslate("hmc_pallet_strip_stale"))}</span>` : "";
+  return `<section class="hmc-pallet-strip-card" data-no-detail data-hmc-pallet-strip="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_strip_title"))}</strong>${headerControls}<small>${inferredLabel}${staleHint}${escapeHtml(machtileTranslate("hmc_pallet_strip_hint"))}</small></header><div class="hmc-pallet-strip-chips">${chips}${unmatchedChip}</div>${panel}</section>`;
 }
 
 function machtileHmcPalletCardMarkup(machine) {
