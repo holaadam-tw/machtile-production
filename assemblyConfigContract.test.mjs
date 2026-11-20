@@ -14,4 +14,6 @@ test("production assembly config opens only F01/G01 for the approved tenant", as
   assert.deepEqual(Array.from(config.assemblyReportTenants), ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"]);
   assert.deepEqual(Array.from(config.assemblyDefectStations), ["G01"]);
   assert.deepEqual(Array.from(config.assemblyDefectReasons), []);
+  assert.equal(config.enableShortCompletion, true);
+  for (const station of ["F01", "G01"]) assert.ok(Array.from(config.shortCompletionMachines).includes(station), `short completion must include ${station}`);
 });

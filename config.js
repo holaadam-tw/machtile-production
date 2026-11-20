@@ -97,7 +97,7 @@ window.MACHTILE_CONFIG = {
   finishCloseMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
   enableShortCompletion: true,
-  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
+  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06", "F01", "G01"],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
   standardFinishFlowMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
