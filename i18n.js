@@ -367,6 +367,7 @@
       asm_start_confirm: "確認開工",
       asm_report: "報工",
       asm_finish: "完工",
+      asm_close_disabled_last_station: "最後一道：完工關站請找生管在舊 MES 處理",
       asm_good_label: "這次完成幾件（良品）",
       asm_bad_label: "這次不良幾件",
       asm_finish_question: "{{order}} 在這一站全部做完了？最後這次有做的件數一起填（沒有就留空）。",
@@ -1046,6 +1047,7 @@
       asm_start_confirm: "Xác nhận bắt đầu",
       asm_report: "Báo công",
       asm_finish: "Hoàn thành",
+      asm_close_disabled_last_station: "Công đoạn cuối: hãy nhờ bộ phận kế hoạch đóng trạm trong MES cũ.", // _draft: 待確認
       asm_good_label: "Lần này làm xong bao nhiêu (hàng tốt)",
       asm_bad_label: "Lần này bao nhiêu hàng lỗi",
       asm_finish_question: "{{order}} đã làm xong hết ở trạm này? Điền luôn số làm lần cuối (không có thì để trống).",

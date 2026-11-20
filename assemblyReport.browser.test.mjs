@@ -33,8 +33,8 @@ const users = [
   { id: id(904), name: "未對照", legacy_user_id: "" },
 ];
 const me = users[0];
-const machines = ["A04", "F01", "G01"].map((code, i) => ({ id: id(200 + i), machine_code: code, machine_name: code,
-  machine_type: code === "A04" ? "車床" : code === "F01" ? "組立" : "測試", location: "", status: "idle", display_order: i }));
+const machines = ["A04", "F01", "G01", "H01"].map((code, i) => ({ id: id(200 + i), machine_code: code, machine_name: code,
+  machine_type: code === "A04" ? "車床" : code === "F01" ? "組立" : code === "G01" ? "測試" : "包裝", location: "", status: "idle", display_order: i }));
 const machineByCode = (code) => machines.find((m) => m.machine_code === code);
 // 站上的單（Station_Type 8：同一站同時好幾張，各有自己的 ManufactureII Id）
 const orders = [
@@ -43,6 +43,7 @@ const orders = [
   { pid: id(303), wo: "WO-F3", part: "PV2R1 葉片泵組立", partNo: "PA-F3", qty: 30, status: "pending", machine: "F01", index: 4, mii: "MII-F3", sim: "SIM-F3", due: "2026-11-06" },
   { pid: id(304), wo: "WO-G1", part: "DSG-01 方向閥測試", partNo: "PA-G1", qty: 40, status: "running", machine: "G01", index: 6, mii: "MII-G1", sim: "SIM-G1", due: "2026-11-02" },
   { pid: id(305), wo: "WO-G2", part: "PV2R2 葉片泵測試", partNo: "PA-G2", qty: 40, status: "pending", machine: "G01", index: 6, mii: "MII-G2", sim: "SIM-G2", due: "2026-11-05" },
+  { pid: id(307), wo: "WO-H1", part: "成品包裝", partNo: "PA-H1", qty: 12, status: "pending", machine: "H01", index: 7, mii: "MII-H1", sim: "SIM-H1", due: "2026-11-06" },
   { pid: id(306), wo: "WO-A4", part: "車削件", partNo: "PA-A4", qty: 100, status: "running", machine: "A04", index: 1, mii: null, sim: "SIM-A4", due: "2026-11-01" },
 ];
 const processRow = (o) => ({ id: o.pid, tenant_id: T, process_order: o.index, process_name: o.machine === "A04" ? "車削" : "組立", process_type: "assembly",
@@ -82,8 +83,8 @@ function fakeFor(st) {
     }
     if (p.endsWith("/rpc/machtile_get_station_report_guard_config")) {
       const code = body().p_machine_code; st.guardCalls.push(code);
-      const enabled = ["F01", "G01"].includes(code);
-      return json({ factory_synced: true, machine_code: code, report_enabled: enabled, report_enabled_machines: { F01: true, G01: true }, fail_reason_codes: ["尺寸不良", "外觀", "其他"] });
+      const enabled = ["F01", "G01", "H01"].includes(code);
+      return json({ factory_synced: true, machine_code: code, report_enabled: enabled, report_enabled_machines: { F01: true, G01: true, H01: true }, fail_reason_codes: ["尺寸不良", "外觀", "其他"] });
     }
     if (p.endsWith("/station_commands") && req.method() === "GET") {
       const uuid = (url.searchParams.get("command_uuid") || "").replace(/^eq\./, "");
@@ -180,11 +181,11 @@ await mkdir(shotDir, { recursive: true });
 
 // ---------------------------------------------------------------- 2. 旗標開（F01＋G01）
 const st = makeState();
-const cfgOn = `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyStations:["F01","G01"],assemblyPollIntervalMs:50,enableShortCompletion:true,shortCompletionMachines:["F01","G01"]`;
+const cfgOn = `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyStations:["F01","G01","H01"],assemblyCloseStations:["F01","G01"],assemblyPollIntervalMs:50,enableShortCompletion:true,shortCompletionMachines:["F01","G01"]`;
 const { context, page, errors } = await openApp(st, cfgOn);
 const entry = page.locator("#dashboardView [data-assembly-entry]");
 await entry.waitFor({ state: "visible" });
-ok((await entry.innerText()).includes("F01・G01"), "flag on: Monitor 入口顯示「組裝報工（F01・G01）」");
+ok((await entry.innerText()).includes("F01・G01・H01"), "flag on: Monitor 入口顯示 F01・G01・H01");
 await entry.click();
 await orderCard(page, "WO-F1").waitFor();
 const rootEl = page.locator("[data-assembly-root]");
@@ -331,6 +332,30 @@ const g1Upsert = st.upserts.find((u) => u.p_payload?.process_id === id(304));
 ok(g1Upsert?.p_payload.defect_qty === 2 && g1Upsert.p_payload.report_payload.fail_reason_code === "尺寸不良", "App 紀錄不良 2＋原因");
 ok(g1Upsert.p_payload.report_payload.assembly_line === "valve", "G01 App 紀錄帶 assembly_line＝valve");
 
+// ---- H01：可開工／一般報工，沒有不良與完工；直接呼叫 close 也 fail closed
+await rootEl.locator('[data-asm-station="H01"]').click();
+const h1 = orderCard(page, "WO-H1");
+await h1.waitFor();
+ok(await h1.locator("[data-asm-start]").count() === 1 && await h1.locator("[data-asm-report]").count() === 1, "H01 有開工與報工入口");
+ok(await h1.locator("[data-asm-finish]").count() === 0, "H01 沒有完工入口");
+ok((await h1.innerText()).includes("最後一道：完工關站請找生管在舊 MES 處理"), "H01 顯示最後一道舊 MES 提示");
+await h1.locator("[data-asm-start]").click();
+await h1.locator("[data-asm-start-confirm]").click();
+await h1.locator("[data-asm-result]").waitFor();
+ok(st.commandSubmits.at(-1)?.p_command_type === "start" && st.commandSubmits.at(-1)?.p_machine_code === "H01", "H01 開工送 start");
+await h1.locator("[data-asm-report]").click();
+ok(await h1.locator("[data-asm-defect-toggle], [data-asm-bad]").count() === 0, "H01 沒有不良欄");
+await h1.locator("[data-asm-good]").fill("2");
+await h1.locator("[data-asm-submit]").click();
+await h1.locator("[data-asm-result].is-ok").waitFor();
+ok(st.reportSubmits.filter((r) => r.p_expected_order_no === "WO-H1").length === 2, "H01 一般報工先預覽再正式送出");
+const beforeH01Close = st.commandSubmits.length;
+const closeError = await page.evaluate(async (pid) => {
+  try { await machtileAsmSendStationCommand(machtileAsmOrderByProcess(pid), "close"); return ""; }
+  catch (error) { return error?.message || String(error); }
+}, id(307));
+ok(closeError.includes("最後一道") && st.commandSubmits.length === beforeH01Close, "H01 直接呼叫 close 也 fail closed、零 RPC");
+
 ok(errors.length === 0, "flag on: 沒有頁面錯誤");
 ok(st.blocked.length === 0, "沒有連到任何外部網址（正式 Supabase 不會被碰到）");
 await context.close();
@@ -338,7 +363,7 @@ await context.close();
 // ---------------------------------------------------------------- 3. 越南文＋平板直式
 {
   const st2 = makeState();
-  const { context: c2, page: p2, errors: e2 } = await openApp(st2, `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyPollIntervalMs:50`, { viewport: { width: 800, height: 1280 }, lang: "vi" });
+  const { context: c2, page: p2, errors: e2 } = await openApp(st2, `${baseConfig},assemblyReportEnabled:true,assemblyReportTenants:["${T}"],assemblyCloseStations:["F01"],assemblyPollIntervalMs:50`, { viewport: { width: 800, height: 1280 }, lang: "vi" });
   const entry2 = p2.locator("#dashboardView [data-assembly-entry]");
   await entry2.waitFor({ state: "visible" });
   ok((await entry2.innerText()).includes("Báo công lắp ráp (F01)"), "vi：入口越南文");
