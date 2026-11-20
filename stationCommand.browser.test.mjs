@@ -212,6 +212,8 @@ function makeBackend({ tableMissing = false, rpcMissing = false, role = "operato
           expected_order_no: body.p_expected_order_no, expected_index_sn: body.p_expected_index_sn, requested_at: new Date(Date.now() - be.serverSkewMs).toISOString(), status: "pending", reject_code: null, reject_message: null, applied_at: null };
         be.commands.set(body.p_command_uuid, row);
       }
+      if (be.submitImmediatePreviousStep) Object.assign(row, { status: "rejected", reject_code: "PREVIOUS_STEP_OPEN",
+        reject_message: "上一道還在進行中。確定要先關這一道嗎？", legacy_snapshot: { guard: { hard: false } } });
       if (be.ackLostNextSubmit) { be.ackLostNextSubmit = false; return route.abort("failed"); }   // 伺服器建好了，回覆在路上掉了
       if (be.submitRowMode === "noUuid") { const { command_uuid, ...rest } = row; return json(200, rest); }
       if (be.submitRowMode === "wrongUuid") return json(200, { ...row, command_uuid: "99999999-9999-4999-8999-999999999999" });
@@ -3199,6 +3201,36 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   ok(be.submits.length === confirmBefore + 1 && be.submits.at(-1)?.p_acks?.includes("PREVIOUS_STEP_OPEN"), "確認，仍要關站可送出新 close");
   await page.evaluate(() => machtileFinishCloseClearPending("A04"));
 
+  // RPC 回應當下就是 soft PREVIOUS_STEP_OPEN：afterRecord 必須先收遮罩，確認與取消都能操作。
+  await openFinish();
+  be.submitImmediatePreviousStep = true;
+  await sendCloseFromSheet("a0000000-0000-4000-8000-000000000001");
+  be.submitImmediatePreviousStep = false;
+  const overlay = page.locator("#finishCloseOverlay");
+  ok(await overlay.isHidden() && await page.locator("#finishSheet [data-finish-close-confirm]").isVisible()
+    && await page.locator("#finishSheet [data-finish-close-cancel]").isVisible(),
+    "submit 即回 PREVIOUS_STEP_OPEN：遮罩收起，確認與取消可按");
+  const immediateBeforeCancel = be.submits.length;
+  await page.locator("#finishSheet [data-finish-close-cancel]").click();
+  ok(be.submits.length === immediateBeforeCancel && await page.locator("#finishSheet [data-finish-close-confirm]").count() === 0,
+    "submit 即回 PREVIOUS_STEP_OPEN：取消可按且不送 RPC");
+
+  // 輪詢才收到 soft PREVIOUS_STEP_OPEN：同樣先收遮罩，再允許確認重送。
+  const polledConfirmUuid = await sendCloseFromSheet("a0000000-0000-4000-8000-000000000002");
+  Object.assign(be.commands.get(polledConfirmUuid), { status: "rejected", reject_code: "PREVIOUS_STEP_OPEN",
+    reject_message: "上一道還在進行中。確定要先關這一道嗎？", legacy_snapshot: { guard: { hard: false } } });
+  await page.evaluate(() => machtileStationCmdPoll("A04"));
+  await page.locator("#finishSheet [data-finish-close-confirm]").waitFor({ timeout: 15000 });
+  ok(await overlay.isHidden() && await page.locator("#finishSheet [data-finish-close-cancel]").isVisible(),
+    "輪詢收到 PREVIOUS_STEP_OPEN：遮罩收起，確認與取消可按");
+  const polledBeforeConfirm = be.submits.length;
+  await page.locator("#finishSheet [data-finish-close-confirm]").click();
+  for (let i = 0; i < 30 && be.submits.length === polledBeforeConfirm; i++) await page.waitForTimeout(50);
+  ok(be.submits.length === polledBeforeConfirm + 1 && be.submits.at(-1)?.p_acks?.includes("PREVIOUS_STEP_OPEN"),
+    "輪詢收到 PREVIOUS_STEP_OPEN：確認可按並重送 close");
+  await page.waitForFunction(() => machtileStationCmd.submittingClose.size === 0, null, { timeout: 10000 });
+  await page.evaluate(() => machtileFinishCloseClearPending("A04"));
+
   // (1) applied、沒有下一道 → 留在精簡完成面板，讓作業員選其他工單或回首頁
   await openFinish();
   const plainUuid = await sendCloseFromSheet("a1111111-1111-4111-8111-111111111111");
@@ -3206,11 +3238,22 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     machine: machtileSingleStationReportState.machineCode, finishOpen: document.getElementById("finishSheet")?.classList.contains("is-open"), type: activeReportType }));
   ok(Boolean(tokens.record) && tokens.record === tokens.sheet, "關站紀錄記下送出時的完工畫面代號", JSON.stringify(tokens));
   ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("關站中"), "等待中：完工畫面顯示關站中");
-  const overlay = page.locator("#finishCloseOverlay");
   ok(await overlay.isVisible() && (await overlay.innerText()).includes("關站中，請稍等（約 5 秒）"), "關站送出後顯示全畫面遮罩");
   const stopBlocked = await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click({ trial: true, timeout: 400 }).then(() => false, () => true);
   ok(stopBlocked, "遮罩期間停工鈕不可按");
   ok(await page.evaluate(() => !machtileLoadSupabaseJs.promise), "Realtime 旗標關時不載入 SDK，維持純輪詢行為");
+  const overlayTimeout = await page.evaluate(() => {
+    clearTimeout(machtileFinishOverlaySet.timer);
+    const realSetTimeout = window.setTimeout;
+    let callback = null; let delay = null;
+    window.setTimeout = (fn, ms) => { callback = fn; delay = ms; return 1; };
+    try { machtileFinishOverlaySet("pending"); } finally { window.setTimeout = realSetTimeout; }
+    callback();
+    return { delay, pending: Boolean(machtileStationCmd.pending.A04), timer: Boolean(machtileStationCmd.timers.A04) };
+  });
+  ok(overlayTimeout.delay === 30000 && overlayTimeout.pending && overlayTimeout.timer && await overlay.isHidden(),
+    "30 秒逾時只收遮罩，pending 與輪詢備援繼續", JSON.stringify(overlayTimeout));
+  await page.evaluate(() => machtileFinishOverlaySet("pending"));
   await pollTo("applied", plainUuid);
   ok(await overlay.isVisible() && (await overlay.innerText()).includes("✔ 已關站"), "applied 顯示已關站大字");
   await overlay.waitFor({ state: "hidden", timeout: 3000 });
@@ -3305,6 +3348,15 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     ok(routineReopened, `[${action}] 重開報工是正常數量表單`);
     await page.evaluate(() => closeReport());
   }
+  // 輪詢遇到 missing-resource：結束等待並收遮罩，不留下全畫面阻擋。
+  await openFinish();
+  await sendCloseFromSheet("a7777777-7777-4777-8777-777777777777");
+  be.tableMissing = true;
+  await page.evaluate(() => machtileStationCmdPoll("A04"));
+  await page.waitForFunction(() => !machtileStationCmd.pending.A04, null, { timeout: 15000 });
+  ok(await overlay.isHidden() && await page.evaluate(() => machtileStationCmd.availability === "missing"),
+    "missing-resource 結束等待並收起遮罩");
+  be.tableMissing = false;
   ok(realErrors(errors).length === 0, "完工關站情境沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }

@@ -15318,7 +15318,11 @@ function machtileFinishOverlaySet(phase = "hidden") {
   overlay.setAttribute("aria-hidden", "false");
   const message = overlay.querySelector("[data-finish-close-overlay-message]");
   if (message) message.textContent = machtileTranslate(phase === "applied" ? "finish_close_overlay_done" : "finish_close_overlay_wait");
-  if (phase === "applied") machtileFinishOverlaySet.timer = setTimeout(() => machtileFinishOverlaySet("hidden"), 1500);
+  machtileFinishOverlaySet.timer = setTimeout(() => machtileFinishOverlaySet("hidden"), phase === "applied" ? 1500 : 30000);
+}
+
+function machtileFinishOverlayRelease(record) {
+  if (record?.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishOverlaySet("hidden");
 }
 
 function machtileStationCmdFlag() {
@@ -15692,7 +15696,10 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid, identity };
     },
     afterRecord: ({ record, view }) => {
-      if (view.terminal || view.needsConfirmation) machtileFinishCloseSetResult(code, view, record);
+      if (view.terminal || view.needsConfirmation) {
+        machtileFinishOverlayRelease(record);
+        machtileFinishCloseSetResult(code, view, record);
+      }
       machtileRenderStationReportSurfaces();
     },
   });
@@ -16983,7 +16990,7 @@ async function machtileStationCmdSubscribe(code, record) {
   machtileStationCmdUnsubscribe(code);
   try {
     const sdk = await machtileLoadSupabaseJs();
-    if (machtileStationCmd.pending[code]?.commandUuid !== record.commandUuid) return;
+    if (machtileStationCmd.pending[code]?.commandUuid !== record.commandUuid || machtileStationCmd.realtime[code]) return;
     const token = machtileSupabaseBearerToken();
     const client = sdk.createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -17037,6 +17044,7 @@ function machtileStationCmdPoll(code) {
         if (current.commandType === "close" && row) { view.prevStepRow = row; view.prevStepTarget = { workOrderNo: current.orderNo, processOrder: current.step }; }
         if (current.commandType === "start" && row?.reject_message) view.rejectMessage = String(row.reject_message);
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
+        if (view.late || core.lockReleased(current.startedAt, Date.now())) machtileFinishOverlayRelease(current);
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
         current.view = view;
         const statusChanged = current.lastStatus !== String(row.status || "");
@@ -17049,6 +17057,7 @@ function machtileStationCmdPoll(code) {
         }
         if (changed) machtileStationCmdRerender();
         if (view.needsConfirmation) {
+          machtileFinishOverlayRelease(current);
           clearTimeout(machtileStationCmd.timers[code]);
           delete machtileStationCmd.timers[code];
           if (current.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view, current);
@@ -17080,6 +17089,7 @@ function machtileStationCmdPoll(code) {
         clearTimeout(machtileStationCmd.timers[code]);
         delete machtileStationCmd.timers[code];
         delete machtileStationCmd.pending[code];
+        machtileFinishOverlayRelease(current);
         if (current.commandType === "start") delete machtileInstantStartPending[code];
         machtileStationCmdSavePending();
         machtileStationCmdRerender();
@@ -17088,7 +17098,11 @@ function machtileStationCmdPoll(code) {
       console.warn("station command poll failed; will retry", error);
     }
     // 剛過解鎖時間 → 卡片重畫一次（按鈕解鎖、輪詢照舊）
-    if (!current.releasedShown && core.lockReleased(current.startedAt, Date.now())) { current.releasedShown = true; machtileStationCmdRerender(); }
+    if (!current.releasedShown && core.lockReleased(current.startedAt, Date.now())) {
+      current.releasedShown = true;
+      machtileFinishOverlayRelease(current);
+      machtileStationCmdRerender();
+    }
     machtileStationCmdPoll(code);
   }, core.pollDelay(elapsed));
 }
