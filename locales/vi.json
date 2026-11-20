@@ -205,6 +205,8 @@
     "_draft": true
   },
   "finish_close_processing": { "value": "Đang xử lý", "_draft": true },
+  "finish_close_overlay_wait": { "value": "Đang đóng công đoạn, vui lòng đợi (khoảng 5 giây)", "_draft": true },
+  "finish_close_overlay_done": { "value": "✔ Đã đóng công đoạn", "_draft": true },
   "finish_close_applied_short": {
     "value": "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm",
     "_draft": true

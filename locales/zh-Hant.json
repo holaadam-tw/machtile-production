@@ -130,6 +130,8 @@
   "card_finish_close_rejected": "關站沒成功：{{reason}}，請再按完工",
   "finish_close_applied": "已關站",
   "finish_close_processing": "處理中",
+  "finish_close_overlay_wait": "關站中，請稍等（約 5 秒）",
+  "finish_close_overlay_done": "✔ 已關站",
   "finish_close_applied_short": "少 {{quantity}} 件，已關站並依實做數入庫",
   "finish_close_applied_detail": "完工報工已保留；舊 MES 已關站。",
   "finish_close_rejected_title": "關站未完成",

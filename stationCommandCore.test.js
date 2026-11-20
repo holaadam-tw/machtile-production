@@ -307,7 +307,8 @@ eq("ageForHint：有時鐘差用伺服器年齡", c.ageForHint({ serverOffset: o
 eq("ageForHint：沒有時鐘差用按下後的本機經過時間", c.ageForHint({ serverOffset: null, startedAt: 1000 }, reqAt, 61000), 60000);
 
 console.log("== 輪詢與解鎖（App 不自己結束）==");
-eq("前 30 秒 2 秒一次", c.pollDelay(5000), 2000);
+eq("前 15 秒 1 秒一次", c.pollDelay(5000), 1000);
+eq("15–30 秒 2 秒一次", c.pollDelay(15000), 2000);
 eq("之後 5 秒一次", c.pollDelay(60000), 5000);
 eq("解鎖後 15 秒一次（照樣輪詢）", c.pollDelay(c.CLIENT_UNLOCK_MS + 1), 15000);
 eq("解鎖＝伺服器 pending 10 分鐘＋1 分鐘", c.CLIENT_UNLOCK_MS, 11 * 60000);

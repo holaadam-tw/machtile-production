@@ -219,6 +219,8 @@
       finish_work_hint: "開啟完工回報；目前不直接關閉舊 MES 工站",
       card_finish_recorded: "完工已記錄", card_finish_close_pending: "關站處理中…", card_finish_close_confirm: "完工已記錄，關站還沒完成：請再按『完工』，跳出確認後按『確認，仍要關站』", card_finish_close_rejected: "關站沒成功：{{reason}}，請再按完工",
       finish_work_close_hint: "完工報工成功後，會接著關閉舊 MES 工站並讓下一道進池", finish_close_applied: "已關站", finish_close_processing: "處理中",
+      finish_close_overlay_wait: "關站中，請稍等（約 5 秒）",
+      finish_close_overlay_done: "✔ 已關站",
       finish_close_applied_short: "少 {{quantity}} 件，已關站並依實做數入庫",
       finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
       finish_close_rejected_title: "關站未完成",
@@ -897,6 +899,8 @@
       finish_work_hint: "Mở báo cáo hoàn tất; hiện chưa đóng công đoạn MES cũ trực tiếp", // _draft
       card_finish_recorded: "Đã ghi nhận hoàn tất", card_finish_close_pending: "Đang xử lý đóng công đoạn…", card_finish_close_confirm: "Đã ghi nhận hoàn tất nhưng chưa đóng xong công đoạn. Hãy bấm ‘Hoàn tất’ lần nữa, rồi khi hộp xác nhận hiện ra hãy chọn ‘Xác nhận, vẫn đóng công đoạn’.", card_finish_close_rejected: "Đóng công đoạn không thành công: {{reason}}. Hãy bấm Hoàn tất lần nữa.", // _draft
       finish_work_close_hint: "Sau khi báo hoàn tất thành công, hệ thống sẽ đóng công đoạn MES cũ và đưa công đoạn tiếp theo vào danh sách.", finish_close_applied: "Đã đóng công đoạn", finish_close_processing: "Đang xử lý", // _draft
+      finish_close_overlay_wait: "Đang đóng công đoạn, vui lòng đợi (khoảng 5 giây)", // _draft
+      finish_close_overlay_done: "✔ Đã đóng công đoạn", // _draft
       finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm", // _draft
       finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
       finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft

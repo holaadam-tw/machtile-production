@@ -15298,9 +15298,32 @@ const machtileStationCmd = {
   pending: {},                // 機台代號 → pendingRecord（等伺服器結果中）
   lastResult: {},             // 機台代號 → { view, at }（卡片上顯示最後一次結果）
   timers: {},                 // 機台代號 → 輪詢 timer
+  realtime: {},               // 機台代號 → Supabase Realtime channel（輪詢永遠保留備援）
   submittingClose: new Set(), // RPC 回來前的同步防雙按鎖（同機台／單／道；有 simulation 才附加）
   sheet: null,                // 目前開著的確認卡
 };
+
+function machtileFinishOverlaySet(phase = "hidden") {
+  const overlay = document.getElementById("finishCloseOverlay");
+  if (!overlay || config.enableFinishOverlay !== true) return;
+  clearTimeout(machtileFinishOverlaySet.timer);
+  if (phase === "hidden") {
+    overlay.hidden = true;
+    overlay.classList.remove("is-applied");
+    overlay.setAttribute("aria-hidden", "true");
+    return;
+  }
+  overlay.hidden = false;
+  overlay.classList.toggle("is-applied", phase === "applied");
+  overlay.setAttribute("aria-hidden", "false");
+  const message = overlay.querySelector("[data-finish-close-overlay-message]");
+  if (message) message.textContent = machtileTranslate(phase === "applied" ? "finish_close_overlay_done" : "finish_close_overlay_wait");
+  machtileFinishOverlaySet.timer = setTimeout(() => machtileFinishOverlaySet("hidden"), phase === "applied" ? 1500 : 30000);
+}
+
+function machtileFinishOverlayRelease(record) {
+  if (record?.commandType === "close" && record.finishCloseReportCommandUuid) machtileFinishOverlaySet("hidden");
+}
 
 function machtileStationCmdFlag() {
   return machtileStationCmdCore ? machtileStationCmdCore.parseFlag(config.stationCommandMachines) : { all: false, machines: [] };
@@ -15640,6 +15663,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
   const identity = { orderNo: args.p_expected_order_no, partNo: args.p_expected_part_no, indexSn: args.p_expected_index_sn,
     simulationId: args.p_expected_simulation_id || null };
   flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid, identity };
+  machtileFinishOverlaySet("pending");
   machtileRenderStationReportSurfaces();
   // 送出時開著的完工畫面代號：結果回來時只有「還是這個畫面」才自動關（作業員重開過就不動）
   const finishCloseSheetToken = machtileFinishSheetOpenFor(code) ? machtileReportSheetOpenToken : "";
@@ -15668,14 +15692,19 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
     },
     startedAt: Date.now(),
     onError: ({ info }) => {
+      machtileFinishOverlaySet("hidden");
       flow.close = { phase: "rejected", title: "關站未完成", message: `完工報工已成功；${info.text}`, reportCommandUuid, identity };
     },
     afterRecord: ({ record, view }) => {
-      if (view.terminal || view.needsConfirmation) machtileFinishCloseSetResult(code, view, record);
+      if (view.terminal || view.needsConfirmation) {
+        machtileFinishOverlayRelease(record);
+        machtileFinishCloseSetResult(code, view, record);
+      }
       machtileRenderStationReportSurfaces();
     },
   });
   if (submitResult?.duplicate) {
+    machtileFinishOverlaySet("hidden");
     flow.close = blockedClose;
     machtileRenderStationReportSurfaces();
   }
@@ -16600,7 +16629,9 @@ window.addEventListener("online", () => { if (machtileStationCmd.availability ==
 // 延到下一個 task，避免觸控瀏覽器完成 focus 預設行為時取消選取。
 function machtileSelectReportQuantity(input) {
   if (!input?.matches?.("[data-report-quantity]") || input.disabled || input.readOnly) return;
-  setTimeout(() => {
+  clearTimeout(input.__machtileSelectTimer);
+  input.__machtileSelectTimer = setTimeout(() => {
+    input.__machtileSelectTimer = null;
     if (document.activeElement !== input) return;
     try { input.select(); } catch { /* number input selection is browser-dependent */ }
   }, 0);
@@ -16621,9 +16652,22 @@ document.addEventListener("touchend", (event) => {
   machtileSelectReportQuantity(event.target);
 }, { passive: true });
 
+document.addEventListener("keydown", (event) => {
+  const input = event.target;
+  if (!input?.matches?.("[data-report-quantity]")) return;
+  // Hardware keyboards can beat the deferred focus-select callback. Once a key
+  // is being handled, selection must not change underneath that keystroke.
+  clearTimeout(input.__machtileSelectTimer);
+  input.__machtileSelectTimer = null;
+});
+
 document.addEventListener("input", (event) => {
   const input = event.target;
   if (!(input instanceof HTMLElement) || !input.matches("[data-station-cmd-daily-qty]")) return;
+  // A fast hardware-keyboard input can arrive before the delayed focus-select task.
+  // Cancel it so the second keystroke does not replace the first one (327 -> 27).
+  clearTimeout(input.__machtileSelectTimer);
+  input.__machtileSelectTimer = null;
   const ds = machtileStationCmd.sheet && machtileStationCmd.sheet.dailyStart;
   if (!ds || ds.state !== "ask") return;
   ds.value = input.value;
@@ -16706,6 +16750,7 @@ async function machtileStationCmdRunSubmission(options) {
   const closeKey = commandType === "close" ? core.closeSubmissionKey({ machineCode, ...fields }) : "";
   if (closeKey && core.closeSubmissionBlocked({ machineCode, ...fields }, machtileStationCmd.submittingClose, machtileStationCmd.pending[machineCode]))
     return { ok: false, duplicate: true };
+  if (commandType === "close" && recordFields?.finishCloseReportCommandUuid) machtileFinishOverlaySet("pending");
   if (closeKey) machtileStationCmd.submittingClose.add(closeKey);
   try {
   const payload = payloadOverride || core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
@@ -16717,6 +16762,7 @@ async function machtileStationCmdRunSubmission(options) {
     const result = await supabaseFetch(`rpc/${rpc}`, { method: "POST", body: JSON.stringify(payload), ...(controller ? { signal: controller.signal } : {}) });
     row = Array.isArray(result) ? result[0] : result;
   } catch (error) {
+    if (commandType === "close" && recordFields?.finishCloseReportCommandUuid) machtileFinishOverlaySet("hidden");
     const info = core.submitErrorText(error);
     const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
     if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload };
@@ -16727,6 +16773,7 @@ async function machtileStationCmdRunSubmission(options) {
         unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
       });
       machtileStationCmdSavePending();
+      void machtileStationCmdSubscribe(machineCode, machtileStationCmd.pending[machineCode]);
       machtileStationCmdPoll(machineCode);
     } else if (machtileStationCmd.pending[machineCode]?.commandUuid === commandUuid) {
       delete machtileStationCmd.pending[machineCode];
@@ -16747,6 +16794,7 @@ async function machtileStationCmdRunSubmission(options) {
       unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
     });
     machtileStationCmdSavePending();
+    void machtileStationCmdSubscribe(machineCode, machtileStationCmd.pending[machineCode]);
     machtileStationCmdPoll(machineCode);
     machtileStationCmdRerender();
     return { ok: false, error, info, payload, row };
@@ -16770,7 +16818,10 @@ async function machtileStationCmdRunSubmission(options) {
   machtileStationCmdSavePending();
   if (afterRecord) await afterRecord({ row, record, view });
   if (view.terminal) machtileStationCmdFinish(machineCode, view);
-  else if (!view.needsConfirmation) machtileStationCmdPoll(machineCode);
+  else if (!view.needsConfirmation) {
+    void machtileStationCmdSubscribe(machineCode, record);
+    machtileStationCmdPoll(machineCode);
+  }
   machtileStationCmdRerender();
   return { ok: true, payload, row, record, view };
   } finally {
@@ -16844,6 +16895,7 @@ function machtileStationCmdFinish(code, view) {
   clearTimeout(machtileStationCmd.timers[code]);
   delete machtileStationCmd.timers[code];
   delete machtileStationCmd.pending[code];
+  machtileStationCmdUnsubscribe(code);
   machtileStationCmdSavePending();
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "start") {
@@ -16882,6 +16934,7 @@ function machtileStationCmdFinish(code, view) {
     if (view.phase === "applied") void machtileTakeoverRefreshAfterApplied(code, record.orderNo, record.step);
   }
   if (record.commandType === "close" && record.finishCloseReportCommandUuid) {
+    machtileFinishOverlaySet(view?.phase === "applied" ? "applied" : "hidden");
     const ownsSheet = machtileFinishCloseOwnsOpenSheet(code, record);
     machtileFinishCloseSetResult(code, view, record);
     machtileFinishCloseAfterFinalResult(code, view, ownsSheet);
@@ -16910,6 +16963,64 @@ function machtileStationCmdFinish(code, view) {
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
 }
 
+function machtileStationCmdUnsubscribe(code) {
+  const entry = machtileStationCmd.realtime[code];
+  if (!entry) return;
+  delete machtileStationCmd.realtime[code];
+  clearTimeout(entry.timeout);
+  try { entry.client.removeChannel(entry.channel); } catch { /* polling remains authoritative */ }
+}
+
+function machtileLoadSupabaseJs() {
+  if (window.supabase?.createClient) return Promise.resolve(window.supabase);
+  if (machtileLoadSupabaseJs.promise) return machtileLoadSupabaseJs.promise;
+  machtileLoadSupabaseJs.promise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    script.async = true;
+    script.onload = () => window.supabase?.createClient ? resolve(window.supabase) : reject(new Error("SUPABASE_JS_UNAVAILABLE"));
+    script.onerror = () => reject(new Error("SUPABASE_JS_LOAD_FAILED"));
+    document.head.appendChild(script);
+  });
+  return machtileLoadSupabaseJs.promise;
+}
+
+async function machtileStationCmdSubscribe(code, record) {
+  if (config.enableStationCommandRealtime !== true || !record?.commandUuid) return;
+  machtileStationCmdUnsubscribe(code);
+  try {
+    const sdk = await machtileLoadSupabaseJs();
+    if (machtileStationCmd.pending[code]?.commandUuid !== record.commandUuid || machtileStationCmd.realtime[code]) return;
+    const token = machtileSupabaseBearerToken();
+    const client = sdk.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    if (client.realtime?.setAuth) client.realtime.setAuth(token);
+    const filter = `command_uuid=eq.${record.commandUuid}`;
+    const channel = client.channel(`station-command-${record.commandUuid}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "station_commands", filter }, (payload) => {
+        const current = machtileStationCmd.pending[code];
+        const row = payload?.new;
+        if (!current || current.commandUuid !== record.commandUuid || String(row?.command_uuid || "") !== record.commandUuid) return;
+        const view = machtileStationCmdCore.statusView(row, current.commandType, machtileStationCmdCore.ageForHint(current, row.requested_at, Date.now()));
+        if (!view.terminal) return;
+        if (current.commandType === "close" && row?.legacy_snapshot) view.warning = String(row.legacy_snapshot.Warning || row.legacy_snapshot.warning || "");
+        if (current.commandType === "close") { view.prevStepRow = row; view.prevStepTarget = { workOrderNo: current.orderNo, processOrder: current.step }; }
+        if (current.commandType === "start" && row?.reject_message) view.rejectMessage = String(row.reject_message);
+        machtileStationCmdFinish(code, view);
+      })
+      .subscribe((status) => {
+        if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) machtileStationCmdUnsubscribe(code);
+      });
+    const timeout = setTimeout(() => machtileStationCmdUnsubscribe(code), 15000);
+    machtileStationCmd.realtime[code] = { client, channel, timeout };
+  } catch (error) {
+    // Realtime is an optional acceleration only. Polling is already running and remains silent to the operator.
+    console.warn("station command realtime unavailable; polling continues", error);
+  }
+}
+
 function machtileStationCmdPoll(code) {
   const core = machtileStationCmdCore;
   const record = machtileStationCmd.pending[code];
@@ -16933,6 +17044,7 @@ function machtileStationCmdPoll(code) {
         if (current.commandType === "close" && row) { view.prevStepRow = row; view.prevStepTarget = { workOrderNo: current.orderNo, processOrder: current.step }; }
         if (current.commandType === "start" && row?.reject_message) view.rejectMessage = String(row.reject_message);
         if (view.terminal) { machtileStationCmdFinish(code, view); return; }
+        if (view.late || core.lockReleased(current.startedAt, Date.now())) machtileFinishOverlayRelease(current);
         const changed = !current.view || current.view.title !== view.title || current.view.late !== view.late || wasUnconfirmed;
         current.view = view;
         const statusChanged = current.lastStatus !== String(row.status || "");
@@ -16945,6 +17057,7 @@ function machtileStationCmdPoll(code) {
         }
         if (changed) machtileStationCmdRerender();
         if (view.needsConfirmation) {
+          machtileFinishOverlayRelease(current);
           clearTimeout(machtileStationCmd.timers[code]);
           delete machtileStationCmd.timers[code];
           if (current.finishCloseReportCommandUuid) machtileFinishCloseSetResult(code, view, current);
@@ -16976,6 +17089,7 @@ function machtileStationCmdPoll(code) {
         clearTimeout(machtileStationCmd.timers[code]);
         delete machtileStationCmd.timers[code];
         delete machtileStationCmd.pending[code];
+        machtileFinishOverlayRelease(current);
         if (current.commandType === "start") delete machtileInstantStartPending[code];
         machtileStationCmdSavePending();
         machtileStationCmdRerender();
@@ -16984,7 +17098,11 @@ function machtileStationCmdPoll(code) {
       console.warn("station command poll failed; will retry", error);
     }
     // 剛過解鎖時間 → 卡片重畫一次（按鈕解鎖、輪詢照舊）
-    if (!current.releasedShown && core.lockReleased(current.startedAt, Date.now())) { current.releasedShown = true; machtileStationCmdRerender(); }
+    if (!current.releasedShown && core.lockReleased(current.startedAt, Date.now())) {
+      current.releasedShown = true;
+      machtileFinishOverlayRelease(current);
+      machtileStationCmdRerender();
+    }
     machtileStationCmdPoll(code);
   }, core.pollDelay(elapsed));
 }
