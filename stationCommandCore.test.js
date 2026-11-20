@@ -21,12 +21,18 @@ eq("pending close", c.closeCardState({ status: "pending" }), { kind: "pending" }
 eq("claimed close", c.closeCardState({ status: "claimed" }), { kind: "pending" });
 eq("soft previous-step guard", c.closeCardState({ status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } }), { kind: "confirm" });
 eq("other rejection", c.closeCardState({ status: "rejected", reject_code: "LOCK_TIMEOUT" }), { kind: "rejected", reason: "LOCK_TIMEOUT" });
-eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied" });
+eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied", text: "已關站", finishDisabled: true });
 const newestClose = c.latestCloseByOrder([
   { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } },
   { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "applied" },
 ]);
-eq("ordered rows keep newest command", newestClose.get("A03|WO-1|3").status, "rejected");
+eq("先 rejected 後 applied：applied 優先", newestClose.get("A03|WO-1|3").status, "applied");
+const appliedThenRejected = c.latestCloseByOrder([
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "rejected" },
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "applied" },
+]);
+eq("applied 後 rejected 序列仍顯示已關站", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).text, "已關站");
+eq("applied 後完工鈕 disabled", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).finishDisabled, true);
 
 console.log("== parseFlag／enabledForMachine ==");
 eq("沒設 → 關", c.flagIsOn(c.parseFlag(undefined)), false);

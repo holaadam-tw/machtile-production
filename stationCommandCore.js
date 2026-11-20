@@ -97,14 +97,16 @@
     return Boolean(key) && (Boolean(submittingKeys?.has?.(key)) || closeSubmissionKey(pendingRecord) === key);
   }
 
-  // Rows must already be ordered requested_at.desc. Keep the newest close for each card identity.
+  // Rows should be ordered requested_at.desc. An applied close is final for the card identity:
+  // a later rejected retry must not overwrite it. Without an applied row, keep the newest row.
   function latestCloseByOrder(rows) {
     const result = new Map();
     (Array.isArray(rows) ? rows : []).forEach((row) => {
       const machine = normCode(row?.machine_code), order = text(row?.expected_order_no), step = Number(row?.expected_index_sn);
       if (!machine || !order || !Number.isInteger(step) || step <= 0) return;
       const key = `${machine}|${order}|${step}`;
-      if (!result.has(key)) result.set(key, row);
+      const current = result.get(key);
+      if (!current || (text(current.status).toLowerCase() !== "applied" && text(row?.status).toLowerCase() === "applied")) result.set(key, row);
     });
     return result;
   }
@@ -112,7 +114,7 @@
   function closeCardState(row) {
     if (!row) return null;
     const status = text(row.status).toLowerCase();
-    if (status === "applied") return { kind: "applied" };
+    if (status === "applied") return { kind: "applied", text: "已關站", finishDisabled: true };
     if (status === "pending" || status === "claimed") return { kind: "pending" };
     const guard = row.legacy_snapshot?.guard || {};
     if (status === "rejected" && text(guard.code) === "PREVIOUS_STEP_OPEN" && guard.hard === false) return { kind: "confirm" };

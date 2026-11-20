@@ -15433,6 +15433,15 @@ function machtileFinishCloseSetResult(code, view, record = null) {
       finishCloseReportCommandUuid: record.finishCloseReportCommandUuid,
     } } : {}),
   };
+  if (applied && closeIdentity?.orderNo && Number(closeIdentity.indexSn) > 0) {
+    const key = `${String(code || "").trim().toUpperCase()}|${String(closeIdentity.orderNo).trim()}|${Number(closeIdentity.indexSn)}`;
+    machtileCardState.latestCloseByOrder.set(key, {
+      command_type: "close", machine_code: code, expected_order_no: closeIdentity.orderNo,
+      expected_index_sn: Number(closeIdentity.indexSn), expected_simulation_id: closeIdentity.simulationId || null,
+      status: "applied", applied_at: new Date().toISOString(),
+    });
+    machtileCardState.closeStatus = "ok";
+  }
   if (view?.terminal) void machtileLoadCardLatestCloseForMachines([code], { render: true });
 }
 
@@ -19312,11 +19321,13 @@ function renderMachineCard(machine) {
   const pickActions = stationCmd.pickPhase ? stationCmd.pickActions || [] : null;
   // 這台有一筆「接錯了，退回」在等結果 → 報工／完工先鎖住（旗標關＝永遠 false）
   const returnClaimLocked = machtileReturnClaimLocks(machine.code || machine.name);
+  const closeState = order ? machtileStationCmdCore?.closeCardState(machtileCardCloseRow(order, machine)) : null;
+  const finishClosed = closeState?.finishDisabled === true;
   const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport && !returnClaimLocked
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
   const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport && !returnClaimLocked
-    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
+    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}"${finishClosed ? " disabled" : ""}>${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
   return `
@@ -31078,6 +31089,9 @@ function machtileCardFooterStatus(order, machine) {
       const code = String(machine?.code || machine?.name || order.machine || "").trim().toUpperCase();
       const row = machtileCardCloseRow(order, machine);
       const close = machtileStationCmdCore.closeCardState(row);
+      if (close?.kind === "applied") {
+        return `<span class="card-today-status is-finished" data-today-status="closed"${title}>${escapeHtml(close.text)}</span>`;
+      }
       if (close && close.kind !== "applied") {
         const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
         const reason = close.reason || machtileTranslate("finish_close_unknown");
