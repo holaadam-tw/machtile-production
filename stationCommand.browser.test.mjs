@@ -3179,6 +3179,26 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   await page.evaluate(() => machtileFinishCloseClearPending("A04"));
   be.submitDelayMs = 0;
 
+  // needsConfirmation 本身不是 in-flight：重入完工流程不可把確認卡卡成「關站中」，確認後仍可送新 close。
+  const confirmBefore = be.submits.length;
+  const duplicateConfirm = await page.evaluate(async () => {
+    const flow = machtileStationReportState(machtileBatchRow("A04"));
+    flow.singleReport = { ...(flow.singleReport || {}), reportType: "finish" };
+    flow.result = { command_type: "report", command_uuid: crypto.randomUUID(), status: "applied", applied_at: new Date().toISOString() };
+    flow.close = { phase: "rejected", needsConfirmation: true, title: "關站前請確認", message: "上一道尚未關站",
+      retryFields: { orderNo: "XX01202502050012", step: 5, partNo: "HCG-06-01", manufactureIiId: "C011E0ZE2YZJ", expectedSimulationId: "SIM-A04" } };
+    machtileStationCmd.pending.A04 = { commandUuid: crypto.randomUUID(), commandType: "close", machineCode: "A04", orderNo: "XX01202502050012", step: 5,
+      expectedSimulationId: "SIM-A04", startedAt: Date.now(), lastStatus: "rejected", view: { needsConfirmation: true } };
+    await machtileFinishCloseAfterAppliedReport("A04", { p_expected_order_no: "XX01202502050012", p_expected_part_no: "HCG-06-01", p_expected_index_sn: 5,
+      p_manufacture_ii_id: "C011E0ZE2YZJ", p_expected_simulation_id: "SIM-A04" }, flow.result.command_uuid);
+    return { needsConfirmation: flow.close?.needsConfirmation, phase: flow.close?.phase };
+  });
+  ok(duplicateConfirm.needsConfirmation === true && duplicateConfirm.phase === "rejected" && be.submits.length === confirmBefore,
+    "needsConfirmation 重入仍保留確認卡", JSON.stringify(duplicateConfirm));
+  await page.evaluate(() => machtileFinishCloseConfirmPreviousStep("A04"));
+  ok(be.submits.length === confirmBefore + 1 && be.submits.at(-1)?.p_acks?.includes("PREVIOUS_STEP_OPEN"), "確認，仍要關站可送出新 close");
+  await page.evaluate(() => machtileFinishCloseClearPending("A04"));
+
   // (1) applied、沒有下一道 → 留在精簡完成面板，讓作業員選其他工單或回首頁
   await openFinish();
   const plainUuid = await sendCloseFromSheet("a1111111-1111-4111-8111-111111111111");

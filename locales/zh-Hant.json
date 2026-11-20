@@ -129,6 +129,7 @@
   "card_finish_close_confirm": "完工已記錄，關站還沒完成：請再按『完工』，跳出確認後按『確認，仍要關站』",
   "card_finish_close_rejected": "關站沒成功：{{reason}}，請再按完工",
   "finish_close_applied": "已關站",
+  "finish_close_processing": "處理中",
   "finish_close_applied_short": "少 {{quantity}} 件，已關站並依實做數入庫",
   "finish_close_applied_detail": "完工報工已保留；舊 MES 已關站。",
   "finish_close_rejected_title": "關站未完成",

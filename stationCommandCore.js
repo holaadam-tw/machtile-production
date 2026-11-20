@@ -88,13 +88,31 @@
   function closeSubmissionKey({ machineCode, orderNo, step, expectedSimulationId } = {}) {
     const machine = normCode(machineCode), order = text(orderNo), simulation = text(expectedSimulationId);
     const index = Number(step);
-    return machine && order && Number.isInteger(index) && index > 0 && simulation
-      ? [machine, order.toUpperCase(), index, simulation].join("|") : "";
+    return machine && order && Number.isInteger(index) && index > 0
+      ? [machine, order.toUpperCase(), index, ...(simulation ? [simulation] : [])].join("|") : "";
   }
 
-  function closeSubmissionBlocked(fields, submittingKeys, pendingRecord) {
+  function closeSubmissionBlocked(fields, submittingKeys, pendingRecord, nowMs = Date.now()) {
     const key = closeSubmissionKey(fields);
-    return Boolean(key) && (Boolean(submittingKeys?.has?.(key)) || closeSubmissionKey(pendingRecord) === key);
+    if (!key) return false;
+    if (submittingKeys?.has?.(key)) return true;
+    if (closeSubmissionKey(pendingRecord) !== key) return false;
+    if (lockReleased(pendingRecord?.startedAt, nowMs) && releasedNote(pendingRecord?.lastStatus).unlock) return false;
+    return true;
+  }
+
+  // Applied only describes the card currently on screen when it happened after this process's latest start.
+  // If start time is unavailable, keep the conservative 24-hour fallback requested for legacy data.
+  function appliedCloseIsCurrent(row, { machineCode, orderNo, step, actualStartAt, nowMs = Date.now() } = {}) {
+    if (text(row?.status).toLowerCase() !== "applied") return true;
+    const same = normCode(row?.machine_code) === normCode(machineCode)
+      && text(row?.expected_order_no).toUpperCase() === text(orderNo).toUpperCase()
+      && Number(row?.expected_index_sn) === Number(step);
+    if (!same) return true;
+    const appliedAt = Date.parse(row?.requested_at || row?.applied_at);
+    const startedAt = Date.parse(actualStartAt);
+    if (Number.isFinite(startedAt)) return Number.isFinite(appliedAt) && appliedAt > startedAt;
+    return Number.isFinite(appliedAt) && Number(nowMs) - appliedAt >= 0 && Number(nowMs) - appliedAt <= PENDING_KEEP_MS;
   }
 
   // Rows should be ordered requested_at.desc. An applied close is final for the card identity:
@@ -111,9 +129,10 @@
     return result;
   }
 
-  function closeCardState(row) {
+  function closeCardState(row, current = null) {
     if (!row) return null;
     const status = text(row.status).toLowerCase();
+    if (status === "applied" && current && !appliedCloseIsCurrent(row, current)) return null;
     if (status === "applied") return { kind: "applied", text: "已關站", finishDisabled: true };
     if (status === "pending" || status === "claimed") return { kind: "pending" };
     const guard = row.legacy_snapshot?.guard || {};
@@ -920,7 +939,7 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS, INSTANT_START_TIMEOUT_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, taiwanParts, finishCloseDecision, closeSubmissionKey, closeSubmissionBlocked, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, taiwanParts, finishCloseDecision, closeSubmissionKey, closeSubmissionBlocked, appliedCloseIsCurrent, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
