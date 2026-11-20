@@ -48,6 +48,12 @@ eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), 
 eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: true, reason: "" });
+eq("close 防重 key：同機台同單同道同 simulation 相同", c.closeSubmissionKey({ machineCode: " a04 ", orderNo: "xx01", step: 2, expectedSimulationId: "SIM-1" }), "A04|XX01|2|SIM-1");
+eq("close 防重 key：缺 simulation fail closed", c.closeSubmissionKey({ machineCode: "A04", orderNo: "XX01", step: 2 }), "");
+const closeFields = { machineCode: "A04", orderNo: "XX01", step: 2, expectedSimulationId: "SIM-1" };
+eq("close 雙擊：第一筆 RPC 等待中擋第二筆", c.closeSubmissionBlocked(closeFields, new Set([c.closeSubmissionKey(closeFields)]), null), true);
+eq("close 雙擊：第一筆已進 pending 仍擋第二筆", c.closeSubmissionBlocked(closeFields, new Set(), closeFields), true);
+eq("close 防重：不同道不擋", c.closeSubmissionBlocked({ ...closeFields, step: 3 }, new Set([c.closeSubmissionKey(closeFields)]), closeFields), false);
 for (const status of ["applied-late", "rejected", "previewed", "unknown"]) {
   eq(`完工關站：server ${status} 不送`, c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: status }), { send: false, reason: "report_not_applied" });
 }

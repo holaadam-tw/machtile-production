@@ -15298,6 +15298,7 @@ const machtileStationCmd = {
   pending: {},                // 機台代號 → pendingRecord（等伺服器結果中）
   lastResult: {},             // 機台代號 → { view, at }（卡片上顯示最後一次結果）
   timers: {},                 // 機台代號 → 輪詢 timer
+  submittingClose: new Set(), // RPC 回來前的同步防雙按鎖（同機台／單／道／simulation）
   sheet: null,                // 目前開著的確認卡
 };
 
@@ -16689,6 +16690,10 @@ async function machtileStationCmdRunSubmission(options) {
     previousRecord = null, attemptNumber = 1, validateRow = null,
     onError = null, onAccepted = null, afterRecord = null, rpcName = null, payloadOverride = null,
   } = options;
+  const closeKey = commandType === "close" ? core.closeSubmissionKey({ machineCode, ...fields }) : "";
+  if (closeKey && core.closeSubmissionBlocked({ machineCode, ...fields }, machtileStationCmd.submittingClose, machtileStationCmd.pending[machineCode]))
+    return { ok: false, duplicate: true };
+  if (closeKey) machtileStationCmd.submittingClose.add(closeKey);
   const payload = payloadOverride || core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
@@ -16700,7 +16705,7 @@ async function machtileStationCmdRunSubmission(options) {
   } catch (error) {
     const info = core.submitErrorText(error);
     const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
-    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload };
+    if (errorResult?.cancel) { if (closeKey) machtileStationCmd.submittingClose.delete(closeKey); return { ok: false, cancelled: true, error, info, payload }; }
     if (info.missing) machtileStationCmd.availability = "missing";
     if (info.retry) {
       machtileStationCmd.pending[machineCode] = core.pendingRecord({
@@ -16714,6 +16719,7 @@ async function machtileStationCmdRunSubmission(options) {
       machtileStationCmdSavePending();
     }
     machtileStationCmdRerender();
+    if (closeKey) machtileStationCmd.submittingClose.delete(closeKey);
     return { ok: false, error, info, payload };
   } finally {
     if (timer) clearTimeout(timer);
@@ -16722,7 +16728,7 @@ async function machtileStationCmdRunSubmission(options) {
     const error = new Error("伺服器沒有回傳這筆指令，結果未確認");
     const info = { missing: false, retry: true, text: error.message };
     const errorResult = onError ? await onError({ error, info, previousRecord }) : null;
-    if (errorResult?.cancel) return { ok: false, cancelled: true, error, info, payload, row };
+    if (errorResult?.cancel) { if (closeKey) machtileStationCmd.submittingClose.delete(closeKey); return { ok: false, cancelled: true, error, info, payload, row }; }
     machtileStationCmd.pending[machineCode] = core.pendingRecord({
       commandUuid, commandType, machineCode, ...recordFields, startedAt,
       unconfirmed: true, serverOffset: null, ...(errorResult?.recordExtra || {}),
@@ -16730,6 +16736,7 @@ async function machtileStationCmdRunSubmission(options) {
     machtileStationCmdSavePending();
     machtileStationCmdPoll(machineCode);
     machtileStationCmdRerender();
+    if (closeKey) machtileStationCmd.submittingClose.delete(closeKey);
     return { ok: false, error, info, payload, row };
   }
   const acceptedResult = onAccepted ? await onAccepted({ row, previousRecord }) : null;
@@ -16747,6 +16754,7 @@ async function machtileStationCmdRunSubmission(options) {
   record.view = view;
   record.lastStatus = String(row?.status || "pending");
   machtileStationCmd.pending[machineCode] = record;
+  if (closeKey) machtileStationCmd.submittingClose.delete(closeKey);
   delete machtileStationCmd.lastResult[machineCode];
   machtileStationCmdSavePending();
   if (afterRecord) await afterRecord({ row, record, view });
@@ -27097,6 +27105,8 @@ function machtileRenderSingleStationReportBase() {
   machtileUpdateReportFailReason();
   const row = machtileSyncSingleStationReportRow();
   const flow = row ? machtileStationReportState(row) : null;
+  const closePending = activeReportType === "finish" && flow?.close?.phase === "pending";
+  if (closePending) { submit.disabled = true; submit.removeAttribute("data-i18n"); submit.textContent = "處理中"; }
   const closeIdentity = flow?.close?.identity;
   const currentLegacyIdentity = order?.processId
     ? machtileBatchState.stationReportIdentityByProcess.get(String(order.processId))

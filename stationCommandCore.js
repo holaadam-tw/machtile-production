@@ -85,6 +85,18 @@
     return { send: true, reason: "" };
   }
 
+  function closeSubmissionKey({ machineCode, orderNo, step, expectedSimulationId } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), simulation = text(expectedSimulationId);
+    const index = Number(step);
+    return machine && order && Number.isInteger(index) && index > 0 && simulation
+      ? [machine, order.toUpperCase(), index, simulation].join("|") : "";
+  }
+
+  function closeSubmissionBlocked(fields, submittingKeys, pendingRecord) {
+    const key = closeSubmissionKey(fields);
+    return Boolean(key) && (Boolean(submittingKeys?.has?.(key)) || closeSubmissionKey(pendingRecord) === key);
+  }
+
   // Rows must already be ordered requested_at.desc. Keep the newest close for each card identity.
   function latestCloseByOrder(rows) {
     const result = new Map();
@@ -906,7 +918,7 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS, INSTANT_START_TIMEOUT_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, taiwanParts, finishCloseDecision, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, taiwanParts, finishCloseDecision, closeSubmissionKey, closeSubmissionBlocked, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,

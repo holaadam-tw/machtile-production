@@ -3164,6 +3164,21 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     await page.waitForFunction(() => !machtileStationCmd.pending.A04, null, { timeout: 15000 });
   };
 
+  // 原事故回歸：第一筆 close RPC 還沒回來時同一機台／單／道再觸發一次，只能送出一筆。
+  be.submitDelayMs = 150;
+  const doubleBefore = be.submits.length;
+  const doubleResult = await page.evaluate(async () => {
+    const fields = { orderNo: "XX01202502050012", step: 5, partNo: "HCG-06-01", manufactureIiId: "C011E0ZE2YZJ", expectedSimulationId: "SIM-A04" };
+    return Promise.all([
+      machtileStationCmdRunSubmission({ commandUuid: crypto.randomUUID(), commandType: "close", machineCode: "A04", fields, recordFields: fields, startedAt: Date.now() }),
+      machtileStationCmdRunSubmission({ commandUuid: crypto.randomUUID(), commandType: "close", machineCode: "A04", fields, recordFields: fields, startedAt: Date.now() })
+    ]);
+  });
+  ok(be.submits.length === doubleBefore + 1 && doubleResult.filter((x) => x?.duplicate).length === 1,
+    "close 雙按等待期間只送 1 筆", JSON.stringify(doubleResult.map((x) => ({ ok: x?.ok, duplicate: x?.duplicate }))));
+  await page.evaluate(() => machtileFinishCloseClearPending("A04"));
+  be.submitDelayMs = 0;
+
   // (1) applied、沒有下一道 → 留在精簡完成面板，讓作業員選其他工單或回首頁
   await openFinish();
   const plainUuid = await sendCloseFromSheet("a1111111-1111-4111-8111-111111111111");
