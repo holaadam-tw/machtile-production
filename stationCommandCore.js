@@ -588,9 +588,10 @@
     return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: late ? "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管" : "已送出，等工廠接手。請稍等，不要重按。", late };
   }
 
-  // 輪詢間隔：前 30 秒每 2 秒，之後每 5 秒，解鎖後每 15 秒
+  // 輪詢間隔：送出後前 15 秒每 1 秒、15–30 秒每 2 秒，之後每 5 秒，解鎖後每 15 秒
   function pollDelay(elapsedMs) {
     const e = Number(elapsedMs);
+    if (e < 15000) return 1000;
     if (e < 30000) return 2000;
     return e > CLIENT_UNLOCK_MS ? 15000 : 5000;
   }

@@ -79,6 +79,8 @@ window.MACHTILE_CONFIG = {
   // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
   // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
   stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
+  // station_commands Realtime publication 尚未在正式庫啟用；開啟後仍保留輪詢備援。
+  enableStationCommandRealtime: false,
   // 派工池接單：全部車床 A01–A05＋全部加工中心 B01–B06（2026-10-14 owner「池開加工中心」）。
   dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // machines / v_machine_management_cards 尚未同步舊 MES Station_Type；machine_type 不是多工能力。
@@ -90,6 +92,8 @@ window.MACHTILE_CONFIG = {
   enableFinishButton: true,
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
+  // 關站送出後擋住全畫面，避免等待 Factory 時再按完工或停工。
+  enableFinishOverlay: true,
   finishCloseMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
   enableShortCompletion: true,

@@ -45,6 +45,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.finish-close-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(10, 18, 30, 0.72);
+  color: #fff;
+  text-align: center;
+  pointer-events: all;
+}
+
+.finish-close-overlay[hidden] { display: none; }
+
+.finish-close-overlay strong {
+  max-width: 760px;
+  font-size: clamp(2rem, 7vw, 4.5rem);
+  line-height: 1.2;
+  text-shadow: 0 3px 18px rgba(0, 0, 0, 0.35);
+}
+
+.finish-close-overlay.is-applied { background: rgba(17, 112, 55, 0.86); }
+
 button,
 input,
 textarea,

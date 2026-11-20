@@ -3129,7 +3129,7 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   be.progressRows = [{ process_id: id(304), legacy_output: 208, legacy_fail: 2, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: new Date(now).toISOString(), actual_start_at: new Date(now - 3600000).toISOString() }];
   // 跟正式 config.js 一樣：A 車床標準完工流程開著
   const { context, page, errors } = await newPage(browser, "phone", { backend: be,
-    configExtra: 'enableFinishButton: true, enableFinishClose: true, finishCloseMachines: ["A04"], enableStandardFinishFlow: true, standardFinishFlowMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],' });
+    configExtra: 'enableFinishButton: true, enableFinishClose: true, enableFinishOverlay: true, finishCloseMachines: ["A04"], enableStandardFinishFlow: true, standardFinishFlowMachines: ["A04"], stationCommandMachines: ["A04"], enableStationReport: true, stationReportMachines: ["A04"],' });
   const openFinish = async () => {
     await page.evaluate(({ orderId, processId }) => openFinishReport(orderId, { machine: "A04", processId }), { orderId: procs[1].wo, processId: id(304) });
     await page.locator("#finishSheet.is-open").waitFor({ timeout: 10000 });
@@ -3206,7 +3206,15 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     machine: machtileSingleStationReportState.machineCode, finishOpen: document.getElementById("finishSheet")?.classList.contains("is-open"), type: activeReportType }));
   ok(Boolean(tokens.record) && tokens.record === tokens.sheet, "關站紀錄記下送出時的完工畫面代號", JSON.stringify(tokens));
   ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("關站中"), "等待中：完工畫面顯示關站中");
+  const overlay = page.locator("#finishCloseOverlay");
+  ok(await overlay.isVisible() && (await overlay.innerText()).includes("關站中，請稍等（約 5 秒）"), "關站送出後顯示全畫面遮罩");
+  const stopBlocked = await cardOf(page, "A04").locator('[data-station-cmd="stop"]').click({ trial: true, timeout: 400 }).then(() => false, () => true);
+  ok(stopBlocked, "遮罩期間停工鈕不可按");
+  ok(await page.evaluate(() => !machtileLoadSupabaseJs.promise), "Realtime 旗標關時不載入 SDK，維持純輪詢行為");
   await pollTo("applied", plainUuid);
+  ok(await overlay.isVisible() && (await overlay.innerText()).includes("✔ 已關站"), "applied 顯示已關站大字");
+  await overlay.waitFor({ state: "hidden", timeout: 3000 });
+  ok(true, "applied 遮罩 1.5 秒後自動收起");
   await page.locator("#finishSheet .finish-success-panel").waitFor({ timeout: 5000 });
   ok(await page.locator("#finishSheet.is-open").count() === 1, "關站 applied、沒有下一道 → 完工選擇面板保持開啟");
   ok(await page.locator("#finishSheet [data-standard-finish-other]").isVisible() && await page.locator("#finishSheet [data-standard-finish-skip]").isVisible(), "沒有下一道時只提供選其他工單／回首頁");
@@ -3228,7 +3236,9 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   // (3) 被擋 → 留著並立刻顯示原因
   await openFinish();
   const rejectUuid = await sendCloseFromSheet("a3333333-3333-4333-8333-333333333333");
+  ok(await overlay.isVisible(), "rejected 前遮罩仍顯示");
   await pollTo("code:LOCK_TIMEOUT", rejectUuid);
+  ok(await overlay.isHidden(), "rejected 立即收起遮罩");
   await page.locator("#finishSheet .finish-close-result", { hasText: "這次沒有關成" }).waitFor({ timeout: 15000 });
   ok(await page.locator("#finishSheet.is-open").count() === 1, "關站被擋 → 完工畫面留著");
   ok((await page.locator("#finishSheet .finish-close-result").innerText()).includes("這次沒有關成（系統忙），可以再按一次"), "被擋原因立刻顯示（不用等別的重畫）");
@@ -3351,6 +3361,66 @@ console.log("\n== 390px：報工 applied → 重讀卡片進度（同一筆只�
   await page.waitForFunction(() => !machtileCardRefreshAfterReport.inFlight, null, { timeout: 5000 });
   ok(reads() - before === 2, "讀失敗後下一筆照常讀");
   ok(realErrors(errors).length === 0, "卡片更新情境沒有 JS 錯誤", realErrors(errors).join(" | "));
+  await context.close();
+}
+
+console.log("\n== 390px：Realtime 旗標開（fake）→ terminal 立即處理、只完成一次；頻道失敗靜默保留輪詢 ==");
+{
+  const be = makeBackend();
+  const { context, page, errors } = await newPage(browser, "phone", { backend: be,
+    configExtra: 'stationCommandMachines: ["A04"], enableStationCommandRealtime: true,' });
+  await page.evaluate(() => {
+    window.__stationRealtimeFake = { handlers: [], statuses: [], removed: 0, filters: [] };
+    window.supabase = {
+      createClient() {
+        return {
+          realtime: { setAuth() {} },
+          channel() {
+            const channel = {
+              on(_type, options, handler) {
+                window.__stationRealtimeFake.filters.push(options.filter);
+                window.__stationRealtimeFake.handlers.push(handler);
+                return channel;
+              },
+              subscribe(statusHandler) {
+                window.__stationRealtimeFake.statuses.push(statusHandler);
+                queueMicrotask(() => statusHandler("SUBSCRIBED"));
+                return channel;
+              },
+            };
+            return channel;
+          },
+          removeChannel() { window.__stationRealtimeFake.removed += 1; },
+        };
+      },
+    };
+  });
+  const firstUuid = "d1111111-1111-4111-8111-111111111111";
+  await page.evaluate(async (commandUuid) => {
+    const fields = { orderNo: "XX01202502050012", step: 5, partNo: "HCG-06-01", manufactureIiId: "C011E0ZE2YZJ", expectedSimulationId: "SIM-A04" };
+    await machtileStationCmdRunSubmission({ commandUuid, commandType: "stop", machineCode: "A04", fields, recordFields: fields, startedAt: Date.now() });
+  }, firstUuid);
+  await page.waitForFunction(() => window.__stationRealtimeFake.handlers.length === 1 && Boolean(machtileStationCmd.timers.A04));
+  ok(await page.evaluate((uuid) => window.__stationRealtimeFake.filters[0] === `command_uuid=eq.${uuid}`, firstUuid), "Realtime 只訂閱本 command_uuid 的 UPDATE");
+  ok(await page.evaluate(() => Boolean(machtileStationCmd.pending.A04) && Boolean(machtileStationCmd.timers.A04)), "Realtime 等待期間輪詢備援仍保留");
+  await page.evaluate((uuid) => window.__stationRealtimeFake.handlers[0]({ new: { command_uuid: uuid, command_type: "stop", status: "applied", requested_at: new Date().toISOString(), applied_at: new Date().toISOString() } }), firstUuid);
+  await page.waitForFunction(() => !machtileStationCmd.pending.A04);
+  const afterFirst = await page.evaluate(() => ({ phase: machtileStationCmd.lastResult.A04?.view?.phase, timer: Boolean(machtileStationCmd.timers.A04), removed: window.__stationRealtimeFake.removed }));
+  ok(afterFirst.phase === "applied" && !afterFirst.timer && afterFirst.removed === 1, "Realtime terminal 立即走既有完成處理並停止該筆輪詢", JSON.stringify(afterFirst));
+  await page.evaluate((uuid) => window.__stationRealtimeFake.handlers[0]({ new: { command_uuid: uuid, status: "rejected", reject_code: "LOCK_TIMEOUT" } }), firstUuid);
+  ok(await page.evaluate(() => machtileStationCmd.lastResult.A04?.view?.phase === "applied"), "Realtime 與輪詢競速後 terminal 只處理一次");
+
+  const secondUuid = "d2222222-2222-4222-8222-222222222222";
+  await page.evaluate(async (commandUuid) => {
+    const fields = { orderNo: "XX01202502050012", step: 5, partNo: "HCG-06-01", manufactureIiId: "C011E0ZE2YZJ", expectedSimulationId: "SIM-A04" };
+    await machtileStationCmdRunSubmission({ commandUuid, commandType: "stop", machineCode: "A04", fields, recordFields: fields, startedAt: Date.now() });
+  }, secondUuid);
+  await page.waitForFunction(() => window.__stationRealtimeFake.statuses.length === 2 && Boolean(machtileStationCmd.timers.A04));
+  await page.evaluate(() => window.__stationRealtimeFake.statuses[1]("CHANNEL_ERROR"));
+  ok(await page.evaluate((uuid) => machtileStationCmd.pending.A04?.commandUuid === uuid && Boolean(machtileStationCmd.timers.A04) && !machtileStationCmd.realtime.A04, secondUuid),
+    "Realtime 頻道失敗不顯示錯誤，pending 與輪詢備援繼續");
+  await page.evaluate(() => machtileFinishCloseClearPending("A04"));
+  ok(realErrors(errors).length === 0, "Realtime fake 情境沒有 JS 錯誤", realErrors(errors).join(" | "));
   await context.close();
 }
 
