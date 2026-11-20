@@ -15298,6 +15298,7 @@ const machtileStationCmd = {
   pending: {},                // 機台代號 → pendingRecord（等伺服器結果中）
   lastResult: {},             // 機台代號 → { view, at }（卡片上顯示最後一次結果）
   timers: {},                 // 機台代號 → 輪詢 timer
+  submittingClose: new Set(), // RPC 回來前的同步防雙按鎖（同機台／單／道；有 simulation 才附加）
   sheet: null,                // 目前開著的確認卡
 };
 
@@ -15432,6 +15433,14 @@ function machtileFinishCloseSetResult(code, view, record = null) {
       finishCloseReportCommandUuid: record.finishCloseReportCommandUuid,
     } } : {}),
   };
+  if (applied && closeIdentity?.orderNo && Number(closeIdentity.indexSn) > 0) {
+    const key = `${String(code || "").trim().toUpperCase()}|${String(closeIdentity.orderNo).trim()}|${Number(closeIdentity.indexSn)}`;
+    machtileCardState.latestCloseByOrder.set(key, {
+      command_type: "close", machine_code: code, expected_order_no: closeIdentity.orderNo,
+      expected_index_sn: Number(closeIdentity.indexSn), expected_simulation_id: closeIdentity.simulationId || null,
+      status: "applied", requested_at: new Date().toISOString(), applied_at: new Date().toISOString(),
+    });
+  }
   if (view?.terminal) void machtileLoadCardLatestCloseForMachines([code], { render: true });
 }
 
@@ -15627,6 +15636,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
     serverStatus: flow.result?.status });
   if (!decision?.send) return;
   if (flow.close?.reportCommandUuid === reportCommandUuid) return;
+  const blockedClose = flow.close;
   const identity = { orderNo: args.p_expected_order_no, partNo: args.p_expected_part_no, indexSn: args.p_expected_index_sn,
     simulationId: args.p_expected_simulation_id || null };
   flow.close = { phase: "pending", title: "關站中…", message: "完工報工已成功，正在請 Factory 關閉舊 MES 工站。", reportCommandUuid, identity };
@@ -15634,7 +15644,7 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
   // 送出時開著的完工畫面代號：結果回來時只有「還是這個畫面」才自動關（作業員重開過就不動）
   const finishCloseSheetToken = machtileFinishSheetOpenFor(code) ? machtileReportSheetOpenToken : "";
   const commandUuid = crypto.randomUUID();
-  await machtileStationCmdRunSubmission({
+  const submitResult = await machtileStationCmdRunSubmission({
     commandUuid,
     commandType: "close",
     machineCode: code,
@@ -15665,6 +15675,10 @@ async function machtileFinishCloseAfterAppliedReport(code, args, reportCommandUu
       machtileRenderStationReportSurfaces();
     },
   });
+  if (submitResult?.duplicate) {
+    flow.close = blockedClose;
+    machtileRenderStationReportSurfaces();
+  }
 }
 
 function machtileStationCmdSavePending() {
@@ -16689,6 +16703,11 @@ async function machtileStationCmdRunSubmission(options) {
     previousRecord = null, attemptNumber = 1, validateRow = null,
     onError = null, onAccepted = null, afterRecord = null, rpcName = null, payloadOverride = null,
   } = options;
+  const closeKey = commandType === "close" ? core.closeSubmissionKey({ machineCode, ...fields }) : "";
+  if (closeKey && core.closeSubmissionBlocked({ machineCode, ...fields }, machtileStationCmd.submittingClose, machtileStationCmd.pending[machineCode]))
+    return { ok: false, duplicate: true };
+  if (closeKey) machtileStationCmd.submittingClose.add(closeKey);
+  try {
   const payload = payloadOverride || core.submitPayload({ commandUuid, commandType, machineCode, ...fields });
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(new Error("timeout")), core.SUBMIT_TIMEOUT_MS) : null;
@@ -16754,6 +16773,9 @@ async function machtileStationCmdRunSubmission(options) {
   else if (!view.needsConfirmation) machtileStationCmdPoll(machineCode);
   machtileStationCmdRerender();
   return { ok: true, payload, row, record, view };
+  } finally {
+    if (closeKey) machtileStationCmd.submittingClose.delete(closeKey);
+  }
 }
 
 async function machtileStationCmdSubmit() {
@@ -19304,11 +19326,13 @@ function renderMachineCard(machine) {
   const pickActions = stationCmd.pickPhase ? stationCmd.pickActions || [] : null;
   // 這台有一筆「接錯了，退回」在等結果 → 報工／完工先鎖住（旗標關＝永遠 false）
   const returnClaimLocked = machtileReturnClaimLocks(machine.code || machine.name);
+  const closeState = order ? machtileStationCmdCore?.closeCardState(machtileCardCloseRow(order, machine)) : null;
+  const finishClosed = closeState?.finishDisabled === true;
   const reportAction = pickActions && !pickActions.includes("report") ? "" : order && canReport && !returnClaimLocked
     ? `<button type="button" class="machine-report-button" ${reportAttr}>${escapeHtml(machtileTranslate("report"))}</button>`
     : `<button type="button" class="machine-report-button" data-no-detail disabled>${escapeHtml(machtileTranslate("report"))}</button>`;
   const finishAction = (!pickActions || pickActions.includes("finish")) && machtileFinishButtonEnabled() && order && canReport && !returnClaimLocked
-    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}">${escapeHtml(machtileTranslate("finish_button"))}</button>`
+    ? `<button type="button" class="machine-finish-button" data-no-detail data-report="${escapeHtml(order.id)}" data-open-report-type="finish" data-report-machine="${escapeHtml(machine.name)}" data-report-process="${escapeHtml(order.processId || "")}" aria-label="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}" title="${escapeHtml(machtileTranslate(machtileFinishCloseEnabled(machine.name) ? "finish_work_close_hint" : "finish_work_hint"))}"${finishClosed ? " disabled" : ""}>${escapeHtml(machtileTranslate("finish_button"))}</button>`
     : "";
 
   return `
@@ -27097,6 +27121,8 @@ function machtileRenderSingleStationReportBase() {
   machtileUpdateReportFailReason();
   const row = machtileSyncSingleStationReportRow();
   const flow = row ? machtileStationReportState(row) : null;
+  const closePending = activeReportType === "finish" && flow?.close?.phase === "pending";
+  if (closePending) { submit.disabled = true; submit.setAttribute("data-i18n", "finish_close_processing"); submit.textContent = machtileTranslate("finish_close_processing"); }
   const closeIdentity = flow?.close?.identity;
   const currentLegacyIdentity = order?.processId
     ? machtileBatchState.stationReportIdentityByProcess.get(String(order.processId))
@@ -30984,7 +31010,9 @@ function machtileCardCloseRow(order, machine) {
       legacy_snapshot: local.view?.needsConfirmation ? { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } : null,
     };
   }
-  return machtileCardState.latestCloseByOrder.get(`${code}|${orderNo}|${step}`);
+  const row = machtileCardState.latestCloseByOrder.get(`${code}|${orderNo}|${step}`);
+  const actualStartAt = machtileCardActivityOf(order)?.actualStartAt || order?.actualStartAt || null;
+  return machtileStationCmdCore?.appliedCloseIsCurrent(row, { machineCode: code, orderNo, step, actualStartAt }) ? row : null;
 }
 
 // 今天（台灣日期）的 dailyStart／noon／finish：卡片底部「今日已開工／已完工」與總覽「今日報工狀態」三格共用這一次查詢。
@@ -31067,7 +31095,11 @@ function machtileCardFooterStatus(order, machine) {
     if (label.tone === "finished" && machtileCardState.closeStatus === "ok") {
       const code = String(machine?.code || machine?.name || order.machine || "").trim().toUpperCase();
       const row = machtileCardCloseRow(order, machine);
-      const close = machtileStationCmdCore.closeCardState(row);
+      const close = machtileStationCmdCore.closeCardState(row, { machineCode: code, orderNo: order.id, step: order.stationStep,
+        actualStartAt: machtileCardActivityOf(order)?.actualStartAt || order.actualStartAt || null });
+      if (close?.kind === "applied") {
+        return `<span class="card-today-status is-finished" data-today-status="closed" data-i18n="finish_close_applied"${title}>${escapeHtml(machtileTranslate("finish_close_applied"))}</span>`;
+      }
       if (close && close.kind !== "applied") {
         const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
         const reason = close.reason || machtileTranslate("finish_close_unknown");

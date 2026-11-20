@@ -21,12 +21,18 @@ eq("pending close", c.closeCardState({ status: "pending" }), { kind: "pending" }
 eq("claimed close", c.closeCardState({ status: "claimed" }), { kind: "pending" });
 eq("soft previous-step guard", c.closeCardState({ status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } }), { kind: "confirm" });
 eq("other rejection", c.closeCardState({ status: "rejected", reject_code: "LOCK_TIMEOUT" }), { kind: "rejected", reason: "LOCK_TIMEOUT" });
-eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied" });
+eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied", text: "已關站", finishDisabled: true });
 const newestClose = c.latestCloseByOrder([
   { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } },
   { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "applied" },
 ]);
-eq("ordered rows keep newest command", newestClose.get("A03|WO-1|3").status, "rejected");
+eq("先 rejected 後 applied：applied 優先", newestClose.get("A03|WO-1|3").status, "applied");
+const appliedThenRejected = c.latestCloseByOrder([
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "rejected" },
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "applied" },
+]);
+eq("applied 後 rejected 序列仍顯示已關站", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).text, "已關站");
+eq("applied 後完工鈕 disabled", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).finishDisabled, true);
 
 console.log("== parseFlag／enabledForMachine ==");
 eq("沒設 → 關", c.flagIsOn(c.parseFlag(undefined)), false);
@@ -48,6 +54,20 @@ eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), 
 eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: true, reason: "" });
+eq("close 防重 key：同機台同單同道同 simulation 相同", c.closeSubmissionKey({ machineCode: " a04 ", orderNo: "xx01", step: 2, expectedSimulationId: "SIM-1" }), "A04|XX01|2|SIM-1");
+eq("close 防重 key：缺 simulation fail closed", c.closeSubmissionKey({ machineCode: "A04", orderNo: "XX01", step: 2 }), "A04|XX01|2");
+const closeFields = { machineCode: "A04", orderNo: "XX01", step: 2, expectedSimulationId: "SIM-1" };
+eq("close 雙擊：第一筆 RPC 等待中擋第二筆", c.closeSubmissionBlocked(closeFields, new Set([c.closeSubmissionKey(closeFields)]), null), true);
+eq("close 雙擊：第一筆已進 pending 仍擋第二筆", c.closeSubmissionBlocked(closeFields, new Set(), closeFields), true);
+eq("close 重送：needsConfirmation pending 仍是阻擋者", c.closeSubmissionBlocked(closeFields, new Set(), { ...closeFields, view: { needsConfirmation: true } }), true);
+eq("close 重送：pending 11 分鐘解鎖後不再擋", c.closeSubmissionBlocked(closeFields, new Set(), { ...closeFields, startedAt: 1, lastStatus: "pending" }, 11 * 60 * 1000 + 2), false);
+eq("close 防重：不同道不擋", c.closeSubmissionBlocked({ ...closeFields, step: 3 }, new Set([c.closeSubmissionKey(closeFields)]), closeFields), false);
+const appliedRow = { status: "applied", machine_code: "A04", expected_order_no: "XX01", expected_index_sn: 2, requested_at: "2026-11-20T00:10:00Z" };
+eq("close applied：目前同單同道且關站晚於最近開工", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, actualStartAt: "2026-11-20T00:00:00Z" }), true);
+eq("close applied：同單同道最近又開工則舊關站失效", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, actualStartAt: "2026-11-20T00:20:00Z" }), false);
+eq("close applied：目前掛不同單道可保留歷史結果", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX02", step: 3, actualStartAt: "2026-11-20T00:20:00Z" }), true);
+eq("close applied：無開工時間只接受 24 小時內", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, nowMs: Date.parse("2026-11-21T00:09:00Z") }), true);
+eq("close applied：無開工時間拒絕超過 24 小時", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, nowMs: Date.parse("2026-11-21T00:11:00Z") }), false);
 for (const status of ["applied-late", "rejected", "previewed", "unknown"]) {
   eq(`完工關站：server ${status} 不送`, c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: status }), { send: false, reason: "report_not_applied" });
 }
