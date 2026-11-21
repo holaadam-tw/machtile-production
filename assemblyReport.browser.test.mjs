@@ -1,5 +1,5 @@
 // 組裝站平板報工（assemblyReport.js）瀏覽器測試：假 Supabase（攔截所有網路），不碰正式環境。
-// 涵蓋：旗標關＝完全不變；站上多張單列表；逐單開工；兩位報工人報工；不良＋軟性確認；委外代收貨對話框；
+// 涵蓋：旗標關＝完全不變；站上多張單列表；逐單開工；兩位報工人報工；不良＋軟性確認；超過工單量軟性確認（EXCEEDS_ORDER_QTY）；委外代收貨對話框；
 // 完工（帶最後件數→報工＋關站、不帶件數→直接關站）；G01 閥件／幫浦分線；越南文。
 import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
@@ -108,8 +108,12 @@ function fakeFor(st) {
               expected_doc4_fingerprint: "7".repeat(64), receipt_mode: "count", receipt_required_qty: 20, previous_outsource_doc4_numbers: ["D4-77"],
               receipt_steps: [{ index_sn: 2, process_name: "電鍍", vendor_name: "甲電鍍", unconfirmed_qty: 20 }] } }]);
         }
-        const soft = Number(b.p_fail_qty) >= 2 && !(b.p_acks || []).length;
-        const code = soft ? "HIGH_FAIL_RATIO" : "";
+        // st.overQty：模擬 Factory 預覽「良品超過工單剩餘量」＝軟性 EXCEEDS_ORDER_QTY（allowed=false、hard=false）
+        const order = orders.find((o) => o.wo === b.p_expected_order_no);
+        const reportedGood = order ? 10 + st.upserts.filter((u) => u.p_payload?.process_id === order.pid).reduce((s, u) => s + Number(u.p_payload.completed_qty || 0), 0) : 0;
+        const overQty = st.overQty && order && Number(b.p_good_qty) > order.qty - reportedGood && !(b.p_acks || []).includes("EXCEEDS_ORDER_QTY");
+        const soft = overQty || (Number(b.p_fail_qty) >= 2 && !(b.p_acks || []).length);
+        const code = overQty ? "EXCEEDS_ORDER_QTY" : soft ? "HIGH_FAIL_RATIO" : "";
         return json([{ command_uuid: b.p_command_uuid, command_type: "report_preview", status: "previewed",
           preview_result: { status: "previewed", allowed: !soft, hard: false, guard_code: code, available: 999,
             legacy_snapshot: { report: { guard: { code, hard: false, message: soft ? "needs ack" : "", Details: { available: 999 } } } } } }]);
@@ -334,6 +338,47 @@ ok(g1Upsert.p_payload.report_payload.assembly_line === "valve", "G01 App 紀錄�
 ok(errors.length === 0, "flag on: 沒有頁面錯誤");
 ok(st.blocked.length === 0, "沒有連到任何外部網址（正式 Supabase 不會被碰到）");
 await context.close();
+
+// ---------------------------------------------------------------- 2b. F01 良品超過工單剩餘量＝軟性 EXCEEDS_ORDER_QTY：要人確認，不是硬擋
+{
+  const sq = makeState(); sq.overQty = true;
+  const { context: cq, page: pq, errors: eq } = await openApp(sq, cfgOn);
+  await pq.locator("#dashboardView [data-assembly-entry]").click();
+  await orderCard(pq, "WO-F1").waitFor();
+  const q1 = orderCard(pq, "WO-F1");
+  const expectText = "這次會超過工單數量，數字沒錯就再按一次送出。";
+  const f1Calls = () => sq.reportSubmits.filter((r) => r.p_expected_order_no === "WO-F1");
+  // 工單 50、已報 10 → 剩 40；這次報 45＝超過
+  // 取消路徑：預覽回軟性 → 顯示確認 → 按取消 → 不再送任何東西
+  await q1.locator("[data-asm-report]").click();
+  await q1.locator("[data-asm-good]").fill("45");
+  await q1.locator("[data-asm-submit]").click();
+  await q1.locator("[data-asm-ack]").waitFor();
+  ok((await q1.locator("[data-asm-ack]").innerText()).includes(expectText), "超量：預覽 EXCEEDS_ORDER_QTY → 顯示「這次會超過工單數量，數字沒錯就再按一次送出。」");
+  ok((await q1.locator("[data-asm-result]").innerText()).includes("需要確認"), "超量：結果列顯示「需要確認」（不是報工失敗）");
+  ok(f1Calls().length === 1 && f1Calls()[0].p_preview === true && f1Calls()[0].p_good_qty === 45 && !f1Calls()[0].p_acks, "超量：只送了一次預覽（良品 45、不帶 acks）");
+  await q1.locator("[data-asm-ack-cancel]").click();
+  await q1.locator("[data-asm-result]").waitFor();
+  ok((await q1.locator("[data-asm-result]").innerText()).includes("已取消，這次沒有報工"), "超量取消：顯示「已取消，這次沒有報工。」");
+  await pq.waitForTimeout(300);
+  ok(f1Calls().length === 1 && sq.upserts.length === 0 && await q1.locator("[data-asm-ack]").count() === 0, "超量取消：沒有正式報工、沒有 App 紀錄、確認框收掉");
+  // 確認路徑：重新送出 → 新預覽 → 確認 → 正式報工帶 p_acks＝EXCEEDS_ORDER_QTY
+  await q1.locator("[data-asm-submit]").click();
+  await q1.locator("[data-asm-ack]").waitFor();
+  ok((await q1.locator("[data-asm-ack]").innerText()).includes(expectText) && f1Calls().length === 2 && f1Calls()[1].p_preview === true, "超量重送：重新預覽、再次顯示超量確認");
+  await pq.screenshot({ path: path.join(shotDir, "10-f01-exceeds-order-confirm.png"), fullPage: true });
+  await q1.locator("[data-asm-ack-confirm]").click();
+  await q1.locator("[data-asm-result].is-ok").waitFor();
+  const [, preview2, final] = f1Calls();
+  ok(f1Calls().length === 3 && final.p_preview === false, "超量確認：確認後只多送一筆正式報工（沒有被硬擋）");
+  ok(JSON.stringify(final.p_acks) === JSON.stringify(["EXCEEDS_ORDER_QTY"]), "超量確認：正式報工帶 p_acks＝[EXCEEDS_ORDER_QTY]");
+  ok(final.p_good_qty === 45 && final.p_fail_qty === 0 && final.p_manufacture_ii_id === "MII-F1", "超量確認：正式報工良品 45、不良 0、WO-F1 的 ManufactureII Id");
+  ok(final.p_command_uuid !== preview2.p_command_uuid && final.p_client_guard_snapshot?.preview_command_uuid === preview2.p_command_uuid, "超量確認：用新 uuid，guard snapshot 指向剛剛那次預覽");
+  const qUpsert = sq.upserts.find((u) => u.p_payload?.process_id === id(301));
+  ok(sq.upserts.length === 1 && qUpsert?.p_report_uuid === final.p_command_uuid && qUpsert.p_payload.completed_qty === 45, "超量確認：App 紀錄一筆、report_uuid＝正式報工 uuid、件數 45");
+  ok(eq.length === 0 && sq.blocked.length === 0, "超量：沒有頁面錯誤、沒有外部連線");
+  await cq.close();
+}
 
 // ---------------------------------------------------------------- 3. 越南文＋平板直式
 {
