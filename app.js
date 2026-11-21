@@ -16976,7 +16976,12 @@ function machtileLoadSupabaseJs() {
   if (machtileLoadSupabaseJs.promise) return machtileLoadSupabaseJs.promise;
   machtileLoadSupabaseJs.promise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    // Exact version + SRI: a floating "@2" would let a new upstream release reach the shop floor untested.
+    // Use the published dist/umd/supabase.js (already minified). jsDelivr generates supabase.min.js on the fly
+    // and says not to use SRI on generated files. To upgrade: change the version AND recompute the sha384.
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js";
+    script.integrity = "sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ";
+    script.crossOrigin = "anonymous";
     script.async = true;
     script.onload = () => window.supabase?.createClient ? resolve(window.supabase) : reject(new Error("SUPABASE_JS_UNAVAILABLE"));
     script.onerror = () => reject(new Error("SUPABASE_JS_LOAD_FAILED"));
