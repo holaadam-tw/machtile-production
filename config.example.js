@@ -81,9 +81,11 @@ window.MACHTILE_CONFIG = {
   shortCompletionMachines: [],
   // 組裝站平板報工（owner 2026-10-31 三週計畫）：false＝入口與畫面都不出現、不讀任何組裝資料。
   // 開之前要先有：派工橋同步這些站的工序（含 manufacture_ii_id）、雲端 machines 有這些站、Factory ReportPilotStations／
-  // 站別目錄 DispatchMulti 含這些站。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
+  // 站別目錄須為 MultiOrder 組裝站（不等於 CNC DispatchMulti）。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
   assemblyReportEnabled: false,
   assemblyStations: ["F01"],
+  // 只有明列站別可從 App 完工關站；空或未設定＝全部關閉（fail closed）。
+  assemblyCloseStations: [],
   // 依客戶開（owner 2026-10-31）：登入者 tenant_id 在這個清單裡才開；租戶不明或不在清單＝關。
   assemblyReportTenants: [],
   // owner 2026-10-31：組裝不會發現不良、測試台才會 → 只有這些站顯示「有不良品」，其他組裝站一律送不良 0。
