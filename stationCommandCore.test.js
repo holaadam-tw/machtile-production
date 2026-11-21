@@ -509,12 +509,20 @@ console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET�
   eq("ALREADY_CLOSED 沒有工廠說明 → 固定句", [noMsg.title, noMsg.text, noMsg.detail, noMsg.factoryMessage, noMsg.closedAt], ["先前已關站", fallback, "", false, null]);
   eq("ALREADY_CLOSED 空白說明 → 固定句", c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: "   " }, "close", 0).text, fallback);
   eq("ALREADY_CLOSED 文案沒有「核對／沒有關站／未完成」", /核對|沒有關站|未完成|待核對/.test(withMsg.title + withMsg.text + noMsg.title + noMsg.text), false);
-  eq("ALREADY_CLOSED 在沒動清單、不在已改清單", [c.LEGACY_UNTOUCHED_CODES.includes("ALREADY_CLOSED"), c.LEGACY_CHANGED_CODES.includes("ALREADY_CLOSED")], [true, false]);
+  eq("ALREADY_CLOSED 不在全域沒動清單、也不在已改清單", [c.LEGACY_UNTOUCHED_CODES.includes("ALREADY_CLOSED"), c.LEGACY_CHANGED_CODES.includes("ALREADY_CLOSED")], [false, false]);
   eq("rejectText：ALREADY_CLOSED 有白話", c.rejectText("ALREADY_CLOSED").text, fallback);
+  for (const type of ["start", "stop", "claim_next", "stop_report", "takeover"]) {
+    const other = c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: msg }, type, 0);
+    eq(`非關站 ${type}＋ALREADY_CLOSED → 維持不認得代碼的保守行為`,
+      [other.title, other.text, other.detail, other.tone, other.alreadyClosed],
+      ["結果待核對", "沒有完成，舊 MES 狀態請核對", msg, "warn", undefined]);
+  }
   // 卡片：不寫「關站沒成功，請再按完工」，也不鎖完工鈕（機台上可能已經是別張單）
   const cardRow = { status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: msg, machine_code: "A04", expected_order_no: "WO-9", expected_index_sn: 2, requested_at: "2026-11-21T05:10:00Z" };
   eq("卡片 ALREADY_CLOSED → already_closed（不鎖完工）", c.closeCardState(cardRow), { kind: "already_closed", reason: msg });
   eq("卡片 ALREADY_CLOSED：這筆之後沒有重新開工 → 顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 2, actualStartAt: "2026-11-21T01:00:00Z" })?.kind, "already_closed");
+  eq("卡片 ALREADY_CLOSED：目前是別張工單 → 不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-10", step: 2, actualStartAt: "2026-11-21T01:00:00Z" }), null);
+  eq("卡片 ALREADY_CLOSED：目前是別道 → 不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 3, actualStartAt: "2026-11-21T01:00:00Z" }), null);
   eq("卡片 ALREADY_CLOSED：之後又重新開工 → 過時不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 2, actualStartAt: "2026-11-21T06:00:00Z" }), null);
   eq("同一道先 applied 後 ALREADY_CLOSED → 卡片仍是已關站", c.closeCardState(c.latestCloseByOrder([cardRow, { ...cardRow, status: "applied", reject_code: null, reject_message: null, requested_at: "2026-11-21T04:57:00Z" }]).get("A04|WO-9|2")).kind, "applied");
   // 回歸：未知代碼照舊保守

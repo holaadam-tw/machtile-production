@@ -3351,6 +3351,16 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
     ok(await page.evaluate(() => machtileTranslate("card_finish_close_already_closed") === "Đã đóng từ trước, không cần đóng lại"), "vi：卡片底部用語");
     await page.evaluate(() => window.MachTileI18n.setLanguage("zh-Hant"));
     ok(await page.evaluate(() => machtileTranslate("card_finish_close_already_closed") === "先前已關站，不用再關"), "zh：卡片底部用語");
+    ok(await page.evaluate(() => ["start", "stop", "claim_next", "stop_report", "takeover"].every((type) => {
+      const view = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: "工廠原文" }, type, 0);
+      return view.title === "結果待核對" && view.text === "沒有完成，舊 MES 狀態請核對"
+        && view.detail === "工廠原文" && view.alreadyClosed === undefined;
+    })), "非關站類型＋ALREADY_CLOSED → 瀏覽器維持不認得代碼的保守行為");
+    ok(await page.evaluate(() => {
+      const row = { status: "rejected", reject_code: "ALREADY_CLOSED", machine_code: "A04", expected_order_no: "WO-OLD", expected_index_sn: 5, requested_at: "2026-11-21T05:10:00Z" };
+      return MachTileStationCommandCore.closeCardState(row, { machineCode: "A04", orderNo: "WO-NEW", step: 5, actualStartAt: "2026-11-21T01:00:00Z" }) === null
+        && MachTileStationCommandCore.closeCardState(row, { machineCode: "A04", orderNo: "WO-OLD", step: 6, actualStartAt: "2026-11-21T01:00:00Z" }) === null;
+    }), "別張工單或別道卡片不顯示 ALREADY_CLOSED 底部措辭");
     // 回歸：未知代碼照舊（關站未完成＋工廠說明；不觸發重讀）
     const refreshBefore = await page.evaluate(() => window.__acRefreshCalls.length);
     const shownUnknown = await runAc("ac555555-5555-4555-8555-555555555555", { code: "SOME_FUTURE_CODE", message: "工廠新原因" }, "關站未完成");

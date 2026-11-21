@@ -15429,8 +15429,8 @@ function machtileFinishComboWrite(code, value) {
 const machtileStandardFinishHandledClaims = new Set();
 
 // ALREADY_CLOSED（這一道先前就關過了，這次沒有寫任何東西）：標題走翻譯；內文＝工廠那句原文，沒有才用翻譯過的固定句。
-function machtileStationCmdAlreadyClosedText(view) {
-  if (view?.alreadyClosed !== true) return null;
+function machtileStationCmdAlreadyClosedText(view, commandType) {
+  if (commandType !== "close" || view?.alreadyClosed !== true) return null;
   return { title: machtileTranslate("station_close_already_closed_title"),
     text: view.factoryMessage ? String(view.text || "") : machtileTranslate("station_close_already_closed_fallback") };
 }
@@ -15441,7 +15441,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
   const closeIdentity = flow.close?.identity || null;
   const applied = view?.phase === "applied";
   const shortQty = Number(view?.shortQty || 0);
-  const alreadyClosed = machtileStationCmdAlreadyClosedText(view);
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, "close");
   const title = applied
     ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
     : alreadyClosed ? alreadyClosed.title : machtileTranslate("finish_close_rejected_title");
@@ -16906,7 +16906,7 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdUnsubscribe(code);
   machtileStationCmdSavePending();
-  const alreadyClosed = machtileStationCmdAlreadyClosedText(view);
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, record.commandType);
   if (alreadyClosed) { view.title = alreadyClosed.title; view.text = alreadyClosed.text; }
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "start") {
