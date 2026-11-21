@@ -137,6 +137,13 @@
     if (status === "pending" || status === "claimed") return { kind: "pending" };
     const guard = row.legacy_snapshot?.guard || {};
     if (status === "rejected" && text(guard.code) === "PREVIOUS_STEP_OPEN" && guard.hard === false) return { kind: "confirm" };
+    // ALREADY_CLOSED＝這一道先前就關過了、這次沒有寫任何東西：卡片不能寫「關站沒成功，請再按完工」。
+    // 不設 finishDisabled（這次送的關站沒有執行；機台上可能已經是別張單）。同一道在這筆之後又重新開工 → 這筆已過時，不顯示。
+    if (status === "rejected" && text(row.reject_code).toUpperCase() === "ALREADY_CLOSED") {
+      const sentAt = Date.parse(row.requested_at), startedAt = Date.parse(current?.actualStartAt);
+      if (Number.isFinite(startedAt) && Number.isFinite(sentAt) && sentAt <= startedAt) return null;
+      return { kind: "already_closed", reason: text(row.reject_message) };
+    }
     return { kind: "rejected", reason: text(row.reject_message) || text(row.reject_code) };
   }
 
@@ -465,6 +472,8 @@
     ZERO_REPORTED: "這一道還沒有報工數量，不能完工關站；請先報工",
     LOCK_TIMEOUT: "這次沒有關成（系統忙），可以再按一次",
     STILL_RUNNING: "這筆仍在生產中，沒有關站；請先停工再試。",
+    // 工廠端新代碼（旗標後）：這一道先前就關過了，這次送的關站沒有執行、什麼都沒寫。有 reject_message 時畫面直接用工廠那句。
+    ALREADY_CLOSED: "這一道先前已經關站完成，不用再關。請重新整理畫面。",
     // 管理員路徑：伺服器在建指令前就拒絕（舊 MES 沒動）。正常是 submit 錯誤；萬一出現在 reject_code 也給同樣白話。
     ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
     ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
@@ -479,6 +488,7 @@
     ORDER_CHANGED_DURING_APPLY: "舊 MES 已改（單剛好被換）",
     OUTCOME_UNKNOWN: "結果不確定",
     INTERNAL_ERROR: "結果不確定",
+    ALREADY_CLOSED: "先前已關站",
   });
   // 舊 MES 已經被改過（全部或部分）的代碼
   const LEGACY_CHANGED_CODES = Object.freeze(["LEGACY_APPLIED_LATE", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY"]);
@@ -489,7 +499,7 @@
     "ORDER_MISMATCH", "INDEX_SN_MISMATCH", "PART_NO_MISMATCH", "MII_NOT_FOUND", "MII_CLOSED", "OPERATOR_NOT_SET", "OPERATOR_UNKNOWN",
     "ALREADY_RUNNING", "ALREADY_STOPPED", "NOT_STARTED", "WORK_ORDER_NOT_FOUND", "APS_SIM_NOT_FOUND", "LABEL_DATA_INVALID",
     "RMS_UNAVAILABLE", "LEGACY_REJECTED", "WRITE_TARGET_DENIED", "LOCK_TIMEOUT", "STILL_RUNNING", "ZERO_REPORTED", "OPERATOR_LIST_TOO_LONG", "NEED_PAUSED",
-    "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED",
+    "ADMIN_LEGACY_ID_MISSING", "ADMIN_SUBMIT_DISABLED", "ALREADY_CLOSED",
   ]);
   const UNTOUCHED_FALLBACK_TEXT = "舊 MES 沒有套用這次指令。";
   const UNKNOWN_CODE_TEXT = "沒有完成，舊 MES 狀態請核對";
@@ -566,6 +576,13 @@
         const detail = text(row.reject_message);
         return { phase: "rejected", terminal: false, needsConfirmation: true, tone: "warn", title: "關站前請確認",
           text: detail || "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", code: r.code, detail: "" };
+      }
+      if (r.code === "ALREADY_CLOSED") {
+        // 不是這次關站成功（phase 仍是 rejected、不給 nextStep／不鎖完工），也不是錯誤：平靜告知＋請重新整理。
+        // 內文＝工廠那句原文（已含單號／道次／時間）；沒有才用固定句。factoryMessage 給畫面判斷要不要翻譯固定句。
+        const snapshot = legacySnapshot(row);
+        return { phase: "rejected", terminal: true, tone: "warn", title: REJECT_TITLE.ALREADY_CLOSED, text: r.detail || r.text, code: r.code, detail: "",
+          alreadyClosed: true, factoryMessage: Boolean(r.detail), closedAt: text(snapshot.closed_at) || null };
       }
       const special = REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
