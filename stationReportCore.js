@@ -535,7 +535,7 @@
     }
     if (!softRejectEnabled(ack, options)) throw new ContractError("INVALID_ACK", "此項目不能以再次確認略過。");
     if (ack === OVER_PREVIOUS_ACK) reportNote = overPreviousReportNote(reportNote);
-    if (ack === "OLD_ORDER_NEWER_OPEN" && !String(previousArgs?.p_report_note || "").trim()) throw new ContractError("REPORT_NOTE_REQUIRED", "報在舊工單須填原因。");
+    if (ack === "OLD_ORDER_NEWER_OPEN" && !String(reportNote || "").trim()) throw new ContractError("REPORT_NOTE_REQUIRED", "報在舊工單須填原因。");
     if (String(reportNote || "").length > 500) throw new ContractError("INVALID_REPORT_NOTE", "備註不可超過 500 字。");
     const acks = [...new Set([...(previousArgs.p_acks || []), ack])];
     return { ...previousArgs, p_command_uuid: nextCommandUuid, p_preview: false, p_report_note: reportNote || null, p_acks: acks };

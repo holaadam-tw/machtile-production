@@ -210,6 +210,10 @@ check("soft-guard retry uses a new UUID and adds only a contract ack", () => {
   assert.deepEqual(retried.p_acks, ["PREV_OUTSOURCE_UNCONFIRMED"]);
   assert.throws(() => core.retryWithAck(previous, "PREV_OUTSOURCE_UNCONFIRMED", UUID_PREVIEW), { code: "COMMAND_UUID_REQUIRED" });
   assert.throws(() => core.retryWithAck(previous, "QTY_EXCEEDS_AVAILABLE", UUID_RETRY), { code: "INVALID_ACK" });
+  // 旗標關也適用：OLD_ORDER 的「須填原因」看的是這次重送的備註（soft 擋住後才補填），不是預覽當下的舊備註。
+  assert.throws(() => core.retryWithAck({ ...previous, p_report_note: null }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY), { code: "REPORT_NOTE_REQUIRED" });
+  assert.equal(core.retryWithAck({ ...previous, p_report_note: null }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY, "擋住後才補的原因").p_report_note, "擋住後才補的原因");
+  assert.throws(() => core.retryWithAck({ ...previous, p_report_note: "預覽當下的舊備註" }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY, "  "), { code: "REPORT_NOTE_REQUIRED" });
 });
 
 check("over-previous reason guard is flag-gated and validates all three reason choices", () => {
