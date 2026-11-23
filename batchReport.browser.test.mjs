@@ -106,10 +106,25 @@ async function fake(route) {
         reject_message: "委外未收貨明細已改變，請重新預覽後再送。", preview_result: null,
         legacy_snapshot: { report: { command_uuid: body.p_command_uuid, guard: { code, hard: true } }, guard: { code, hard: true } } }]);
     }
+    // Real hard quantity shape (shadow 2026-11-13 r2-a-preview-163-flag-off.log): previewed, allowed:false, hard:true,
+    // QTY_EXCEEDS_AVAILABLE, remaining quantity at preview_result.available and guard.Details.available/tol/requested.
+    if (body.p_preview && stationScenario === "qty-a04" && body.p_expected_order_no === "WO-A04") {
+      const code = "QTY_EXCEEDS_AVAILABLE";
+      const requested = body.p_good_qty + body.p_fail_qty;
+      const available = Math.max(0, requested - 2); // two pieces too many
+      const message = `第 1 道只夠再報 ${available} 件，請先報前一道或找生管。`;
+      return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
+        preview_result: { status: "previewed", allowed: false, hard: true, guard_code: code, message, available,
+          previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 140,
+          legacy_snapshot: { report: { guard: { code, hard: true, message, Details: { available, tol: 0, requested } } } } } }]);
+    }
     if (body.p_preview) {
       const soft = stationScenario === "ack" || (stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04");
       const code = soft ? "HIGH_FAIL_RATIO" : "";
       const preview = { status: "previewed", allowed: !soft, hard: false, guard_code: code, available: 999,
+        ...(stationScenario === "ack-a04" && body.p_expected_order_no === "WO-A04" ? {
+          available: 40, previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 140,
+        } : {}),
         legacy_snapshot: { report: { guard: { code, hard: false, message: soft ? "needs ack" : "", Details: { available: 999 } } } } };
       return json([{ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: preview }]);
     }
@@ -242,6 +257,20 @@ await rootView.locator('[data-batch-row="A05"] [data-batch-current]').fill("60")
 await rootView.locator("[data-batch-submit]").click();
 await page.waitForFunction(() => document.querySelector('[data-batch-needs-confirmation="A04"]') && document.querySelector('[data-batch-row="A05"] .batch-result')?.textContent.includes("✓"));
 ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-panel]').isVisible(), "preview needing acknowledgement expands the panel with a confirmation marker");
+const positiveLimitHint = await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').innerText();
+ok(positiveLimitHint === "目前最多可報 40 件（上一道 A01 已報 140 件）", `batch card shows N>0 from structured preview fields: ${positiveLimitHint}`);
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  Object.assign(flow.result.preview_result, { available: 0, previous_station_code: null, previous_step_name: "熱處理", previous_reported_good: 140 });
+  machtileRenderStationReportSurfaces();
+});
+ok((await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').innerText()) === "等委外收貨後才能報", "batch card shows the outsource N=0 wait hint");
+await page.evaluate(() => {
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  delete flow.result.preview_result.previous_reported_good;
+  machtileRenderStationReportSurfaces();
+});
+ok(await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').count() === 0, "old Factory payload without additive fields shows no new hint");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A04" && !x.p_preview).length === 0, "ack row is not submitted automatically");
 ok(stationSubmits.slice(ackStart).filter((x) => x.p_expected_order_no === "WO-A05" && !x.p_preview).length === 1, "other rows continue after an acknowledgement is required");
 
@@ -338,6 +367,30 @@ await rootView.locator("[data-batch-submit]").click();
 await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"]')?.classList.contains("has-error"));
 ok(stationSubmits.slice(errorStart).filter((x) => !x.p_preview).length === 0, "preview error never submits that row");
 ok((await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).trim().length > 0, "preview error is shown on the card");
+
+// Owner 2026-11-13: a hard quantity reject in the batch card says the largest machine total that fits.
+await page.waitForTimeout(1500);
+await page.evaluate(() => {
+  const row = machtileBatchRow("A04"); row.stationReport = null; row.result = null; row.error = "";
+  row.processId = "00000000-0000-4000-8000-000000000304"; row.operatorId = machtileBatchState.users[0].id;
+  machtileBatchState.stationReportIdentityByProcess.set("00000000-0000-4000-8000-000000000304", { legacy_index_sn: 1, manufacture_ii_id: "MII-A04", simulation_id: "SIM-A04", part_no: "D-1" });
+  machtileRenderBatchReport();
+});
+stationScenario = "qty-a04";
+const qtyStart = stationSubmits.length;
+await rootView.locator('[data-batch-row="A04"] [data-batch-current]').fill("180");
+await rootView.locator("[data-batch-submit]").click();
+await page.waitForFunction(() => document.querySelector('[data-batch-row="A04"]')?.classList.contains("has-error"));
+const qtySent = stationSubmits.slice(qtyStart);
+ok(qtySent.length === 1 && qtySent[0].p_preview === true, `hard quantity preview never submits a final: ${JSON.stringify(qtySent.map((x) => x.p_preview))}`);
+const qtyMax = 178; // 180 on the machine, two pieces over the remaining quantity
+ok(qtySent[0].p_good_qty + qtySent[0].p_fail_qty >= 2, "fixture sends at least two pieces");
+const qtyText = (await rootView.locator('[data-batch-row="A04"] .batch-result').innerText()).trim();
+ok(qtyText === `這一道最多只能報 ${qtyMax} 件（目前填 180 件）。請改成 ${qtyMax} 件以內再送出；機台上真的做比較多，請告訴生管。`, `batch card names the max machine total: ${qtyText}`);
+ok(await rootView.locator('[data-batch-row="A04"] [data-station-report-ack="A04"], [data-batch-row="A04"] [data-station-report-preview-ack="A04"]').count() === 0, "hard quantity reject offers no confirm/resend");
+ok(await rootView.locator('[data-batch-row="A04"] [data-report-limit-hint]').count() === 0, "non-first step blocked: old 目前最多可報 hint hidden, only the max sentence");
+ok(!/目前最多可報/.test(await rootView.locator('[data-batch-row="A04"]').innerText()), "no second number on the card");
+stationScenario = "clean";
 
 await page.evaluate(() => { for (const code of ["A04", "A05"]) { const row = machtileBatchRow(code); row.stationReport = null; row.result = null; row.error = ""; row.current = ""; row.good = ""; row.bad = ""; row.failReasonCode = ""; row.reportNote = ""; row.defectOpen = false; } machtileRenderBatchReport(); });
 

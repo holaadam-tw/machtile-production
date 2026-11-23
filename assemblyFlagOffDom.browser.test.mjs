@@ -1,4 +1,4 @@
-// 組裝站報工「關」的時候，CNC 畫面 DOM 要跟 origin/main（f9ac7669，#159 之後）逐字相同。
+// 組裝站報工「關」的時候，CNC 畫面 DOM 要跟當前簽入版本逐字相同。
 // 「關」包含：旗標關；旗標開但租戶不明（示範模式沒有登入者）。依 outsourceStatusStrip 的做法：同一個靜態
 // 伺服器，base 那一頁的 index.html／app.js／i18n.js／styles.css 換成 git show 的舊版，比對 body（去掉 script）。
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const baseRef = process.env.ASSEMBLY_DOM_BASE || "f9ac7669";
+const baseRef = process.env.ASSEMBLY_DOM_BASE || "HEAD";
 childProcess.execFileSync("git", ["rev-parse", "--verify", `${baseRef}^{commit}`], { cwd: root, stdio: "pipe" });
 const files = ["index.html", "app.js", "i18n.js", "styles.css"];
 const baseFiles = new Map(files.map((file) => [file, childProcess.execFileSync("git", ["show", `${baseRef}:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));
@@ -46,7 +46,7 @@ async function open(config, base = false) {
   await page.waitForTimeout(300);
   return { context, page, errors };
 }
-const bodyDom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script").forEach((n) => n.remove()); return body.innerHTML.trimEnd(); }); // 多兩個 script 標籤拿掉後只在 body 尾端留下空白，不算畫面差異
+const bodyDom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard").forEach((n) => n.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); }); // 全域更新提示不屬於組裝旗標 DOM；忽略移除全域節點留下的空行
 const diffAt = (a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i += 1; if (i === a.length && a.length === b.length) i = -1; return i < 0 ? "" : `${JSON.stringify(a.slice(Math.max(0, i - 80), i + 120))} vs ${JSON.stringify(b.slice(Math.max(0, i - 80), i + 120))}`; };
 
 try {

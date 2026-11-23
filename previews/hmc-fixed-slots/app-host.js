@@ -1,8 +1,8 @@
 (function(root,factory){
   const node=typeof module==='object'&&module.exports;
-  const api=node?factory(require('./staging-session.js'),require('./project-target.js')):factory(root.HmcFixedStagingSession,root.HmcFixedProjectTarget);
+  const api=node?factory(require('./staging-session.js'),require('./project-target.js'),require('./staging-rest.js')):factory(root.HmcFixedStagingSession,root.HmcFixedProjectTarget,root.HmcFixedStagingRest);
   if(node)module.exports=api;else root.HmcFixedAppHost=api;
-}(globalThis,function(Session,Target){
+}(globalThis,function(Session,Target,Rest){
   'use strict';
   // The process-mapping panel was cancelled by the owner on 2026-09-10: this host opens fixed slots only.
   const PROJECT=Target&&Target.url;
@@ -63,7 +63,19 @@
       }catch(_){invalidate();return false;}
       return panel===mounted;
     }
-    return Object.freeze({available,open,close,authChanged,invalidate,context});
+    async function readPallets(machineCode){
+      if(!available()||!machine(machineCode))return null;
+      const captured=identity();if(!captured)return null;
+      const rpc=Rest.create({enabled:true,request,getProjectUrl:()=>settings().projectUrl});
+      const rows=await Promise.all(Array.from({length:6},async(_,index)=>{
+        const scope={machineCode,palletNo:index+1};
+        const response=await rpc('hmc_fixed_read',{p_scope:scope});
+        if(JSON.stringify(identity())!==JSON.stringify(captured))throw Error('CONTEXT_CHANGED');
+        return response?.data?.ok===true&&response.data.state?.machineCode===machineCode&&response.data.state?.palletNo===scope.palletNo?response.data.state:null;
+      }));
+      return rows.filter(Boolean);
+    }
+    return Object.freeze({available,open,readPallets,close,authChanged,invalidate,context});
   }
   return Object.freeze({create});
 }));

@@ -1,6 +1,8 @@
 // Copy this file to config.js and fill values for Supabase Cloud.
 // Do not commit real service role keys into frontend code.
 window.MACHTILE_CONFIG = {
+  // 單站智慧報工：停止輸入約 800ms 後先在背景送預覽；不會自動送正式報工。
+  reportBackgroundPreviewEnabled: true,
   cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
@@ -41,11 +43,16 @@ window.MACHTILE_CONFIG = {
   // Keep true for static hosts without SPA route fallback.
   // QR will use /?route=/m/report&machine=CNC-01 instead of /m/report?machine=CNC-01.
   useQueryRoutesForFieldReports: true,
+  // Compare-only cloud capability read; legacy decisions always win.
+  enableMachineCapabilityDualRead: false,
   useSupabase: false,
   // CNC field-report offline outbox (default false). true routes 現場報工
   // submit through the offline-first idempotent outbox seam (needs
   // migrations 202607110001–0003 on the target DB).
   enableOutboxSubmit: false,
+  // Default off: recover uncertain final reports by read-first, same-UUID idempotent resend.
+  enableReportUncertainRecover: false,
+  reportAutoCloseOnSuccess: true,
   // 派工池接單：空陣列＝全部關；首波 pilot 可設 ["A01", "A03"]。
   dispatchPoolMachines: [],
   enableStandardFinishFlow: false,
@@ -63,15 +70,22 @@ window.MACHTILE_CONFIG = {
   reportQtyJumpWarnEnabled: false,
   homeOvertimeCardEnabled: false,
   overtimeStartCardEnabled: false,
+  // HMC 卡片六盤料號推算；關閉時不讀固定工件資料、不改卡片 DOM。
+  enableHmcPalletCard: false,
+  enableHmcPalletStrip: false,
+  hmcPalletCardMachines: ["B01", "B02"],
+  hmcPalletMap: {},
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,
   shortCompletionMachines: [],
   // 組裝站平板報工（owner 2026-10-31 三週計畫）：false＝入口與畫面都不出現、不讀任何組裝資料。
   // 開之前要先有：派工橋同步這些站的工序（含 manufacture_ii_id）、雲端 machines 有這些站、Factory ReportPilotStations／
-  // 站別目錄 DispatchMulti 含這些站。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
+  // 站別目錄須為 MultiOrder 組裝站（不等於 CNC DispatchMulti）。assemblyStations 只接受 D01 D03 E01 F01 G01 H01；G01 依品名分閥件／幫浦測試。
   assemblyReportEnabled: false,
   assemblyStations: ["F01"],
+  // 只有明列站別可從 App 完工關站；空或未設定＝全部關閉（fail closed）。
+  assemblyCloseStations: [],
   // 依客戶開（owner 2026-10-31）：登入者 tenant_id 在這個清單裡才開；租戶不明或不在清單＝關。
   assemblyReportTenants: [],
   // 組裝站多人報工送雲端：true＝組裝站報工預覽／正式都帶 p_operator_app_user_ids（勾選的其他報工人 app_users id），
@@ -140,4 +154,11 @@ window.MACHTILE_CONFIG = {
   faceAdminUrl: "",
   // 人臉「已登記 N 張」獨立開關（不需 enableAccountDelete）；函式讀不到時顯示「—」。
   enableFaceStatus: true,
+  // 上一道擋住（owner 2026-11-14「照建議」；prevStepNotifyCore.js）。預設都關。
+  // enablePrevStepBlockHint：報工／關站被上一道擋時，多一句「卡在 A05（第 2 道）、請找 A05 或生管」。
+  // enablePrevStepNotify：再加「通知生管」鍵＋提醒中心看板（生管以上）；開之前要先套雲端 migration 20261114170000。
+  enablePrevStepBlockHint: false,
+  enablePrevStepNotify: false,
+  // A/B 機台已開智慧報工時，午報／完工不再退回直接寫 production_reports（只進雲端、不進舊 MES；REPORT #9）。預設關。
+  hideLegacyReportForStationMachines: false,
 };

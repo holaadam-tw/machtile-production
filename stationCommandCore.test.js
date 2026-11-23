@@ -16,6 +16,24 @@ const UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 const PID = "00000000-0000-4000-8000-000000000304";
 const order = { id: "XX01202502050012", processId: PID, part: "HCG-06本體", drawing: "DRW-77", process: "車床加工", stationStep: 5, offStation: false };
 
+console.log("== card close status ==");
+eq("pending close", c.closeCardState({ status: "pending" }), { kind: "pending" });
+eq("claimed close", c.closeCardState({ status: "claimed" }), { kind: "pending" });
+eq("soft previous-step guard", c.closeCardState({ status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } }), { kind: "confirm" });
+eq("other rejection", c.closeCardState({ status: "rejected", reject_code: "LOCK_TIMEOUT" }), { kind: "rejected", reason: "LOCK_TIMEOUT" });
+eq("production-shaped applied snapshot", c.closeCardState({ status: "applied", legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 3, OrderNo: "WO-1", Warning: "", station: "A03", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } }), { kind: "applied", text: "已關站", finishDisabled: true });
+const newestClose = c.latestCloseByOrder([
+  { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "rejected", legacy_snapshot: { guard: { code: "PREVIOUS_STEP_OPEN", hard: false } } },
+  { machine_code: "A03", expected_order_no: "WO-1", expected_index_sn: 3, status: "applied" },
+]);
+eq("先 rejected 後 applied：applied 優先", newestClose.get("A03|WO-1|3").status, "applied");
+const appliedThenRejected = c.latestCloseByOrder([
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "rejected" },
+  { machine_code: "A04", expected_order_no: "WO-2", expected_index_sn: 2, status: "applied" },
+]);
+eq("applied 後 rejected 序列仍顯示已關站", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).text, "已關站");
+eq("applied 後完工鈕 disabled", c.closeCardState(appliedThenRejected.get("A04|WO-2|2")).finishDisabled, true);
+
 console.log("== parseFlag／enabledForMachine ==");
 eq("沒設 → 關", c.flagIsOn(c.parseFlag(undefined)), false);
 eq("空陣列 → 關", c.flagIsOn(c.parseFlag([])), false);
@@ -36,6 +54,20 @@ eq("名單外機台不會意外開啟", c.enabledForMachine(allCncFlag, "C01"), 
 eq("完工關站：旗標關不送", c.finishCloseDecision({ enabled: false, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：白名單空不送", c.finishCloseDecision({ enabled: true, machines: [], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: false, reason: "flag_off" });
 eq("完工關站：只有 finish applied 才送", c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: "applied" }), { send: true, reason: "" });
+eq("close 防重 key：同機台同單同道同 simulation 相同", c.closeSubmissionKey({ machineCode: " a04 ", orderNo: "xx01", step: 2, expectedSimulationId: "SIM-1" }), "A04|XX01|2|SIM-1");
+eq("close 防重 key：缺 simulation fail closed", c.closeSubmissionKey({ machineCode: "A04", orderNo: "XX01", step: 2 }), "A04|XX01|2");
+const closeFields = { machineCode: "A04", orderNo: "XX01", step: 2, expectedSimulationId: "SIM-1" };
+eq("close 雙擊：第一筆 RPC 等待中擋第二筆", c.closeSubmissionBlocked(closeFields, new Set([c.closeSubmissionKey(closeFields)]), null), true);
+eq("close 雙擊：第一筆已進 pending 仍擋第二筆", c.closeSubmissionBlocked(closeFields, new Set(), closeFields), true);
+eq("close 重送：needsConfirmation pending 仍是阻擋者", c.closeSubmissionBlocked(closeFields, new Set(), { ...closeFields, view: { needsConfirmation: true } }), true);
+eq("close 重送：pending 11 分鐘解鎖後不再擋", c.closeSubmissionBlocked(closeFields, new Set(), { ...closeFields, startedAt: 1, lastStatus: "pending" }, 11 * 60 * 1000 + 2), false);
+eq("close 防重：不同道不擋", c.closeSubmissionBlocked({ ...closeFields, step: 3 }, new Set([c.closeSubmissionKey(closeFields)]), closeFields), false);
+const appliedRow = { status: "applied", machine_code: "A04", expected_order_no: "XX01", expected_index_sn: 2, requested_at: "2026-11-20T00:10:00Z" };
+eq("close applied：目前同單同道且關站晚於最近開工", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, actualStartAt: "2026-11-20T00:00:00Z" }), true);
+eq("close applied：同單同道最近又開工則舊關站失效", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, actualStartAt: "2026-11-20T00:20:00Z" }), false);
+eq("close applied：目前掛不同單道可保留歷史結果", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX02", step: 3, actualStartAt: "2026-11-20T00:20:00Z" }), true);
+eq("close applied：無開工時間只接受 24 小時內", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, nowMs: Date.parse("2026-11-21T00:09:00Z") }), true);
+eq("close applied：無開工時間拒絕超過 24 小時", c.appliedCloseIsCurrent(appliedRow, { machineCode: "A04", orderNo: "XX01", step: 2, nowMs: Date.parse("2026-11-21T00:11:00Z") }), false);
 for (const status of ["applied-late", "rejected", "previewed", "unknown"]) {
   eq(`完工關站：server ${status} 不送`, c.finishCloseDecision({ enabled: true, machines: ["A04"], machineCode: "A04", reportType: "finish", serverStatus: status }), { send: false, reason: "report_not_applied" });
 }
@@ -147,6 +179,9 @@ eq("合約欄位齊全", c.submitPayload({ commandUuid: UUID, commandType: "star
 eq("料號沒有 → null", c.submitPayload({ commandUuid: UUID, commandType: "start", machineCode: "A04", orderNo: "X", step: 1, partNo: null }).p_expected_part_no, null);
 eq("多工站帶 Id", c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "B03", orderNo: "X", step: 1, manufactureIiId: "77" }).p_manufacture_ii_id, "77");
 eq("close 帶預期 SimulationId", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1" }).p_expected_simulation_id, "SIM-1");
+eq("close 確認重送才帶 PREVIOUS_STEP_OPEN ack", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, partNo: "P", expectedSimulationId: "SIM-1", acks: ["PREVIOUS_STEP_OPEN"] }).p_acks, ["PREVIOUS_STEP_OPEN"]);
+throws("close 不收未知 ack", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", acks: ["OTHER"] }), "INVALID_ACK");
+throws("close 外指令不得帶 ack", () => c.submitPayload({ commandUuid: UUID, commandType: "stop", machineCode: "A04", orderNo: "X", step: 1, acks: ["PREVIOUS_STEP_OPEN"] }), "INVALID_ACK");
 eq("close 短交使用雲端具名參數與 Factory JSON 欄位", c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "MATERIAL_SHORT", note: "缺料" } }).p_short_completion, { reason_code: "MATERIAL_SHORT", note: "缺料" });
 throws("短交 OTHER 缺說明", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1, expectedSimulationId: "SIM-1", shortCompletion: { reason_code: "OTHER", note: "" } }), "SHORT_COMPLETION_REASON_INVALID");
 throws("close 缺 SimulationId", () => c.submitPayload({ commandUuid: UUID, commandType: "close", machineCode: "A04", orderNo: "X", step: 1 }), "NO_SIMULATION_ID");
@@ -161,6 +196,11 @@ eq("close rejected 保留伺服器白話原因", c.statusView({ status: "rejecte
 eq("close ZERO_REPORTED 顯示 owner 定案白話", c.statusView({ status: "rejected", reject_code: "ZERO_REPORTED" }, "close", 0).text, "這一道還沒有報工數量，不能完工關站；請先報工");
 eq("close LOCK_TIMEOUT 顯示可再按一次", c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "close", 0).text, "這次沒有關成（系統忙），可以再按一次");
 eq("close STILL_RUNNING 照 #892 白話", c.statusView({ status: "rejected", reject_code: "STILL_RUNNING" }, "close", 0).text, "這筆仍在生產中，沒有關站；請先停工再試。");
+const previousStepHard = c.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "原工廠文字" }, "close", 0);
+eq("PREVIOUS_STEP_OPEN hard 未標 false → 維持 terminal 與工廠文字", [previousStepHard.terminal, previousStepHard.needsConfirmation, previousStepHard.detail], [true, undefined, "原工廠文字"]);
+const previousStepSoft = c.statusView({ status: "rejected", reject_code: "PREVIOUS_STEP_OPEN", reject_message: "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", legacy_snapshot: { guard: { hard: false } } }, "close", 0);
+eq("PREVIOUS_STEP_OPEN hard=false → 顯示確認並沿用工廠文字", [previousStepSoft.terminal, previousStepSoft.needsConfirmation, previousStepSoft.text], [false, true, "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。"]);
+eq("preview guard.hard=false 也啟用；close 外不啟用", [c.closePreviousStepOpenConfirmation({ reject_code: "PREVIOUS_STEP_OPEN", preview: { guard: { hard: false } } }, "close"), c.closePreviousStepOpenConfirmation({ reject_code: "PREVIOUS_STEP_OPEN", preview: { guard: { hard: false } } }, "stop")], [true, false]);
 
 console.log("== 錯誤分類 ==");
 eq("表不存在 PGRST205 → missing", c.isMissingResourceError(new Error('404 {"code":"PGRST205","message":"Could not find the table"}')), true);
@@ -267,7 +307,8 @@ eq("ageForHint：有時鐘差用伺服器年齡", c.ageForHint({ serverOffset: o
 eq("ageForHint：沒有時鐘差用按下後的本機經過時間", c.ageForHint({ serverOffset: null, startedAt: 1000 }, reqAt, 61000), 60000);
 
 console.log("== 輪詢與解鎖（App 不自己結束）==");
-eq("前 30 秒 2 秒一次", c.pollDelay(5000), 2000);
+eq("前 15 秒 1 秒一次", c.pollDelay(5000), 1000);
+eq("15–30 秒 2 秒一次", c.pollDelay(15000), 2000);
 eq("之後 5 秒一次", c.pollDelay(60000), 5000);
 eq("解鎖後 15 秒一次（照樣輪詢）", c.pollDelay(c.CLIENT_UNLOCK_MS + 1), 15000);
 eq("解鎖＝伺服器 pending 10 分鐘＋1 分鐘", c.CLIENT_UNLOCK_MS, 11 * 60000);
@@ -422,7 +463,40 @@ const claimBound = c.statusView({ status: "applied", legacy_snapshot: { claim_ne
 eq("claim applied 帶回綁定工單與 canonical 步序", [claimBound.claimNext.orderNo, claimBound.claimNext.indexSn], [order.id, 6]);
 const claimTaken = c.statusView({ status: "rejected", reject_code: "ALREADY_CLAIMED", legacy_snapshot: { claim_next: { claimed_machine_code: "A05" } } }, "claim_next", 0);
 eq("applier rejected 從 legacy_snapshot 帶回實際接走機台", [claimTaken.code, claimTaken.claimNext.claimedMachineCode], ["ALREADY_CLAIMED", "A05"]);
-eq("pendingRecord 保存 claim 冪等重試資料", c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true }).standardFinishClaim, true);
+const pendingClaim = c.pendingRecord({ commandUuid: UUID, commandType: "claim_next", machineCode: "A04", orderNo: order.id, step: 6, poolItemId: "sid|nid|sim", standardFinishClaim: true, standardFinishComboIntent: "claim-start", standardFinishClaimSheetToken: "sheet-7" });
+eq("pendingRecord 保存 claim 冪等重試資料", [pendingClaim.standardFinishClaim, pendingClaim.standardFinishComboIntent, pendingClaim.standardFinishClaimSheetToken], [true, "claim-start", "sheet-7"]);
+
+console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET） ==");
+{
+  const notSet = c.statusView({ status: "rejected", reject_code: "STATION_NOT_SET", reject_message: "A03 目前沒有掛工單（等待工單），請找生管設定。" }, "start", 0);
+  eq("開工 STATION_NOT_SET → 新白話", [notSet.title, notSet.text], ["沒有開工", "這台還沒掛上工單，請找生管在 Factory 設定後再按開工。"]);
+  eq("停工 STATION_NOT_SET 文字不變", c.statusView({ status: "rejected", reject_code: "STATION_NOT_SET" }, "stop", 0).text, "舊 MES 這台還沒設定工單，請找生管。");
+  const at = Date.parse("2026-11-13T08:40:00Z");   // 台北 16:40
+  const rec = c.startRejectRecord({ machineCode: "a03", orderNo: "XX01202610210005", step: 2, view: notSet, rejectMessage: "A03 目前沒有掛工單（等待工單），請找生管設定。", at });
+  eq("紀錄：機台大寫、代碼、工廠說明", [rec.machineCode, rec.code, rec.step, rec.detail], ["A03", "STATION_NOT_SET", 2, "A03 目前沒有掛工單（等待工單），請找生管設定。"]);
+  const ctx = { machineCode: "A03", orderNo: "XX01202610210005", step: 2, commandRows: [], now: new Date(at + 60000) };
+  eq("同台同單同道 → 專用鍵", c.startRejectNotice(rec, ctx), { key: "start_reject_station_not_set", params: {}, code: "STATION_NOT_SET", detail: "A03 目前沒有掛工單（等待工單），請找生管設定。" });
+  eq("換道次 → 不顯示", c.startRejectNotice(rec, { ...ctx, step: 3 }), null);
+  eq("換單 → 不顯示", c.startRejectNotice(rec, { ...ctx, orderNo: "XX0" }), null);
+  eq("別台 → 不顯示", c.startRejectNotice(rec, { ...ctx, machineCode: "A04" }), null);
+  eq("隔天 → 不顯示", c.startRejectNotice(rec, { ...ctx, now: new Date(at + 24 * 3600000) }), null);
+  const appliedLater = [{ machine_code: "A03", command_type: "start", status: "applied", expected_order_no: "XX01202610210005", expected_index_sn: 2, applied_at: new Date(at + 30000).toISOString() }];
+  eq("之後開工 applied → 不顯示", c.startRejectNotice(rec, { ...ctx, commandRows: appliedLater }), null);
+  const appliedBefore = [{ ...appliedLater[0], applied_at: new Date(at - 3600000).toISOString() }];
+  eq("更早的 applied 不影響", c.startRejectNotice(rec, { ...ctx, commandRows: appliedBefore })?.key, "start_reject_station_not_set");
+  const other = c.statusView({ status: "rejected", reject_code: "OPERATOR_NOT_SET", reject_message: "no operator" }, "start", 0);
+  eq("其他代碼 → 通用：標題＋白話＋工廠說明", c.startRejectNotice(c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: other, rejectMessage: "no operator", at }), { machineCode: "A03", orderNo: "W", step: 1, now: new Date(at) }),
+    { key: "start_reject_generic", params: { title: "沒有開工", reason: "舊 MES 這台還沒設定好作業員，請找生管。" }, code: "OPERATOR_NOT_SET", detail: "no operator" });
+  const unknown = c.statusView({ status: "rejected", reject_code: "NEW_CODE_X", reject_message: "工廠新原因" }, "start", 0);
+  eq("未知代碼 → 保守標題＋工廠說明", c.startRejectNotice(c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: unknown, rejectMessage: "工廠新原因", at }), { machineCode: "A03", orderNo: "W", step: 1, now: new Date(at) }),
+    { key: "start_reject_generic", params: { title: "結果待核對", reason: "沒有完成，舊 MES 狀態請核對" }, code: "NEW_CODE_X", detail: "工廠新原因" });
+  eq("applied 不記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "applied" }, "start", 0), at }), null);
+  eq("expired 也記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "expired" }, "start", 0), at })?.code, "EXPIRED");
+  eq("壞紀錄 → 不顯示", c.startRejectNotice("x", ctx), null);
+}
+// 完工關站：pendingRecord 保留送出時的完工畫面代號（app.js 判斷要不要自動關畫面）
+eq("pendingRecord 保留完工畫面代號", c.pendingRecord({ ...rec, commandType: "close", finishCloseReportCommandUuid: UUID, finishCloseSheetToken: "abc-3" }).finishCloseSheetToken, "abc-3");
+eq("pendingRecord 沒有代號 → null（不自動關）", c.pendingRecord(rec).finishCloseSheetToken, null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -85,6 +85,61 @@
     return { send: true, reason: "" };
   }
 
+  function closeSubmissionKey({ machineCode, orderNo, step, expectedSimulationId } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), simulation = text(expectedSimulationId);
+    const index = Number(step);
+    return machine && order && Number.isInteger(index) && index > 0
+      ? [machine, order.toUpperCase(), index, ...(simulation ? [simulation] : [])].join("|") : "";
+  }
+
+  function closeSubmissionBlocked(fields, submittingKeys, pendingRecord, nowMs = Date.now()) {
+    const key = closeSubmissionKey(fields);
+    if (!key) return false;
+    if (submittingKeys?.has?.(key)) return true;
+    if (closeSubmissionKey(pendingRecord) !== key) return false;
+    if (lockReleased(pendingRecord?.startedAt, nowMs) && releasedNote(pendingRecord?.lastStatus).unlock) return false;
+    return true;
+  }
+
+  // Applied only describes the card currently on screen when it happened after this process's latest start.
+  // If start time is unavailable, keep the conservative 24-hour fallback requested for legacy data.
+  function appliedCloseIsCurrent(row, { machineCode, orderNo, step, actualStartAt, nowMs = Date.now() } = {}) {
+    if (text(row?.status).toLowerCase() !== "applied") return true;
+    const same = normCode(row?.machine_code) === normCode(machineCode)
+      && text(row?.expected_order_no).toUpperCase() === text(orderNo).toUpperCase()
+      && Number(row?.expected_index_sn) === Number(step);
+    if (!same) return true;
+    const appliedAt = Date.parse(row?.requested_at || row?.applied_at);
+    const startedAt = Date.parse(actualStartAt);
+    if (Number.isFinite(startedAt)) return Number.isFinite(appliedAt) && appliedAt > startedAt;
+    return Number.isFinite(appliedAt) && Number(nowMs) - appliedAt >= 0 && Number(nowMs) - appliedAt <= PENDING_KEEP_MS;
+  }
+
+  // Rows should be ordered requested_at.desc. An applied close is final for the card identity:
+  // a later rejected retry must not overwrite it. Without an applied row, keep the newest row.
+  function latestCloseByOrder(rows) {
+    const result = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const machine = normCode(row?.machine_code), order = text(row?.expected_order_no), step = Number(row?.expected_index_sn);
+      if (!machine || !order || !Number.isInteger(step) || step <= 0) return;
+      const key = `${machine}|${order}|${step}`;
+      const current = result.get(key);
+      if (!current || (text(current.status).toLowerCase() !== "applied" && text(row?.status).toLowerCase() === "applied")) result.set(key, row);
+    });
+    return result;
+  }
+
+  function closeCardState(row, current = null) {
+    if (!row) return null;
+    const status = text(row.status).toLowerCase();
+    if (status === "applied" && current && !appliedCloseIsCurrent(row, current)) return null;
+    if (status === "applied") return { kind: "applied", text: "已關站", finishDisabled: true };
+    if (status === "pending" || status === "claimed") return { kind: "pending" };
+    const guard = row.legacy_snapshot?.guard || {};
+    if (status === "rejected" && text(guard.code) === "PREVIOUS_STEP_OPEN" && guard.hard === false) return { kind: "confirm" };
+    return { kind: "rejected", reason: text(row.reject_message) || text(row.reject_code) };
+  }
+
   // 有卡片「開工／停工」的機台，開工確認卡已順便記今日開工；單台報工不再顯示重複的「今日開工」分頁。
   // 若既有連結／flow 指定 dailyStart，移到下一個仍可用的分頁「中午報工」。
   function dailyStartReportVisible(flag, machineCode) {
@@ -276,7 +331,7 @@
   // ---------------------------------------------------------------- 送出
   // fields：{ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId }
   // partNo 只能是 work_orders.part_no；沒有就送 null（不拿圖號頂替）。
-  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped } = {}) {
+  function submitPayload({ commandUuid, commandType, machineCode, orderNo, step, partNo, manufactureIiId, expectedSimulationId, shortCompletion, poolItemId, replaceStopped, acks } = {}) {
     if (!isUuid(commandUuid)) throw new Error("BAD_COMMAND_UUID");
     if (!GENERIC_SUBMIT_COMMAND_TYPES.includes(commandType)) throw new Error("BAD_COMMAND_TYPE");
     const code = normCode(machineCode);
@@ -302,6 +357,12 @@
         if (!["MATERIAL_SHORT", "SCRAP", "OTHER"].includes(reason) || note.length > 500 || (reason === "OTHER" && !note)) throw new Error("SHORT_COMPLETION_REASON_INVALID");
         payload.p_short_completion = { reason_code: reason, note };
       }
+      if (acks != null) {
+        if (!Array.isArray(acks) || acks.length !== 1 || text(acks[0]).toUpperCase() !== "PREVIOUS_STEP_OPEN") throw new Error("INVALID_ACK");
+        payload.p_acks = ["PREVIOUS_STEP_OPEN"];
+      }
+    } else if (acks != null) {
+      throw new Error("INVALID_ACK");
     }
     if (commandType === "claim_next") {
       if (!text(poolItemId)) throw new Error("NO_POOL_ITEM_ID");
@@ -458,6 +519,14 @@
     return Number.isFinite(qty) && qty > 0 ? qty : 0;
   }
 
+  function closePreviousStepOpenConfirmation(row, commandType) {
+    const type = COMMAND_TYPES.includes(commandType) ? commandType : text(row && row.command_type);
+    if (type !== "close" || text(row && row.reject_code).toUpperCase() !== "PREVIOUS_STEP_OPEN") return false;
+    const preview = row && row.preview;
+    const sources = [preview && typeof preview === "object" ? preview : {}, legacySnapshot(row)];
+    return sources.some((source) => source?.guard?.hard === false);
+  }
+
   function standardFinishNextStep(row) {
     const raw = legacySnapshot(row).next_step;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -493,10 +562,17 @@
     }
     if (status === "rejected") {
       const r = rejectText(row.reject_code, row.reject_message);
+      if (closePreviousStepOpenConfirmation(row, type)) {
+        const detail = text(row.reject_message);
+        return { phase: "rejected", terminal: false, needsConfirmation: true, tone: "warn", title: "關站前請確認",
+          text: detail || "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", code: r.code, detail: "" };
+      }
       const special = REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
       const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
-      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: r.text, code: r.code, detail: r.detail,
+      // 開工被擋「這台沒掛單」：說清楚要生管在 Factory 設定後再按（其他指令照舊）
+      const plain = type === "start" && r.code === "STATION_NOT_SET" ? START_REJECT_STATION_NOT_SET_TEXT : r.text;
+      return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: plain, code: r.code, detail: r.detail,
         ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }
     if (status === "expired") {
@@ -512,9 +588,10 @@
     return { phase: "pending", terminal: false, tone: "wait", title: "等待工廠套用…", text: late ? "工廠還沒處理，這筆應該不會生效；請等最終結果或問生管" : "已送出，等工廠接手。請稍等，不要重按。", late };
   }
 
-  // 輪詢間隔：前 30 秒每 2 秒，之後每 5 秒，解鎖後每 15 秒
+  // 輪詢間隔：送出後前 15 秒每 1 秒、15–30 秒每 2 秒，之後每 5 秒，解鎖後每 15 秒
   function pollDelay(elapsedMs) {
     const e = Number(elapsedMs);
+    if (e < 15000) return 1000;
     if (e < 30000) return 2000;
     return e > CLIENT_UNLOCK_MS ? 15000 : 5000;
   }
@@ -547,8 +624,12 @@
       expectedSimulationId: text(rec.expectedSimulationId) || null,
       shortCompletion: rec.shortCompletion && typeof rec.shortCompletion === "object" ? rec.shortCompletion : null,
       finishCloseReportCommandUuid: text(rec.finishCloseReportCommandUuid) || null,
+      // 送出關站時開著的完工畫面代號（app.js 用來判斷結果回來時要不要自動關畫面）；沒有＝不自動關
+      finishCloseSheetToken: text(rec.finishCloseSheetToken) || null,
       poolItemId: text(rec.poolItemId) || null,
       standardFinishClaim: rec.standardFinishClaim === true,
+      standardFinishComboIntent: text(rec.standardFinishComboIntent) || null,
+      standardFinishClaimSheetToken: text(rec.standardFinishClaimSheetToken) || null,
       startedAt: Number(rec.startedAt) || Date.now(),
       unconfirmed: rec.unconfirmed === true,
       lastStatus: ["pending", "claimed"].includes(String(rec.lastStatus || "")) ? String(rec.lastStatus) : null,
@@ -822,6 +903,33 @@
     const done = latest?.type === "start";
     return { visible: !done, overtime: false, reason: stopped ? "stopped" : done ? "daily_applied" : (samePending ? "pending_timeout" : "daily_due") };
   }
+  // ---------------------------------------------------------------- 開工被擋下的卡片提示
+  // 2026-11-13 A03 現場：開工被工廠退回（STATION_NOT_SET），卡片只剩「開工」鈕、作業員重新整理 3–4 次都不知道為什麼。
+  // 退回的那一筆記成一筆小紀錄（機台＋工單＋道次＋代碼），卡片照這筆顯示，直到：同一台同一道之後有 applied 的開工／停工、
+  // 換了單或道次、隔天。這裡只做判斷；存取由 app.js 處理。
+  const START_REJECT_SPECIFIC = Object.freeze({ STATION_NOT_SET: "start_reject_station_not_set" });
+  const START_REJECT_STATION_NOT_SET_TEXT = "這台還沒掛上工單，請找生管在 Factory 設定後再按開工。";
+  function startRejectRecord({ machineCode, orderNo, step, view, rejectMessage, at } = {}) {
+    const machine = normCode(machineCode), order = text(orderNo), when = Number(at);
+    if (!machine || !order || !Number.isFinite(when) || !view || !["rejected", "expired"].includes(view.phase) || view.needsConfirmation) return null;
+    return { machineCode: machine, orderNo: order, step: Number.isInteger(Number(step)) ? Number(step) : null,
+      code: text(view.code).toUpperCase(), title: text(view.title), text: text(view.text),
+      detail: text(rejectMessage) && text(rejectMessage) !== text(view.text) ? text(rejectMessage) : "", at: when };
+  }
+  // 回傳 { key, params, detail } 或 null（不顯示）。key＝i18n 鍵；STATION_NOT_SET 有專用白話，其他用伺服器原因
+  function startRejectNotice(record, { machineCode, orderNo, step, commandRows, now = new Date() } = {}) {
+    if (!record || typeof record !== "object") return null;
+    if (normCode(record.machineCode) !== normCode(machineCode) || text(record.orderNo) !== text(orderNo)) return null;
+    if (record.step != null && step != null && Number(record.step) !== Number(step)) return null;
+    const at = Number(record.at);
+    if (!Number.isFinite(at) || taiwanParts(new Date(at))?.day !== taiwanParts(now)?.day) return null;
+    const later = latestAppliedAction(commandRows, { machineCode, orderNo, step, now });
+    if (later && later.at >= at) return null;
+    const code = text(record.code).toUpperCase();
+    if (START_REJECT_SPECIFIC[code]) return { key: START_REJECT_SPECIFIC[code], params: {}, code, detail: text(record.detail) };
+    return { key: "start_reject_generic", params: { title: text(record.title) || "沒有開工", reason: text(record.text) || text(record.detail) || UNKNOWN_CODE_TEXT },
+      code, detail: text(record.detail) };
+  }
   function askDailyStart({ commandType, role, isBridge, todayStatus, rows, processId } = {}) {
     if (commandType !== "start") return false;
     if (normRole(role) !== "operator" || isBridge === true) return false;
@@ -832,15 +940,16 @@
   return {
     COMMAND_TYPES, TYPE_LABEL, TERMINAL, MAX_APPLY_AGE_MS, CLAIM_LEASE_MS, PENDING_EXPIRE_MS, CLIENT_UNLOCK_MS, PENDING_KEEP_MS, INSTANT_START_TIMEOUT_MS,
     SUBMIT_TIMEOUT_MS, SUBMIT_RPC, REPLACE_STOPPED_RPC, MISSING_PART_NO, REJECT_TEXT, REJECT_TITLE, LEGACY_CHANGED_CODES, LEGACY_UNTOUCHED_CODES, SUBMIT_ERROR_TEXT,
-    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, finishCloseDecision, dailyStartReportVisible, reportTypeForMachine,
+    SUBMIT_ROLES, parseFlag, flagIsOn, enabledForMachine, taiwanParts, finishCloseDecision, closeSubmissionKey, closeSubmissionBlocked, appliedCloseIsCurrent, latestCloseByOrder, closeCardState, dailyStartReportVisible, reportTypeForMachine,
     isMultiStation, roleAllowed, isAdminActor, actorLines, isUuid, eligibility, newUuid,
     formatTime, formatHm, serverOffset, serverAgeMs,
     legacyRowFor, freshCheck, legacyStateLines, confirmModel, submitPayload,
     isMissingResourceError, isNetworkError, errorCodeOf, submitErrorText, rejectText, legacySnapshot, closeShortQty, standardFinishNextStep, claimNextResult,
-    statusView, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
+    statusView, closePreviousStepOpenConfirmation, pollDelay, lockReleased, ageForHint, pendingRecord, restorePending, unconfirmedNotSent, releasedNote, UNCONFIRMED_MIN_MS,
     DAILY_START_EMPTY_TEXT, DAILY_START_INVALID_TEXT, DAILY_START_FAILED_TEXT, DAILY_START_FIELD_LABEL,
     dailyStartQtyCheck, startQtyGap, startBackfillDelta, startBackfillPayload, startBackfillReportUuid, timeMinutes, overtimePromptDue, overtimeNote, overtimeAppliedAt, overtimeStartSegments, OVERTIME_START_MINUTES, OVERTIME_END_TYPES, dailyStartRecordedToday, askDailyStart, pendingDailyStart, delayedDailyStartAction,
     DAILY_START_QUEUED_TEXT, DAILY_START_EXISTS_TEXT, dailyStartBlockedText, startAppliedToday, startAppliedInWindow, startButtonState, startedToday,
     DAILY_START_UNCONFIRMED_TEXT, DAILY_START_ABSENT_TEXT, DAILY_START_ALREADY_TEXT, DAILY_START_RETRY_TEXT, DAILY_START_UNREADABLE_TEXT, taiwanDay, dailyStartReportUuid,
+    START_REJECT_STATION_NOT_SET_TEXT, startRejectRecord, startRejectNotice,
   };
 });

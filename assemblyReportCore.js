@@ -50,6 +50,14 @@
     return enabledStations(config, tenantId).includes(normCode(code));
   }
 
+  // 完工關站是獨立能力；未設定或空清單時全部關閉，避免最後一道誤結工單。
+  function closeAllowed(config, code, tenantId) {
+    const station = normCode(code);
+    if (!isAssemblyStation(config, station, tenantId)) return false;
+    const list = Array.isArray(config?.assemblyCloseStations) ? config.assemblyCloseStations : [];
+    return [...new Set(list.map(normCode).filter((item) => ALL_ASSEMBLY_STATIONS.includes(item)))].includes(station);
+  }
+
   function stationLabel(code) {
     const c = normCode(code);
     return STATION_LABELS[c] ? `${c} ${STATION_LABELS[c]}` : c;
@@ -355,7 +363,7 @@
   return Object.freeze({
     ALL_ASSEMBLY_STATIONS, DEFAULT_STATIONS, STATION_LABELS, LINE_LABELS, MAX_OPERATORS,
     SHORT_REASONS, defectAllowed, defectReasons, shortfall, shortCompletionValue,
-    isAssemblyEnabledForTenant, enabledStations, isAssemblyStation, stationLabel, machineCodeOf, ordersForStation, lineOf, stationHasLines,
+    isAssemblyEnabledForTenant, enabledStations, isAssemblyStation, closeAllowed, stationLabel, machineCodeOf, ordersForStation, lineOf, stationHasLines,
     operatorChoices, defaultOperatorIds, toggleOperator, validateForm, legacyContext, buildReportArgs, commandFields,
     multiOperatorCommandEnabled, coOperatorAppUserIds, checkCoOperators, operatorListErrorKey, OPERATOR_LIST_ERROR_KEYS,
     productionReportPayload, shiftStateByOrder, orderKey, displayState, resultSummary,

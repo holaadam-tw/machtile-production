@@ -15,6 +15,15 @@ test("flag off returns no stations; flag on defaults to F01 and ignores non-asse
   assert.deepEqual(core.enabledStations({ assemblyReportEnabled: true }), [], "flag on but no tenant gate = off");
 });
 
+test("closeAllowed is independently allow-listed and fails closed for H01", () => {
+  const tenant = "a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f";
+  const config = { assemblyReportEnabled: true, assemblyReportTenants: [tenant], assemblyStations: ["F01", "G01", "H01"], assemblyCloseStations: ["F01", "G01"] };
+  assert.equal(core.closeAllowed(config, "F01", tenant), true);
+  assert.equal(core.closeAllowed(config, "H01", tenant), false);
+  assert.equal(core.closeAllowed({ ...config, assemblyCloseStations: undefined }, "F01", tenant), false, "missing close scope must fail closed");
+  assert.equal(core.closeAllowed(config, "F01", "wrong-tenant"), false);
+});
+
 test("ordersForStation lists every open order on the station, running first then due date", () => {
   const orders = [
     { id: "WO-3", processId: "p3", machine: "F01", processStatus: "pending", dueDate: "2026-11-05" },

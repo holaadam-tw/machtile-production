@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const baseRef = "origin/claude/finish-refresh-pick-20261029";
+const baseRef = process.env.MACHTILE_ORDER_DETAIL_BASE || "5e24490";
 childProcess.execFileSync("git", ["rev-parse", "--verify", baseRef], { stdio: "pipe" });
 const baseFiles = new Map();
 for (const file of ["index.html", "app.js", "config.js", "i18n.js", "styles.css"]) {

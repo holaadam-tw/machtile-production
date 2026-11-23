@@ -233,7 +233,7 @@
   // 卡片底部要顯示的字。nameOf(id) → 姓名（照 App 顯示報工人的方式：operator_ids 第一位，沒有就 user_id）。
   function todayStatusLabel(entry, nameOf = () => "") {
     if (!entry) return { tone: "none", text: "今日尚未開工" };
-    if (entry.type === "finish") return { tone: "finished", text: `今日已收工 ${entry.time}` };
+    if (entry.type === "finish") return { tone: "finished", text: `今日已完工 ${entry.time}` };
     const name = entry.operatorId ? text(nameOf(entry.operatorId)) : "";
     return { tone: "started", text: `今日已開工 ${entry.time}${name ? `・${name}` : ""}` };
   }
