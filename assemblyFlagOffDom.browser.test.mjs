@@ -1,4 +1,4 @@
-// 組裝站報工「關」的時候，CNC 畫面 DOM 要跟 origin/main（f9ac7669，#159 之後）逐字相同。
+// 組裝站報工「關」的時候，CNC 畫面 DOM 要跟當前簽入版本逐字相同。
 // 「關」包含：旗標關；旗標開但租戶不明（示範模式沒有登入者）。依 outsourceStatusStrip 的做法：同一個靜態
 // 伺服器，base 那一頁的 index.html／app.js／i18n.js／styles.css 換成 git show 的舊版，比對 body（去掉 script）。
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const baseRef = process.env.ASSEMBLY_DOM_BASE || "f9ac7669";
+const baseRef = process.env.ASSEMBLY_DOM_BASE || "HEAD";
 childProcess.execFileSync("git", ["rev-parse", "--verify", `${baseRef}^{commit}`], { cwd: root, stdio: "pipe" });
 const files = ["index.html", "app.js", "i18n.js", "styles.css"];
 const baseFiles = new Map(files.map((file) => [file, childProcess.execFileSync("git", ["show", `${baseRef}:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })]));

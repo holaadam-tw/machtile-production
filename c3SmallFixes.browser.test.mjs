@@ -64,6 +64,57 @@ check(qty.over?.quantity === 11 && qty.normal === null, "quantity jump warns abo
 check(qty.unreadable === null && qty.zh.includes("這次加 11 件"), "unreadable estimate stays silent and Chinese copy is available");
 check(qty.cancelled === false && qty.accepted === true && qty.prompts === 2, "quantity jump confirmation can cancel or continue submission");
 
+const sourceRefresh = await page.evaluate(async () => {
+  const originalFetch = supabaseFetch;
+  const order = state.workOrders[0];
+  order.processId = "00000000-0000-4000-8000-000000000050";
+  order.done = 0;
+  order.progressSource = { source: "app", done: 0, legacyKnown: false, label: "舊 MES 尚無資料" };
+  selectedOrder = order;
+  activeReportType = "noon";
+  config.reportTotalSemanticsEnabled = true;
+  document.getElementById("completedQty").value = "60";
+  document.getElementById("defectQty").value = "0";
+  supabaseFetch = async (path) => {
+    if (path.startsWith("work_order_processes?")) return [{ id: order.processId, qty_completed: 0, qty_defect: 0 }];
+    if (path === "rpc/batch_report_progress") return [{ process_id: order.processId, legacy_output: 50, legacy_fail: 0, pending_output: 0, pending_fail: 0, pending_count: 0 }];
+    if (path.startsWith("production_reports?")) return [];
+    throw new Error(`unexpected browser fixture read: ${path}`);
+  };
+  const result = await machtileRefreshReportTotalState(order);
+  const calculation = reportCounterCalculation();
+  const view = { result, calculation, done: order.done, source: order.progressSource.source,
+    text: document.getElementById("reportCounterPreview").textContent,
+    red: document.getElementById("reportCounterPreview").classList.contains("is-error") };
+  supabaseFetch = originalFetch;
+  return view;
+});
+check(sourceRefresh.result?.status === "ready" && sourceRefresh.done === 50 && sourceRefresh.source === "legacy", "app-source card adopts fresh legacy-source progress");
+check(!sourceRefresh.red && sourceRefresh.text.includes("50") && sourceRefresh.calculation.delta === 10, "fresh header stays neutral and total delta uses the fresh quantity");
+
+const retryRefresh = await page.evaluate(async () => {
+  const originalFresh = machtileFreshReportedTotals;
+  const originalLoad = machtileLoadCardLegacyProgress;
+  const originalFetch = supabaseFetch;
+  let attempts = 0;
+  let reloads = 0;
+  machtileFreshReportedTotals = async () => { attempts += 1; if (attempts < 3) throw new Error("temporary RPC failure"); return { goodDone: 50, failDone: 0 }; };
+  machtileLoadCardLegacyProgress = async () => { reloads += 1; return true; };
+  supabaseFetch = async (path) => path.startsWith("production_reports?") ? [] : originalFetch(path);
+  const started = Date.now();
+  const states = [];
+  const observer = new MutationObserver(() => states.push({ text: document.getElementById("reportCounterPreview").textContent, error: document.getElementById("reportCounterPreview").classList.contains("is-error") }));
+  observer.observe(document.getElementById("reportCounterPreview"), { childList: true, attributes: true, subtree: true });
+  const result = await machtileRefreshReportTotalState(selectedOrder);
+  observer.disconnect();
+  machtileFreshReportedTotals = originalFresh;
+  machtileLoadCardLegacyProgress = originalLoad;
+  supabaseFetch = originalFetch;
+  return { attempts, reloads, elapsed: Date.now() - started, result, states };
+});
+check(retryRefresh.attempts === 3 && retryRefresh.reloads === 2 && retryRefresh.elapsed >= 1900, "RPC failure reloads card progress and succeeds on the second bounded retry");
+check(retryRefresh.result?.status === "ready" && retryRefresh.states.every(state => !state.error), "retry wait never exposes the red blocked state");
+
 const overtime = await page.evaluate(() => {
   config.homeOvertimeCardEnabled = true;
   config.overtimeStartCardEnabled = true;

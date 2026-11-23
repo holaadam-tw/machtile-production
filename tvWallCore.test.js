@@ -36,7 +36,7 @@ eq("沒有交期 → null", c.overdueDays(null, at("09:00")), null);
 console.log("== 整台的今日狀態＝所有工序最新一筆 ==");
 const todayMap = est.todayStatusByProcess([rep("p1", "dailyStart", "08:05"), rep("p2", "dailyStart", "09:10"), rep("p3", "finish", "16:30"), rep("p3", "dailyStart", "08:00")], at("17:00"));
 eq("兩道工序都開工 → 取較晚的 09:10", c.latestTodayEntry(todayMap, ["p1", "p2"]).time, "09:10");
-eq("收工那道最新 → 已收工", c.latestTodayEntry(todayMap, ["p1", "p3"]).type, "finish");
+eq("完工那道最新 → 已完工", c.latestTodayEntry(todayMap, ["p1", "p3"]).type, "finish");
 eq("沒有報工 → null", c.latestTodayEntry(todayMap, ["zz"]), null);
 
 console.log("== 機台格 ==");

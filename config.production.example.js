@@ -5,6 +5,7 @@
 // bundle); every read/write goes through the signed-in session Bearer.
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
+  enableReportUncertainRecover: false,
   cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
@@ -38,6 +39,8 @@ window.MACHTILE_CONFIG = {
   enableFileUpload: true,
   fieldReportBaseUrl: "https://your-production-host.example.com/",
   useQueryRoutesForFieldReports: true,
+  // Compare-only cloud capability read; legacy decisions always win.
+  enableMachineCapabilityDualRead: false,
   useTenantHeaderAuth: true,
   useSupabase: false,
   useHmcWorklistSupabase: true,

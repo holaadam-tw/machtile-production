@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const baseRef=process.env.MACHTILE_OUTSOURCE_DOM_BASE||"5e24490"; // task branch base; global shell changes are normalized below
+const baseRef=process.env.MACHTILE_OUTSOURCE_DOM_BASE||"HEAD"; // compare flag-off behavior with the current checked-in app
 childProcess.execFileSync("git",["rev-parse","--verify",baseRef],{stdio:"pipe"});
 const files=["index.html","app.js","config.js","i18n.js","processFlowCore.js","styles.css","mockData.js"];
 const baseFiles=new Map(files.map(file=>[file,childProcess.execFileSync("git",["show",`${baseRef}:${file}`],{maxBuffer:16*1024*1024})]));

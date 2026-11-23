@@ -1,0 +1,6 @@
+# Vendored copy. Do not edit by hand.
+# Source repo: machtile-mini-mes, branch feat/return-claim, commit d8ee0d18e4684e7b98ef7011a0a0f7238c51e751 (d8ee0d18)
+# Source file: supabase/tests/pglite/fixtures/return_claim_poll_select.txt
+# The single non-comment line below is that file, byte for byte (CONTRACT-P2 r1 section 6).
+# returnClaimCore.test.js compares returnClaimCore.POLL_SELECT with it, and fails if the cloud worktree copy has drifted.
+command_uuid,command_type,machine_code,pool_item_id,expected_order_no,expected_index_sn,status,requested_at,claimed_at,applied_at,reject_code,reject_message,legacy_snapshot

@@ -198,7 +198,7 @@
         throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
       }
       args.p_previous_outsource_receipt_qty = qty;
-      args.p_expected_doc4_fingerprint = fingerprint;
+      args.p_expected_doc4_fingerprint = fingerprint === null ? null : fingerprint.toLowerCase();
     }
     // No metadata (total semantics off, batch path, invalid counter) = send nothing, same as flag off.
     // reported_before = machine-counter baseline (reported good + reported defect, owner 2026-10-31: the counter
@@ -246,7 +246,7 @@
         receiptMode: hasNewContract ? value.receipt_mode : "legacy_count",
         receiptRequiredQty: qty,
         receiptSteps: steps,
-        expectedDoc4Fingerprint: fingerprint,
+        expectedDoc4Fingerprint: fingerprint.toLowerCase(),
       };
     }
     for (const child of Object.values(value)) {
@@ -300,7 +300,7 @@
       throw new ContractError("INVALID_OUTSOURCE_RECEIPT", "委外收貨數量或識別資料無效，請重新預覽。");
     }
     return { ...previousArgs, p_command_uuid: nextCommandUuid,
-      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint };
+      p_previous_outsource_receipt_qty: quantity, p_expected_doc4_fingerprint: fingerprint.toLowerCase() };
   }
 
   function withoutOutsourceReceipt(previousArgs, nextCommandUuid) {
@@ -435,6 +435,7 @@
           preview: result,
           reportLimitHint: reportLimitHint(result),
           missingDoc4Defer: code === MISSING_DOC4_DEFER_ACK,
+          overrunNotice: firstStepOverrunNotice(result),
         };
       }
       if (row.status === "rejected") return { kind: "hard", title: "預覽未通過", message: guardMessage(row.reject_code, row.reject_message, "預覽遭拒。"), code: row.reject_code || "" };
@@ -470,6 +471,58 @@
     return null;
   }
 
+  // Owner 2026-11-13: the first route step has no quantity ceiling. With Factory
+  // StationCommands:ReportFirstStepOverrunAllowedEnabled on, an allowed preview carries
+  // legacy_snapshot.report.guard.Details.first_step_overrun=true plus over_order_qty /
+  // overrun_order_qty (StationReportGuard.cs). Display-only reminder: it never blocks,
+  // never adds an ack and never changes what is sent. Absent keys (older Factory) → null.
+  function firstStepOverrunNotice(result) {
+    if (!isPlainObject(result) || result.allowed !== true) return null;
+    const details = result.legacy_snapshot?.report?.guard?.Details;
+    if (!isPlainObject(details) || details.first_step_overrun !== true) return null;
+    const over = details.over_order_qty;
+    const order = details.overrun_order_qty;
+    if (!Number.isInteger(over) || over <= 0 || !Number.isInteger(order) || order < 0) return null;
+    return { key: "report_first_step_overrun", params: { n: over, order } };
+  }
+
+  // Owner 2026-11-13 (A03 163 vs 161): a HARD quantity reject cannot be fixed by sending again;
+  // the operator must change the number. QTY_FIX_CODES = hard rejects whose only fix is the
+  // quantity field. For QTY_EXCEEDS_AVAILABLE the preview carries the remaining quantity
+  // (preview_result.available, also legacy_snapshot.report.guard.Details.available/tol); the
+  // field shows a machine total, so the largest value the field may hold is
+  // entered - requested + (available + tol), with requested = good + fail derived from the same
+  // field. Missing/odd numbers → max null (caller keeps today's sentence). Read-only.
+  const QTY_FIX_CODES = Object.freeze(["QTY_EXCEEDS_AVAILABLE", "INVALID_REPORT_QTY"]);
+  function wholeNumber(value) {
+    if (typeof value === "number") return Number.isInteger(value) ? value : null;
+    const text = typeof value === "string" ? value.trim() : "";
+    return /^\d+$/.test(text) ? Number(text) : null;
+  }
+  function quantityLimitBlock(row, { enteredQty, requestedQty } = {}) {
+    if (!row || typeof row !== "object") return null;
+    const card = resultCard(row);
+    const code = card.guardCode || card.code || "";
+    if (!["preview-blocked", "hard"].includes(card.kind) || !QTY_FIX_CODES.includes(code)) return null;
+    const out = { code, max: null, entered: null };
+    if (code !== "QTY_EXCEEDS_AVAILABLE") return out;
+    const result = isPlainObject(row.preview_result) ? row.preview_result : null;
+    const report = (result?.legacy_snapshot || row.legacy_snapshot)?.report;
+    const details = report?.guard?.Details || report?.guard?.details;
+    const available = [result?.available, details?.available, report?.available].find((value) => Number.isInteger(value));
+    if (available === undefined) return out;
+    const tol = Number.isInteger(details?.tol) && details.tol > 0 ? details.tol : 0;
+    // Nothing left to report (previous step not reported yet, or already over): a smaller number cannot
+    // fix it, so keep today's sentence and hint instead of suggesting a number.
+    if (available + tol <= 0) return out;
+    const entered = wholeNumber(enteredQty);
+    const requested = wholeNumber(requestedQty);
+    if (entered === null || requested === null || requested <= 0) return out;
+    const max = entered - requested + available + tol;
+    if (max < 0) return out;
+    return { code, max, entered };
+  }
+
   function retryWithAck(previousArgs, ack, nextCommandUuid, options = {}) {
     if (!UUID_RE.test(String(nextCommandUuid || "")) || nextCommandUuid === previousArgs?.p_command_uuid) {
       throw new ContractError("COMMAND_UUID_REQUIRED", "再次確認必須使用新的報工識別碼。");
@@ -503,7 +556,7 @@
     ORDER_MISMATCH: "simple_block_changed",
     PART_NO_MISMATCH: "simple_block_changed",
     STALE_COMMAND: "simple_block_changed",
-    LEGACY_STATE_INCONSISTENT: "simple_block_changed",
+    LEGACY_STATE_INCONSISTENT: "simple_block_data",
     GUARD_STATE_CHANGED: "simple_block_changed",
     EXPIRED: "simple_block_changed",
     PREV_OUTSOURCE_RECEIPT_STALE: "simple_block_changed",
@@ -573,7 +626,8 @@
   return Object.freeze({
     FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, MISSING_DOC4_DEFER_ACK, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
-    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, retryWithAck, retryPreviewWithAck,
+    commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, firstStepOverrunNotice, retryWithAck, retryPreviewWithAck,
+    QTY_FIX_CODES, quantityLimitBlock,
     findOutsourceReceiptSnapshot, outsourceReceiptCode, outsourceReceiptAction, withOutsourceReceipt, withoutOutsourceReceipt,
     refreshOutsourceReceiptPreview, confirmedPreviewReceipt, finalAfterFreshPreview, createClient, operatorMessageKey,
   });

@@ -16,7 +16,7 @@
 //   started_at＝上一筆報工時間，兩者不會相等 → 照樣算有報。缺 started_at 的列也算有報（不是只改時間的形狀）。
 //
 // 一台機台的報工＝這台卡片上所有工單（目前工單＋「這台還掛 N 張」）的工序 id 今天的報工合起來看。
-// 資料＝卡片底部「今日已開工／已收工」那一份查詢（production_reports 今天、report_type in dailyStart／noon／finish），不另外打 API。
+// 資料＝卡片底部「今日已開工／已完工」那一份查詢（production_reports 今天、report_type in dailyStart／noon／finish），不另外打 API。
 // 報工時間＝ended_at（現場按送出的時間），沒有才用 created_at；跟卡片底部同一套。
 //
 // DOM 與 fetch 留在 app.js；這裡只做可測的決策。

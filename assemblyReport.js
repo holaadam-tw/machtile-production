@@ -48,6 +48,7 @@ function machtileAsmTenantId() {
 }
 function machtileAsmStations() { return machtileAsmCore()?.enabledStations(window.MACHTILE_CONFIG || config, machtileAsmTenantId()) || []; }
 function machtileAsmEnabled() { return machtileAsmStations().length > 0; }
+function machtileAsmCloseAllowed() { return machtileAsmCore()?.closeAllowed(window.MACHTILE_CONFIG || config, machtileAsm.station, machtileAsmTenantId()) === true; }
 function machtileAsmPollMs() { const v = Number(config.assemblyPollIntervalMs); return Number.isFinite(v) && v >= 10 ? v : 2000; }
 const machtileAsmDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -271,12 +272,13 @@ function machtileAsmOrderHtml(order) {
   const result = machtileAsm.results.get(String(order.processId));
   const ack = machtileAsm.ack && machtileAsm.ack.processId === String(order.processId) ? machtileAsm.ack : null;
   const startConfirm = machtileAsm.confirmStart === String(order.processId);
+  const closeAllowed = machtileAsmCloseAllowed();
   const actions = form.open ? "" : `<div class="asm-actions">
       ${startConfirm
         ? `<button type="button" class="primary-action" data-asm-start-confirm="${pid}"${lock}>${escapeHtml(machtileAsmT("asm_start_confirm"))}</button><button type="button" class="secondary-action" data-asm-start-cancel="${pid}"${lock}>${escapeHtml(machtileAsmT("cancel"))}</button>`
         : `${running ? "" : `<button type="button" class="secondary-action asm-start" data-asm-start="${pid}"${lock || (!ctx.ok ? " disabled" : "")}>${escapeHtml(machtileAsmT("asm_start"))}</button>`}
            <button type="button" class="primary-action asm-report" data-asm-report="${pid}"${lock || (!ctx.ok || !reportOpen ? " disabled" : "")}>${escapeHtml(machtileAsmT("asm_report"))}</button>
-           <button type="button" class="secondary-action asm-finish" data-asm-finish="${pid}"${lock || (!ctx.ok ? " disabled" : "")}>${escapeHtml(machtileAsmT("asm_finish"))}</button>`}
+           ${closeAllowed ? `<button type="button" class="secondary-action asm-finish" data-asm-finish="${pid}"${lock || (!ctx.ok ? " disabled" : "")}>${escapeHtml(machtileAsmT("asm_finish"))}</button>` : `<span class="asm-close-disabled" role="note">${escapeHtml(machtileAsmT("asm_close_disabled_last_station"))}</span>`}`}
     </div>`;
   return `<article class="asm-order${running ? " is-running" : ""}${busyHere ? " is-busy" : ""}" data-asm-order="${pid}" data-asm-order-no="${escapeHtml(order.id)}">
     <header class="asm-order-head">
@@ -341,6 +343,7 @@ async function machtileAsmWaitStationCommand(uuid, type, maxMs = 5 * 60 * 1000) 
 
 async function machtileAsmSendStationCommand(order, type, shortCompletion = null) {
   const cmdCore = window.MachTileStationCommandCore;
+  if (type === "close" && !machtileAsmCloseAllowed()) throw new Error(machtileAsmT("asm_close_disabled_last_station"));
   const ctx = machtileAsmContext(order);
   if (!ctx.ok) throw new Error(machtileAsmT("asm_missing_identity", { fields: ctx.missing.join("、") }));
   const uuid = cmdCore.newUuid(window.crypto);
@@ -596,6 +599,11 @@ function machtileAsmHandleClick(event) {
   if (d.asmStartCancel) { machtileAsm.confirmStart = ""; machtileAsmRender(); return; }
   if (d.asmStartConfirm) { void machtileAsmStart(d.asmStartConfirm); return; }
   if (d.asmReport || d.asmFinish) {
+    if (d.asmFinish && !machtileAsmCloseAllowed()) {
+      machtileAsm.results.set(d.asmFinish, { tone: "bad", text: machtileAsmT("asm_close_disabled_last_station") });
+      machtileAsmRender();
+      return;
+    }
     const pid = d.asmReport || d.asmFinish;
     const form = machtileAsmForm(pid);
     form.open = true; form.mode = d.asmFinish ? "finish" : "report"; form.error = ""; form.shortPrompt = null;

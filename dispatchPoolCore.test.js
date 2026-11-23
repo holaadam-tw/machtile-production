@@ -30,6 +30,30 @@ eq("同條件依工單、步序", c.sortItems([item({ process_order: 3 }), item(
 eq("不改原陣列", (() => { const a = [item({ urgency: 4 }), item({ urgency: 1 })]; c.sortItems(a); return a[0].urgency; })(), 4);
 eq("非陣列 → 空", c.sortItems(null), []);
 
+console.log("== groupClaimableItems（同單只露出最前一道）==");
+const grouped = c.groupClaimableItems([
+  item({ work_order_no: "WO-2", process_order: 3 }),
+  item({ work_order_no: "WO-1", process_order: 2 }),
+  item({ work_order_no: "WO-1", process_order: 1 }),
+]);
+eq("同單最低道次是主列，群組依主列排序", grouped.map(g => [g.main.work_order_no, g.main.process_order, g.later.map(x => x.process_order)]), [["WO-1", 1, [2]], ["WO-2", 3, []]]);
+eq("不改原列", grouped[0].main === grouped[0].later[0], false);
+const groupedByMain = c.groupClaimableItems([
+  item({ work_order_no: "W1", process_order: 1, urgency: 3 }),
+  item({ work_order_no: "W1", process_order: 2, urgency: 1 }),
+  item({ work_order_no: "W2", process_order: 1, urgency: 2 }),
+]);
+eq("群組依主列排序，不受先看到的後續道次影響", groupedByMain.map(g => g.main.work_order_no), ["W2", "W1"]);
+const claimableMain = c.groupClaimableItems([
+  item({ work_order_no: "W3", process_order: 1, urgency: 1, eligibleHere: false }),
+  item({ work_order_no: "W3", process_order: 2, urgency: 2, eligibleHere: true }),
+]);
+eq("生管畫面以本機可接的最低道次為主列", [claimableMain[0].main.process_order, claimableMain[0].later.map(x => x.process_order)], [2, [1]]);
+eq("完全沒有本機可接列時才退回最低道次", c.groupClaimableItems([
+  item({ work_order_no: "W4", process_order: 2, eligibleHere: false }),
+  item({ work_order_no: "W4", process_order: 1, eligibleHere: false }),
+])[0].main.process_order, 1);
+
 console.log("== itemsForMachine（同課）==");
 const pool = [item({ work_order_no: "L1" }), item({ work_order_no: "M1", department_code: "MILL", eligible_machine_codes: ["B03"] }),
   item({ work_order_no: "L2", urgency: 1, eligible_machine_codes: ["A05"] })];
@@ -113,6 +137,18 @@ eq("名稱 null → 未提供", c.displayName(null), "未提供");
 eq("名稱空白 → 未提供", c.displayName("   "), "未提供");
 eq("最近同步時間", c.latestSyncedAt([{ synced_at: "2026-10-07T01:00:00Z" }, { synced_at: "2026-10-07T02:30:00Z" }]), "10/07 10:30");
 eq("沒有同步時間", c.latestSyncedAt([]), "");
+
+console.log("== 選工單搜尋 ==");
+const searchable = [
+  { work_order_no: "WO-AR16-0004", part_no: "AR-16", part_name: "主軸 套", operation_name: "CNC 車削" },
+  { work_order_no: "WO-0005", part_no: "B20", part_name: "底座", operation_name: "銑削" },
+];
+eq("搜尋不分大小寫且忽略連字號", c.filterOrderSearch(searchable, "ar16").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("有連字號輸入也找到無差異內容", c.filterOrderSearch(searchable, "AR-16").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("工單末碼可搜尋", c.filterOrderSearch(searchable, "0004").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("多關鍵字全部符合", c.filterOrderSearch(searchable, "主軸 車削").map(x => x.work_order_no), ["WO-AR16-0004"]);
+eq("多關鍵字任一不符即排除", c.filterOrderSearch(searchable, "主軸 銑削"), []);
+eq("空字串保留全部", c.filterOrderSearch(searchable, "  "), searchable);
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 if (fail) process.exit(1);
