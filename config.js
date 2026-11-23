@@ -25,6 +25,7 @@ window.MACHTILE_CONFIG = {
   enableFileUpload: true,
   fieldReportBaseUrl: "https://app.machtile.com/",
   useQueryRoutesForFieldReports: true,
+  enableMachineCapabilityDualRead: false,
   useTenantHeaderAuth: true,
   useSupabase: true,
   useHmcWorklistSupabase: true,
@@ -32,6 +33,9 @@ window.MACHTILE_CONFIG = {
   // through the offline-first idempotent outbox seam (DB side = migrations
   // 202607110001–0003, applied). Rollback = set false (direct POST path).
   enableOutboxSubmit: true,
+  // 查證並以同一 command_uuid 安全補送不確定報工；驗證後再由 owner 開啟。
+  enableReportUncertainRecover: false,
+  reportAutoCloseOnSuccess: true,
   // Schedule foundation and capacity calendar are present and verified in Production.
   enableScheduleContracts: true,
   // 202607160005 is present and passed the Production rollback smoke.
@@ -75,6 +79,8 @@ window.MACHTILE_CONFIG = {
   // 空＝全部機台關。開之前要先有：machtile-mini-mes 的 station_commands migration 已套正式庫、
   // 工廠套用端（Factory 背景服務）已部署且開關打開。表或 RPC 不存在時按鈕會自動藏起來。
   stationCommandMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
+  // station_commands Realtime publication 尚未在正式庫啟用；開啟後仍保留輪詢備援。
+  enableStationCommandRealtime: false,
   // 派工池接單：全部車床 A01–A05＋全部加工中心 B01–B06（2026-10-14 owner「池開加工中心」）。
   dispatchPoolMachines: ["A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04", "B05", "B06"],
   // machines / v_machine_management_cards 尚未同步舊 MES Station_Type；machine_type 不是多工能力。
@@ -86,10 +92,12 @@ window.MACHTILE_CONFIG = {
   enableFinishButton: true,
   // 完工報工 applied 後自動派關站；本包只佈建，不開正式旗標。
   enableFinishClose: true,
+  // 關站送出後擋住全畫面，避免等待 Factory 時再按完工或停工。
+  enableFinishOverlay: true,
   finishCloseMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 短交完工：cloud 與 Factory 皆驗證；預設關，僅明列機台可顯示與送出。
   enableShortCompletion: true,
-  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
+  shortCompletionMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06", "F01", "G01"],
   // 標準完工下一步流程：預設關；待 cloud + Factory flags 都驗證後另行開啟。
   enableStandardFinishFlow: true,
   standardFinishFlowMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
@@ -108,6 +116,7 @@ window.MACHTILE_CONFIG = {
   // 開工計數高於系統已報時，開工 applied 後沿用卡片報工路徑補報差額。
   startBackfillEnabled: true,
   reportTotalSemanticsEnabled: true,
+  reportBackgroundPreviewEnabled: true,
   reportCounterMetaRpcEnabled: false,
   reportQtyJumpWarnEnabled: true,
   homeOvertimeCardEnabled: true,
@@ -121,6 +130,132 @@ window.MACHTILE_CONFIG = {
   outsourceReceiptDialogEnabled: true,
   stationReportMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
-  assemblyReportEnabled: false,
+  assemblyReportEnabled: true,
   assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"],
+  assemblyStations: ["F01", "G01", "H01"],
+  // 完工關站另行控管；H01 是最後一道，仍由生管在舊 MES 關站。
+  assemblyCloseStations: ["F01", "G01"],
+  assemblyDefectStations: ["G01"],
+  assemblyDefectReasons: [],
+  // 機台卡片「接錯了，退回」（作業員退回自己接、還沒開工的單；CONTRACT-P2）。預設關。
+  // 開之前要先有：雲端 migration 20261112200000 已套、Factory 套用端支援 return_claim、雲端 return_claim_enabled=true。
+  enableReturnClaim: false,
+  // 機台卡片「換道次」（同一張工單換成待做池裡另一道：先退回現在這一道，再接選的那一道）。預設關。
+  // enableReturnClaim 也要開才有效；開之前還要先有：工廠把同一張工單沒做完的道次都放進待做池。
+  enableSwitchStep: false,
+  // 換道次（已開工、還沒報工；第 2 階段 switch_step 指令，工廠一個交易做完）。預設關；跟上面的 enableSwitchStep 分開，也不需要 enableReturnClaim。
+  // 換道次 第 2 階段開之前要先有：雲端 migration 20261114090000 已套＋switch_step_enabled=true、工廠 SwitchStepApplierEnabled＋機台名單。
+  enableSwitchStepStarted: true,
+  // B01/B02 卡片六盤料號推算；預設關閉，僅讀既有 hmc_fixed_read。
+  enableHmcPalletCard: true,
+  enableHmcPalletStrip: true,
+  hmcPalletCardMachines: ["B01", "B02"],
+  hmcPalletMap: {
+    B01: {
+      1: [
+        { partNos: ["BG-03-01"], label: "BG-03本體" },
+        { partNos: ["SF-03-01"], label: "SF-03本體" },
+        { partNos: ["SKF-03-01"], label: "SKF-03本體" },
+      ],
+      2: [
+        { partNos: ["A37-R01-04"], label: "A37搖籃" },
+        { partNos: ["A56-R01-03"], label: "A56搖籃" },
+        { partNos: ["A16-R01-04"], label: "A16／A22搖籃" },
+        { partNos: ["CPDG-06-01", "CPDG-06-01(新型)"], label: "CPDG-06", default: true },
+        { partNos: ["HG-06-01"], label: "HG-06", default: false },
+        { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 5 },
+        { partNos: ["MSW-01-01", "MSW-01Y-01"], label: "MSW-01／MSW-01-Y", dual: true, sharedWith: 5 },
+      ],
+      3: [{ partNos: ["DSHG-04-01"], label: "DSHG-04中座體(小流量)" }],
+      4: [
+        { partNos: ["CPDG-03-01"], label: "CPDG-03" },
+        { partNos: ["CPDG-06-01", "CPDG-06-01(新型)"], label: "CPDG-06", default: false },
+        { partNos: ["HCG-06-01"], label: "HCG-06" },
+        { partNos: ["HG-06-01"], label: "HG-06", default: true },
+      ],
+      5: [
+        { partNos: ["A16-R01-01"], label: "A16本體" },
+        { partNos: ["AR16-R01-01"], label: "AR16/AR22泵浦本體" },
+        { partNos: ["MPW-01-01"], label: "MPW-01", dual: true, sharedWith: 2 },
+        { partNos: ["MSW-01-01", "MSW-01Y-01"], label: "MSW-01／MSW-01-Y", dual: true, sharedWith: 2 },
+        { partNos: ["SF-06-01", "SF-06(內內)-01", "SF-06(外外)-01"], label: "SF-06本體(內外／內內／外外)" },
+        { partNos: ["SF-06T-01"], label: "SF-06T本體" },
+        { partNos: ["THF-06-01"], label: "THF-06本體" },
+      ],
+      6: [
+        { partNos: ["BG-06-01"], label: "BG-06本體" },
+        { partNos: ["DSHG-04-02"], label: "DSHG-04中座平蓋" },
+        { partNos: ["MCA-06-01"], label: "MCA-06本體" },
+      ],
+    },
+    B02: {
+      1: [
+        { partNos: ["EDG-01-01"], label: "EDG-01本體" },
+        { partNos: ["SBG-03(06)-02-L"], label: "SBG-03(06)側蓋-L", dual: true, sharedWith: 5 },
+        { partNos: ["SBG-03(06)-02-R"], label: "SBG-03(06)側蓋-R", dual: true, sharedWith: 5 },
+        { partNos: ["SBP-03(06)-02"], label: "SBP-03(06)側蓋" },
+        { partNos: ["SBSG-03(06)-01-L"], label: "SBSG-03(06)長蓋-L(比例)" },
+        { partNos: ["SBSG-03(06)-01-PT-1"], label: "SBSG-03(06)長蓋-L(PT)" },
+        { partNos: ["SBSG-03(06)-01-2B2"], label: "SBSG-03(06)長蓋-R(2B2)", dual: true, sharedWith: 5 },
+        { partNos: ["SBSG-03(06)-01-R"], label: "SBSG-03(06)長蓋-R(比例)", dual: true, sharedWith: 5 },
+        { partNos: ["SBSG-03(06)-01-PT"], label: "SBSG-03(06)長蓋-R(PT)", dual: true, sharedWith: 5 },
+      ],
+      2: [
+        { partNos: ["DG-01-01"], label: "DG-01本體", dual: true, sharedWith: 6 },
+        { partNos: ["DT-02-01"], label: "DT-02本體", dual: true, sharedWith: 6 },
+        { partNos: ["EFBG-03-01"], label: "EFBG-03本體" },
+        { partNos: ["MPW-01-01"], label: "MPW-01本體" },
+      ],
+      3: [
+        { partNos: ["SBG-03-01"], label: "SBG-03本體" },
+        { partNos: ["AR16-R01-04"], label: "AR16九孔座" },
+        { partNos: ["AR22-R01-01"], label: "AR22九孔座", dual: true, sharedWith: 6 },
+        { partNos: ["CPDG-03-02"], label: "CPDG-03平蓋(小孔)" },
+        { partNos: ["CPDG-03-03"], label: "CPDG-03平蓋(大孔)" },
+        { partNos: ["HCG-03-03-01"], label: "HCG-03平蓋(大孔Φ8)" },
+        { partNos: ["HCG-03-03"], label: "HCG(HG)-03平蓋(小孔Φ6)" },
+      ],
+      4: [
+        { partNos: ["CPDG-06-02", "CPDG-06-03"], label: "CPDG-06平蓋(小孔/大孔)" },
+        { partNos: ["HCG-03-01"], label: "HCG-03本體", dual: true, sharedWith: 5 },
+        { partNos: ["HCG-06-03-1"], label: "HCG(HG)-06平蓋(大孔Φ8)" },
+        { partNos: ["HG-03-01"], label: "HG-03本體", dual: true, sharedWith: 5 },
+        { partNos: ["P16-R01-04A"], label: "P16九孔座-AR齒" },
+        { partNos: ["P22-R01-01A"], label: "P22九孔座-AR齒" },
+      ],
+      5: [
+        { partNos: ["HCG-03-01"], label: "HCG-03本體", dual: true, sharedWith: 4 },
+        { partNos: ["HG-03-01"], label: "HG-03本體", dual: true, sharedWith: 4 },
+        { partNos: ["SBG-03(06)-02-L"], label: "SBG-03(06)側蓋-L", dual: true, sharedWith: 1 },
+        { partNos: ["SBG-03(06)-02-R"], label: "SBG-03(06)側蓋-R", dual: true, sharedWith: 1 },
+        { partNos: ["SBSG-03(06)-01-2B2"], label: "SBSG-03(06)長蓋-R(2B2)", dual: true, sharedWith: 1 },
+        { partNos: ["SBSG-03(06)-01-R"], label: "SBSG-03(06)長蓋-R(比例)", dual: true, sharedWith: 1 },
+        { partNos: ["SBSG-03(06)-01-PT"], label: "SBSG-03(06)長蓋-R(PT)", dual: true, sharedWith: 1 },
+      ],
+      6: [
+        { partNos: ["DG-01-01"], label: "DG-01本體", dual: true, sharedWith: 2 },
+        { partNos: ["DG-02-01"], label: "DG-02遙控體" },
+        { partNos: ["DT-01-01"], label: "DT-01遙控體" },
+        { partNos: ["DT-02-01"], label: "DT-02本體", dual: true, sharedWith: 2 },
+        { partNos: ["SBG-06-01"], label: "SBG-06本體" },
+        { partNos: ["AR22-R01-01"], label: "AR22九孔座", dual: true, sharedWith: 3 },
+      ],
+    },
+  },
+  // 換道次（已開工）開放的機台（預設 []＝一台都沒有）；enableSwitchStepStarted 也要開，而且機台代號要在這裡才出按鈕。
+  switchStepStartedMachines: ["A05"],
+  // 換道次（已開工）：不在待做池的道次也列出來（標「不在待做池」）。預設關；要跟工廠 SwitchStepAllowUnpooledTarget 一起開。
+  switchStepStartedAllowUnpooled: false,
+  // 上一道擋住（owner 2026-11-14「照建議」；prevStepNotifyCore.js）。程式預設關；2026-11-15 起 hint／notify 兩個開（owner pack 20261115-prevstep-enable，雲端 migration 20261114170000 已套），hideLegacyReportForStationMachines 仍關。
+  // enablePrevStepBlockHint：報工／關站被上一道擋時，多一句「卡在 A05（第 2 道）、請找 A05 或生管」。
+  // enablePrevStepNotify：再加「通知生管」鍵＋提醒中心看板（生管以上）；開之前要先套雲端 migration 20261114170000。
+  enablePrevStepBlockHint: true,
+  enablePrevStepNotify: true,
+  // A/B 機台已開智慧報工時，午報／完工不再退回直接寫 production_reports（只進雲端、不進舊 MES；REPORT #9）。預設關。
+  hideLegacyReportForStationMachines: false,
+  // 換道次（數量一起搬；第 3 階段 switch_step_preview＋switch_step 帶 expected_moved_*）：已經報過工的道次換成同一張單的另一道、已報數量一起搬過去。預設關；跟上面兩個換道次旗標分開。
+  // 換道次（數量一起搬）開之前要先有：雲端 r3 migration 已套＋switch_step_move_enabled=true、工廠 SwitchStepMoveReportedEnabled＋SwitchStepMoveStations 機台名單。
+  enableSwitchStepMove: false,
+  // 換道次（數量一起搬）開放的機台（預設 []＝一台都沒有）；enableSwitchStepMove 也要開，而且機台代號要在這裡才出按鈕。
+  switchStepMoveMachines: [],
 };

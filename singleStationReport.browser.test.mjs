@@ -7,7 +7,8 @@ import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.env.MACHTILE_SCREENSHOT_DIR || "D:/04_SoftNet/ops/codex-inbox/shots";
 await mkdir(shots, { recursive: true });
-await mkdir("D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots", { recursive: true });
+const finishDialogShots = path.join(shots, "finish-dialog");
+await mkdir(finishDialogShots, { recursive: true });
 const moduleSpec = process.env.MACHTILE_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.MACHTILE_PLAYWRIGHT_MODULE).href : "playwright";
 const imported = await import(moduleSpec);
 const { chromium } = imported.default || imported;
@@ -27,13 +28,17 @@ const tenantId = id(1), workOrderId = id(101), processId = id(301);
 const previewResult = {
   command_uuid: id(701), status: "previewed", allowed: true, guard_code: null, hard: false, message: "可送出",
   available: 80, supply: 100, done_c: 20, prev_index_sn: 1, prev_kind: "INHOUSE", predicted_ac03_qty: 38,
+  previous_station_code: "A01", previous_step_name: "車床", previous_reported_good: 100,
   order_qty: 1000, order_start: "2026-10-01", shown_at: "2026-10-13T04:00:00.000Z",
   legacy_snapshot: { report: { guard: { code: "", hard: false, message: "可送出", Details: {
     available: 80, supply: 100, done_c: 20, prev_index_sn: 1, prev_kind: "INHOUSE", predicted_ac03_qty: 38,
     order_start: "2026-10-01", effective_need: 1000,
   } } } },
 };
-const calls = { commands: [], reports: [], closeCommands: [] };
+const calls = { commands: [], reports: [], closeCommands: [], prevStepNotify: [], prevStepResolve: [] };
+// 「上一道擋住」旗標（預設空字串＝config 不帶＝全關）；prevStepBoardRows＝看板 RPC 回的列
+let prevStepFlags = "";
+let prevStepBoardRows = [];
 const requestUrls = [];
 let currentMachine = "A04";
 let guardFails = false;
@@ -48,6 +53,8 @@ let reconciledCommand = null;
 let closeCommand = null;
 let reportedOutput = 920;
 let reportedFail = 0; let noStartCounter = false;
+let reportProgressDelayMs = 0;
+let reportProgressFails = false;
 let freshReadEnabled = false;
 let outsourceReceiptEnabled = false;
 let outsourceReceiptRequired = false;
@@ -57,8 +64,12 @@ let finalStaleOnce = false;
 let finalRequiredOnce = false;
 let starterUserId = null;
 let previewBlockedCode = "";
+let previewBlockedNoNumber = false;
 let previewSoftCode = "";
-const browser = await chromium.launch();
+let previewFirstStepOverrun = false;
+const browser = await chromium.launch(process.env.MACHTILE_CHROMIUM_EXECUTABLE
+  ? { executablePath: process.env.MACHTILE_CHROMIUM_EXECUTABLE }
+  : {});
 const context = await browser.newContext({ viewport: { width: 800, height: 1100 }, serviceWorkers: "block" });
 await context.route("**/*", async route => {
   const req = route.request(); const url = new URL(req.url());
@@ -75,7 +86,11 @@ await context.route("**/*", async route => {
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select")?.includes("operator_ids") && url.searchParams.get("report_type") === "eq.dailyStart") {
       return json(starterUserId ? [{ process_id: processId, report_type: "dailyStart", created_at: "2026-10-31T00:05:00Z", user_id: starterUserId, operator_ids: [starterUserId] }] : []);
     }
-    if (url.pathname.endsWith("/rpc/batch_report_progress")) return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    if (url.pathname.endsWith("/rpc/batch_report_progress")) {
+      if (reportProgressDelayMs) await new Promise(resolve => setTimeout(resolve, reportProgressDelayMs));
+      if (reportProgressFails) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "progress unavailable" }) });
+      return json([{ process_id: processId, legacy_output: reportedOutput, legacy_fail: reportedFail, pending_output: 0, pending_fail: 0, pending_count: 0, last_report_at: "2026-10-13T03:00:00Z", actual_start_at: "2026-10-13T00:00:00Z" }]);
+    }
     if (url.pathname.endsWith("/production_reports") && req.method() === "GET" && url.searchParams.get("select") === "report_type,report_payload,created_at") return json(noStartCounter ? [] : [{ report_type: "noon", created_at: "2026-10-13T03:00:00Z", report_payload: { machine_qty: 920 } }]);
     if (url.pathname.endsWith("/rpc/machtile_submit_station_report")) {
       const body = req.postDataJSON(); calls.commands.push(body);
@@ -126,10 +141,23 @@ await context.route("**/*", async route => {
             legacy_snapshot: { report: { guard } } } });
       }
       if (body.p_preview && previewBlockedCode) {
-        const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30 } };
+        const guard = { code: previewBlockedCode, hard: true, message: "本次數量超過可報數", Details: { ...previewResult.legacy_snapshot.report.guard.Details, available: 30, tol: 0, requested: body.p_good_qty + body.p_fail_qty } };
+        const blocked = { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
+          legacy_snapshot: { report: { guard } } };
+        // Older/odd Factory payload: no remaining-quantity field anywhere → App keeps today's sentence.
+        if (previewBlockedNoNumber) { delete blocked.available; delete guard.Details.available; }
         return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", reject_code: null, reject_message: null, legacy_snapshot: null,
-          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, allowed: false, hard: true, guard_code: previewBlockedCode, message: guard.message, available: 30,
-            legacy_snapshot: { report: { guard } } } });
+          preview_result: blocked });
+      }
+      // Real shape (shadow 2026-11-13 r2-a-preview-163-flag-on.log): allowed preview, guard.Details carries the
+      // first-step overrun keys (StationReportGuard.cs), top-level preview_result.notices has FIRST_STEP_OVERRUN.
+      if (body.p_preview && previewFirstStepOverrun) {
+        const notice = { code: "FIRST_STEP_OVERRUN", message: "第一道超過工單數量報工：本次 38 件、報完累計 1002 件，工單 1000 件（多 2 件）。請生管核對。" };
+        const guard = { code: "", hard: false, message: "可送出", Details: { ...previewResult.legacy_snapshot.report.guard.Details,
+          first_step_overrun: true, over_available_qty: 2, overrun_order_qty: 1000, reported_after: 1002, over_order_qty: 2, over_effective_need_qty: 2,
+          notices: [{ Code: notice.code, Message: notice.message }] } };
+        return json({ command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed",
+          preview_result: { ...previewResult, command_uuid: body.p_command_uuid, notices: [notice], legacy_snapshot: { report: { guard } } } });
       }
       if (!body.p_preview && finalSubmitFails) {
         reconciledCommand = { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty };
@@ -140,6 +168,9 @@ await context.route("**/*", async route => {
         ? { command_uuid: body.p_command_uuid, command_type: "report_preview", status: "previewed", preview_result: { ...previewResult, command_uuid: body.p_command_uuid } }
         : { command_uuid: body.p_command_uuid, command_type: "report", status: "applied", good_qty: body.p_good_qty, fail_qty: body.p_fail_qty });
     }
+    if (url.pathname.endsWith("/rpc/machtile_notify_prev_step_block")) { calls.prevStepNotify.push(req.postDataJSON()); return json({ id: id(990), result: "created", notify_count: 1 }); }
+    if (url.pathname.endsWith("/rpc/machtile_prev_step_block_notices")) return json(prevStepBoardRows);
+    if (url.pathname.endsWith("/rpc/machtile_resolve_prev_step_block_notice")) { calls.prevStepResolve.push(req.postDataJSON()); return json({ id: req.postDataJSON().p_id, result: "resolved" }); }
     if (url.pathname.endsWith("/rpc/machtile_submit_station_command")) {
       const body = req.postDataJSON(); calls.closeCommands.push(body);
       closeCommand = { command_uuid: body.p_command_uuid, command_type: "close", status: "applied", reject_code: null, reject_message: null };
@@ -160,7 +191,7 @@ await context.route("**/*", async route => {
     return json([]);
   }
   if (url.origin === base.slice(0, -1)) {
-    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},disableServiceWorker:true};` });
+    if (url.pathname === "/config.js") return route.fulfill({ contentType: "text/javascript", body: `window.MACHTILE_CONFIG={authMode:"dev-nologin",supabaseUrl:"${fake}",supabaseAnonKey:"test",useSupabase:true,enableStationReport:true,stationReportMachines:["A04"],outsourceReceiptDialogEnabled:${outsourceReceiptEnabled},enableFinishButton:${finishButtonEnabled},enableFinishClose:true,finishCloseMachines:["A04"],enableShortCompletion:true,shortCompletionMachines:["A04"],stationCommandMachines:["A04"],enablePickStartFlow:${pickStartEnabled},pickStartFlowMachines:${pickStartEnabled ? '["A04"]' : "[]"},${prevStepFlags}disableServiceWorker:true};` });
     return route.continue();
   }
   return route.abort();
@@ -174,6 +205,22 @@ await page.waitForFunction(() => document.getElementById("dataSourceLabel")?.tex
 // Admin keeps the full smart-report detail (preview / hold confirm / reconcile) behind 技術細節.
 await page.evaluate(() => { machtileAuthState.role = "admin"; });
 await page.locator("[data-open-report]:visible").first().click();
+const partNumberCard = await page.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  const order = state.workOrders[0];
+  const host = document.createElement("div");
+  host.innerHTML = renderMachineCard({ ...machine, order });
+  return { text: host.querySelector(".job-part-number")?.textContent || "", partNo: order?.partNo || "" };
+});
+assert.equal(partNumberCard.partNo, "GQ7Q", "fixture part_no is already present in card order data");
+assert.match(partNumberCard.text, /GQ7Q/, "machine card renders the fixture part number");
+assert.equal(await page.locator("#reportPartNo").innerText(), "GQ7Q", "routine report header shows the part number");
+assert.equal(await page.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  const host = document.createElement("div");
+  host.innerHTML = renderMachineCard({ ...machine, order: { ...state.workOrders[0], partNo: "" } });
+  return host.querySelectorAll(".job-part-number").length;
+}), 0, "machine card hides the part-number line when part_no is empty");
 await page.locator('#reportForm [data-report-type="noon"]').click();
 assert.equal(await page.locator('#reportForm .report-type-tab[data-report-type="finish"]').count(), 0, "routine report has no finish tab");
 await page.locator("#completedQty").fill("958");
@@ -258,6 +305,8 @@ await page.locator('#singleStationReportPanel [data-station-report-preview="A04"
 await page.waitForTimeout(500);
 assert.equal(await page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]').count(), 1, `${await page.locator("#singleStationReportPanel").innerText()} calls=${JSON.stringify(calls.commands)}`);
 assert.equal(calls.commands.length, 1, "preview creates one command");
+assert.equal(await page.locator("#simpleReportSummary [data-report-limit-hint]").innerText(), "目前最多可報 80 件（上一道 A01 已報 100 件）", "unblocked preview keeps the old hint in the sheet");
+assert.equal(await page.locator("[data-station-report-tech] [data-report-limit-hint]").innerText(), "目前最多可報 80 件（上一道 A01 已報 100 件）", "unblocked preview keeps the old hint in the tech panel");
 assert.equal(calls.commands[0].p_preview, true);
 assert.equal(calls.commands[0].p_good_qty, 38);
 assert.equal(calls.commands[0].p_fail_qty, 2);
@@ -303,6 +352,19 @@ await page.evaluate(() => {
 });
 await page.locator('#singleStationReportPanel [data-station-report-preview="A04"]').click();
 await page.waitForFunction(() => document.querySelector('[data-station-report-confirm="A04"]'));
+await page.evaluate(() => { machtileStationReportState(machtileBatchRow("A04")).singleReport.overlayTotal = 960; });
+await page.evaluate(processId => {
+  window.__r3ImmediateCardProgress = [];
+  const refresh = machtileRefreshCardSections;
+  machtileRefreshCardSections = function () {
+    const order = [...(state.workOrders || []), ...(state.assignedCardOrders || [])].find(item => item.processId === processId);
+    const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+    const host = document.createElement("div");
+    host.innerHTML = renderMachineCard({ ...machine, order });
+    window.__r3ImmediateCardProgress.push(host.querySelector(".machine-metrics strong")?.textContent || "");
+    return refresh();
+  };
+}, processId);
 
 const confirm = page.locator('#singleStationReportPanel [data-station-report-confirm="A04"]');
 await confirm.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 });
@@ -323,10 +385,12 @@ assert.equal(finalCommand.p_fail_qty, 2);
 assert.equal("p_previous_outsource_receipt_qty" in finalCommand, false, "flag off: final RPC body has no receipt keys");
 assert.equal("p_expected_doc4_fingerprint" in finalCommand, false, "flag off: final RPC body has no fingerprint key");
 assert.equal(calls.commands.some(command => "p_previous_outsource_receipt_qty" in command), false, "flag off: no RPC body carries receipt keys");
-assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "true", "confirmation closes the report sheet immediately");
-assert.match(await page.locator("#toast").innerText(), /已送出，工廠寫入中|工廠已完成寫入/, "background submission gives immediate or completed feedback");
+assert.equal(await page.locator("#reportSheet").getAttribute("aria-hidden"), "false", "report sheet stays open while the Factory result is unknown");
 await page.evaluate(() => { selectedOrder = { id: "OTHER-WO", processId: "other-process", machine: "A01" }; });
 await page.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"));
+await page.waitForFunction(() => document.querySelector("#reportSheet")?.getAttribute("aria-hidden") === "true");
+assert.match(await page.locator("#toast").innerText(), /報工成功：良品 38 件、不良 2 件/, "applied report gives the quantity toast");
+assert.ok((await page.evaluate(() => window.__r3ImmediateCardProgress)).some(text => /960\/1000/.test(text)), "machine card progress updates immediately after success");
 assert.equal(calls.reports.length, 1, "applied command records production_reports exactly once");
 assert.equal(calls.reports[0].process_id, processId, "switching machines during background submit still records the originally submitted order");
 assert.equal(calls.reports[0].completed_qty, 38);
@@ -366,13 +430,15 @@ assert.equal(await outsider.evaluate(() => buildReportPayload("noon").fail_reaso
 await outsider.setViewportSize({ width: 390, height: 844 });
 await outsider.evaluate(() => { document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0; const layout = document.querySelector("#reportSheet .report-layout"); layout.scrollLeft = 0; layout.scrollTop = 0; });
 await outsider.locator("#reportFailReasonField").scrollIntoViewIfNeeded();
-await outsider.screenshot({ path: "D:/04_SoftNet/ops/codex-inbox/20261015-app-finish-dialog-shots/defect-reason-mobile.png" });
+await outsider.screenshot({ path: path.join(finishDialogShots, "defect-reason-mobile.png") });
 await outsider.close();
 
 currentMachine = "A04";
+freshReadEnabled = true;
 const finishValidation = await context.newPage();
 await finishValidation.goto(base, { waitUntil: "domcontentloaded" });
 await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await finishValidation.evaluate(() => { config.reportTotalSemanticsEnabled = true; });
 await finishValidation.locator("[data-open-report]:visible").first().waitFor();
 await finishValidation.waitForFunction(() => state.workOrders?.length && state.machines?.length);
 await finishValidation.evaluate(() => {
@@ -383,19 +449,74 @@ await finishValidation.evaluate(() => {
 });
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').count(), 1, "enabled finish flag shows one machine-card finish button");
 assert.equal(await finishValidation.locator('[data-open-report-type="finish"]:visible').innerText(), "完工");
-await finishValidation.locator('.machine-report-button:visible').click();
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "first finish open after page load prefills the fresh reported machine total");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
 assert.equal(await finishValidation.locator('.report-type-tab[data-report-type="noon"]').getAttribute("class").then(value => value.includes("active")), true, "machine-card report button opens directly on routine report");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "routine report keeps today's zero default");
 await finishValidation.evaluate(() => closeReport());
 await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
-await finishValidation.waitForTimeout(200);
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish open after routine report prefills the fresh reported machine total");
 const finishOpenState = await finishValidation.evaluate(() => ({ finishOpen: document.querySelector("#finishSheet")?.classList.contains("is-open"), reportOpen: document.querySelector("#reportSheet")?.classList.contains("is-open"), activeReportType, formHost: document.querySelector("#reportForm")?.parentElement?.id, toast: document.querySelector("#toast")?.textContent, dataset: { ...document.querySelector('.machine-finish-button')?.dataset }, orders: machtileMachineCardOrders().map(o => ({ id: o.id, machine: o.machine, processId: o.processId })) }));
 assert.equal(finishOpenState.finishOpen, true, `finish card button opens independent finish screen: ${JSON.stringify(finishOpenState)}`);
 assert.equal(finishOpenState.reportOpen, false, "finish screen does not open the routine report sheet");
 assert.equal(finishOpenState.activeReportType, "finish");
 assert.equal(finishOpenState.formHost, "finishFormHost", "finish reuses the canonical report form and submit orchestration");
-assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "這一道總完成數（良品）", "independent finish screen labels the production input as whole-operation good total");
+assert.equal(await finishValidation.locator("#finishPartNo").innerText(), "GQ7Q", "finish header shows the part number");
+assert.equal(await finishValidation.locator("#completedQtyLabel").innerText(), "機台目前顯示總數（這張單）", "production finish screen labels the input as the machine total");
 assert.equal(await finishValidation.locator("#finishReportedQty").innerText(), "已報 920 件", "finish screen reuses card progress as reported quantity");
 assert.equal(await finishValidation.locator('[data-report-section="finish"] .radio-card').isHidden(), true, "overtime choice is hidden");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 350;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "late finish refresh never fills a routine report");
+await finishValidation.waitForTimeout(450);
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "0", "late finish refresh remains isolated after it resolves");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('.machine-report-button:not([disabled]):visible').click();
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "", "finish stays empty while the fresh total is loading");
+assert.equal(await finishValidation.locator("#reportForm .submit-report").isDisabled(), true, "finish submit is disabled while loading");
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish receives its own delayed open-time total");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 350;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.locator("#completedQty").fill("930");
+await finishValidation.waitForTimeout(450);
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "930", "operator-entered finish total is preserved when refresh resolves");
+await finishValidation.evaluate(() => closeReport());
+reportProgressDelayMs = 0;
+reportProgressFails = true;
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#finishReportedQty")?.classList.contains("is-error"), null, { timeout: 5000 });
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "", "failed finish refresh leaves the field empty");
+assert.equal(await finishValidation.locator("#reportForm .submit-report").isDisabled(), true, "failed finish refresh disables submit");
+assert.doesNotMatch(await finishValidation.locator("#finishReportedQty").innerText(), /已報\s+920/, "failed refresh does not show a stale reported total");
+const writesBeforeEmptySubmit = calls.commands.length + calls.reports.length;
+reportProgressFails = false;
+await finishValidation.locator("#reportForm .submit-report").evaluate(button => { button.disabled = false; button.click(); });
+await finishValidation.waitForFunction(() => document.querySelector("#reportSubmitError")?.textContent.includes("請輸入機台顯示總數"));
+assert.equal(calls.commands.length + calls.reports.length, writesBeforeEmptySubmit, "empty finish is rejected before recovery refresh and sends nothing");
+await finishValidation.evaluate(() => closeReport());
+await finishValidation.reload({ waitUntil: "domcontentloaded" });
+await finishValidation.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await finishValidation.waitForFunction(() => state.workOrders?.length && state.machines?.length);
+await finishValidation.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+await finishValidation.locator('[data-open-report-type="finish"]:visible').click();
+await finishValidation.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+assert.equal(await finishValidation.locator("#completedQty").inputValue(), "920", "finish open after reload prefills the fresh reported machine total");
 assert.match(await finishValidation.locator("#shortCompletionSection").innerText(), /80/, "short-completion prompt shows the actual plan gap");
 await finishValidation.locator("#completedQty").fill("1000");
 assert.equal(await finishValidation.locator("#shortCompletionSection").isHidden(), true, "total completed quantity at plan hides short completion");
@@ -428,7 +549,6 @@ assert.equal(await finishValidation.locator('#singleStationReportPanel [data-sta
 const zeroCommandsBefore = calls.commands.length;
 await finishValidation.locator("#reportForm .submit-report").click();
 assert.equal(calls.commands.length, zeroCommandsBefore, "total below reported is blocked before creating a command");
-assert.match(await finishValidation.locator("#toast").innerText(), /總數不能小於已報的 920 件；報錯請用報工修正/, "below-reported block gives the approved correction guidance");
 assert.match(await finishValidation.locator("#reportSubmitError").innerText(), /總數不能小於已報的 920 件/, "quantity validation remains visible above submit");
 assert.equal(await finishValidation.evaluate(() => document.activeElement?.id), "completedQty", "quantity validation scroll target receives focus");
 await finishValidation.locator("#completedQty").fill("958");
@@ -449,7 +569,11 @@ assert.equal(calls.closeCommands[0].p_expected_order_no, "XX01202604140011");
 assert.equal(calls.closeCommands[0].p_expected_index_sn, 2);
 assert.equal(calls.closeCommands[0].p_expected_simulation_id, "Y011BG35APT0");
 assert.deepEqual(calls.closeCommands[0].p_short_completion, { reason_code: "MATERIAL_SHORT", note: "" }, "APP fixture uses the cloud RPC parameter and Factory JSON field names");
-assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "true", "finish confirmation closes immediately while factory work continues");
+assert.equal(await finishValidation.locator("#finishSheet").getAttribute("aria-hidden"), "false", "successful finish stays open on the post-finish choice panel");
+assert.equal(await finishValidation.locator("#finishSheet .finish-success-panel").isVisible(), true, "post-finish panel replaces the form");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-other]").isVisible(), true, "no claimable next step offers another order");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-skip]").isVisible(), true, "no claimable next step offers return home");
+assert.equal(await finishValidation.locator("#finishSheet [data-standard-finish-claim]").count(), 0, "no claimable next step hides claim action");
 assert.match(await finishValidation.locator("#stationReportBackgroundStatus").innerText(), /工廠已完成寫入/, "successful background finish shows a temporary completion status");
 assert.equal(await finishValidation.evaluate(() => {
   const flow = machtileStationReportState(machtileBatchRow("A04"));
@@ -730,7 +854,7 @@ console.log("PASS material/count outsource receipt dialogs → preview success")
 
 
 // ---- 單台報工簡化（owner 2026-10-31「單台報工簡化 照圖做」）：作業員畫面 ----
-const implShots = "D:/04_SoftNet/ops/owner-pack/20261031-single-report-mock/impl-final";
+const implShots = path.join(shots, "impl-final");
 await mkdir(implShots, { recursive: true });
 currentMachine = "A04"; guardFails = false; guardEnabled = true; outsourceReceiptEnabled = false; outsourceReceiptRequired = false;
 finalStaleOnce = false; finalRequiredOnce = false; finalSubmitFails = false; reconciledCommand = null; starterUserId = id(902);
@@ -761,6 +885,98 @@ const sheetShot = async (op, name) => {
   await op.evaluate(() => { const layout = document.querySelector("#reportSheet .report-layout"); if (layout) layout.scrollTop = 0; });
   await op.locator("#reportSheet .report-panel").screenshot({ path: path.join(implShots, name) });
 };
+
+// APP batch 2：停打 800ms 背景預覽；只保留最新 fingerprint，按送出只再送 final；旗標關維持舊流程。
+const bg = await openOperatorPage();
+await bg.evaluate(() => { config.reportBackgroundPreviewEnabled = true; });
+const bgBusyAt = calls.commands.length;
+await bg.evaluate(() => { machtileStationCmd.pending.A04 = { commandType: "start" }; });
+await bg.locator("#completedQty").fill("958");
+await bg.waitForTimeout(1100);
+assert.equal(calls.commands.length, bgBusyAt, "background preview waits while this tablet has another command pending for the machine");
+await bg.evaluate(() => { delete machtileStationCmd.pending.A04; });
+const bgBefore = calls.commands.length;
+await bg.locator("#completedQty").fill("959");
+await bg.waitForTimeout(1100);
+assert.equal(calls.commands.slice(bgBefore).filter(c => c.p_preview).length, 1, "background typing debounce sends exactly one preview");
+await bg.locator("#completedQty").fill("959");
+await bg.waitForTimeout(100);
+await bg.locator("#completedQty").fill("960");
+const bgChangedAt = calls.commands.length;
+  await bg.waitForTimeout(1100);
+  assert.equal(calls.commands.slice(bgChangedAt).filter(c => c.p_preview).length, 1, "changed value discards/queues stale work and previews only the latest value");
+  const bgCappedAt = calls.commands.length;
+  await bg.locator("#completedQty").fill("961");
+  await bg.waitForTimeout(1100);
+  assert.equal(calls.commands.length, bgCappedAt, "a report form sends at most two background previews");
+  const bgSubmitAt = calls.commands.length;
+  await bg.locator("#reportForm .submit-report").click();
+  await bg.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+  assert.deepEqual(calls.commands.slice(bgSubmitAt).map(c => c.p_preview), [true, false], "after the background cap, submit performs the current preview and final");
+await bg.close();
+
+// M3：背景預覽不得清掉既有的「請勿重送」或 submit-path blocked guard。
+const bgGuard = await openOperatorPage();
+await bgGuard.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = true;
+  const flow = machtileStationReportState(machtileBatchRow("A04"));
+  flow.phase = "blocked";
+  flow.args = { p_command_uuid: "guard-submit-uuid" };
+  flow.error = "舊 MES 已套用但 App 後續紀錄失敗：請勿重送數量";
+  machtileRenderStationReportSurfaces();
+});
+const guardCallsAt = calls.commands.length;
+await bgGuard.locator("#completedQty").fill("962");
+await bgGuard.waitForTimeout(1100);
+assert.equal(calls.commands.length, guardCallsAt, "background preview does not run over an existing do-not-resend guard");
+assert.deepEqual(await bgGuard.evaluate(() => { const f = machtileStationReportState(machtileBatchRow("A04")); return [f.phase, f.args?.p_command_uuid, f.error]; }),
+  ["blocked", "guard-submit-uuid", "舊 MES 已套用但 App 後續紀錄失敗：請勿重送數量"], "retyping preserves the existing submit-path warning and args");
+await bgGuard.close();
+
+// L1：背景 await 期間關閉／切到完工，舊 noon run 必須失去 owner，不能走 zero-finish 真實寫入。
+const bgOwner = await openOperatorPage();
+await bgOwner.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = true;
+  window.__savedHasPendingReport = machtileHasPendingReport;
+  window.__pendingGate = new Promise((resolve) => { window.__releasePendingGate = resolve; });
+  machtileHasPendingReport = async () => window.__pendingGate;
+  const fingerprint = machtileBackgroundPreviewFingerprint();
+  window.__staleBackgroundRun = machtileRunBackgroundPreview(fingerprint);
+});
+await bgOwner.waitForTimeout(100);
+const ownerWritesAt = calls.reports.length + calls.closeCommands.length;
+await bgOwner.evaluate(() => closeReport());
+await bgOwner.evaluate(() => {
+  const machine = state.machines.find(item => String(item.code || item.name).toUpperCase() === "A04") || state.machines[0];
+  machine.order = state.workOrders[0];
+  state.assignedCardOrders = [state.workOrders[0]];
+  document.querySelector("#workOrderGrid").innerHTML = renderMachineCard(machine);
+});
+await bgOwner.locator('[data-open-report-type="finish"]:visible').click();
+await bgOwner.waitForFunction(() => document.querySelector("#completedQty")?.value === "920");
+await bgOwner.locator("#completedQty").fill("920");
+await bgOwner.evaluate(() => {
+  window.__zeroFinishBranchEntries = 0;
+  window.__savedRefreshReportTotalState = machtileRefreshReportTotalState;
+  machtileRefreshReportTotalState = (...args) => { window.__zeroFinishBranchEntries += 1; return window.__savedRefreshReportTotalState(...args); };
+  window.__releasePendingGate(false);
+});
+await bgOwner.evaluate(async () => { await window.__staleBackgroundRun; machtileHasPendingReport = window.__savedHasPendingReport; });
+assert.equal(await bgOwner.evaluate(() => window.__zeroFinishBranchEntries), 0, "stale noon background run never enters the zero-finish branch after the real card opens finish");
+assert.equal(calls.reports.length + calls.closeCommands.length, ownerWritesAt, "stale background run cannot reach zero-finish real writes without a submit tap");
+await bgOwner.close();
+
+const bgOff = await openOperatorPage();
+await bgOff.evaluate(() => {
+  config.reportBackgroundPreviewEnabled = false;
+  clearTimeout(machtileBackgroundPreview.timer);
+  machtileInvalidateBackgroundPreview();
+});
+const bgOffAt = calls.commands.length;
+await bgOff.locator("#completedQty").fill("959");
+await bgOff.waitForTimeout(1100);
+assert.equal(calls.commands.length, bgOffAt, "background preview flag off preserves old no-preview-before-submit behavior");
+await bgOff.close();
 
 // ① 一般報工：沒有智慧報工字樣、一行摘要、大總數、良品提示、報工人＝開工的人、一顆送出鈕
 const op = await openOperatorPage();
@@ -935,7 +1151,7 @@ await bad.locator("#defectQty").fill("2");
 const badFinals = calls.commands.filter(c => !c.p_preview).length;
 await bad.evaluate(() => machtileStationReportSubmitFinal("A04"));
 assert.equal(calls.commands.filter(c => !c.p_preview).length, badFinals, "changed defects after preview → no final");
-assert.match(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).error), /已報數量已改變/);
+assert.equal(await bad.evaluate(() => machtileStationReportState(machtileBatchRow("A04")).preview), null, "changed defects discard the stale preview immediately");
 await bad.close();
 
 // L3 #3：舊單確認（OLD_ORDER_NEWER_OPEN）沒寫原因 → 留在確認狀態、提示寫原因，不重新預覽；寫了才送出。
@@ -945,6 +1161,7 @@ const oldBefore = calls.commands.length;
 await old.locator("#reportForm .submit-report").click();
 await old.waitForFunction(() => document.querySelector('[data-simple-report-status="warning"]'));
 assert.match(await old.locator('[data-simple-report-status="warning"]').innerText(), /同一個料號已經有比較新的工單/);
+assert.equal(await old.locator("#reportSheet").getAttribute("aria-hidden"), "false", "ack-needed preview keeps the report sheet open");
 assert.equal(await old.locator("#reportForm .submit-report").innerText(), "確認沒錯，送出");
 assert.equal(await old.locator('#simpleReportReason [data-station-report-note="A04"]').isVisible(), true, "old-order note field is shown");
 await old.locator("#reportForm .submit-report").click();
@@ -962,30 +1179,211 @@ await old.close();
 previewSoftCode = "";
 console.log("PASS L3: double tap single chain, defect change blocks final, old-order note keeps soft state");
 
-// ④ 被擋：只有一句白話、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
+// Owner 2026-11-13：第一道超過開單數量 → Factory 直接放行（旗標 ReportFirstStepOverrunAllowedEnabled），
+// 平板只多一行不擋人的提醒：同一顆送出鈕、沒有確認、送出的內容跟平常一字不差。
+const overrunText = "這次比開單數量多 2 件（開單 1000 件）。第一道不限數量，可以直接送出。";
+const plainRun = await openOperatorPage();
+const plainBefore = calls.commands.length;
+await plainRun.locator("#reportForm .submit-report").click();
+await plainRun.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const plainSent = calls.commands.slice(plainBefore);
+await plainRun.close();
+previewFirstStepOverrun = true;
+const ov = await openOperatorPage();
+// In the sheet: a preview that stays on screen shows the one reminder line; button text unchanged.
+await ov.evaluate(() => machtileStationReportSubmitPreview("A04"));
+await ov.waitForFunction(() => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed");
+assert.equal(await ov.locator("#reportSheet [data-first-step-overrun-notice]:visible").count(), 1, "exactly one visible overrun reminder in the sheet");
+assert.equal(await ov.locator("#reportSheet [data-first-step-overrun-notice]:visible").innerText(), overrunText);
+assert.equal(await ov.locator("#reportForm .submit-report").innerText(), "送出報工", "submit button unchanged");
+assert.equal(await ov.locator("#reportForm .submit-report").isDisabled(), false, "reminder does not block");
+assert.equal(await ov.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 0, "no red box");
+await sheetShot(ov, "08-operator-first-step-overrun.png");
+await ov.close();
+const ov2 = await openOperatorPage();
+const ovBefore = calls.commands.length;
+await ov2.locator("#reportForm .submit-report").click();
+await ov2.waitForFunction(() => document.querySelector("#stationReportBackgroundStatus")?.textContent.includes("工廠已完成寫入"), null, { timeout: 8000 });
+const ovSent = calls.commands.slice(ovBefore);
+assert.deepEqual(ovSent.map(c => c.p_preview), [true, false], "one press = preview then final, no extra confirm");
+const shapeOf = (c) => ({ ...c, p_command_uuid: "*", p_client_guard_snapshot: c.p_client_guard_snapshot ? { ...c.p_client_guard_snapshot, preview_command_uuid: "*", shown_at: "*" } : c.p_client_guard_snapshot });
+assert.deepEqual(ovSent.map(shapeOf), plainSent.map(shapeOf), "what is sent is identical to a normal report");
+assert.equal(await ov2.locator("#stationReportBackgroundStatus [data-station-report-background-message]").innerText(), "工廠已完成寫入");
+assert.equal(await ov2.locator("#stationReportBackgroundStatus [data-station-report-background-note]").innerText(), overrunText, "banner keeps the reminder after the sheet closes");
+await ov2.locator("#stationReportBackgroundStatus").screenshot({ path: path.join(implShots, "09-banner-first-step-overrun.png") });
+previewFirstStepOverrun = false;
+// Next normal report on the same page: the reminder line is gone, banner DOM back to the old shape.
+await ov2.locator("[data-open-report]:visible").first().click();
+await ov2.locator('#reportForm [data-report-type="noon"]').click();
+await ov2.waitForFunction(() => document.querySelector("#reportForm.is-simple-report"));
+await ov2.locator("#completedQty").fill("958");
+assert.equal(await ov2.locator("[data-first-step-overrun-notice]").count(), 0, "no reminder without the preview keys");
+await ov2.locator("#reportForm .submit-report").click();
+await ov2.waitForFunction(() => {
+  const el = document.querySelector("#stationReportBackgroundStatus");
+  return el?.textContent.includes("工廠已完成寫入") && !el.querySelector("[data-station-report-background-note]");
+}, null, { timeout: 8000 });
+await ov2.close();
+console.log("PASS first-step overrun: one non-blocking reminder (sheet + banner), same button, same payload");
+
+// ④ 被擋：只有一句白話（說出這一格最多填幾件）、沒有技術數字、沒有重複紅框；管理員在技術細節看得到可報數
+// Owner 2026-11-13（A03 163 vs 161）：硬擋數量 → 主按鈕「改數量」只帶回數量欄、不送任何東西。
 previewBlockedCode = "QTY_EXCEEDS_AVAILABLE";
 const bl = await openOperatorPage();
 const blBefore = calls.commands.length;
 await bl.locator("#reportForm .submit-report").click();
 await bl.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
 assert.equal(calls.commands.slice(blBefore).filter(c => !c.p_preview).length, 0, "blocked preview never sends a final");
-assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。");
+assert.equal(await bl.locator("#reportSheet").getAttribute("aria-hidden"), "false", "refused preview keeps the report sheet open with its reason");
+// 958 on the machine, 920 already reported → 38 this time, only 30 left → the field may hold at most 950.
+const qtyMaxText = "這一道最多只能報 950 件（目前填 958 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。";
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText);
+// Coordinator 2026-11-13: non-first step with a previous station — when the max sentence shows, the old
+// 「目前最多可報 30 件（上一道 A01 已報 100 件）」 hint is hidden so the operator sees one number only.
+assert.equal(await bl.locator("#reportSheet [data-report-limit-hint]").count(), 0, "blocked + max sentence → old per-report hint hidden in the sheet");
+assert.equal(await bl.locator("[data-report-limit-hint]:visible").count(), 0, "and nowhere visible");
+assert.equal(await bl.locator("#reportSheet").innerText().then(t => /目前最多可報/.test(t)), false, "no 目前最多可報 anywhere in the sheet");
 const blText = await bl.locator("#singleStationReportPanel").innerText();
 assert.doesNotMatch(blText, /可報|先領|guard|QTY_EXCEEDS|30/, `no technical numbers for operators: ${blText}`);
 assert.equal(await bl.locator('.station-report-simple-status.is-error:visible, #reportSubmitError:visible, #singleStationReportPanel .batch-notice.is-error:visible').count(), 1, "exactly one red sentence");
-assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "重新送出");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "改數量", "hard quantity reject: no resubmission button");
 await sheetShot(bl, "05-operator-blocked.png");
+const blRequests = requestUrls.length;
+const blCommands = calls.commands.length;
+await bl.locator("#completedQty").blur();
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForTimeout(400);
+await bl.locator("#reportForm .submit-report").press("Enter");
+await bl.waitForTimeout(400);
+assert.equal(calls.commands.length, blCommands, "改數量 sends no command");
+assert.equal(requestUrls.length, blRequests, `改數量 makes no request at all: ${requestUrls.slice(blRequests).join(" | ")}`);
+assert.equal(await bl.evaluate(() => document.activeElement?.id), "completedQty", "改數量 returns focus to the quantity field");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "改數量");
+// Operator changes the number → the button is a normal retry again and the sentence follows the field.
+await bl.locator("#completedQty").fill("950");
+assert.equal(await bl.locator("#reportForm .submit-report").innerText(), "重新送出", "after editing the quantity the retry is back");
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(),
+  "這一道最多只能報 950 件（目前填 950 件）。請改成 950 件以內再送出；機台上真的做比較多，請告訴生管。");
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForFunction((n) => machtileStationReportState(machtileBatchRow("A04")).phase === "previewed"
+  && machtileStationReportState(machtileBatchRow("A04")).args?.p_good_qty === 30, null, { timeout: 8000 });
+assert.deepEqual(calls.commands.slice(blCommands).map(c => [c.p_preview, c.p_good_qty]), [[true, 30]], "edited quantity → one new preview, nothing else");
+await bl.locator("#completedQty").fill("958");
+await bl.evaluate(() => { machtileStationReportState(machtileBatchRow("A04")).phase = "idle"; machtileStationReportState(machtileBatchRow("A04")).result = null; machtileRenderSingleStationReport(); });
+await bl.locator("#reportForm .submit-report").click();
+await bl.waitForFunction(() => document.querySelector("#reportForm .submit-report")?.textContent === "改數量");
 await bl.evaluate(() => { machtileAuthState.role = "admin"; machtileRenderSingleStationReport(); });
 assert.equal(await bl.locator("[data-station-report-tech]").count(), 1, "admin keeps 技術細節");
 await bl.locator("[data-station-report-tech] > summary").click();
+assert.equal(await bl.locator("#reportSheet [data-report-limit-hint]").count(), 0, "admin tech panel also drops the old hint while the max sentence shows");
 const adminText = await bl.locator("[data-station-report-tech]").innerText();
 assert.match(adminText, /目前可報 30 件/, "admin sees the technical available quantity");
 assert.match(adminText, /預估先領 38 件/);
 assert.equal(await bl.locator('#singleStationReportPanel [data-station-report-preview="A04"]').isVisible(), true, "admin keeps 先預覽");
-assert.match(await bl.locator('[data-simple-report-status="error"]').innerText(), /這次數量比可以報的還多/, "admin still gets the same plain sentence on top");
+assert.equal(await bl.locator('[data-simple-report-status="error"]').innerText(), qtyMaxText, "admin still gets the same plain sentence on top");
 await sheetShot(bl, "06-admin-view.png");
 await bl.locator("[data-station-report-tech]").screenshot({ path: path.join(implShots, "07-admin-tech-details.png") });
 await bl.close();
+// Missing number in the preview → today's sentence, but still 改數量 and still no resubmission.
+previewBlockedNoNumber = true;
+const bn = await openOperatorPage();
+await bn.locator("#reportForm .submit-report").click();
+await bn.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(await bn.locator('[data-simple-report-status="error"]').innerText(), "這次數量比可以報的還多，請確認機台數字是這張單的。", "no number → fallback sentence");
+assert.equal(await bn.locator("#reportForm .submit-report").innerText(), "改數量");
+const bnCommands = calls.commands.length;
+await bn.locator("#reportForm .submit-report").click();
+await bn.waitForTimeout(400);
+assert.equal(calls.commands.length, bnCommands, "fallback 改數量 also sends nothing");
+assert.equal(await bn.evaluate(() => document.activeElement?.id), "completedQty");
+await bn.close();
+previewBlockedNoNumber = false;
+console.log("PASS hard QTY_EXCEEDS_AVAILABLE: max number + 改數量 (no send), edit → 重新送出, missing number → fallback");
+// ---- 上一道擋住（owner 2026-11-14「照建議」；prevStepNotifyCore.js）----
+// ① 旗標全關：被上一道擋也不多任何東西、不打任何新 RPC
+previewBlockedCode = "QTY_EXCEEDS_AVAILABLE"; currentMachine = "A04";
+const psOff = await openOperatorPage();
+await psOff.locator("#reportForm .submit-report").click();
+await psOff.waitForFunction(() => document.querySelector('[data-simple-report-status="error"]'));
+assert.equal(await psOff.locator("[data-prev-step-block]").count(), 0, "flags off: no prev-step block");
+assert.equal(requestUrls.filter(u => /prev_step_block/.test(u)).length, 0, "flags off: no prev-step RPC");
+await psOff.close();
+// ② enablePrevStepNotify：一句白話（卡在 A01 第 1 道、差 8 件、找誰）＋「通知生管」→ 一次 RPC，payload 照雲端合約
+prevStepFlags = "enablePrevStepNotify:true,";
+const psOn = await openOperatorPage();
+const psCommands = calls.commands.length;
+await psOn.locator("#reportForm .submit-report").click();
+await psOn.waitForFunction(() => document.querySelector("#singleStationReportPanel [data-prev-step-block]"));
+assert.equal(await psOn.locator("[data-prev-step-block]:visible").count(), 1, "operator sees exactly one prev-step block");
+const psText = await psOn.locator("#singleStationReportPanel [data-prev-step-block-text]").innerText();
+assert.equal(psText, "卡在上一道 A01（第 1 道，車床）：還差 8 件。請找 A01 先報工；A01 已做完沒報，請找生管。", psText);
+assert.equal(await psOn.locator('[data-simple-report-status="error"]').count(), 1, "the original plain sentence stays");
+await sheetShot(psOn, "20-prev-step-block.png");
+await psOn.locator("#singleStationReportPanel [data-prev-step-notify]").click();
+await psOn.waitForFunction(() => document.querySelector('#singleStationReportPanel [data-prev-step-notify-status="sent"]'));
+assert.equal(await psOn.locator("#singleStationReportPanel [data-prev-step-notify-status]").innerText(), "已通知生管，生管會在管理頁看到。");
+assert.equal(await psOn.locator("[data-prev-step-notify]").count(), 0, "button gone after a successful notice (every surface)");
+assert.equal(calls.prevStepNotify.length, 1, "exactly one notify RPC");
+const psPayload = calls.prevStepNotify[0].p_payload;
+assert.deepEqual({ ...psPayload, message: undefined }, { machine_code: "A04", work_order_no: "XX01202604140011", process_order: 2, reason_code: "QTY_EXCEEDS_AVAILABLE",
+  blocking_machine_code: "A01", blocking_process_order: 1, blocking_step_name: "車床", blocking_vendor_name: null, short_qty: 8, message: undefined }, JSON.stringify(psPayload));
+assert.match(psPayload.message, /^A04 XX01202604140011 第 2 道被擋：卡在上一道 A01/);
+assert.equal(calls.commands.slice(psCommands).filter(c => !c.p_preview).length, 0, "notify never sends a report");
+await psOn.close();
+previewBlockedCode = "";
+// ③ 管理頁看板（生管）：讀 RPC、顯示一行、按「已處理」→ resolve RPC、列消失；作業員看不到看板
+prevStepBoardRows = [{ id: id(991), machine_code: "A03", work_order_no: "XX01202606120005", process_order: 3, reason_code: "PREVIOUS_STEP_OPEN",
+  blocking_machine_code: "A05", blocking_process_order: 2, blocking_step_name: null, blocking_vendor_name: null, short_qty: null,
+  message: "m", status: "open", notify_count: 2, first_notified_at: "2026-11-14T01:00:00Z", last_notified_at: "2026-11-14T02:00:00Z", resolved_at: null, resolution_note: null }];
+const board = await context.newPage();
+board.on("pageerror", error => errors.push(error.message));
+await board.goto(base, { waitUntil: "domcontentloaded" });
+await board.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await board.evaluate(() => { machtileAuthState.role = "operator"; renderAlerts(); });
+assert.equal(await board.locator("#prevStepBoard").isHidden(), true, "operator: board stays hidden");
+await board.evaluate(() => { machtileAuthState.role = "planner"; switchView("alerts"); renderAlerts(); });
+await board.waitForFunction(() => document.querySelector("[data-prev-step-board-row]"));
+const boardText = await board.locator("#prevStepBoard").innerText();
+assert.match(boardText, /A03 工單 XX01202606120005 第 3 道/);
+assert.match(boardText, /上一道 A05（第 2 道）還沒關站。請找 A05 關站，或找生管。/);
+assert.match(boardText, /通知 2 次/);
+await board.locator(`[data-prev-step-resolve="${id(991)}"]`).click();
+await board.waitForFunction(() => document.querySelector('[data-prev-step-board-state="empty"]'));
+assert.deepEqual(calls.prevStepResolve, [{ p_id: id(991), p_note: null }]);
+await board.close();
+prevStepBoardRows = [];
+// ④ REPORT #9 hideLegacyReportForStationMachines：Factory 關掉這台智慧報工（guard report_enabled=false）時，
+//    必須保留直接寫 production_reports 的唯一報工路徑。
+prevStepFlags = "hideLegacyReportForStationMachines:true,"; guardEnabled = false;
+const legacy = await context.newPage();
+legacy.on("pageerror", error => errors.push(error.message));
+await legacy.goto(base, { waitUntil: "domcontentloaded" });
+await legacy.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await legacy.locator("[data-open-report]:visible").first().click();
+await legacy.locator('#reportForm [data-report-type="noon"]').click();
+await legacy.waitForFunction(() => !document.querySelector("#reportForm .submit-report").hidden);
+await legacy.locator("#completedQty").fill("930");
+const legacyReports = calls.reports.length;
+await legacy.locator("#reportForm .submit-report").click();
+for (let attempt = 0; attempt < 100 && calls.reports.length === legacyReports; attempt += 1) await legacy.waitForTimeout(50);
+assert.equal(calls.reports.length, legacyReports + 1, "Factory-disabled smart report keeps the legacy production_reports POST");
+await legacy.close();
+
+// Factory 同步設定已載入且這台確實開啟智慧報工時，legacy helper 必須擋住直接 POST。
+guardEnabled = true;
+const smartLegacyBlocked = await context.newPage();
+smartLegacyBlocked.on("pageerror", error => errors.push(error.message));
+await smartLegacyBlocked.goto(base, { waitUntil: "domcontentloaded" });
+await smartLegacyBlocked.waitForFunction(() => document.getElementById("dataSourceLabel")?.textContent.includes("Supabase"));
+await smartLegacyBlocked.locator("[data-open-report]:visible").first().click();
+await smartLegacyBlocked.locator('#reportForm [data-report-type="noon"]').click();
+await smartLegacyBlocked.waitForFunction(() => machtileBatchState.stationReportSettings.status === "loaded");
+const smartLegacyReports = calls.reports.length;
+assert.equal(await smartLegacyBlocked.evaluate(() => machtileLegacyReportBlocked("A04", "noon")), true, "Factory-enabled smart report blocks the legacy path");
+assert.equal(calls.reports.length, smartLegacyReports, "blocked legacy path does not POST production_reports");
+await smartLegacyBlocked.close();
+prevStepFlags = ""; guardEnabled = true;
+console.log("PASS prev-step block: flags off unchanged; hint + 通知生管 payload; planner board + resolve; legacy fallback preserved unless Factory enables smart reporting (REPORT #9)");
 previewBlockedCode = ""; starterUserId = null;
 console.log("PASS single report simplified operator view (one button, receipt cancel, blocked, admin details)");
 
@@ -1062,7 +1460,7 @@ assert.equal(await defectTotal.locator("#reportCounterPreview").textContent(), "
 assert.equal(await defectTotal.evaluate(() => validateReportForm("noon")), "暫時無法核對已報不良數，請稍後再按");
 // F5 + F3: finish prefill = reported good + reported defect; short completion compares planned vs GOOD.
 reportedFail = 5;
-await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder); });
+await defectTotal.evaluate(async () => { activeReportType = "finish"; setReportDefaults(selectedOrder); await machtileRefreshReportTotalState(selectedOrder, { prefill: true }); });
 assert.equal(await defectTotal.locator("#completedQty").inputValue(), "755", "finish prefill = 750 good + 5 defect (machine total so far)");
 await defectTotal.locator("#completedQty").fill("761");
 await defectTotal.locator("#defectQty").fill("1");
@@ -1090,6 +1488,7 @@ guardFails = false;
 await failedGuard.locator("[data-station-report-reload-guard]").click();
 await failedGuard.waitForFunction(() => !document.querySelector("#reportForm .submit-report").disabled);
 assert.equal(await failedGuard.locator("#reportForm .submit-report").innerText(), "送出報工", "guard reload restores the one primary action");
+
 assert.deepEqual(errors, []);
 console.log("PASS single station smart report browser contract");
 await browser.close();

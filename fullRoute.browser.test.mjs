@@ -23,7 +23,7 @@ const procs = [
   {id:id(305),work_order_id:id(201),process_order:5,process_name:'測試委外',process_type:'outsourced',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(306),work_order_id:id(201),process_order:6,process_name:'包裝',process_type:'cnc',machine_id:null,status:'pending',qty_completed:0,qty_defect:0},
   {id:id(309),work_order_id:id(202),process_order:2,process_name:'車削',process_type:'cnc',machine_id:id(101),status:'pending',qty_completed:0,qty_defect:0,queue_order:2}];
-let routeMode='full', routeGets=0;
+let routeMode='full', routeGets=0, routeFailuresRemaining=0;
 const routeRows=Array.from({length:9},(_,i)=>({work_order_no:'TEST-SAME',step_no:i+1,operation_name:'TEST-BOM-'+(i+1),station_no:'TEST-STATION-'+(i+1),station_codes:i===2?'B03,B04,B05,B06':'TEST-STATION-'+(i+1),is_outsourced:i===0||i===4,is_confirmed:i!==0,supplier_name:i===0?'測試委外廠商':'',supplier_no:'',source_updated_at:null}));
 let n3Legacy = 4690, settingsMode = 'missing', settings = {}, role = 'operator';
 const progress = p => ({process_id:p.id,process_order:p.process_order,legacy_output:p.id===id(303)?n3Legacy:p.id===id(302)?5000:null,legacy_input:5000,legacy_fail:0,pending_output:0,pending_fail:0,pending_count:0,last_report_at:null,legacy_updated_at:null});
@@ -64,7 +64,7 @@ async function openAs(who) {
       routeGets++;
       const scoped=u.searchParams.get('work_order_no');
       ok(/^in\.\([^)]+\)$/.test(scoped||'') && scoped.slice(4,-1).split(',').length<=50,'every route GET is work-order scoped');
-      if(routeMode==='failed')return json(503,{message:'TEST route outage'});
+      if(routeMode==='failed'||routeFailuresRemaining>0){if(routeFailuresRemaining>0)routeFailuresRemaining--;return json(503,{message:'TEST route outage'});}
       if(routeMode==='missing')return json(404,{code:'PGRST205'});
       if(routeMode==='duplicate')return json(200,[routeRows[0],routeRows[0]]);
       const level=settingsMode==='row'?(settings[role]||'full'):'full';
@@ -105,6 +105,9 @@ try {
   ok(await dialog.locator('.process-flow-step').count()===9,'full dialog retains 7+ steps');
   ok((await dialog.innerText()).includes('委外：測試委外廠商')&&(await dialog.innerText()).includes('委外狀態無資料'),'vendor but no invented outsource status');
   ok((await dialog.innerText()).includes('B03、B04、B05、B06')&&(await dialog.innerText()).includes('BOM 未發行'),'shared machines and unpublished BOM warning render');
+  await page.evaluate(()=>{window.__routeBeforeUnavailable=machtileProcessFlows.get('TEST-SAME');machtileProcessFlows.set('TEST-SAME',{processes:[],unavailable:true});machtileRefreshOpenProcessFlow();});
+  ok((await dialog.innerText()).includes('製程路線讀取失敗，稍後自動重試')&&!(await dialog.innerText()).includes('共 0 道'),'open full-route dialog shows unavailable text, never a zero-step count');
+  await page.evaluate(()=>{machtileProcessFlows.set('TEST-SAME',window.__routeBeforeUnavailable);delete window.__routeBeforeUnavailable;machtileRefreshOpenProcessFlow();});
   ok((await dialog.locator('[data-flow-process="'+id(302)+'"]').innerText()).includes('已完成'),'actual completed status retained');
   ok((await dialog.locator('[data-flow-process="'+id(303)+'"]').innerText()).includes('已報 4690 / 5000'),'same card/flow quantity snapshot');
   ok(await dialog.locator('[data-flow-process="route:TEST-SAME:5"] select,[data-flow-process="route:TEST-SAME:5"] button').count()===0,'outsource has no assignment controls');
@@ -122,7 +125,17 @@ try {
   settings={operator:'hidden'};await reload(page);ok(await card(page,'A01').locator('.process-flow').count()===0,'hidden remains hidden');
   settings={operator:'full'};
   const warningsBeforeMissing=routeWarnings.length;
-  for(const mode of ['failed','duplicate','missing']){routeMode=mode;await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===5,mode+' falls back, no stale full route');}
+  routeFailuresRemaining=1;const readsBeforeTransient=routeGets;await reload(page);
+  ok(routeGets===readsBeforeTransient+2&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'route read fails once then retries and retains all three-plus steps');
+  routeMode='failed';await page.evaluate(()=>{machtileProcessFlows=new Map();});await reload(page);
+  ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME')?.unavailable===true),'route fails after retries with no prior success is explicitly unavailable');
+  const unavailableText=await card(page,'A01').innerText();
+  ok(unavailableText.includes('製程路線讀取失敗，稍後自動重試')&&!unavailableText.includes('共 1 道'),'unavailable route never shows a confident one-step count');
+  routeMode='full';await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'route recovers after unavailable state');
+  routeMode='failed';await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===9,'route fails after a prior success and keeps previous route');
+  routeMode='duplicate';await reload(page);ok(await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===5,'invalid duplicate route falls back to actual processes');
+  routeMode='missing';const readsBeforeMissing=routeGets;await reload(page);
+  ok(routeGets===readsBeforeMissing+1&&await page.evaluate(()=>machtileProcessFlows.get('TEST-SAME').processes.length)===5,'404 table-missing path is unchanged and is not retried');
   const readsAfterMissing=routeGets;await reload(page);
   ok(routeGets===readsAfterMissing,'missing table is not retried by later dashboard batches or refresh in this login');
   await page.reload({waitUntil:'domcontentloaded'});
