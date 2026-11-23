@@ -45,7 +45,6 @@
   "simple_report_fix_qty": { "value": "Sửa số lượng", "_draft": true },
   "simple_report_ack_submit": { "value": "Đã kiểm tra đúng, gửi", "_draft": true },
   "missing_doc4_defer_message": { "value": "Công đoạn trước {{step}} (nhà cung cấp) chưa có phiếu thuê ngoài. Bấm “Báo công trước, báo kế hoạch bổ sung phiếu” để báo công như bình thường nhưng không tự động trừ vật liệu; bộ phận kế hoạch sẽ nhận danh sách cần bổ sung trong Factory.", "_draft": true },
-  "missing_doc4_defer_confirm": { "value": "Báo công trước, báo kế hoạch bổ sung phiếu", "_draft": true },
   "missing_doc4_defer_cancel": { "value": "Hủy", "_draft": true },
   "simple_report_cancelled": { "value": "Đã hủy, chưa nhận hàng và chưa báo công.", "_draft": true },
   "simple_report_timeout": { "value": "Nhà máy không phản hồi, hãy bấm gửi lại.", "_draft": true },
