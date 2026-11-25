@@ -15428,15 +15428,23 @@ function machtileFinishComboWrite(code, value) {
 
 const machtileStandardFinishHandledClaims = new Set();
 
+// ALREADY_CLOSED（這一道先前就關過了，這次沒有寫任何東西）：標題走翻譯；內文＝工廠那句原文，沒有才用翻譯過的固定句。
+function machtileStationCmdAlreadyClosedText(view, commandType) {
+  if (commandType !== "close" || view?.alreadyClosed !== true) return null;
+  return { title: machtileTranslate("station_close_already_closed_title"),
+    text: view.factoryMessage ? String(view.text || "") : machtileTranslate("station_close_already_closed_fallback") };
+}
+
 function machtileFinishCloseSetResult(code, view, record = null) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const closeIdentity = flow.close?.identity || null;
   const applied = view?.phase === "applied";
   const shortQty = Number(view?.shortQty || 0);
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, "close");
   const title = applied
     ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
-    : machtileTranslate("finish_close_rejected_title");
+    : alreadyClosed ? alreadyClosed.title : machtileTranslate("finish_close_rejected_title");
   const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running",
     SHORT_COMPLETION_DISABLED: "short_completion_disabled", SHORT_COMPLETION_NOT_NEEDED: "short_completion_not_needed",
     SHORT_COMPLETION_REASON_INVALID: "short_completion_reason_invalid" })[view?.code];
@@ -15445,6 +15453,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
     title,
     message: applied
       ? (view?.warning && flow.singleReport?.shortCompletion ? machtileTranslate("short_completion_warning") : (view?.warning || machtileTranslate("finish_close_applied_detail")))
+      : alreadyClosed ? alreadyClosed.text
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
     prevStepRow: applied ? null : view?.prevStepRow || null,
@@ -16897,6 +16906,8 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdUnsubscribe(code);
   machtileStationCmdSavePending();
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, record.commandType);
+  if (alreadyClosed) { view.title = alreadyClosed.title; view.text = alreadyClosed.text; }
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "start") {
     delete machtileInstantStartPending[code];
@@ -16958,6 +16969,9 @@ function machtileStationCmdFinish(code, view) {
     || (record.commandType === "claim_next" && record.replaceStopped === true);
   if (view.phase === "applied" && refreshOccupation) {
     void machtileRefreshAfterApplied(code, record.commandType);
+  } else if (alreadyClosed && record.commandType === "close") {
+    // 這一道先前就關過了：卡片可能還停在舊畫面 → 跟關站成功後同一支重讀（一次；不走「池子空了再重試」那段）。
+    void machtileRefreshAfterApplied(code, "already_closed");
   }
   if (view.phase === "applied" && record.commandType === "claim_next" && record.standardFinishClaim) return;
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
@@ -16976,7 +16990,12 @@ function machtileLoadSupabaseJs() {
   if (machtileLoadSupabaseJs.promise) return machtileLoadSupabaseJs.promise;
   machtileLoadSupabaseJs.promise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    // Exact version + SRI: a floating "@2" would let a new upstream release reach the shop floor untested.
+    // Use the published dist/umd/supabase.js (already minified). jsDelivr generates supabase.min.js on the fly
+    // and says not to use SRI on generated files. To upgrade: change the version AND recompute the sha384.
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js";
+    script.integrity = "sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ";
+    script.crossOrigin = "anonymous";
     script.async = true;
     script.onload = () => window.supabase?.createClient ? resolve(window.supabase) : reject(new Error("SUPABASE_JS_UNAVAILABLE"));
     script.onerror = () => reject(new Error("SUPABASE_JS_LOAD_FAILED"));
@@ -31219,7 +31238,8 @@ function machtileCardFooterStatus(order, machine) {
         return `<span class="card-today-status is-finished" data-today-status="closed" data-i18n="finish_close_applied"${title}>${escapeHtml(machtileTranslate("finish_close_applied"))}</span>`;
       }
       if (close && close.kind !== "applied") {
-        const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
+        const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm"
+          : close.kind === "already_closed" ? "card_finish_close_already_closed" : "card_finish_close_rejected";
         const reason = close.reason || machtileTranslate("finish_close_unknown");
         return `<span class="card-today-status is-close-incomplete" data-today-status="close-incomplete"${title}><strong>${escapeHtml(machtileTranslate("card_finish_recorded"))}</strong><span>${escapeHtml(machtileTranslate(textKey, { reason }))}</span></span>`;
       }
