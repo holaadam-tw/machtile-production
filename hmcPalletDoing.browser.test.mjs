@@ -60,7 +60,8 @@ const initialRead = () => ({
   ],
 });
 
-async function open({ base = false, doing = null, readResponse = initialRead(), setResponse = null } = {}) {
+async function open({ base = false, doing = null, machines = '["B01","B02"]', readResponse = initialRead(), setResponse = null, holdLaterReads = false } = {}) {
+  let releaseRead = null;
   const calls = { read: 0, set: [] };
   const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 380, height: 900 } });
   await context.route("**/*", async (route) => {
@@ -68,10 +69,10 @@ async function open({ base = false, doing = null, readResponse = initialRead(), 
     if (url.hostname !== "127.0.0.1") return route.abort();
     const relative = url.pathname.replace(/^\//, "") || "index.html";
     if (relative === "config.js") {
-      const flags = doing === null ? "" : `enableHmcPalletDoing:${doing},hmcPalletDoingMachines:["B01","B02"],`;
+      const flags = doing === null ? "" : `enableHmcPalletDoing:${doing},hmcPalletDoingMachines:${machines},`;
       return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:true,enableHmcPalletStrip:true,hmcPalletCardMachines:["B01"],${flags}hmcPalletMap:${JSON.stringify({ B01: b01Map })},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
     }
-    if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_doing_read")) { calls.read += 1; return route.fulfill({ contentType: mime[".json"], body: JSON.stringify(readResponse) }); }
+    if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_doing_read")) { calls.read += 1; if (holdLaterReads && calls.read > 1) await new Promise((resolve) => { releaseRead = resolve; }); return route.fulfill({ contentType: mime[".json"], body: JSON.stringify(readResponse) }); }
     if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_doing_set")) {
       const body = JSON.parse(route.request().postData() || "{}");
       calls.set.push(body.p_payload);
@@ -88,7 +89,7 @@ async function open({ base = false, doing = null, readResponse = initialRead(), 
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded" });
   try { await page.waitForFunction(() => document.querySelectorAll("#workOrderGrid article").length > 0, null, { timeout: 5000 }); }
   catch (error) { throw new Error(`fixture did not render: ${errors.join(" | ") || error.message}`); }
-  return { context, page, errors, calls };
+  return { context, page, errors, calls, release: () => releaseRead && releaseRead() };
 }
 const dom = (page) => page.evaluate(() => { const body = document.body.cloneNode(true); body.querySelectorAll("script, #appUpdateCard, .job-part-number, .report-part-number, .finish-part-number").forEach((node) => node.remove()); return body.innerHTML.replace(/\n\s*\n/g, "\n").trimEnd(); });
 const toastText = (page) => page.evaluate(() => document.querySelector("#toast")?.textContent || "");
@@ -98,8 +99,8 @@ try {
   const baseline = await open({ base: true });
   const baselineDom = await dom(baseline.page);
   ok(baselineDom.includes("data-hmc-pallet-strip"), "baseline renders the pallet strip fixture");
-  for (const [label, doing] of [["旗標未設", null], ["旗標 false", "false"]]) {
-    const off = await open({ doing });
+  for (const [label, doing, machines] of [["旗標未設", null], ["旗標 false", "false"], ["旗標 true 但 B01 不在清單", "true", '["B02"]']]) {
+    const off = await open({ doing, machines });
     await off.page.waitForTimeout(250);
     eq(await dom(off.page), baselineDom, `${label}：盤號條 DOM 與 origin/main 逐字相同`);
     eq(off.calls.read, 0, `${label}：0 次 hmc_pallet_doing_read`);
@@ -115,6 +116,19 @@ try {
   const card = on.page.locator('[data-hmc-pallet-strip="B01"]');
   await card.locator("[data-hmc-doing-legend]").waitFor();
   ok(on.calls.read >= 1, "旗標開：讀了 hmc_pallet_doing_read");
+  {
+    // 重讀進行中（loading）：上一次的「在做」不可先閃掉。
+    const hold = await open({ doing: "true", holdLaterReads: true });
+    const holdCard = hold.page.locator('[data-hmc-pallet-strip="B01"]');
+    await holdCard.locator("[data-hmc-doing-legend]").waitFor();
+    await hold.page.evaluate(() => { machtileLoadHmcPalletDoing(state.machines.find((m) => (m.code || m.name) === "B01"), true); renderWorkOrders(); });
+    await hold.page.waitForFunction(() => machtileHmcPalletDoingState.get("B01")?.status === "loading");
+    await hold.page.evaluate(() => renderWorkOrders());
+    eq(await hold.page.locator('[data-hmc-pallet-strip="B01"] .doing-dot').count() > 0, true, "重讀中：仍顯示上一次的在做綠點");
+    eq(await hold.page.locator('[data-hmc-pallet-strip="B01"] [data-hmc-doing-legend]').count(), 1, "重讀中：圖例不消失");
+    hold.release();
+    await hold.context.close();
+  }
   const chip = (n) => card.locator(`[data-hmc-strip-chip="${n}"]`);
   ok((await chip(1).getAttribute("class")).includes("is-doing") && !(await chip(1).getAttribute("class")).includes("is-doing-no-order"), "盤 1 在做：is-doing");
   eq(await chip(1).locator(".doing-dot").count(), 1, "盤 1 在做：有綠點");

@@ -11950,7 +11950,8 @@ function machtileHmcPalletDoingEnabled(machine) {
 
 function machtileHmcPalletDoingRead(code) {
   const cached = machtileHmcPalletDoingState.get(code);
-  return cached && (cached.status === "ready" || cached.status === "stale") ? cached.read : null;
+  // loading 也回傳上一次的結果，避免每 30 秒重讀時畫面先閃掉「在做」、按鈕與原因選單被重建。
+  return cached && (cached.status === "ready" || cached.status === "stale" || cached.status === "loading") ? cached.read || null : null;
 }
 
 function machtileLoadHmcPalletDoing(machine, force = false) {
