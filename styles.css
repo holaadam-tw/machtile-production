@@ -13566,3 +13566,20 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .prev-step-board-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .prev-step-board-row { padding: 10px; border: 1px solid #e0b252; border-radius: 6px; background: #fff8e6; }
 .prev-step-board-row p { margin: 4px 0; }
+/* 2026-11-26 B01/B02 盤號條「現在在做」（enableHmcPalletDoing）：綠點=在做（實心圓點，與 is-open 的綠外框不同形）；無單在做=橘底。 */
+.hmc-pallet-chip .doing-dot { position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 2px #fff; }
+.hmc-pallet-chip.is-doing:not(.is-active) span { color: #15803d; font-weight: 900; }
+.hmc-pallet-chip.is-doing-no-order { border: 2px solid #b45309; background: #fff4e5; color: #9a3412; }
+.hmc-pallet-chip.is-doing-no-order span { color: #9a3412; font-size: 10px; font-weight: 900; }
+.doing-pill { display: inline-block; border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 900; line-height: 1.4; }
+.doing-pill.on { background: #16a34a; color: #fff; }
+.doing-pill.idle { background: #e5e7eb; color: #475467; }
+.doing-pill.noorder { background: #c2410c; color: #fff; }
+.hmc-pallet-workpiece.is-doing-no-order { border-color: #fdba74; background: #fff7ed; }
+.hmc-doing-legend { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px; font-size: 11px; color: #475467; }
+.doing-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px; }
+.doing-actions button { min-height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; padding: 5px 10px; font-size: 12px; font-weight: 800; }
+.doing-actions button.primary { border-color: #16a34a; background: #16a34a; color: #fff; }
+.doing-actions button:disabled { opacity: 0.55; }
+.doing-picker select, .doing-picker input { min-height: 36px; min-width: 0; border: 1px solid #cbd5e1; border-radius: 8px; padding: 4px 8px; font-size: 13px; }
+.doing-picker input { flex: 1 1 140px; }
