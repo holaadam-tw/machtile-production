@@ -137,6 +137,17 @@
     if (status === "pending" || status === "claimed") return { kind: "pending" };
     const guard = row.legacy_snapshot?.guard || {};
     if (status === "rejected" && text(guard.code) === "PREVIOUS_STEP_OPEN" && guard.hard === false) return { kind: "confirm" };
+    // ALREADY_CLOSED＝這一道先前就關過了、這次沒有寫任何東西：卡片不能寫「關站沒成功，請再按完工」。
+    // 不設 finishDisabled（這次送的關站沒有執行；機台上可能已經是別張單）。同一道在這筆之後又重新開工 → 這筆已過時，不顯示。
+    if (status === "rejected" && text(row.reject_code).toUpperCase() === "ALREADY_CLOSED") {
+      const sameCard = !current || (normCode(row.machine_code) === normCode(current.machineCode)
+        && text(row.expected_order_no).toUpperCase() === text(current.orderNo).toUpperCase()
+        && Number(row.expected_index_sn) === Number(current.step));
+      if (!sameCard) return null;
+      const sentAt = Date.parse(row.requested_at), startedAt = Date.parse(current?.actualStartAt);
+      if (Number.isFinite(startedAt) && Number.isFinite(sentAt) && sentAt <= startedAt) return null;
+      return { kind: "already_closed", reason: text(row.reject_message) };
+    }
     return { kind: "rejected", reason: text(row.reject_message) || text(row.reject_code) };
   }
 
@@ -465,6 +476,8 @@
     ZERO_REPORTED: "這一道還沒有報工數量，不能完工關站；請先報工",
     LOCK_TIMEOUT: "這次沒有關成（系統忙），可以再按一次",
     STILL_RUNNING: "這筆仍在生產中，沒有關站；請先停工再試。",
+    // 工廠端新代碼（旗標後）：這一道先前就關過了，這次送的關站沒有執行、什麼都沒寫。有 reject_message 時畫面直接用工廠那句。
+    ALREADY_CLOSED: "這一道先前已經關站完成，不用再關。請重新整理畫面。",
     // 管理員路徑：伺服器在建指令前就拒絕（舊 MES 沒動）。正常是 submit 錯誤；萬一出現在 reject_code 也給同樣白話。
     ADMIN_LEGACY_ID_MISSING: "管理員帳號還沒對應舊 MES 工號，請找 Claude 設定",
     ADMIN_SUBMIT_DISABLED: "管理員開工／停工尚未開放",
@@ -479,6 +492,7 @@
     ORDER_CHANGED_DURING_APPLY: "舊 MES 已改（單剛好被換）",
     OUTCOME_UNKNOWN: "結果不確定",
     INTERNAL_ERROR: "結果不確定",
+    ALREADY_CLOSED: "先前已關站",
   });
   // 舊 MES 已經被改過（全部或部分）的代碼
   const LEGACY_CHANGED_CODES = Object.freeze(["LEGACY_APPLIED_LATE", "LEGACY_PARTIAL_WRITE", "ORDER_CHANGED_DURING_APPLY"]);
@@ -567,11 +581,19 @@
         return { phase: "rejected", terminal: false, needsConfirmation: true, tone: "warn", title: "關站前請確認",
           text: detail || "上一道還在進行中。確定要先關這一道嗎？按確認後會關站，下一道照常進池。", code: r.code, detail: "" };
       }
-      const special = REJECT_TITLE[r.code];
+      if (type === "close" && r.code === "ALREADY_CLOSED") {
+        // 不是這次關站成功（phase 仍是 rejected、不給 nextStep／不鎖完工），也不是錯誤：平靜告知＋請重新整理。
+        // 內文＝工廠那句原文（已含單號／道次／時間）；沒有才用固定句。factoryMessage 給畫面判斷要不要翻譯固定句。
+        const snapshot = legacySnapshot(row);
+        return { phase: "rejected", terminal: true, tone: "warn", title: REJECT_TITLE.ALREADY_CLOSED, text: r.detail || r.text, code: r.code, detail: "",
+          alreadyClosed: true, factoryMessage: Boolean(r.detail), closedAt: text(snapshot.closed_at) || null };
+      }
+      const special = r.code === "ALREADY_CLOSED" ? null : REJECT_TITLE[r.code];
       const untouched = LEGACY_UNTOUCHED_CODES.includes(r.code);
       const title = special || (untouched ? `沒有${action}` : UNKNOWN_CODE_TITLE);
       // 開工被擋「這台沒掛單」：說清楚要生管在 Factory 設定後再按（其他指令照舊）
-      const plain = type === "start" && r.code === "STATION_NOT_SET" ? START_REJECT_STATION_NOT_SET_TEXT : r.text;
+      const plain = type === "start" && r.code === "STATION_NOT_SET" ? START_REJECT_STATION_NOT_SET_TEXT
+        : r.code === "ALREADY_CLOSED" ? UNKNOWN_CODE_TEXT : r.text;
       return { phase: "rejected", terminal: true, tone: special || !untouched ? "warn" : "bad", title, text: plain, code: r.code, detail: r.detail,
         ...(type === "claim_next" ? { claimNext: claimNextResult(row) } : {}) };
     }

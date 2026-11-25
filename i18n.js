@@ -224,6 +224,9 @@
       finish_close_applied_short: "少 {{quantity}} 件，已關站並依實做數入庫",
       finish_close_applied_detail: "完工報工已保留；舊 MES 已關站。",
       finish_close_rejected_title: "關站未完成",
+      station_close_already_closed_title: "先前已關站",
+      station_close_already_closed_fallback: "這一道先前已經關站完成，不用再關。請重新整理畫面。",
+      card_finish_close_already_closed: "先前已關站，不用再關",
       finish_close_zero_reported: "這一道還沒有報工數量，不能完工關站；請先報工",
       finish_close_lock_timeout: "這次沒有關成（系統忙），可以再按一次",
       finish_close_still_running: "這筆仍在生產中，沒有關站；請先停工再試。",
@@ -912,6 +915,9 @@
       finish_close_applied_short: "Thiếu {{quantity}} sản phẩm, đã đóng công đoạn và nhập kho theo số thực làm", // _draft
       finish_close_applied_detail: "Báo cáo hoàn tất đã được lưu; công đoạn MES cũ đã đóng.", // _draft
       finish_close_rejected_title: "Chưa đóng được công đoạn", // _draft
+      station_close_already_closed_title: "Công đoạn đã được đóng từ trước", // _draft: 待確認
+      station_close_already_closed_fallback: "Công đoạn này đã được đóng xong từ trước, không cần đóng lại. Vui lòng tải lại màn hình.", // _draft: 待確認
+      card_finish_close_already_closed: "Đã đóng từ trước, không cần đóng lại", // _draft: 待確認
       finish_close_zero_reported: "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.", // _draft
       finish_close_lock_timeout: "Lần này chưa đóng được vì hệ thống đang bận; bạn có thể bấm lại.", // _draft
       finish_close_still_running: "Mục này vẫn đang sản xuất nên chưa đóng công đoạn; vui lòng dừng máy rồi thử lại.", // _draft
