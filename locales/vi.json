@@ -227,6 +227,9 @@
     "value": "Chưa đóng được công đoạn",
     "_draft": true
   },
+  "station_close_already_closed_title": { "value": "Công đoạn đã được đóng từ trước", "_draft": true },
+  "station_close_already_closed_fallback": { "value": "Công đoạn này đã được đóng xong từ trước, không cần đóng lại. Vui lòng tải lại màn hình.", "_draft": true },
+  "card_finish_close_already_closed": { "value": "Đã đóng từ trước, không cần đóng lại", "_draft": true },
   "finish_close_zero_reported": {
     "value": "Công đoạn này chưa có số lượng báo cáo nên chưa thể hoàn tất và đóng công đoạn; vui lòng báo cáo trước.",
     "_draft": true

@@ -3296,6 +3296,82 @@ console.log("\n== 390px：完工畫面開著，關站走正式送出＋輪詢：
   ok(await page.locator("#finishSheet.is-open").count() === 1, "結果不確定 → 完工畫面留著");
   await page.evaluate(() => closeReport());
 
+  // (4b) ALREADY_CLOSED（工廠新代碼）：這一道先前就關過了、這次沒有執行 → 平靜告知＋工廠原文＋重讀卡片；不算成功
+  {
+    const acMsg = "工單 …050012 第 5 道 先前已經關站完成（11/21 12:57），不用再關。機台現在是別張單或別道，要關現在這張請重新整理後再按。";
+    const acFallback = "這一道先前已經關站完成，不用再關。請重新整理畫面。";
+    const acSnapshot = { already_closed: true, closed_at: "2026-11-21T04:57:00Z", original_reject_code: "ORDER_MISMATCH" };
+    const acSavedReject = be.reject;
+    await page.evaluate(() => {
+      window.__acRefreshCalls = [];
+      const original = machtileRefreshAfterApplied;
+      window.__acRefreshRestore = () => { machtileRefreshAfterApplied = original; };
+      machtileRefreshAfterApplied = (...args) => { window.__acRefreshCalls.push(args); return original(...args); };
+    });
+    const acResult = page.locator("#finishSheet .finish-close-result");
+    const acText = async () => (await acResult.innerText()).replace(/\s+/g, " ").trim();
+    const runAc = async (reportUuid, reject, waitText) => {
+      await openFinish();
+      const uuid = await sendCloseFromSheet(reportUuid);
+      be.reject = reject;
+      await pollTo("rejected", uuid, acSnapshot);
+      await page.locator("#finishSheet .finish-close-result", { hasText: waitText }).waitFor({ timeout: 15000 });
+      return acText();
+    };
+    // 有工廠說明
+    const shownMsg = await runAc("ac111111-1111-4111-8111-111111111111", { code: "ALREADY_CLOSED", message: acMsg }, "先前已關站");
+    ok(shownMsg.includes("先前已關站") && shownMsg.includes(acMsg), "ALREADY_CLOSED 有說明 → 標題「先前已關站」＋工廠原文", shownMsg);
+    ok(!/關站未完成|核對|待核對/.test(shownMsg), "ALREADY_CLOSED 不出現「關站未完成／請核對」", shownMsg);
+    ok(await page.locator("#finishSheet .finish-success-panel").count() === 0, "ALREADY_CLOSED 不顯示完工成功面板（不是這次關站成功）");
+    ok(await overlay.isHidden(), "ALREADY_CLOSED 收起遮罩");
+    ok(await page.evaluate(() => { const v = machtileStationCmd.lastResult.A04?.view; return v?.phase === "rejected" && v.code === "ALREADY_CLOSED" && v.title === "先前已關站"; }), "ALREADY_CLOSED 卡片結果＝rejected（不是 applied）");
+    ok(await page.evaluate(() => window.__acRefreshCalls.length === 1 && window.__acRefreshCalls[0][0] === "A04" && window.__acRefreshCalls[0][1] === "already_closed"), "ALREADY_CLOSED → 觸發一次既有的卡片重讀（不走池子空了重試）", JSON.stringify(await page.evaluate(() => window.__acRefreshCalls)));
+    ok(await page.evaluate(() => !machtileStationReportState(machtileBatchRow("A04")).close?.nextStep), "ALREADY_CLOSED 不給下一道卡");
+    await page.screenshot({ path: path.join(outDir, "a04-finish-close-already-closed-390.png") });
+    await page.evaluate(() => closeReport());
+    const acCardLine = await page.evaluate(() => { const m = machtileStationCmdMachineByCode("A04"); return machtileStationCmdParts(m).status; });
+    ok(acCardLine.includes("先前已關站") && acCardLine.includes("is-warn") && !acCardLine.includes("is-bad"), "卡片狀態列：先前已關站（非錯誤色）", acCardLine);
+    ok(await page.evaluate(() => MachTileStationCommandCore.closeCardState({ status: "rejected", reject_code: "ALREADY_CLOSED" }).finishDisabled !== true), "ALREADY_CLOSED 不鎖完工鈕（重新整理後仍可關現在這張）");
+    ok(await page.evaluate(() => { const m = machtileStationCmdMachineByCode("A04"); return !/data-station-cmd="(start|stop)"[^>]*disabled/.test(machtileStationCmdParts(m).buttons); }), "ALREADY_CLOSED 後卡片按鈕沒有被鎖住");
+    // 沒有工廠說明 → 固定句
+    const shownFallback = await runAc("ac222222-2222-4222-8222-222222222222", { code: "ALREADY_CLOSED", message: null }, "先前已關站");
+    ok(shownFallback.includes("先前已關站") && shownFallback.includes(acFallback), "ALREADY_CLOSED 沒說明 → 固定句", shownFallback);
+    await page.evaluate(() => closeReport());
+    // 越南文：標題翻譯＋工廠原文（中文）照登；沒說明 → 翻譯過的固定句
+    await page.evaluate(() => window.MachTileI18n.setLanguage("vi"));
+    const viMsg = await runAc("ac333333-3333-4333-8333-333333333333", { code: "ALREADY_CLOSED", message: acMsg }, "Công đoạn đã được đóng từ trước");
+    ok(viMsg.includes("Công đoạn đã được đóng từ trước") && viMsg.includes(acMsg) && !viMsg.includes("先前已關站"), "vi：翻譯標題＋工廠原文", viMsg);
+    ok(!viMsg.includes("Chưa đóng được công đoạn"), "vi：不顯示「關站未完成」標題", viMsg);
+    await page.evaluate(() => closeReport());
+    const viCardLine = await page.evaluate(() => { const m = machtileStationCmdMachineByCode("A04"); return machtileStationCmdParts(m).status; });
+    ok(viCardLine.includes("Công đoạn đã được đóng từ trước"), "vi：卡片狀態列標題也翻譯", viCardLine);
+    const viFallback = await runAc("ac444444-4444-4444-8444-444444444444", { code: "ALREADY_CLOSED", message: "" }, "Công đoạn đã được đóng từ trước");
+    ok(viFallback.includes("Công đoạn này đã được đóng xong từ trước, không cần đóng lại. Vui lòng tải lại màn hình."), "vi：沒說明 → 翻譯過的固定句", viFallback);
+    await page.evaluate(() => closeReport());
+    ok(await page.evaluate(() => machtileTranslate("card_finish_close_already_closed") === "Đã đóng từ trước, không cần đóng lại"), "vi：卡片底部用語");
+    await page.evaluate(() => window.MachTileI18n.setLanguage("zh-Hant"));
+    ok(await page.evaluate(() => machtileTranslate("card_finish_close_already_closed") === "先前已關站，不用再關"), "zh：卡片底部用語");
+    ok(await page.evaluate(() => ["start", "stop", "claim_next", "stop_report", "takeover"].every((type) => {
+      const view = MachTileStationCommandCore.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: "工廠原文" }, type, 0);
+      return view.title === "結果待核對" && view.text === "沒有完成，舊 MES 狀態請核對"
+        && view.detail === "工廠原文" && view.alreadyClosed === undefined;
+    })), "非關站類型＋ALREADY_CLOSED → 瀏覽器維持不認得代碼的保守行為");
+    ok(await page.evaluate(() => {
+      const row = { status: "rejected", reject_code: "ALREADY_CLOSED", machine_code: "A04", expected_order_no: "WO-OLD", expected_index_sn: 5, requested_at: "2026-11-21T05:10:00Z" };
+      return MachTileStationCommandCore.closeCardState(row, { machineCode: "A04", orderNo: "WO-NEW", step: 5, actualStartAt: "2026-11-21T01:00:00Z" }) === null
+        && MachTileStationCommandCore.closeCardState(row, { machineCode: "A04", orderNo: "WO-OLD", step: 6, actualStartAt: "2026-11-21T01:00:00Z" }) === null;
+    }), "別張工單或別道卡片不顯示 ALREADY_CLOSED 底部措辭");
+    // 回歸：未知代碼照舊（關站未完成＋工廠說明；不觸發重讀）
+    const refreshBefore = await page.evaluate(() => window.__acRefreshCalls.length);
+    const shownUnknown = await runAc("ac555555-5555-4555-8555-555555555555", { code: "SOME_FUTURE_CODE", message: "工廠新原因" }, "關站未完成");
+    ok(shownUnknown.includes("關站未完成") && shownUnknown.includes("工廠新原因") && !shownUnknown.includes("先前已關站"), "回歸：未知代碼仍顯示關站未完成＋工廠說明", shownUnknown);
+    ok(await page.evaluate(() => { const v = machtileStationCmd.lastResult.A04?.view; return v?.title === "結果待核對" && v.text === "沒有完成，舊 MES 狀態請核對"; }), "回歸：未知代碼卡片仍是「結果待核對」");
+    ok(await page.evaluate((n) => window.__acRefreshCalls.length === n, refreshBefore), "回歸：未知代碼不觸發卡片重讀");
+    ok(refreshBefore === 4, "ALREADY_CLOSED 四次各觸發一次重讀", String(refreshBefore));
+    await page.evaluate(() => { closeReport(); window.__acRefreshRestore(); });
+    be.reject = acSavedReject;
+  }
+
   // (5) 作業員關掉後同一台重新打開完工畫面（新的動作）→ 舊關站 applied 不會把新畫面關掉
   await openFinish();
   const reopenUuid = await sendCloseFromSheet("a5555555-5555-4555-8555-555555555555");
