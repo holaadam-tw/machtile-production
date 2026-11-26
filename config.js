@@ -130,6 +130,9 @@ window.MACHTILE_CONFIG = {
   // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
   assemblyReportEnabled: true,
   assemblyReportTenants: ["a5b73213-3b81-43cf-9e88-dfaa7d3fcd1f"],
+  // 組裝站多人報工送雲端（p_operator_app_user_ids）。雲端 migration 20261101090000 套到正式庫之前必須保持 false，
+  // 否則報工會找不到函式（送不出去）。false＝送出內容跟今天一模一樣。
+  assemblyMultiOperatorCommandEnabled: false,
   assemblyStations: ["F01", "G01", "H01"],
   // 完工關站另行控管；H01 是最後一道，仍由生管在舊 MES 關站。
   assemblyCloseStations: ["F01", "G01"],

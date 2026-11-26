@@ -693,6 +693,13 @@
       switch_step_move_why_preview_unsent: "會怎麼搬沒有算出來（網路不穩，可能沒送到）。",
       switch_step_move_why_preview_invalid: "工廠回來的計算結果看不懂。",
       switch_step_move_why_preview_timeout: "工廠太久沒有算出會怎麼搬。",
+      asm_err_operator_list_invalid: "報工人名單有問題，請重新勾選報工人再送。",
+      asm_err_operator_list_too_long: "報工人太多：連登入的人最多 10 位，工號合起來也不能太長。請少勾幾位再送。",
+      asm_err_operator_list_member_not_found: "勾選的報工人裡有人找不到帳號（可能不是這間工廠的人），請重新勾選或找主管。",
+      asm_err_operator_list_member_inactive: "勾選的報工人裡有人帳號已停用，請拿掉他或找主管。",
+      asm_err_operator_list_member_legacy_missing: "勾選的報工人裡有人沒有對照舊 MES 工號，請找主管設定。",
+      asm_err_operator_list_member_legacy_invalid: "勾選的報工人裡有人的舊 MES 工號格式不對，請找主管修正。",
+      asm_err_operator_legacy_invalid: "你自己的舊 MES 工號格式不對，不能多人報工，請找主管修正。"
     },
     vi: {
       part_number: "Mã linh kiện",
@@ -1373,6 +1380,13 @@
       switch_step_move_why_preview_unsent: "Chưa tính được việc chuyển (mạng không ổn định, có thể chưa gửi được).", // _draft
       switch_step_move_why_preview_invalid: "Không hiểu được kết quả tính nhà máy gửi về.", // _draft
       switch_step_move_why_preview_timeout: "Nhà máy quá lâu chưa tính xong việc chuyển.", // _draft
+      asm_err_operator_list_invalid: "Danh sách người báo công có lỗi; hãy chọn lại người báo công rồi gửi.",
+      asm_err_operator_list_too_long: "Quá nhiều người báo công: tính cả người đăng nhập tối đa 10 người, mã nhân viên ghép lại cũng không được quá dài. Hãy bớt người rồi gửi.",
+      asm_err_operator_list_member_not_found: "Có người được chọn không tìm thấy tài khoản (có thể không thuộc nhà máy này); hãy chọn lại hoặc báo quản lý.",
+      asm_err_operator_list_member_inactive: "Có người được chọn đã bị khóa tài khoản; hãy bỏ chọn hoặc báo quản lý.",
+      asm_err_operator_list_member_legacy_missing: "Có người được chọn chưa có mã nhân viên MES cũ; hãy báo quản lý cài đặt.",
+      asm_err_operator_list_member_legacy_invalid: "Có người được chọn có mã nhân viên MES cũ sai định dạng; hãy báo quản lý sửa.",
+      asm_err_operator_legacy_invalid: "Mã nhân viên MES cũ của bạn sai định dạng nên không báo công nhiều người được; hãy báo quản lý sửa."
     }
   };
 
