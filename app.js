@@ -11954,7 +11954,7 @@ function machtileHmcPalletDoingEnabled(machine) {
 function machtileHmcNoOrderMergeEnabled(machine) {
   const code = String(machine?.code || machine?.name || "");
   return config.enableHmcNoOrderMerge === true && Boolean(machtileHmcNoOrderMergeCore)
-    && machtileHmcPalletDoingEnabled(machine) && machtileHmcNoOrderMergeCore.allowedRole(machtileActualRole())
+    && machtileHmcPalletDoingEnabled(machine) && machtileHmcNoOrderMergeCore.allowedRole(machtileUiRole())
     && Array.isArray(config.hmcNoOrderMergeMachines) && config.hmcNoOrderMergeMachines.includes(code);
 }
 
@@ -12018,14 +12018,34 @@ function machtileHmcNoOrderMergeMarkup(machine, doingRead, palletNo) {
   const rows = machtileHmcNoOrderMergeCore.pendingRows(doingRead).filter((row) => row.palletNo === Number(palletNo));
   if (!rows.length) return "";
   const count = rows.length;
-  return `<span class="hmc-merge-entry"><span class="hmc-merge-badge">${escapeHtml(machtileTranslate("hmc_merge_pending", { count }))}</span><button type="button" data-hmc-merge-open data-hmc-merge-machine="${escapeHtml(String(machine.code || machine.name))}" data-hmc-merge-capture="${escapeHtml(rows[0].captureId)}">${escapeHtml(machtileTranslate("hmc_merge_button"))}</button></span>`;
+  return `<span class="hmc-merge-entry"><span class="hmc-merge-badge">${escapeHtml(machtileTranslate("hmc_merge_pending", { count }))}</span><button type="button" data-hmc-merge-open data-hmc-merge-machine="${escapeHtml(String(machine.code || machine.name))}" data-hmc-merge-pallet="${Number(palletNo)}">${escapeHtml(machtileTranslate("hmc_merge_button"))}</button></span>`;
 }
 
 async function machtileHmcNoOrderMergeOpen(dataset) {
   if (document.querySelector("[data-hmc-merge-dialog]") || machtileHmcNoOrderMergeBusy) return;
   const machine = (state.machines || []).find((item) => String(item.code || item.name) === dataset.hmcMergeMachine);
   if (!machtileHmcNoOrderMergeEnabled(machine)) return;
-  const capture = machtileHmcNoOrderMergeCore.pendingRows(machtileHmcPalletDoingRead(dataset.hmcMergeMachine)).find((row) => row.captureId === dataset.hmcMergeCapture);
+  const captures = machtileHmcNoOrderMergeCore.pendingRows(machtileHmcPalletDoingRead(dataset.hmcMergeMachine))
+    .filter((row) => row.palletNo === Number(dataset.hmcMergePallet));
+  if (captures.length > 1 && !dataset.hmcMergeCapture) {
+    const backdrop = document.createElement("div");
+    backdrop.className = "hmc-doing-dialog-backdrop"; backdrop.setAttribute("data-hmc-merge-dialog", "");
+    const rows = captures.map((row) => `<button type="button" class="primary" data-hmc-merge-capture-choice="${escapeHtml(row.captureId)}"><span>${escapeHtml(row.partNo || "—")}／${escapeHtml(row.shiftScope || "—")}／TOTAL ${row.counterTotalQty}／${escapeHtml(row.capturedAt || "—")}</span></button>`).join("");
+    backdrop.innerHTML = `<div class="hmc-doing-dialog hmc-merge-dialog" role="dialog" aria-modal="true"><h3>${escapeHtml(machtileTranslate("hmc_merge_choose_capture"))}</h3><div class="hmc-merge-capture-list">${rows}</div><div class="hmc-doing-dialog-actions"><button type="button" data-hmc-merge-cancel>${escapeHtml(machtileTranslate("hmc_doing_btn_cancel"))}</button></div></div>`;
+    backdrop.addEventListener("click", (event) => {
+      if (event.target.closest("[data-hmc-merge-cancel]")) return backdrop.remove();
+      const choice = event.target.closest("[data-hmc-merge-capture-choice]");
+      if (!choice) return;
+      const next = { ...dataset, hmcMergeCapture: choice.dataset.hmcMergeCaptureChoice };
+      backdrop.remove();
+      void machtileHmcNoOrderMergeOpen(next);
+    });
+    document.body.appendChild(backdrop);
+    return;
+  }
+  const capture = dataset.hmcMergeCapture
+    ? captures.find((row) => row.captureId === dataset.hmcMergeCapture)
+    : captures[0];
   if (!capture) return showToast(machtileTranslate("hmc_merge_err_capture_missing"));
   machtileHmcNoOrderMergeBusy = true;
   try {
@@ -12034,7 +12054,8 @@ async function machtileHmcNoOrderMergeOpen(dataset) {
       supabaseFetch("app_users?select=id,name,legacy_user_id&is_active=eq.true&order=name")
     ]);
     const choices = machtileHmcNoOrderMergeCore.eligibleProcesses(processRows, dataset.hmcMergeMachine, capture.partNo);
-    const people = (Array.isArray(operators) ? operators : []).filter((row) => row?.id && row?.name);
+    // 與既有可報工人員判斷（machtileUserCanReceiveOutput）一致：沒有舊 MES 工號就不能歸產值。
+    const people = (Array.isArray(operators) ? operators : []).filter((row) => row?.id && row?.name && String(row?.legacy_user_id || "").trim());
     const backdrop = document.createElement("div");
     backdrop.className = "hmc-doing-dialog-backdrop"; backdrop.setAttribute("data-hmc-merge-dialog", "");
     const choiceHtml = choices.map((row, index) => `<label><input type="radio" name="hmc-merge-order" value="${index}"> ${escapeHtml(row.workOrderNo)}／${row.processOrder} ${escapeHtml(row.processName)}</label>`).join("") || `<p>${escapeHtml(machtileTranslate("hmc_merge_no_orders"))}</p>`;
@@ -12055,13 +12076,18 @@ async function machtileHmcNoOrderMergeOpen(dataset) {
       const built = machtileHmcNoOrderMergeCore.buildPayload({ ...content, mergeUuid: machtileHmcNoOrderMergeCommands.uuidFor(content) });
       if (!built.ok) { resultNode.textContent = machtileTranslate(machtileHmcNoOrderMergeCore.errorKey(new Error(built.error))); return; }
       event.target.disabled = true;
+      let succeeded = false;
       try {
         const result = await supabaseFetch("rpc/hmc_no_order_quantity_merge", { method: "POST", body: JSON.stringify({ p_payload: built.payload }), timeoutMs: MACHTILE_HMC_PALLET_DOING_TIMEOUT_MS });
         machtileHmcNoOrderMergeCommands.done(content);
-        resultNode.textContent = machtileTranslate(machtileHmcNoOrderMergeCore.resultKey(result));
+        const resultKey = machtileHmcNoOrderMergeCore.resultKey(result);
+        if (resultKey === "hmc_merge_err_generic") { resultNode.textContent = machtileTranslate(resultKey); return; }
+        succeeded = true;
+        close();
+        machtileLoadHmcPalletDoing(machine, true);
       } catch (error) {
         resultNode.textContent = machtileTranslate(machtileHmcNoOrderMergeCore.errorKey(error));
-      } finally { event.target.disabled = false; }
+      } finally { if (!succeeded && event.target.isConnected) event.target.disabled = false; }
     });
     document.body.appendChild(backdrop);
   } catch (error) { showToast(machtileTranslate("hmc_merge_err_load")); }

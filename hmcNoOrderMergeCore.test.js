@@ -1,5 +1,13 @@
 const assert = require("node:assert/strict");
-const core = require("./hmcNoOrderMergeCore.js");
+const core = process.env.HMC_MUTATE_REMOVE_LEGACY_PROGRESS === "1" ? (() => {
+  const fs = require("node:fs"), Module = require("node:module");
+  const source = fs.readFileSync(require.resolve("./hmcNoOrderMergeCore.js"), "utf8")
+    .replace('    LEGACY_PROGRESS_MISSING: "hmc_merge_err_legacy_progress_missing",\n', "");
+  const mutant = new Module("hmcNoOrderMergeCore.mutant", module);
+  mutant.filename = require.resolve("./hmcNoOrderMergeCore.js");
+  mutant._compile(source, mutant.filename);
+  return mutant.exports;
+})() : require("./hmcNoOrderMergeCore.js");
 const U1 = "11111111-1111-4111-8111-111111111111", U2 = "22222222-2222-4222-8222-222222222222", U3 = "33333333-3333-4333-8333-333333333333";
 
 assert.equal(core.allowedRole("planner"), true);
@@ -17,6 +25,9 @@ let minted = 0; const store = core.createCommandStore(() => (++minted, U1));
 const content = { captureId: U2, workOrderNo: "WO", processOrder: 1, operatorAppUserIds: [U3] };
 assert.equal(store.uuidFor(content), store.uuidFor({ ...content })); assert.equal(minted, 1);
 for (const [code, key] of Object.entries(core.ERROR_KEYS)) assert.equal(core.errorKey(new Error(`server: ${code}`)), key, code);
+assert.equal(core.errorKey(new Error("LEGACY_PROGRESS_MISSING")), "hmc_merge_err_legacy_progress_missing");
 assert.equal(core.resultKey({ result: "nothing_to_merge" }), "hmc_merge_nothing");
 assert.equal(core.resultKey({ result: "merged" }), "hmc_merge_success");
+assert.equal(core.resultKey({ result: "replayed" }), "hmc_merge_success");
+assert.equal(core.resultKey({ result: "already_merged" }), "hmc_merge_success");
 console.log("hmcNoOrderMergeCore: ok");

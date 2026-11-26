@@ -15,6 +15,7 @@
     WORK_ORDER_NOT_FOUND: "hmc_merge_err_work_order_not_found", PROCESS_NOT_FOUND: "hmc_merge_err_process_not_found",
     PART_NO_MISMATCH: "hmc_merge_err_part_mismatch", PROCESS_MACHINE_MISMATCH: "hmc_merge_err_machine_mismatch",
     MACHINE_DEPARTMENT_INACTIVE: "hmc_merge_err_department", INVALID_REPORT_TARGET: "hmc_merge_err_target",
+    LEGACY_PROGRESS_MISSING: "hmc_merge_err_legacy_progress_missing",
     CAPTURE_NOT_FOUND: "hmc_merge_err_capture_missing", CAPTURE_SUPERSEDED: "hmc_merge_err_capture_superseded",
     COMMAND_UUID_CONFLICT: "hmc_merge_err_conflict", MACHINE_COMMAND_IN_FLIGHT: "hmc_merge_err_in_flight",
     TENANT_INACTIVE: "hmc_merge_err_tenant", AUTH_REQUIRED: "hmc_merge_err_auth",
