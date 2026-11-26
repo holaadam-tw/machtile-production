@@ -215,6 +215,7 @@ try {
     await page.locator('[data-card-pool-open="A05"]').click();
     await page.waitForSelector(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]:not([disabled])`);
     await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]`).click();
+    await page.locator('[data-pool-confirm-claim]').click();
     await page.waitForFunction(order => [...document.querySelectorAll('#workOrderGrid .machine-tile-card')].some(card => card.querySelector('h2')?.textContent.trim().startsWith('A05') && card.innerHTML.includes(order)), ORDER_NO);
     normalClaim = fx.claims[0];
     ok(fx.claims.length === 1 && normalClaim.raw === JSON.stringify({ p_source_key: keyOf(1), p_machine_code: 'A05' }), 'baseline: a normal claim from the pool panel posts { p_source_key, p_machine_code }: ' + normalClaim.raw);
@@ -444,6 +445,7 @@ try {
     await sheet(page).locator('[data-return-claim-close]').click();
     await page.locator('[data-card-pool-open="A05"]').click();
     await page.waitForSelector('#machtileCardSelection [data-pool-claim]');
+    await page.locator(`[data-pool-expand="${ORDER_NO}"]`).click();
     ok(await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(3)}"]`).count() === 1, `${label}: 「選工單／待做池」 opens and the returned step 3 is back in the pool`);
     await ctx.close();
   }
@@ -537,6 +539,7 @@ try {
     await page.locator('[data-card-pool-open="A05"]').click();
     await page.waitForSelector(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]:not([disabled])`);
     await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(1)}"]`).click();
+    await page.locator('[data-pool-confirm-claim]').click();
     await cardOf(page, ORDER_NO);
     await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '');
     ok(await toastText(page) === '接單成功，工單已進入這台機台。' && fx.claims.length === 1 && fx.claims[0].raw === normalClaim.raw, 'normal claim from the pool panel (flags on): its own success toast and request are unchanged: ' + await toastText(page));
@@ -663,8 +666,10 @@ try {
     fx.claimMode = 'accept';
     await page.waitForSelector('[data-card-pool-open="A05"]', { timeout: 15000 });
     await page.locator('[data-card-pool-open="A05"]').click();
+    await page.locator(`[data-pool-expand="${ORDER_NO}"]`).click();
     await page.waitForSelector(`#machtileCardSelection [data-pool-claim="${keyOf(2)}"]:not([disabled])`, { timeout: 15000 });
     await page.locator(`#machtileCardSelection [data-pool-claim="${keyOf(2)}"]`).click();
+    await page.locator('[data-pool-confirm-claim]').click();
     await cardOf(page, 'N2');
     await page.waitForFunction(() => machtileDispatchPoolState.claimBusy === '');
     ok(fx.claims.length === 2 && fx.claims[1].raw === JSON.stringify({ p_source_key: keyOf(2), p_machine_code: 'A05' }) && await toastText(page) === '接單成功，工單已進入這台機台。', 'LOW-B: right after the timeout a pick-order claim works (not silently dropped); it is the operator\'s own claim, not a resend of step 1');

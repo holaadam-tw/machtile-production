@@ -193,7 +193,7 @@ try {
 
   // ---- 伺服器拒絕：一句白話、不顯示代碼、沒有重送鈕
   for (const [code, sentence] of [['NOT_CLAIM_OWNER', '這張單不是你接的，你不能退回。請找接單的人或生管。'], ['BRAND_NEW_UNKNOWN_CODE', '沒有退回成功。請重新整理畫面確認這台的工單；還是不對請找生管。']]) {
-    reset({ flag: true, submitMode: code });
+    reset({ flag: true, poolStatus: 'gone', submitMode: code });
     const { ctx, page } = await openApp();
     await page.locator('[data-return-claim-open="A01"]').click();
     await page.waitForFunction(() => document.querySelector('#machtileReturnClaimSheet [data-return-claim-confirm]:not([disabled])'));

@@ -112,6 +112,9 @@ let active = 0, maxActive = 0, workOrderCalls = 0;
 const flowContext = vm.createContext({
   console: { warn() {} }, Map, Promise, Array, Math, encodeURIComponent,
   state: { workOrders: orderRows.map((row) => ({ id: row.work_order_no })), machineMasters: [] },
+  machtileProcessFlowLoadGeneration: 0, machtileDeferredLoadGeneration: 0,
+  machtileProcessFlowRetryTimer: null, machtileProcessFlowRetryCount: 0,
+  MACHTILE_ROUTE_RELOAD_DELAYS_MS: [1000], setTimeout, clearTimeout,
   machtileProcessFlows: new Map(), machtileCardPickState: { progressByProcess: new Map() },
   machtileReadRouteSteps: async () => [], machtileWoFetchProgress: async () => new Map(),
   machtileBatchCore: () => ({ cardProgress: () => ({ done: 0 }) }),
