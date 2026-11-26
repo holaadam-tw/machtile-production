@@ -210,6 +210,57 @@ check("soft-guard retry uses a new UUID and adds only a contract ack", () => {
   assert.deepEqual(retried.p_acks, ["PREV_OUTSOURCE_UNCONFIRMED"]);
   assert.throws(() => core.retryWithAck(previous, "PREV_OUTSOURCE_UNCONFIRMED", UUID_PREVIEW), { code: "COMMAND_UUID_REQUIRED" });
   assert.throws(() => core.retryWithAck(previous, "QTY_EXCEEDS_AVAILABLE", UUID_RETRY), { code: "INVALID_ACK" });
+  // 旗標關也適用：OLD_ORDER 的「須填原因」看的是這次重送的備註（soft 擋住後才補填），不是預覽當下的舊備註。
+  assert.throws(() => core.retryWithAck({ ...previous, p_report_note: null }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY), { code: "REPORT_NOTE_REQUIRED" });
+  assert.equal(core.retryWithAck({ ...previous, p_report_note: null }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY, "擋住後才補的原因").p_report_note, "擋住後才補的原因");
+  assert.throws(() => core.retryWithAck({ ...previous, p_report_note: "預覽當下的舊備註" }, "OLD_ORDER_NEWER_OPEN", UUID_RETRY, "  "), { code: "REPORT_NOTE_REQUIRED" });
+});
+
+check("over-previous reason guard is flag-gated and validates all three reason choices", () => {
+  const previous = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  const ack = "QTY_OVER_PREVIOUS_WITH_REASON";
+  const on = { enableOverPreviousReasonPrompt: true };
+  assert.equal(core.softRejectEnabled(ack), false);
+  assert.equal(core.softRejectEnabled(ack, on), true);
+  assert.throws(() => core.retryWithAck(previous, ack, UUID_RETRY, "F01 漏報／晚報"), { code: "INVALID_ACK" });
+  for (const reason of ["F01 漏報／晚報", "同一台重測", "其他：治具定位偏移"]) {
+    const retried = core.retryWithAck(previous, ack, UUID_RETRY, reason, on);
+    assert.equal(retried.p_command_uuid, UUID_RETRY);
+    assert.deepEqual(retried.p_acks, [ack]);
+    assert.equal(retried.p_report_note, reason);
+  }
+  for (const reason of [null, "其他：", "其他：三字喔"]) {
+    assert.throws(() => core.retryWithAck(previous, ack, UUID_RETRY, reason, on), { code: "QTY_OVER_PREVIOUS_REASON_REQUIRED" });
+  }
+  assert.throws(() => core.retryWithAck(previous, ack, UUID_PREVIEW, "同一台重測", on), { code: "COMMAND_UUID_REQUIRED" });
+});
+
+check("over-previous reason survives a following auto-pull acknowledgement", () => {
+  const previous = core.buildSubmitArgs(validInput(), UUID_PREVIEW, true);
+  const on = { enableOverPreviousReasonPrompt: true };
+  const reason = "F01 漏報／晚報";
+  const overRetry = core.retryWithAck(previous, core.OVER_PREVIOUS_ACK, UUID_RETRY, reason, on);
+  const autoPullUuid = "44444444-4444-4444-8444-444444444444";
+  const autoPullRetry = core.retryWithAck(overRetry, "AUTO_PULL_ACK", autoPullUuid, undefined, on);
+  assert.equal(overRetry.p_command_uuid, UUID_RETRY);
+  assert.equal(autoPullRetry.p_command_uuid, autoPullUuid);
+  assert.notEqual(previous.p_command_uuid, overRetry.p_command_uuid);
+  assert.notEqual(overRetry.p_command_uuid, autoPullRetry.p_command_uuid);
+  assert.deepEqual(autoPullRetry.p_acks, [core.OVER_PREVIOUS_ACK, "AUTO_PULL_ACK"]);
+  assert.equal(autoPullRetry.p_report_note, reason);
+});
+
+check("over-previous preview is blocked with flag off and retryable with flag on", () => {
+  const result = structuredClone(COMPLETE_PREVIEW);
+  result.allowed = false; result.hard = false; result.guard_code = "QTY_OVER_PREVIOUS_WITH_REASON";
+  result.legacy_snapshot.report.guard.code = result.guard_code;
+  const command = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: result };
+  assert.equal(core.resultCard(command).kind, "preview-blocked");
+  assert.equal(core.resultCard(command, { enableOverPreviousReasonPrompt: true }).kind, "preview-soft");
+  const retry = core.retryPreviewWithAck(core.buildSubmitArgs(validInput(), UUID_PREVIEW, true), command, result.guard_code, UUID_RETRY, "F01 漏報／晚報", { enableOverPreviousReasonPrompt: true });
+  assert.equal(retry.p_command_uuid, UUID_RETRY);
+  assert.deepEqual(retry.p_acks, [result.guard_code]);
+  assert.equal(retry.p_report_note, "F01 漏報／晚報");
 });
 
 check("previewed is terminal only for report_preview and never displays applied", () => {
@@ -489,6 +540,25 @@ check("operator message keys map guard codes to plain-language sentences", () =>
   assert.equal(core.operatorMessageKey(""), "simple_block_generic");
   assert.equal(core.operatorMessageKey("OLD_ORDER_NEWER_OPEN", true), "simple_soft_old_order");
   assert.equal(core.operatorMessageKey("UNKNOWN_SOFT", true), "simple_soft_generic");
+});
+
+check("missing DOC4 defer ack is inert flag-off and retries with the exact Factory ack flag-on", () => {
+  const code = core.MISSING_DOC4_DEFER_ACK;
+  const guard = { code, hard: false, message: "缺委外單", Details: { ...COMPLETE_PREVIEW.legacy_snapshot.report.guard.Details } };
+  const preview = { command_uuid: UUID_PREVIEW, command_type: "report_preview", status: "previewed", preview_result: {
+    ...COMPLETE_PREVIEW, allowed: false, hard: false, guard_code: code, message: guard.message,
+    previous_step_name: "熱處理", legacy_snapshot: { report: { guard } },
+  } };
+  assert.equal(core.resultCard(preview).kind, "preview-blocked", "flag off preserves the existing blocked result");
+  assert.throws(() => core.retryPreviewWithAck(validInput(), preview, code, UUID_RETRY), { code: "INVALID_ACK" });
+  const options = { enableMissingDoc4DeferAck: true };
+  const card = core.resultCard(preview, options);
+  assert.equal(card.kind, "preview-soft");
+  assert.equal(card.missingDoc4Defer, true);
+  const retry = core.retryPreviewWithAck(core.buildSubmitArgs(validInput(), UUID_REPORT, true), preview, code, UUID_RETRY, null, options);
+  assert.equal(retry.p_preview, false);
+  assert.deepEqual(retry.p_acks, [code]);
+  assert.notEqual(retry.p_command_uuid, UUID_REPORT);
 });
 
 check("report limit hint requires the complete additive field set and distinguishes station/outsource", () => {

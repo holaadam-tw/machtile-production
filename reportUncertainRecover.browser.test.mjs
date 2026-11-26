@@ -178,9 +178,10 @@ test("uncertain report recovery runs through the real APP", async (t) => {
       const row = { stationReport: flow, reportNote: "confirmed" };
       window.MachTileStationReportCore = {
         SOFT_REJECTS: ["OLD_ORDER_NEWER_OPEN"],
+        softRejectEnabled: (code) => code === "OLD_ORDER_NEWER_OPEN",
         retryWithAck: (oldArgs) => ({ ...oldArgs, p_command_uuid: crypto.randomUUID(), p_preview: false }),
         retryPreviewWithAck: (oldArgs) => ({ ...oldArgs, p_command_uuid: crypto.randomUUID(), p_preview: false }),
-        resultCard: (item) => mode === "preview" && item === result ? { kind: "preview-soft", guardCode: "OLD_ORDER_NEWER_OPEN" } : { kind: "applied" },
+        resultCard: (item) => item === result ? (mode === "preview" ? { kind: "preview-soft", guardCode: "OLD_ORDER_NEWER_OPEN" } : { kind: "soft" }) : { kind: "applied" },
         isTerminal: () => true,
         createClient: () => ({ submit: async (sent) => ({ ...sent, status: "applied" }) }),
       };

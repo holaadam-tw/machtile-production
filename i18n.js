@@ -26,11 +26,15 @@
       outsource_receipt_confirm: "確認收貨並報工",
       outsource_receipt_range: "請輸入 1 到 {{max}} 件。",
       outsource_receipt_cancelled: "已取消；本次沒有代收貨或報工。",
+      missing_doc4_defer_message: "上一道{{step}}（廠商）沒有委外單。按「先報工、通知生管補單」會照常報工，但不會自動扣料；生管會在 Factory 收到待補清單。",
+      missing_doc4_defer_confirm: "先報工、通知生管補單",
+      missing_doc4_defer_cancel: "取消",
       report_limit_available_station: "目前最多可報 {{available}} 件（上一道 {{station}} 已報 {{reported}} 件）",
       report_limit_wait_station: "等 {{station}} 報工後才能報",
       report_limit_available_outsource: "目前最多可報 {{available}} 件（上一道委外 {{step}} 已收貨 {{reported}} 件）",
       report_limit_wait_outsource: "等委外收貨後才能報",
       report_first_step_overrun: "這次比開單數量多 {{n}} 件（開單 {{order}} 件）。第一道不限數量，可以直接送出。",
+      over_previous_title: "這次比上一站多報 {{count}} 件，請選原因", over_previous_choose: "多報原因", over_previous_f01: "F01 漏報／晚報", over_previous_retest: "同一台重測", over_previous_other: "其他", over_previous_other_label: "請填其他原因（至少 4 字）", over_previous_other_short: "請選原因；其他原因至少填 4 個字。", over_previous_submit: "確認並送出",
       outsource_receipt_not_expected: "現況已更新，不需要代收貨；系統會重新送出報工。",
       simple_report_summary: "這次報：{{process}}（第 {{step}} 道）・已報 {{reported}}", simple_report_summary_nostep: "這次報：{{process}}・已報 {{reported}}", simple_report_summary_fail: "這次報：{{process}}（第 {{step}} 道）・已報 {{reported}}（含不良 {{fail}}）", simple_report_summary_nostep_fail: "這次報：{{process}}・已報 {{reported}}（含不良 {{fail}}）", simple_report_flow_open: "▸流程", simple_report_flow_close: "▾流程", simple_report_total_label: "機台目前總數（這張單）", simple_report_total_label_defect: "機台目前總數（這張單，含不良）", simple_report_defect_qty: "這次不良幾件", simple_report_reason: "原因", simple_report_old_order_note: "請寫一句為什麼報這張單", simple_report_hint: "這次良品 {{good}} 件、不良 {{bad}} 件", simple_report_hint_waiting: "填機台數字後，這裡會顯示這次良品幾件", simple_report_hint_invalid: "機台數字不對，請確認是這張單的數字", simple_report_operator: "報工人：", simple_report_operator_starter: "（開工的人）", simple_report_operator_none: "未選報工人", simple_report_change_operator: "換人", simple_report_change_operator_done: "收起", simple_report_waiting: "工廠計算中… {{seconds}} 秒", simple_report_sending: "送出中，請稍候…", simple_report_sending_button: "送出中…", simple_report_resubmit: "重新送出", simple_report_fix_qty: "改數量", simple_report_ack_submit: "確認沒錯，送出", simple_report_cancelled: "已取消，沒有收貨也沒有報工。", simple_report_timeout: "工廠沒有回應，請再按一次送出。", simple_report_unconfirmed: "上一筆還沒確認有沒有報進去，請先不要重送，請通知主管。", simple_report_done: "上一筆已報工完成。", simple_report_tech: "技術細節", simple_block_qty_exceeds: "這次數量比可以報的還多，請確認機台數字是這張單的。", simple_block_qty_max: "這一道最多只能報 {{n}} 件（目前填 {{entered}} 件）。請改成 {{n}} 件以內再送出；機台上真的做比較多，請告訴生管。", simple_block_stock_short: "素材庫存不夠，沒有報進去，請通知生管。", simple_block_not_started: "這台還沒開工，請先按開工再報工。", simple_block_closed: "這一道已經結束，不能再報，請通知生管。", simple_block_data: "這張工單的資料有問題，系統擋下來了，再按也報不進去。請通知生管處理。", simple_block_changed: "工單剛有變動，請再按一次送出。", simple_block_reason_required: "有不良品時，請選不良原因。", simple_block_note_required: "請寫一句原因再送出。", simple_block_qty_invalid: "數量不對，請確認機台數字。", simple_block_disabled: "這台目前不能用平板報工，請通知主管。", simple_block_receipt: "上一道委外還沒收貨，沒有報進去，請通知生管。", simple_block_unavailable: "平板報工暫時不能用，請通知主管。", simple_block_generic: "這次沒有報進去，請通知主管。", simple_soft_old_order: "同一個料號已經有比較新的工單。確定要報這張，請寫一句原因再按送出。", simple_soft_high_fail: "這次不良比較多，數字沒錯就再按一次送出。", simple_soft_exceeds_order: "這次會超過工單數量，數字沒錯就再按一次送出。", simple_soft_duplicate: "這個數字跟剛剛報的一樣，確定是新做的就再按一次送出。", simple_soft_auto_pull: "這次會自動先領素材，數字沒錯就再按一次送出。", simple_soft_receipt: "上一道委外還沒確認收貨，數字沒錯就再按一次送出。", simple_soft_generic: "請確認數字沒錯，再按一次送出。",
       batch_total_label: "機台目前總數", batch_added_qty: "本次增加 +{{quantity}} 件", batch_added_split: "這次良品 {{good}} 件、不良 {{fail}} 件", batch_added_waiting: "輸入後顯示本次增加", batch_total_below_reported: "總數不能少於已報 {{reported}} 件", batch_defect_toggle: "有不良品", batch_technical_details: "技術資訊", batch_submit_all: "一次全部送出", batch_submit_all_count: "一次全部送出（{{count}} 台）", batch_report_hint: "只要填<strong>機台目前顯示數</strong>，系統自動算這次增加；有不良再勾「有不良品」。完工請在機台卡上按。",
@@ -725,11 +729,22 @@
       switch_step_move_why_preview_unsent: "會怎麼搬沒有算出來（網路不穩，可能沒送到）。",
       switch_step_move_why_preview_invalid: "工廠回來的計算結果看不懂。",
       switch_step_move_why_preview_timeout: "工廠太久沒有算出會怎麼搬。",
+      asm_err_operator_list_invalid: "報工人名單有問題，請重新勾選報工人再送。",
+      asm_err_operator_list_too_long: "報工人太多：連登入的人最多 10 位，工號合起來也不能太長。請少勾幾位再送。",
+      asm_err_operator_list_member_not_found: "勾選的報工人裡有人找不到帳號（可能不是這間工廠的人），請重新勾選或找主管。",
+      asm_err_operator_list_member_inactive: "勾選的報工人裡有人帳號已停用，請拿掉他或找主管。",
+      asm_err_operator_list_member_legacy_missing: "勾選的報工人裡有人沒有對照舊 MES 工號，請找主管設定。",
+      asm_err_operator_list_member_legacy_invalid: "勾選的報工人裡有人的舊 MES 工號格式不對，請找主管修正。",
+      asm_err_operator_legacy_invalid: "你自己的舊 MES 工號格式不對，不能多人報工，請找主管修正。"
     },
     vi: {
       part_number: "Mã linh kiện",
       report_applied_success: "Báo công thành công: {{good}} hàng tốt",
       report_applied_success_with_defect: "Báo công thành công: {{good}} hàng tốt, {{fail}} hàng lỗi",
+      missing_doc4_defer_message: "Công đoạn trước {{step}} (nhà cung cấp) chưa có phiếu thuê ngoài. Bấm “Báo công trước, báo kế hoạch bổ sung phiếu” để báo công như bình thường nhưng không tự động trừ vật liệu; bộ phận kế hoạch sẽ nhận danh sách cần bổ sung trong Factory.",
+      missing_doc4_defer_confirm: "Báo công trước, báo kế hoạch bổ sung phiếu",
+      missing_doc4_defer_cancel: "Hủy",
+      over_previous_title: "Lần này báo nhiều hơn công đoạn trước {{count}} sản phẩm, vui lòng chọn lý do", over_previous_choose: "Lý do báo nhiều hơn", over_previous_f01: "F01 báo thiếu / báo trễ", over_previous_retest: "Kiểm tra lại trên cùng máy", over_previous_other: "Khác", over_previous_other_label: "Nhập lý do khác (ít nhất 4 ký tự)", over_previous_other_short: "Vui lòng chọn lý do; lý do khác phải có ít nhất 4 ký tự.", over_previous_submit: "Xác nhận và gửi",
       app_update_available: "Có phiên bản mới",
       app_update_button: "Cập nhật",
       outsource_receipt_question: "Công đoạn trước 〈{{step}}〉 thuê ngoài chưa nhận hàng. Đã về bao nhiêu sản phẩm?",
@@ -1437,6 +1452,13 @@
       switch_step_move_why_preview_unsent: "Chưa tính được việc chuyển (mạng không ổn định, có thể chưa gửi được).", // _draft
       switch_step_move_why_preview_invalid: "Không hiểu được kết quả tính nhà máy gửi về.", // _draft
       switch_step_move_why_preview_timeout: "Nhà máy quá lâu chưa tính xong việc chuyển.", // _draft
+      asm_err_operator_list_invalid: "Danh sách người báo công có lỗi; hãy chọn lại người báo công rồi gửi.",
+      asm_err_operator_list_too_long: "Quá nhiều người báo công: tính cả người đăng nhập tối đa 10 người, mã nhân viên ghép lại cũng không được quá dài. Hãy bớt người rồi gửi.",
+      asm_err_operator_list_member_not_found: "Có người được chọn không tìm thấy tài khoản (có thể không thuộc nhà máy này); hãy chọn lại hoặc báo quản lý.",
+      asm_err_operator_list_member_inactive: "Có người được chọn đã bị khóa tài khoản; hãy bỏ chọn hoặc báo quản lý.",
+      asm_err_operator_list_member_legacy_missing: "Có người được chọn chưa có mã nhân viên MES cũ; hãy báo quản lý cài đặt.",
+      asm_err_operator_list_member_legacy_invalid: "Có người được chọn có mã nhân viên MES cũ sai định dạng; hãy báo quản lý sửa.",
+      asm_err_operator_legacy_invalid: "Mã nhân viên MES cũ của bạn sai định dạng nên không báo công nhiều người được; hãy báo quản lý sửa."
     }
   };
 
