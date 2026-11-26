@@ -12,7 +12,7 @@
   const ALLOWED_ACKS = Object.freeze([
     "PREV_OUTSOURCE_UNCONFIRMED", "AUTO_PULL_ACK", "OLD_ORDER_NEWER_OPEN",
     "HIGH_FAIL_RATIO", "FAIL_ONLY", "EXCEEDS_ORDER_QTY", "DUPLICATE_SUSPECTED",
-    "GUARD_STATE_CHANGED",
+    "GUARD_STATE_CHANGED", "PREV_OUTSOURCE_DOC_MISSING_DEFER",
   ]);
   const HARD_REJECTS = Object.freeze([
     "QTY_EXCEEDS_AVAILABLE", "AUTO_PULL_WOULD_GO_NEGATIVE", "REPORT_NOTE_REQUIRED",
@@ -26,6 +26,7 @@
     "FAIL_ONLY", "EXCEEDS_ORDER_QTY", "DUPLICATE_SUSPECTED", "GUARD_STATE_CHANGED",
     "QTY_OVER_PREVIOUS_WITH_REASON",
   ]);
+  const MISSING_DOC4_DEFER_ACK = "PREV_OUTSOURCE_DOC_MISSING_DEFER";
   const GUARD_LABELS = Object.freeze({
     PREV_OUTSOURCE_UNCONFIRMED: "上一道委外尚未確認收貨",
     AUTO_PULL_ACK: "本次將產生先領倉量單",
@@ -37,7 +38,8 @@
   const OVER_PREVIOUS_ACK = "QTY_OVER_PREVIOUS_WITH_REASON";
   const OVER_PREVIOUS_FIXED_REASONS = Object.freeze(["F01 漏報／晚報", "同一台重測"]);
   function softRejectEnabled(code, options = {}) {
-    return SOFT_REJECTS.includes(code) && (code !== OVER_PREVIOUS_ACK || options.enableOverPreviousReasonPrompt === true);
+    return (SOFT_REJECTS.includes(code) && (code !== OVER_PREVIOUS_ACK || options.enableOverPreviousReasonPrompt === true)) ||
+      (options.enableMissingDoc4DeferAck === true && code === MISSING_DOC4_DEFER_ACK);
   }
   function overPreviousReportNote(value) {
     const note = String(value || "").trim();
@@ -441,6 +443,7 @@
           values: result,
           preview: result,
           reportLimitHint: reportLimitHint(result),
+          missingDoc4Defer: code === MISSING_DOC4_DEFER_ACK,
           overrunNotice: firstStepOverrunNotice(result),
         };
       }
@@ -631,7 +634,7 @@
   }
 
   return Object.freeze({
-    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
+    FAIL_REASON_DEFAULTS, ALLOWED_ACKS, HARD_REJECTS, SOFT_REJECTS, MISSING_DOC4_DEFER_ACK, REPORT_SELECT, OUTSOURCE_RECEIPT_CODES,
     OVER_PREVIOUS_ACK, OVER_PREVIOUS_FIXED_REASONS, softRejectEnabled, overPreviousReportNote,
     ContractError, isPlainObject, reportMachineEnabled, isGuardConfig, guardConfigReportEnabled, legacyIdentityFromProjection, previewCycleTime, rateReasonableness, validateReportInput, buildSubmitArgs,
     commandReadPath, buildClientGuardSnapshot, isTerminal, resultCard, reportLimitHint, firstStepOverrunNotice, retryWithAck, retryPreviewWithAck,

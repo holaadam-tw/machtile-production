@@ -128,6 +128,8 @@ window.MACHTILE_CONFIG = {
   // G01 比上一站多報時要求選理由；先保持關閉，開啟前須確認 Factory 合約已上線。
   enableOverPreviousReasonPrompt: false,
   outsourceReceiptDialogEnabled: true,
+  // 缺委外單先報工確認：APP/Factory 兩端皆驗證後才開；關閉時不增加任何確認 UI。
+  enableMissingDoc4DeferAck: false,
   stationReportMachines: ["A01", "A02", "A03", "A04", "A05", "B03", "B04", "B05", "B06"],
   // 組裝站平板報工（owner 2026-10-31）：依客戶開。旗標仍關；開的時候只有這些租戶（大正正式）看得到。
   assemblyReportEnabled: true,

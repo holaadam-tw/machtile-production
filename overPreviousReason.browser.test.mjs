@@ -8,7 +8,7 @@ const { chromium } = mod.default || mod;
 const root = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(.:)/, "$1"));
 const app = await readFile(path.join(root, "app.js"), "utf8");
 const core = await readFile(path.join(root, "stationReportCore.js"), "utf8");
-const start = app.indexOf("const machtileOverPreviousOptions");
+const start = app.indexOf("const machtileStationReportOptions");
 const end = app.indexOf("const machtileStationReportEnabled", start);
 if (start < 0 || end < 0) throw new Error("over-previous dialog source not found");
 const dialogSource = app.slice(start, end);
@@ -22,7 +22,7 @@ await page.setContent("<!doctype html><html lang='zh-Hant'><body></body></html>"
 await page.addStyleTag({ path: path.join(root, "styles.css") });
 await page.addScriptTag({ content: `window.config={enableOverPreviousReasonPrompt:false}; window.escapeHtml=(v)=>String(v); window.machtileTranslate=(key,p)=>({over_previous_title:'這次比上一站多報 '+p?.count+' 件，請選原因',over_previous_choose:'多報原因',over_previous_f01:'F01 漏報／晚報',over_previous_retest:'同一台重測',over_previous_other:'其他',over_previous_other_label:'請填其他原因（至少 4 字）',over_previous_other_short:'請選原因；其他原因至少填 4 個字。',over_previous_submit:'確認並送出',cancel:'取消'})[key]||key;` });
 await page.addScriptTag({ content: core });
-await page.addScriptTag({ content: `${dialogSource}\n${retryNoteSource}\nwindow.testAsk=machtileAskOverPreviousReason; window.testOptions=machtileOverPreviousOptions; window.testRetryNote=machtileStationReportRetryNote;` });
+await page.addScriptTag({ content: `${dialogSource}\n${retryNoteSource}\nwindow.testAsk=machtileAskOverPreviousReason; window.testOptions=machtileStationReportOptions; window.testRetryNote=machtileStationReportRetryNote;` });
 
 const preview = await page.evaluate(() => {
   const result = { allowed: false, hard: false, guard_code: "QTY_OVER_PREVIOUS_WITH_REASON", available: 8,
