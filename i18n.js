@@ -112,6 +112,38 @@
       hmc_pallet_strip_order_count: "{{count}} 張",
       hmc_pallet_strip_shared: "與盤 {{number}} 一起",
       hmc_pallet_strip_other: "其他 {{count}}",
+      hmc_doing_legend: "在做／可做未做／無單在做",
+      hmc_doing_chip_on: "在做",
+      hmc_doing_chip_no_order: "無單在做",
+      hmc_doing_pill_on: "在做",
+      hmc_doing_pill_no_order: "無單在做",
+      hmc_doing_pill_idle: "沒在做",
+      hmc_doing_idle_mold: "模具在做 {{part}}",
+      hmc_doing_reason_shared_mold_on_other: "共用模具在做別的料號",
+      hmc_doing_reason_waiting_material: "等料",
+      hmc_doing_reason_waiting_program: "等程式",
+      hmc_doing_reason_waiting_inspection: "等檢驗",
+      hmc_doing_reason_other: "其他",
+      hmc_doing_btn_start: "在做",
+      hmc_doing_btn_stop: "改成沒在做",
+      hmc_doing_btn_idle: "沒在做",
+      hmc_doing_reason_label: "沒在做的原因",
+      hmc_doing_reason_text_ph: "原因說明（選「其他」必填）",
+      hmc_doing_btn_confirm: "確定",
+      hmc_doing_btn_cancel: "取消",
+      hmc_doing_saved: "已更新",
+      hmc_doing_err_offline: "連不上，沒改成",
+      hmc_doing_err_shared_mold: "共用模具正在做另一個料號，沒改成。請先讓另一盤改成沒在做。",
+      hmc_doing_err_machine: "這台機器不是你的課別，沒改成",
+      hmc_doing_err_bridge: "這個帳號不能改，沒改成",
+      hmc_doing_err_disabled: "帳號已停用，沒改成",
+      hmc_doing_err_role: "這個帳號沒有權限，沒改成",
+      hmc_doing_err_auth: "請重新登入，沒改成",
+      hmc_doing_err_conflict: "這次操作和先前的衝突，請重按一次",
+      hmc_doing_err_reason_text: "選「其他」要寫原因說明",
+      hmc_doing_err_reason: "請選沒在做的原因",
+      hmc_doing_err_part: "這個工件缺料號，沒改成",
+      hmc_doing_err_generic: "沒改成，請稍後再試",
       machine_details: "機台詳情",
       machine_status: "機台 · {{status}}",
       work_order_status: "工單 · {{status}}",
@@ -807,6 +839,38 @@
       hmc_pallet_strip_order_count: "{{count}} lệnh", // _draft
       hmc_pallet_strip_shared: "Cùng pallet {{number}}", // _draft
       hmc_pallet_strip_other: "Khác {{count}}", // _draft
+      hmc_doing_legend: "Đang làm / Có thể làm chưa làm / Đang làm không có lệnh", // _draft
+      hmc_doing_chip_on: "Đang làm", // _draft
+      hmc_doing_chip_no_order: "Không lệnh", // _draft
+      hmc_doing_pill_on: "Đang làm", // _draft
+      hmc_doing_pill_no_order: "Đang làm, chưa có lệnh", // _draft
+      hmc_doing_pill_idle: "Không làm", // _draft
+      hmc_doing_idle_mold: "Khuôn đang làm {{part}}", // _draft
+      hmc_doing_reason_shared_mold_on_other: "Khuôn chung đang làm mã khác", // _draft
+      hmc_doing_reason_waiting_material: "Chờ vật liệu", // _draft
+      hmc_doing_reason_waiting_program: "Chờ chương trình", // _draft
+      hmc_doing_reason_waiting_inspection: "Chờ kiểm tra", // _draft
+      hmc_doing_reason_other: "Khác", // _draft
+      hmc_doing_btn_start: "Đang làm", // _draft
+      hmc_doing_btn_stop: "Đổi thành không làm", // _draft
+      hmc_doing_btn_idle: "Không làm", // _draft
+      hmc_doing_reason_label: "Lý do không làm", // _draft
+      hmc_doing_reason_text_ph: "Mô tả lý do (bắt buộc nếu chọn Khác)", // _draft
+      hmc_doing_btn_confirm: "Xác nhận", // _draft
+      hmc_doing_btn_cancel: "Hủy", // _draft
+      hmc_doing_saved: "Đã cập nhật", // _draft
+      hmc_doing_err_offline: "Không kết nối được, chưa đổi", // _draft
+      hmc_doing_err_shared_mold: "Khuôn chung đang làm mã khác, chưa đổi. Hãy đổi pallet kia thành không làm trước.", // _draft
+      hmc_doing_err_machine: "Máy này không thuộc bộ phận của bạn, chưa đổi", // _draft
+      hmc_doing_err_bridge: "Tài khoản này không được đổi, chưa đổi", // _draft
+      hmc_doing_err_disabled: "Tài khoản đã bị khóa, chưa đổi", // _draft
+      hmc_doing_err_role: "Tài khoản này không có quyền, chưa đổi", // _draft
+      hmc_doing_err_auth: "Vui lòng đăng nhập lại, chưa đổi", // _draft
+      hmc_doing_err_conflict: "Thao tác xung đột với lần trước, vui lòng bấm lại", // _draft
+      hmc_doing_err_reason_text: "Chọn Khác phải ghi lý do", // _draft
+      hmc_doing_err_reason: "Vui lòng chọn lý do không làm", // _draft
+      hmc_doing_err_part: "Chi tiết này thiếu mã, chưa đổi", // _draft
+      hmc_doing_err_generic: "Chưa đổi, vui lòng thử lại sau", // _draft
       machine_details: "Chi tiết máy",
       machine_status: "Máy · {{status}}",
       work_order_status: "Lệnh · {{status}}",

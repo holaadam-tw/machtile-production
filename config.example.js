@@ -75,6 +75,8 @@ window.MACHTILE_CONFIG = {
   enableHmcPalletCard: false,
   enableHmcPalletStrip: false,
   hmcPalletCardMachines: ["B01", "B02"],
+  enableHmcPalletDoing: false,
+  hmcPalletDoingMachines: ["B01", "B02"],
   hmcPalletMap: {},
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],

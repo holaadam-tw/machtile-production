@@ -11766,6 +11766,7 @@ function deriveMachines() {
 // 一台機台同時掛好幾張在站單時，卡片顯示最近有活動的那張；可以手動切換（只改畫面，不寫資料庫）。
 const machtileCardActiveCore = window.MachTileCardActiveOrderCore;
 const machtileHmcPalletCardCore = window.MachTileHmcPalletCardCore;
+const machtileHmcPalletDoingCore = window.MachTileHmcPalletDoingCore;
 const machtileCardPickState = {
   // orderKey（工序 id，沒有就單號）→ { lastReportAt, legacyUpdatedAt, actualStartAt }
   activityByKey: new Map(),
@@ -11932,6 +11933,135 @@ function machtileHmcPalletStripEnabled(machine) {
   return config.enableHmcPalletStrip === true && machtileHmcPalletCardEnabled(machine);
 }
 
+// ---- B01/B02 盤號條「現在在做」（enableHmcPalletDoing，預設關；關＝沒有任何新 DOM、新 RPC）----
+const MACHTILE_HMC_PALLET_DOING_REFRESH_MS = 30000;
+const MACHTILE_HMC_PALLET_DOING_STALE_MS = 10 * 60 * 1000;
+const MACHTILE_HMC_PALLET_DOING_TIMEOUT_MS = 15000;
+const machtileHmcPalletDoingState = new Map();
+const machtileHmcPalletDoingBusy = new Set();
+const machtileHmcPalletDoingUi = { picker: null };
+let machtileHmcPalletDoingCommands = null;
+
+function machtileHmcPalletDoingEnabled(machine) {
+  const code = String(machine?.code || machine?.name || "");
+  return config.enableHmcPalletDoing === true && Boolean(machtileHmcPalletDoingCore) && machtileHmcPalletStripEnabled(machine)
+    && Array.isArray(config.hmcPalletDoingMachines) && config.hmcPalletDoingMachines.includes(code);
+}
+
+function machtileHmcPalletDoingRead(code) {
+  const cached = machtileHmcPalletDoingState.get(code);
+  // loading 也回傳上一次的結果，避免每 30 秒重讀時畫面先閃掉「在做」、按鈕與原因選單被重建。
+  return cached && (cached.status === "ready" || cached.status === "stale" || cached.status === "loading") ? cached.read || null : null;
+}
+
+function machtileLoadHmcPalletDoing(machine, force = false) {
+  if (!machtileHmcPalletDoingEnabled(machine)) return;
+  const code = String(machine.code || machine.name);
+  const cached = machtileHmcPalletDoingState.get(code);
+  if (cached?.status === "loading") return;
+  if (!force && cached && performance.now() - cached.loadedAt < MACHTILE_HMC_PALLET_DOING_REFRESH_MS) return;
+  if (navigator.onLine === false) return;
+  machtileHmcPalletDoingState.set(code, { status: "loading", read: cached?.read || null, loadedAt: performance.now(), lastSuccessAt: cached?.lastSuccessAt || 0 });
+  void supabaseFetch("rpc/hmc_pallet_doing_read", {
+    method: "POST",
+    body: JSON.stringify({ p_machine_code: code }),
+    timeoutMs: MACHTILE_HMC_PALLET_DOING_TIMEOUT_MS,
+  }).then((result) => {
+    const read = machtileHmcPalletDoingCore.parseRead(result);
+    if (!read) throw new Error("HMC_PALLET_DOING_READ_FAILED");
+    const now = performance.now();
+    machtileHmcPalletDoingState.set(code, { status: "ready", read, loadedAt: now, lastSuccessAt: now });
+  }).catch(() => {
+    // 讀不到：保留最近成功的結果（10 分鐘內），否則退回不顯示；原本盤號條完全不受影響。
+    const previous = machtileHmcPalletDoingState.get(code) || cached;
+    const now = performance.now();
+    const lastSuccessAt = Number(previous?.lastSuccessAt || 0);
+    const keep = lastSuccessAt > 0 && now - lastSuccessAt < MACHTILE_HMC_PALLET_DOING_STALE_MS;
+    machtileHmcPalletDoingState.set(code, { status: keep ? "stale" : "error", read: keep ? previous.read : null, loadedAt: now, lastSuccessAt });
+  }).finally(() => {
+    try { deriveMachines(); renderWorkOrders(); } catch (error) { console.warn("HMC pallet doing re-render failed", error); }
+  });
+}
+
+function machtileHmcPalletDoingReasonLabel(info) {
+  if (info.reasonCode === "shared_mold_on_other") {
+    return info.otherPartNo ? machtileTranslate("hmc_doing_idle_mold", { part: info.otherPartNo }) : machtileTranslate("hmc_doing_reason_shared_mold_on_other");
+  }
+  if (info.reasonCode === "other") return info.reasonText || machtileTranslate("hmc_doing_reason_other");
+  return machtileTranslate(`hmc_doing_reason_${info.reasonCode}`);
+}
+
+function machtileHmcPalletDoingPillMarkup(doing) {
+  const info = machtileHmcPalletDoingCore.pillInfo(doing);
+  if (!info) return "";
+  if (info.kind === "on") return `<span class="doing-pill on">${escapeHtml(machtileTranslate(info.key))}</span>`;
+  if (info.kind === "noorder") return `<span class="doing-pill noorder">${escapeHtml(machtileTranslate(info.key))}</span>`;
+  return `<span class="doing-pill idle">${escapeHtml(`${machtileTranslate(info.key)}：${machtileHmcPalletDoingReasonLabel(info)}`)}</span>`;
+}
+
+function machtileHmcPalletDoingLegendMarkup() {
+  return `<div class="hmc-doing-legend" data-hmc-doing-legend><span class="doing-pill on">${escapeHtml(machtileTranslate("hmc_doing_pill_on"))}</span><span class="doing-pill idle">${escapeHtml(machtileTranslate("hmc_doing_pill_idle"))}</span><span class="doing-pill noorder">${escapeHtml(machtileTranslate("hmc_doing_pill_no_order"))}</span></div>`;
+}
+
+function machtileHmcPalletDoingActionsMarkup(workpiece, pallet, code, workpieceKey) {
+  const core = machtileHmcPalletDoingCore;
+  const attrs = `data-hmc-doing-machine="${escapeHtml(code)}" data-hmc-doing-pallet="${pallet.palletNo}" data-hmc-doing-wp="${escapeHtml(String(workpiece.id))}" data-hmc-doing-part="${escapeHtml(core.partNoFor(workpiece))}" data-hmc-doing-key="${escapeHtml(workpieceKey)}"`;
+  const busy = machtileHmcPalletDoingBusy.has(workpieceKey) ? " disabled" : "";
+  const active = core.isDoingActive(workpiece.doing);
+  const picker = machtileHmcPalletDoingUi.picker?.key === workpieceKey ? machtileHmcPalletDoingUi.picker : null;
+  if (picker) {
+    const options = [`<option value="">${escapeHtml(machtileTranslate("hmc_doing_reason_label"))}</option>`, ...core.REASON_CODES.map((reason) => `<option value="${reason}"${picker.reasonCode === reason ? " selected" : ""}>${escapeHtml(machtileTranslate(`hmc_doing_reason_${reason}`))}</option>`)].join("");
+    return `<div class="doing-actions doing-picker" data-hmc-doing-picker="${escapeHtml(workpieceKey)}"><select data-hmc-doing-reason aria-label="${escapeHtml(machtileTranslate("hmc_doing_reason_label"))}">${options}</select><input type="text" maxlength="200" data-hmc-doing-reason-text value="${escapeHtml(picker.reasonText)}" placeholder="${escapeHtml(machtileTranslate("hmc_doing_reason_text_ph"))}"><button type="button" class="primary" data-hmc-doing-confirm ${attrs}${busy}>${escapeHtml(machtileTranslate("hmc_doing_btn_confirm"))}</button><button type="button" data-hmc-doing-cancel>${escapeHtml(machtileTranslate("hmc_doing_btn_cancel"))}</button></div>`;
+  }
+  const startStatus = core.startStatus(workpiece);
+  const buttons = active
+    ? `<button type="button" data-hmc-doing-pick ${attrs}${busy}>${escapeHtml(machtileTranslate("hmc_doing_btn_stop"))}</button>`
+    : `<button type="button" class="primary" data-hmc-doing-start="${startStatus}" ${attrs}${busy}>${escapeHtml(machtileTranslate("hmc_doing_btn_start"))}</button><button type="button" data-hmc-doing-pick ${attrs}${busy}>${escapeHtml(machtileTranslate("hmc_doing_btn_idle"))}</button>`;
+  return `<div class="doing-actions">${buttons}</div>`;
+}
+
+async function machtileHmcPalletDoingSend(dataset, status, reasonCode = "", reasonText = "") {
+  const core = machtileHmcPalletDoingCore;
+  if (!core) return;
+  const content = { machineCode: dataset.hmcDoingMachine, palletNo: Number(dataset.hmcDoingPallet), workpieceKey: dataset.hmcDoingWp,
+    partNo: dataset.hmcDoingPart, status, reasonCode, reasonText, switchMold: false };
+  const busyKey = dataset.hmcDoingKey;
+  if (navigator.onLine === false) { showToast(machtileTranslate("hmc_doing_err_offline")); return; }
+  if (machtileHmcPalletDoingBusy.has(busyKey)) return;
+  const pre = core.buildSetPayload({ ...content, commandUuid: "pending" });
+  if (!pre.ok) { showToast(machtileTranslate(core.errorKey(new Error(pre.error), true))); return; }
+  machtileHmcPalletDoingCommands = machtileHmcPalletDoingCommands || core.createCommandStore(() => crypto.randomUUID());
+  const payload = { ...pre.payload, command_uuid: machtileHmcPalletDoingCommands.uuidFor(content) };
+  machtileHmcPalletDoingBusy.add(busyKey);
+  renderWorkOrders();
+  try {
+    await supabaseFetch("rpc/hmc_pallet_doing_set", { method: "POST", body: JSON.stringify({ p_payload: payload }), timeoutMs: MACHTILE_HMC_PALLET_DOING_TIMEOUT_MS });
+    machtileHmcPalletDoingCommands.done(content);
+    machtileHmcPalletDoingUi.picker = null;
+    showToast(machtileTranslate("hmc_doing_saved"));
+    machtileHmcPalletDoingBusy.delete(busyKey);
+    const machine = (Array.isArray(state.machines) ? state.machines : []).find((item) => String(item.code || item.name) === content.machineCode);
+    if (machine) machtileLoadHmcPalletDoing(machine, true); else machtileHmcPalletDoingState.delete(content.machineCode);
+  } catch (error) {
+    const key = core.errorKey(error, navigator.onLine);
+    // 伺服器明確拒絕＝這次操作作廢；網路／不明錯誤才保留同一個 command_uuid 供重送。
+    if (key !== "hmc_doing_err_offline" && key !== "hmc_doing_err_generic") machtileHmcPalletDoingCommands.done(content);
+    showToast(machtileTranslate(key));
+  } finally {
+    machtileHmcPalletDoingBusy.delete(busyKey);
+    renderWorkOrders();
+  }
+}
+
+document.addEventListener("change", (event) => {
+  const select = event.target?.closest?.("[data-hmc-doing-reason]");
+  if (select && machtileHmcPalletDoingUi.picker) machtileHmcPalletDoingUi.picker.reasonCode = select.value;
+});
+document.addEventListener("input", (event) => {
+  const field = event.target?.closest?.("[data-hmc-doing-reason-text]");
+  if (field && machtileHmcPalletDoingUi.picker) machtileHmcPalletDoingUi.picker.reasonText = field.value;
+});
+
 function machtileLoadHmcPalletCard(machine) {
   if (!machtileHmcPalletCardEnabled(machine)) return;
   const code = String(machine.code || machine.name);
@@ -11994,7 +12124,7 @@ function machtileHmcPalletStripOrderMarkup(entry, machine) {
   </article>`;
 }
 
-function machtileHmcPalletWorkpieceMarkup(workpiece, pallet, machine) {
+function machtileHmcPalletWorkpieceMarkup(workpiece, pallet, machine, doingOn = false) {
   const code = String(machine.code || machine.name);
   const workpieceKey = `${pallet.palletNo}:${workpiece.id}`;
   const open = (machtileHmcPalletWorkpieceOpen.get(code) || "") === workpieceKey;
@@ -12002,12 +12132,15 @@ function machtileHmcPalletWorkpieceMarkup(workpiece, pallet, machine) {
   const qty = workpiece.orderCount ? `${workpiece.done}/${workpiece.total}（${workpiece.percent}%）` : machtileTranslate("hmc_pallet_strip_no_order");
   const progressTag = workpiece.statusOrder ? machtileOverQtyTag(workpiece.statusOrder) : "";
   const details = open ? `<div class="hmc-pallet-workpiece-detail" data-hmc-workpiece-detail="${escapeHtml(workpieceKey)}">${workpiece.orders.map((entry) => machtileHmcPalletStripOrderMarkup(entry, machine)).join("")}</div>` : "";
-  return `<div class="hmc-pallet-workpiece${workpiece.orderCount ? " has-order" : " is-empty"}${workpiece.isActive ? " is-active" : ""}${workpiece.isOver ? " is-over" : ""}">
+  const doingPill = doingOn ? machtileHmcPalletDoingPillMarkup(workpiece.doing) : "";
+  const doingActions = doingOn ? machtileHmcPalletDoingActionsMarkup(workpiece, pallet, code, workpieceKey) : "";
+  const doingClass = doingOn && workpiece.doing?.state === "noOrder" ? " is-doing-no-order" : "";
+  return `<div class="hmc-pallet-workpiece${workpiece.orderCount ? " has-order" : " is-empty"}${workpiece.isActive ? " is-active" : ""}${workpiece.isOver ? " is-over" : ""}${doingClass}">
     <button type="button" class="hmc-pallet-workpiece-row" data-hmc-workpiece="${escapeHtml(workpieceKey)}" data-hmc-workpiece-machine="${escapeHtml(code)}" aria-expanded="${open}"${workpiece.orderCount ? "" : " disabled"}>
       <span><strong>${escapeHtml(workpiece.label)}</strong><small>${escapeHtml(workpiece.partNos.join("、"))}</small></span>
-      <span class="hmc-pallet-workpiece-qty">${escapeHtml(qty)}${progressTag}${workpiece.orderCount > 1 ? `<em>${escapeHtml(machtileTranslate("hmc_pallet_strip_order_count", { count: workpiece.orderCount }))}</em>` : ""}${shared ? `<i>${escapeHtml(shared)}</i>` : ""}</span>
+      <span class="hmc-pallet-workpiece-qty">${doingPill}${escapeHtml(qty)}${progressTag}${workpiece.orderCount > 1 ? `<em>${escapeHtml(machtileTranslate("hmc_pallet_strip_order_count", { count: workpiece.orderCount }))}</em>` : ""}${shared ? `<i>${escapeHtml(shared)}</i>` : ""}</span>
       ${workpiece.orderCount ? `<span class="progress-track hmc-pallet-workpiece-bar" aria-hidden="true"><span class="progress-fill" style="width:${Math.min(100, workpiece.percent)}%"></span></span>` : ""}
-    </button>${details}
+    </button>${doingActions}${details}
   </div>`;
 }
 
@@ -12028,27 +12161,33 @@ function machtileHmcPalletStripMarkup(machine) {
   const code = String(machine.code || machine.name);
   const cached = machtileHmcPalletCardState.get(code) || { states: [] };
   const machineMap = config.hmcPalletMap?.[code];
-  const model = machineMap
+  let model = machineMap
     ? machtileHmcPalletCardCore.configuredStripModel(machine.cardOrders || [], machineMap, machine.order)
     : machtileHmcPalletCardCore.inferredStripModel(machine.cardOrders || [], cached.states, machine.order);
+  const doingEnabled = machtileHmcPalletDoingEnabled(machine);
+  if (doingEnabled) machtileLoadHmcPalletDoing(machine);
+  const doingRead = doingEnabled ? machtileHmcPalletDoingRead(code) : null;
+  if (doingRead) model = machtileHmcPalletDoingCore.mergeDoing(model, doingRead);
   const openKey = machtileHmcPalletStripOpen.has(code) ? machtileHmcPalletStripOpen.get(code) : model.defaultOpen;
   const chips = model.pallets.map((pallet) => {
     const key = String(pallet.palletNo);
-    const classes = [pallet.hasOrder ? "has-order" : "is-empty", pallet.isActive ? "is-active" : "", pallet.isOver ? "is-over" : "", pallet.inferred ? "is-inferred" : "", openKey === key ? "is-open" : ""].filter(Boolean).join(" ");
-    return `<button type="button" class="hmc-pallet-chip ${classes}" data-hmc-strip-chip="${key}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === key}"><b>${pallet.palletNo}</b><span>${escapeHtml(pallet.hasOrder ? machtileTranslate("hmc_pallet_strip_has_order") : machtileTranslate("hmc_pallet_strip_empty"))}</span>${pallet.isOver ? `<em>!</em>` : ""}</button>`;
+    const classes = [pallet.hasOrder ? "has-order" : "is-empty", pallet.isActive ? "is-active" : "", pallet.isOver ? "is-over" : "", pallet.inferred ? "is-inferred" : "", openKey === key ? "is-open" : "", ...(doingRead ? machtileHmcPalletDoingCore.chipClasses(pallet) : [])].filter(Boolean).join(" ");
+    const doingTextKey = doingRead ? machtileHmcPalletDoingCore.chipTextKey(pallet) : "";
+    const doingDot = doingTextKey === "hmc_doing_chip_on" ? `<i class="doing-dot" aria-hidden="true"></i>` : "";
+    return `<button type="button" class="hmc-pallet-chip ${classes}" data-hmc-strip-chip="${key}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === key}">${doingDot}<b>${pallet.palletNo}</b><span>${escapeHtml(doingTextKey ? machtileTranslate(doingTextKey) : pallet.hasOrder ? machtileTranslate("hmc_pallet_strip_has_order") : machtileTranslate("hmc_pallet_strip_empty"))}</span>${pallet.isOver ? `<em>!</em>` : ""}</button>`;
   }).join("");
   const unmatchedKey = "unmatched";
   const unmatchedChip = model.hasUnmatched ? `<button type="button" class="hmc-pallet-chip is-unmatched${model.unmatchedIsOver ? " is-over" : ""}${openKey === unmatchedKey ? " is-open" : ""}" data-hmc-strip-chip="${unmatchedKey}" data-hmc-strip-machine="${escapeHtml(code)}" aria-expanded="${openKey === unmatchedKey}"><b>${escapeHtml(machtileTranslate("hmc_pallet_strip_other", { count: model.unmatched.length }))}</b>${model.unmatchedIsOver ? `<em>!</em>` : ""}</button>` : "";
   const selectedPallet = model.pallets.find((pallet) => String(pallet.palletNo) === openKey);
   const panelContent = openKey === unmatchedKey
     ? model.unmatched.map((entry) => machtileHmcPalletStripOrderMarkup(entry, machine)).join("")
-    : selectedPallet?.workpieces.map((workpiece) => machtileHmcPalletWorkpieceMarkup(workpiece, selectedPallet, machine)).join("");
+    : selectedPallet?.workpieces.map((workpiece) => machtileHmcPalletWorkpieceMarkup(workpiece, selectedPallet, machine, Boolean(doingRead))).join("");
   const panel = !openKey ? "" : `<div class="hmc-pallet-strip-panel" data-hmc-strip-panel="${escapeHtml(openKey)}">${panelContent || `<p>${escapeHtml(machtileTranslate("hmc_pallet_strip_empty_detail"))}</p>`}</div>`;
   const manual = machine.cardPickBasis === "manual";
   const headerControls = manual ? `<span class="hmc-pallet-strip-controls"><span class="card-orders-manual">${escapeHtml(machtileTranslate("hmc_pallet_strip_manual"))}</span><button type="button" class="card-order-auto" data-card-pick="${escapeHtml(machine.name)}" data-card-pick-key="">${escapeHtml(machtileTranslate("hmc_pallet_strip_restore_auto"))}</button></span>` : "";
   const inferredLabel = !machineMap ? `<span class="hmc-pallet-strip-inferred">${escapeHtml(machtileTranslate("hmc_pallet_strip_inferred"))}</span>` : "";
   const staleHint = !machineMap && cached.failures >= MACHTILE_HMC_PALLET_CARD_STALE_FAILURES ? `<span class="hmc-pallet-strip-stale" role="status">${escapeHtml(machtileTranslate("hmc_pallet_strip_stale"))}</span>` : "";
-  return `<section class="hmc-pallet-strip-card" data-no-detail data-hmc-pallet-strip="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_strip_title"))}</strong>${headerControls}<small>${inferredLabel}${staleHint}${escapeHtml(machtileTranslate("hmc_pallet_strip_hint"))}</small></header><div class="hmc-pallet-strip-chips">${chips}${unmatchedChip}</div>${panel}</section>`;
+  return `<section class="hmc-pallet-strip-card" data-no-detail data-hmc-pallet-strip="${escapeHtml(code)}"><header><strong>${escapeHtml(machtileTranslate("hmc_pallet_strip_title"))}</strong>${headerControls}<small>${inferredLabel}${staleHint}${escapeHtml(machtileTranslate("hmc_pallet_strip_hint"))}</small></header>${doingRead ? machtileHmcPalletDoingLegendMarkup() : ""}<div class="hmc-pallet-strip-chips">${chips}${unmatchedChip}</div>${panel}</section>`;
 }
 
 function machtileHmcPalletCardMarkup(machine) {
@@ -30413,6 +30552,13 @@ function bindEvents() {
       machtileSetCardPick(cardPickButton.dataset.cardPick, cardPickButton.dataset.cardPickKey || "");
       return;
     }
+    const doingStart = event.target.closest("[data-hmc-doing-start]");
+    if (doingStart) { void machtileHmcPalletDoingSend(doingStart.dataset, doingStart.dataset.hmcDoingStart); return; }
+    const doingPick = event.target.closest("[data-hmc-doing-pick]");
+    if (doingPick) { machtileHmcPalletDoingUi.picker = { key: doingPick.dataset.hmcDoingKey, reasonCode: "", reasonText: "" }; renderWorkOrders(); return; }
+    const doingConfirm = event.target.closest("[data-hmc-doing-confirm]");
+    if (doingConfirm) { const picker = machtileHmcPalletDoingUi.picker; void machtileHmcPalletDoingSend(doingConfirm.dataset, "idle_reason", picker?.reasonCode || "", picker?.reasonText || ""); return; }
+    if (event.target.closest("[data-hmc-doing-cancel]")) { machtileHmcPalletDoingUi.picker = null; renderWorkOrders(); return; }
     const palletStripChip = event.target.closest("[data-hmc-strip-chip]");
     if (palletStripChip) {
       const machineCode = palletStripChip.dataset.hmcStripMachine;
