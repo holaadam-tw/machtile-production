@@ -265,7 +265,7 @@ console.log("== 手機（Pixel 7）==");
   console.log("-- 今日開工狀態 --");
   const foot = async (code) => cardOf(page, code).locator(".machine-tile-footer > span").first();
   ok((await (await foot("A01")).innerText()) === "今日已開工 08:05・王小明" && await (await foot("A01")).getAttribute("data-today-status") === "started", "A01：今日已開工 08:05・王小明（綠）", await (await foot("A01")).innerText());
-  ok((await (await foot("A04")).innerText()) === "今日已完工 17:00" && await (await foot("A04")).getAttribute("data-today-status") === "finished", "A04：先開工後完工 → 今日已完工 17:00", await (await foot("A04")).innerText());
+  ok((await (await foot("A04")).innerText()) === "已關站" && await (await foot("A04")).getAttribute("data-today-status") === "closed", "A04：先開工後完工且關站套用 → 已關站", await (await foot("A04")).innerText());
   ok((await (await foot("B03")).innerText()) === "今日尚未開工" && await (await foot("B03")).getAttribute("data-today-status") === "none", "B03：今日尚未開工（灰）");
   ok((await (await foot("A02")).innerText()) === "今日尚未開工", "A02：昨天的開工不算");
   const colors = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll(".card-today-status")].map((e) => [e.dataset.todayStatus, getComputedStyle(e).color])));
@@ -298,7 +298,7 @@ console.log("== 手機（Pixel 7）==");
   be.closeRow = { ...be.closeRow, status: "applied", reject_code: null, reject_message: null, applied_at: todayAt("17:02"),
     legacy_snapshot: { kind: "close", Branch: "A", IndexSn: 1, OrderNo: "XX01202604140011", Warning: "", station: "A04", ShortQty: 0, SimSetOk: true, next_step: null, StockInQty: 10, OperateLogId: 9 } };
   await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
-  ok((await closeStatus()) === "今日已完工 17:00", "applied：維持完工狀態", await closeStatus());
+  ok((await closeStatus()) === "已關站", "applied：顯示關站已套用", await closeStatus());
   be.closeRow = { ...be.closeRow, status: "pending", applied_at: null, legacy_snapshot: null };
   await page.evaluate(() => localStorage.setItem("machtile.language", "vi"));
   await page.reload({ waitUntil: "domcontentloaded" }); await waitLoaded(page);
