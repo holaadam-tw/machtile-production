@@ -138,6 +138,16 @@ test("partNoChoices: one part, two parts, case/space dedupe, no orders", () => {
   assert.deepEqual(doing.partNoChoices(null), []);
 });
 
+test("partNoFor agrees with partNoChoices (review MEDIUM: first order outside the map)", () => {
+  const order = (part) => ({ order: { partNo: part } });
+  const wp = { partNos: ["A", "B"], orders: [order("X"), order("b")] };
+  assert.deepEqual(doing.partNoChoices(wp), ["B"]);
+  assert.equal(doing.partNoFor(wp), "B");
+  assert.equal(doing.partNoFor({ partNos: ["A", "B"], orders: [order("X")] }), "A");
+  assert.equal(doing.partNoFor({ partNos: [], orders: [order(" x ")] }), "X");
+  assert.equal(doing.partNoFor({ partNos: [], orders: [] }), "");
+});
+
 test("conflictPartNo: finds the other active part in the same mold group", () => {
   const rows = doing.parseRead({ machine_code: "B02", pallets: [{ pallet_no: 1, workpieces: [
     { workpiece_key: "a", part_no: "P16", status: "doing", mold_group_code: "M1" },

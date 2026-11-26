@@ -12024,6 +12024,7 @@ function machtileHmcPalletDoingActionsMarkup(workpiece, pallet, code, workpieceK
 // APP 自己的對話框（不用 window.confirm/alert）。回傳 Promise：選項值（字串）或 null（取消）。
 function machtileHmcPalletDoingDialog(title, choices) {
   return new Promise((resolve) => {
+    if (document.querySelector("[data-hmc-doing-dialog]")) return resolve(null); // 已有一個開著：不再開第二個
     const backdrop = document.createElement("div");
     backdrop.className = "hmc-doing-dialog-backdrop";
     backdrop.setAttribute("data-hmc-doing-dialog", "");
@@ -12033,7 +12034,7 @@ function machtileHmcPalletDoingDialog(title, choices) {
     backdrop.innerHTML = `<div class="hmc-doing-dialog" role="dialog" aria-modal="true"><p>${escapeHtml(title)}</p><div class="hmc-doing-dialog-actions">${buttons}<button type="button" data-hmc-doing-dialog-cancel>${escapeHtml(machtileTranslate("hmc_doing_btn_cancel"))}</button></div></div>`;
     const finish = (value) => { backdrop.remove(); resolve(value); };
     backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop || event.target.closest("[data-hmc-doing-dialog-cancel]")) return finish(null);
+      if (event.target.closest("[data-hmc-doing-dialog-cancel]")) return finish(null);
       const choice = event.target.closest("[data-hmc-doing-dialog-choice]");
       if (choice) return finish(choice.dataset.hmcDoingDialogChoice);
       if (event.target.closest("[data-hmc-doing-dialog-ok]")) finish("ok");

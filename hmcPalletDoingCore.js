@@ -98,13 +98,11 @@
   function startStatus(workpiece) { return Number(workpiece?.orderCount) > 0 ? "doing" : "doing_no_order"; }
 
   // Part number sent to the server: the part of the first order if there is one, else the first mapped part. upper+trim.
+  // Part number sent when there is no choice to make: the first of partNoChoices (same rule as the menu, so the
+  // pill / direct send / menu never disagree). Review MEDIUM 11/26: first order outside the map used to fall back
+  // to mapped[0] even when a later order matched the map.
   function partNoFor(workpiece) {
-    const order = (workpiece?.orders || [])[0];
-    const o = order?.order || order || {};
-    const fromOrder = normalize(o.partNo || o.part_no || o.drawing);
-    const mapped = Array.isArray(workpiece?.partNos) ? workpiece.partNos.map(normalize).filter(Boolean) : [];
-    if (fromOrder && mapped.includes(fromOrder)) return fromOrder;
-    return mapped[0] || fromOrder || "";
+    return partNoChoices(workpiece)[0] || "";
   }
 
   // Distinct part numbers (upper+trim) the operator may mean for this workpiece: parts of its open orders (limited to the
