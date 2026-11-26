@@ -133,6 +133,9 @@
       hmc_doing_btn_cancel: "取消",
       hmc_doing_saved: "已更新",
       hmc_doing_err_offline: "連不上，沒改成",
+      hmc_doing_choose_part: "做哪個料號？",
+      hmc_doing_switch_confirm: "{{other}} 會自動改成沒在做（原因：模具換去做 {{part}}），確定？",
+      hmc_doing_switch_confirm_generic: "同模具正在做的另一個料號會自動改成沒在做，確定換？",
       hmc_doing_err_shared_mold: "共用模具正在做另一個料號，沒改成。請先讓另一盤改成沒在做。",
       hmc_doing_err_machine: "這台機器不是你的課別，沒改成",
       hmc_doing_err_bridge: "這個帳號不能改，沒改成",
@@ -860,6 +863,9 @@
       hmc_doing_btn_cancel: "Hủy", // _draft
       hmc_doing_saved: "Đã cập nhật", // _draft
       hmc_doing_err_offline: "Không kết nối được, chưa đổi", // _draft
+      hmc_doing_choose_part: "Làm mã nào?", // _draft
+      hmc_doing_switch_confirm: "{{other}} sẽ tự đổi thành không làm (lý do: khuôn chuyển sang làm {{part}}), xác nhận?", // _draft
+      hmc_doing_switch_confirm_generic: "Mã khác đang làm trên cùng khuôn sẽ tự đổi thành không làm, xác nhận đổi?", // _draft
       hmc_doing_err_shared_mold: "Khuôn chung đang làm mã khác, chưa đổi. Hãy đổi pallet kia thành không làm trước.", // _draft
       hmc_doing_err_machine: "Máy này không thuộc bộ phận của bạn, chưa đổi", // _draft
       hmc_doing_err_bridge: "Tài khoản này không được đổi, chưa đổi", // _draft

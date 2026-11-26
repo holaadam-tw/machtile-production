@@ -107,6 +107,29 @@
     return mapped[0] || fromOrder || "";
   }
 
+  // Distinct part numbers (upper+trim) the operator may mean for this workpiece: parts of its open orders (limited to the
+  // mapped parts when there are any), else the mapped parts. 1 -> use directly, >=2 -> ask.
+  function partNoChoices(workpiece) {
+    const mapped = Array.isArray(workpiece?.partNos) ? workpiece.partNos.map(normalize).filter(Boolean) : [];
+    const uniq = (list) => list.filter((part, index) => list.indexOf(part) === index);
+    const fromOrders = (workpiece?.orders || []).map((entry) => {
+      const o = entry?.order || entry || {};
+      return normalize(o.partNo || o.part_no || o.drawing);
+    }).filter(Boolean);
+    const matched = uniq(mapped.length ? fromOrders.filter((part) => mapped.includes(part)) : fromOrders);
+    if (matched.length) return matched;
+    return uniq(mapped.length ? mapped : fromOrders);
+  }
+
+  // The other part number currently active in the same mold group as `partNo` ("" when unknown).
+  function conflictPartNo(rows, partNo) {
+    const part = normalize(partNo);
+    if (!Array.isArray(rows) || !part) return "";
+    const groups = rows.filter((row) => row.partNo === part && row.moldGroup).map((row) => row.moldGroup);
+    const other = rows.find((row) => groups.includes(row.moldGroup) && row.partNo && row.partNo !== part && isActiveStatus(row.status));
+    return other ? other.partNo : "";
+  }
+
   // Returns { ok:true, payload } or { ok:false, error: "<CODE>" } (client-side pre-check; the server re-validates).
   function buildSetPayload(input) {
     const status = input?.status;
@@ -181,5 +204,5 @@
   }
 
   return Object.freeze({ STATUSES, REASON_CODES, parseRead, mergeDoing, chipClasses, chipTextKey, pillInfo, isDoingActive,
-    startStatus, partNoFor, buildSetPayload, createCommandStore, errorKey });
+    startStatus, partNoFor, partNoChoices, conflictPartNo, buildSetPayload, createCommandStore, errorKey });
 }));
