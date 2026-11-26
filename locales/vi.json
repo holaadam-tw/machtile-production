@@ -1010,5 +1010,12 @@
   "switch_step_move_why_generic": { "value": "Nhà máy chưa đổi thành công.", "_draft": true },
   "switch_step_move_why_preview_unsent": { "value": "Chưa tính được việc chuyển (mạng không ổn định, có thể chưa gửi được).", "_draft": true },
   "switch_step_move_why_preview_invalid": { "value": "Không hiểu được kết quả tính nhà máy gửi về.", "_draft": true },
-  "switch_step_move_why_preview_timeout": { "value": "Nhà máy quá lâu chưa tính xong việc chuyển.", "_draft": true }
+  "switch_step_move_why_preview_timeout": { "value": "Nhà máy quá lâu chưa tính xong việc chuyển.", "_draft": true },
+  "asm_err_operator_list_invalid": { "value": "Danh sách người báo công có lỗi; hãy chọn lại người báo công rồi gửi.", "_draft": true },
+  "asm_err_operator_list_too_long": { "value": "Quá nhiều người báo công: tính cả người đăng nhập tối đa 10 người, mã nhân viên ghép lại cũng không được quá dài. Hãy bớt người rồi gửi.", "_draft": true },
+  "asm_err_operator_list_member_not_found": { "value": "Có người được chọn không tìm thấy tài khoản (có thể không thuộc nhà máy này); hãy chọn lại hoặc báo quản lý.", "_draft": true },
+  "asm_err_operator_list_member_inactive": { "value": "Có người được chọn đã bị khóa tài khoản; hãy bỏ chọn hoặc báo quản lý.", "_draft": true },
+  "asm_err_operator_list_member_legacy_missing": { "value": "Có người được chọn chưa có mã nhân viên MES cũ; hãy báo quản lý cài đặt.", "_draft": true },
+  "asm_err_operator_list_member_legacy_invalid": { "value": "Có người được chọn có mã nhân viên MES cũ sai định dạng; hãy báo quản lý sửa.", "_draft": true },
+  "asm_err_operator_legacy_invalid": { "value": "Mã nhân viên MES cũ của bạn sai định dạng nên không báo công nhiều người được; hãy báo quản lý sửa.", "_draft": true }
 }
