@@ -494,6 +494,43 @@ console.log("\n== 開工被擋：卡片提示（2026-11-13 A03 STATION_NOT_SET�
   eq("expired 也記", c.startRejectRecord({ machineCode: "A03", orderNo: "W", step: 1, view: c.statusView({ status: "expired" }, "start", 0), at })?.code, "EXPIRED");
   eq("壞紀錄 → 不顯示", c.startRejectNotice("x", ctx), null);
 }
+// ALREADY_CLOSED（工廠端新代碼）：這一道先前就關過了，這次送的關站沒有執行。平靜告知、不算成功、不叫人核對舊 MES。
+{
+  const msg = "工單 …123456 第 2 道 先前已經關站完成（11/21 12:57），不用再關。機台現在是別張單或別道，要關現在這張請重新整理後再按。";
+  const fallback = "這一道先前已經關站完成，不用再關。請重新整理畫面。";
+  const snap = { already_closed: true, closed_at: "2026-11-21T04:57:00Z", original_reject_code: "ORDER_MISMATCH" };
+  const withMsg = c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: msg, legacy_snapshot: snap }, "close", 0);
+  eq("ALREADY_CLOSED 有工廠說明 → 標題平靜、內文＝工廠原文", [withMsg.title, withMsg.text, withMsg.detail, withMsg.code], ["先前已關站", msg, "", "ALREADY_CLOSED"]);
+  eq("ALREADY_CLOSED 不是成功、是終局、非錯誤色", [withMsg.phase, withMsg.terminal, withMsg.tone, withMsg.alreadyClosed, withMsg.factoryMessage], ["rejected", true, "warn", true, true]);
+  eq("ALREADY_CLOSED 不帶下一道／短交（不當成這次關站成功）", ["nextStep" in withMsg, "shortQty" in withMsg], [false, false]);
+  eq("ALREADY_CLOSED 帶出 closed_at", withMsg.closedAt, "2026-11-21T04:57:00Z");
+  eq("ALREADY_CLOSED legacy_snapshot 是 JSON 字串也可以", c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", legacy_snapshot: JSON.stringify(snap) }, "close", 0).closedAt, "2026-11-21T04:57:00Z");
+  const noMsg = c.statusView({ status: "rejected", reject_code: "already_closed" }, "close", 0);
+  eq("ALREADY_CLOSED 沒有工廠說明 → 固定句", [noMsg.title, noMsg.text, noMsg.detail, noMsg.factoryMessage, noMsg.closedAt], ["先前已關站", fallback, "", false, null]);
+  eq("ALREADY_CLOSED 空白說明 → 固定句", c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: "   " }, "close", 0).text, fallback);
+  eq("ALREADY_CLOSED 文案沒有「核對／沒有關站／未完成」", /核對|沒有關站|未完成|待核對/.test(withMsg.title + withMsg.text + noMsg.title + noMsg.text), false);
+  eq("ALREADY_CLOSED 不在全域沒動清單、也不在已改清單", [c.LEGACY_UNTOUCHED_CODES.includes("ALREADY_CLOSED"), c.LEGACY_CHANGED_CODES.includes("ALREADY_CLOSED")], [false, false]);
+  eq("rejectText：ALREADY_CLOSED 有白話", c.rejectText("ALREADY_CLOSED").text, fallback);
+  for (const type of ["start", "stop", "claim_next", "stop_report", "takeover"]) {
+    const other = c.statusView({ status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: msg }, type, 0);
+    eq(`非關站 ${type}＋ALREADY_CLOSED → 維持不認得代碼的保守行為`,
+      [other.title, other.text, other.detail, other.tone, other.alreadyClosed],
+      ["結果待核對", "沒有完成，舊 MES 狀態請核對", msg, "warn", undefined]);
+  }
+  // 卡片：不寫「關站沒成功，請再按完工」，也不鎖完工鈕（機台上可能已經是別張單）
+  const cardRow = { status: "rejected", reject_code: "ALREADY_CLOSED", reject_message: msg, machine_code: "A04", expected_order_no: "WO-9", expected_index_sn: 2, requested_at: "2026-11-21T05:10:00Z" };
+  eq("卡片 ALREADY_CLOSED → already_closed（不鎖完工）", c.closeCardState(cardRow), { kind: "already_closed", reason: msg });
+  eq("卡片 ALREADY_CLOSED：這筆之後沒有重新開工 → 顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 2, actualStartAt: "2026-11-21T01:00:00Z" })?.kind, "already_closed");
+  eq("卡片 ALREADY_CLOSED：目前是別張工單 → 不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-10", step: 2, actualStartAt: "2026-11-21T01:00:00Z" }), null);
+  eq("卡片 ALREADY_CLOSED：目前是別道 → 不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 3, actualStartAt: "2026-11-21T01:00:00Z" }), null);
+  eq("卡片 ALREADY_CLOSED：之後又重新開工 → 過時不顯示", c.closeCardState(cardRow, { machineCode: "A04", orderNo: "WO-9", step: 2, actualStartAt: "2026-11-21T06:00:00Z" }), null);
+  eq("同一道先 applied 後 ALREADY_CLOSED → 卡片仍是已關站", c.closeCardState(c.latestCloseByOrder([cardRow, { ...cardRow, status: "applied", reject_code: null, reject_message: null, requested_at: "2026-11-21T04:57:00Z" }]).get("A04|WO-9|2")).kind, "applied");
+  // 回歸：未知代碼照舊保守
+  const future = c.statusView({ status: "rejected", reject_code: "SOME_FUTURE_CODE", reject_message: "工廠新原因" }, "close", 0);
+  eq("回歸：未知代碼（關站）仍是結果待核對＋工廠說明放 detail", [future.title, future.text, future.detail, future.tone, future.alreadyClosed], ["結果待核對", "沒有完成，舊 MES 狀態請核對", "工廠新原因", "warn", undefined]);
+  eq("回歸：未知代碼卡片仍是 rejected", c.closeCardState({ status: "rejected", reject_code: "SOME_FUTURE_CODE", reject_message: "工廠新原因" }), { kind: "rejected", reason: "工廠新原因" });
+  eq("回歸：LOCK_TIMEOUT 關站標題不變", c.statusView({ status: "rejected", reject_code: "LOCK_TIMEOUT" }, "close", 0).title, "沒有關站");
+}
 // 完工關站：pendingRecord 保留送出時的完工畫面代號（app.js 判斷要不要自動關畫面）
 eq("pendingRecord 保留完工畫面代號", c.pendingRecord({ ...rec, commandType: "close", finishCloseReportCommandUuid: UUID, finishCloseSheetToken: "abc-3" }).finishCloseSheetToken, "abc-3");
 eq("pendingRecord 沒有代號 → null（不自動關）", c.pendingRecord(rec).finishCloseSheetToken, null);

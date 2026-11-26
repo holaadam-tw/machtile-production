@@ -15428,15 +15428,23 @@ function machtileFinishComboWrite(code, value) {
 
 const machtileStandardFinishHandledClaims = new Set();
 
+// ALREADY_CLOSED（這一道先前就關過了，這次沒有寫任何東西）：標題走翻譯；內文＝工廠那句原文，沒有才用翻譯過的固定句。
+function machtileStationCmdAlreadyClosedText(view, commandType) {
+  if (commandType !== "close" || view?.alreadyClosed !== true) return null;
+  return { title: machtileTranslate("station_close_already_closed_title"),
+    text: view.factoryMessage ? String(view.text || "") : machtileTranslate("station_close_already_closed_fallback") };
+}
+
 function machtileFinishCloseSetResult(code, view, record = null) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const closeIdentity = flow.close?.identity || null;
   const applied = view?.phase === "applied";
   const shortQty = Number(view?.shortQty || 0);
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, "close");
   const title = applied
     ? machtileTranslate(shortQty > 0 ? "finish_close_applied_short" : "finish_close_applied", { quantity: shortQty })
-    : machtileTranslate("finish_close_rejected_title");
+    : alreadyClosed ? alreadyClosed.title : machtileTranslate("finish_close_rejected_title");
   const rejectKey = ({ ZERO_REPORTED: "finish_close_zero_reported", LOCK_TIMEOUT: "finish_close_lock_timeout", STILL_RUNNING: "finish_close_still_running",
     SHORT_COMPLETION_DISABLED: "short_completion_disabled", SHORT_COMPLETION_NOT_NEEDED: "short_completion_not_needed",
     SHORT_COMPLETION_REASON_INVALID: "short_completion_reason_invalid" })[view?.code];
@@ -15445,6 +15453,7 @@ function machtileFinishCloseSetResult(code, view, record = null) {
     title,
     message: applied
       ? (view?.warning && flow.singleReport?.shortCompletion ? machtileTranslate("short_completion_warning") : (view?.warning || machtileTranslate("finish_close_applied_detail")))
+      : alreadyClosed ? alreadyClosed.text
       : (rejectKey ? machtileTranslate(rejectKey) : (view?.detail || view?.text || machtileTranslate("finish_close_unknown"))),
     nextStep: applied && machtileStandardFinishEnabled(code) ? view?.nextStep || null : null,
     prevStepRow: applied ? null : view?.prevStepRow || null,
@@ -16897,6 +16906,8 @@ function machtileStationCmdFinish(code, view) {
   delete machtileStationCmd.pending[code];
   machtileStationCmdUnsubscribe(code);
   machtileStationCmdSavePending();
+  const alreadyClosed = machtileStationCmdAlreadyClosedText(view, record.commandType);
+  if (alreadyClosed) { view.title = alreadyClosed.title; view.text = alreadyClosed.text; }
   machtileStationCmd.lastResult[code] = { view, at: Date.now() };
   if (record.commandType === "start") {
     delete machtileInstantStartPending[code];
@@ -16958,6 +16969,9 @@ function machtileStationCmdFinish(code, view) {
     || (record.commandType === "claim_next" && record.replaceStopped === true);
   if (view.phase === "applied" && refreshOccupation) {
     void machtileRefreshAfterApplied(code, record.commandType);
+  } else if (alreadyClosed && record.commandType === "close") {
+    // 這一道先前就關過了：卡片可能還停在舊畫面 → 跟關站成功後同一支重讀（一次；不走「池子空了再重試」那段）。
+    void machtileRefreshAfterApplied(code, "already_closed");
   }
   if (view.phase === "applied" && record.commandType === "claim_next" && record.standardFinishClaim) return;
   if (view.phase === "applied" && record.commandType !== "takeover") showToast(`${code} ${view.title}（舊 MES）`);
@@ -16976,7 +16990,12 @@ function machtileLoadSupabaseJs() {
   if (machtileLoadSupabaseJs.promise) return machtileLoadSupabaseJs.promise;
   machtileLoadSupabaseJs.promise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    // Exact version + SRI: a floating "@2" would let a new upstream release reach the shop floor untested.
+    // Use the published dist/umd/supabase.js (already minified). jsDelivr generates supabase.min.js on the fly
+    // and says not to use SRI on generated files. To upgrade: change the version AND recompute the sha384.
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js";
+    script.integrity = "sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ";
+    script.crossOrigin = "anonymous";
     script.async = true;
     script.onload = () => window.supabase?.createClient ? resolve(window.supabase) : reject(new Error("SUPABASE_JS_UNAVAILABLE"));
     script.onerror = () => reject(new Error("SUPABASE_JS_LOAD_FAILED"));
@@ -26916,11 +26935,61 @@ const MACHTILE_STATION_REPORT_HOLD_MS = 800;
 let machtileStationReportPreviewTicker = null;
 
 const machtileStationReportCore = () => (typeof window === "undefined" ? null : window.MachTileStationReportCore);
-const machtileMissingDoc4DeferOptions = () => ({ enableMissingDoc4DeferAck: config.enableMissingDoc4DeferAck === true });
-const machtileStationReportResultCard = (row) => machtileStationReportCore()?.resultCard(row, machtileMissingDoc4DeferOptions());
+const machtileStationReportOptions = () => ({
+  enableMissingDoc4DeferAck: config.enableMissingDoc4DeferAck === true,
+  enableOverPreviousReasonPrompt: config.enableOverPreviousReasonPrompt === true
+});
+const machtileStationReportResultCard = (row) => machtileStationReportCore()?.resultCard(row, machtileStationReportOptions());
 const machtileMissingDoc4Step = (card) => String(card?.values?.previous_step_name ||
   card?.snapshot?.report?.previous_step_name || card?.snapshot?.report?.guard?.Details?.previous_step_name ||
   "委外加工").trim() || "委外加工";
+
+function machtileOverPreviousExcess(flow) {
+  const preview = flow?.preview?.preview_result || {};
+  for (const value of [preview.over_previous_qty, preview.excess_qty, preview.legacy_snapshot?.report?.guard?.Details?.over_previous_qty]) {
+    if (Number.isInteger(Number(value)) && Number(value) > 0) return Number(value);
+  }
+  return Math.max(1, Number(flow?.args?.p_good_qty || 0) + Number(flow?.args?.p_fail_qty || 0) - Number(preview.available || 0));
+}
+
+function machtileAskOverPreviousReason(excess) {
+  return new Promise((resolve) => {
+    const holder = document.createElement("div");
+    holder.className = "over-previous-dialog-backdrop";
+    holder.dataset.overPreviousDialog = "";
+    holder.innerHTML = `<form class="over-previous-dialog" data-over-previous-form role="dialog" aria-modal="true" aria-labelledby="overPreviousTitle">
+      <h2 id="overPreviousTitle">${escapeHtml(machtileTranslate("over_previous_title", { count: excess }))}</h2>
+      <fieldset><legend>${escapeHtml(machtileTranslate("over_previous_choose"))}</legend>
+        <label><input type="radio" name="overPreviousReason" value="F01 漏報／晚報"> ${escapeHtml(machtileTranslate("over_previous_f01"))}</label>
+        <label><input type="radio" name="overPreviousReason" value="同一台重測"> ${escapeHtml(machtileTranslate("over_previous_retest"))}</label>
+        <label><input type="radio" name="overPreviousReason" value="other"> ${escapeHtml(machtileTranslate("over_previous_other"))}</label>
+      </fieldset>
+      <label class="over-previous-other" hidden>${escapeHtml(machtileTranslate("over_previous_other_label"))}<textarea data-over-previous-other rows="2" maxlength="497"></textarea></label>
+      <p class="over-previous-error" data-over-previous-error role="alert" hidden>${escapeHtml(machtileTranslate("over_previous_other_short"))}</p>
+      <div class="over-previous-actions"><button type="button" class="secondary-action" data-over-previous-cancel>${escapeHtml(machtileTranslate("cancel"))}</button><button type="submit" class="primary-action">${escapeHtml(machtileTranslate("over_previous_submit"))}</button></div>
+    </form>`;
+    document.body.append(holder);
+    const form = holder.querySelector("form");
+    const otherHolder = holder.querySelector(".over-previous-other");
+    const other = holder.querySelector("[data-over-previous-other]");
+    const error = holder.querySelector("[data-over-previous-error]");
+    const finish = (value) => { holder.remove(); resolve(value); };
+    form.addEventListener("change", () => { otherHolder.hidden = form.elements.overPreviousReason.value !== "other"; error.hidden = true; if (!otherHolder.hidden) other.focus(); });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const selected = form.elements.overPreviousReason.value;
+      if (!selected) { error.hidden = false; return; }
+      if (selected === "other") {
+        const detail = other.value.trim();
+        if ([...detail].length < 4) { error.hidden = false; other.focus(); return; }
+        finish(`其他：${detail}`); return;
+      }
+      finish(selected);
+    });
+    holder.querySelector("[data-over-previous-cancel]").addEventListener("click", () => finish(null));
+    holder.querySelector("input").focus();
+  });
+}
 const machtileStationReportEnabled = () => window.MACHTILE_CONFIG?.enableStationReport === true;
 const machtileOutsourceReceiptDialogEnabled = () => window.MACHTILE_CONFIG?.outsourceReceiptDialogEnabled === true;
 const machtileReportUncertainRecoverEnabled = () => window.MACHTILE_CONFIG?.enableReportUncertainRecover === true;
@@ -27075,7 +27144,7 @@ async function machtileStationReportRefreshAfterStaleFinal(code) {
   await machtileStationReportRunCommand(code, core.refreshOutsourceReceiptPreview(finalArgs, crypto.randomUUID()), "preview");
   // The fresh preview (and the receipt dialog it asked for) must end allowed for this exact preview;
   // anything else (cancel, soft/hard guard, timeout) stays on screen for the operator to redo.
-  const card = core.resultCard(flow.preview, machtileMissingDoc4DeferOptions());
+  const card = core.resultCard(flow.preview, machtileStationReportOptions());
   if (flow.phase !== "previewed" || card.kind !== "previewed" || flow.preview?.command_uuid !== flow.args?.p_command_uuid) {
     if (!flow.error) flow.error = `${staleMessage}（${card.message || card.title}）`;
     return true;
@@ -27409,7 +27478,7 @@ function machtileSimpleReportNeedsNote(row, card) {
 function machtileRenderSimpleStationReportPanel(code, order, row) {
   const core = machtileStationReportCore();
   const flow = machtileStationReportState(row);
-  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileStationReportOptions()) : null;
   const parts = [];
   if (["submitting-preview", "waiting-preview"].includes(flow.phase)) {
     parts.push(`<p class="batch-notice station-report-preview-wait" role="status">${escapeHtml(machtileTranslate("simple_report_waiting", { seconds: machtileStationReportPreviewElapsed(flow) }))}</p>`);
@@ -27495,7 +27564,7 @@ function machtileApplySimpleReportChrome() {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const core = machtileStationReportCore();
-  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileStationReportOptions()) : null;
   // 新句子「這一道最多只能報 N 件」出現時，舊的「目前最多可報…（上一道…）」不再顯示：作業員只看到一個要填的數字。
   const qtyMaxShown = Boolean(card && machtileSimpleReportStatus(flow, card)?.qtyMax);
   const reportLimitHtml = (card?.reportLimitHint && !qtyMaxShown
@@ -27602,7 +27671,7 @@ async function machtileSimpleReportPrimaryRun(code) {
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   if (!core || machtileStationReportFlowBusy(flow)) return;
-  const card = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
+  const card = flow.result ? core.resultCard(flow.result, machtileStationReportOptions()) : null;
   if (machtileSimpleReportFinalUncertain(flow, card)) {
     if (machtileReportUncertainRecoverEnabled()) {
       if (String(flow.finalOrder?.id || "") !== String(flow.args?.p_expected_order_no || "")) {
@@ -27640,7 +27709,7 @@ async function machtileSimpleReportPrimaryRun(code) {
   }
   await machtileStationReportSubmitPreview(code);
   const after = machtileStationReportState(machtileBatchRow(code));
-  const afterCard = after.result ? core.resultCard(after.result, machtileMissingDoc4DeferOptions()) : null;
+  const afterCard = after.result ? core.resultCard(after.result, machtileStationReportOptions()) : null;
   if (after.phase === "previewed" && afterCard?.kind === "previewed" && !after.error
     && after.preview?.command_uuid === after.args?.p_command_uuid) {
     await machtileStationReportSubmitFinal(code);
@@ -27916,7 +27985,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
   const reasons = settings.failReasonCodesByMachine[code] || [];
   const reasonOptions = ["<option value=\"\">選不良原因</option>", ...reasons.map((reason) =>
     `<option value="${escapeHtml(reason)}"${reason === row.failReasonCode ? " selected" : ""}>${escapeHtml(reason)}</option>`)].join("");
-  const result = flow.result ? core.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
+  const result = flow.result ? core.resultCard(flow.result, machtileStationReportOptions()) : null;
   // Same sheet/card already shows 「這一道最多只能報 N 件」 → drop the old per-report hint (one number only).
   const qtyMaxShown = Boolean(result) && (simple
     ? Boolean(machtileSimpleReportStatus(flow, result)?.qtyMax)
@@ -27949,7 +28018,7 @@ function machtileRenderStationReportPanel(code, order, row, busy, { batch = fals
     const previewValues = result.values && Number.isInteger(result.values.available)
       ? `<div class="station-report-preview-values"><span>目前可報 <strong>${result.values.available}</strong> 件</span>${Number.isInteger(result.values.predicted_ac03_qty) ? `<span>預估先領 <strong>${result.values.predicted_ac03_qty}</strong> 件</span>` : ""}${rateCheck ? `<span>工時上限約 <strong>${rateCheck.maxQty}</strong> 件（${escapeHtml(rateCheck.source)}${rateCheck.estimated ? "，估計" : ""}）</span>` : ""}</div>${rateCheck?.warn ? `<p class="station-report-rate-warning" role="note">${escapeHtml(rateCheck.message)}</p>` : ""}`
       : "";
-    const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview, machtileMissingDoc4DeferOptions()); return true; } catch { return false; } })();
+    const snapshotReady = ["previewed", "preview-soft"].includes(result.kind) && (() => { try { core.buildClientGuardSnapshot(flow.preview, machtileStationReportOptions()); return true; } catch { return false; } })();
     const prevIndex = Number(result.previousIndex);
     const previousStep = ["hard", "preview-blocked"].includes(result.kind) && (result.code || result.guardCode) === "QTY_EXCEEDS_AVAILABLE" && Number.isInteger(prevIndex) && prevIndex > 0
       ? `<a class="station-report-previous-step" href="${escapeHtml(workOrderDetailUrl(order?.id))}">查看製程路線，先報第 ${prevIndex} 道</a>` : "";
@@ -28392,7 +28461,7 @@ async function machtileStationReportSubmitFinal(code, options = {}) {
   if (!core || machtileStationReportFlowBusy(flow) || !flow.preview) return;
   if (machtileReturnClaimBlockMessage(code)) { flow.error = machtileReturnClaimBlockMessage(code); machtileRenderStationReportSurfaces(); return; }
   let snapshot;
-  try { snapshot = core.buildClientGuardSnapshot(flow.preview, machtileMissingDoc4DeferOptions()); }
+  try { snapshot = core.buildClientGuardSnapshot(flow.preview, machtileStationReportOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   const order = options.batch ? (flow.batchOrder || machtileBatchSelectedOrder(code)) : machtileStationReportOrderForCode(code);
   const context = options.batch && flow.args ? {
@@ -28570,7 +28639,7 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   // A receipt re-submit replaces the command (new uuid) inside the handler; App records and
   // finish-close must reference the command that actually reached a final result.
   const resultArgs = flow.args?.p_preview === false ? flow.args : args;
-  const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result, machtileMissingDoc4DeferOptions())?.kind);
+  const applied = ["applied", "applied-late"].includes(core.resultCard(flow.result, machtileStationReportOptions())?.kind);
   if (!machtileReportUncertainRecoverEnabled()) {
     // Keep the flag-off path byte-for-behavior identical to main, including close/overlay after
     // an App record failure and no background banner for non-background submissions.
@@ -28612,15 +28681,25 @@ async function machtileStationReportSendFinal(code, args, options = {}) {
   machtileRenderStationReportSurfaces();
 }
 
+function machtileStationReportRetryNote(flowArgs, rowReportNote, core) {
+  return flowArgs?.p_acks?.includes(core?.OVER_PREVIOUS_ACK)
+    ? flowArgs.p_report_note
+    : (rowReportNote || null);
+}
+
 async function machtileStationReportRetryAck(code) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
   const result = flow.result;
-  const card = result ? core?.resultCard(result, machtileMissingDoc4DeferOptions()) : null;
-  if (!core || !flow.args || card?.kind !== "soft") return;
+  if (!core || !flow.args || !result || !core.softRejectEnabled(result.reject_code, machtileStationReportOptions())) return;
+  let reportNote = machtileStationReportRetryNote(flow.args, row.reportNote, core);
+  if (result.reject_code === core.OVER_PREVIOUS_ACK) {
+    reportNote = await machtileAskOverPreviousReason(machtileOverPreviousExcess(flow));
+    if (!reportNote) return;
+  }
   let args;
-  try { args = core.retryWithAck({ ...flow.args, p_report_note: row.reportNote || null }, result.reject_code, crypto.randomUUID(), machtileMissingDoc4DeferOptions()); }
+  try { args = core.retryWithAck(flow.args, result.reject_code, crypto.randomUUID(), reportNote, machtileStationReportOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
@@ -28629,10 +28708,15 @@ async function machtileStationReportRetryPreviewAck(code) {
   const core = machtileStationReportCore();
   const row = machtileBatchRow(code);
   const flow = machtileStationReportState(row);
-  const result = flow.result ? core?.resultCard(flow.result, machtileMissingDoc4DeferOptions()) : null;
+  const result = flow.result ? core?.resultCard(flow.result, machtileStationReportOptions()) : null;
   if (!core || !flow.args || !flow.preview || result?.kind !== "preview-soft") return;
+  let reportNote = machtileStationReportRetryNote(flow.args, row.reportNote, core);
+  if (result.guardCode === core.OVER_PREVIOUS_ACK) {
+    reportNote = await machtileAskOverPreviousReason(machtileOverPreviousExcess(flow));
+    if (!reportNote) return;
+  }
   let args;
-  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), row.reportNote, machtileMissingDoc4DeferOptions()); }
+  try { args = core.retryPreviewWithAck(flow.args, flow.preview, result.guardCode, crypto.randomUUID(), reportNote, machtileStationReportOptions()); }
   catch (error) { flow.error = error.message; machtileRenderStationReportSurfaces(); return; }
   await machtileStationReportSendFinal(code, args);
 }
@@ -31238,7 +31322,8 @@ function machtileCardFooterStatus(order, machine) {
         return `<span class="card-today-status is-finished" data-today-status="closed" data-i18n="finish_close_applied"${title}>${escapeHtml(machtileTranslate("finish_close_applied"))}</span>`;
       }
       if (close && close.kind !== "applied") {
-        const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm" : "card_finish_close_rejected";
+        const textKey = close.kind === "pending" ? "card_finish_close_pending" : close.kind === "confirm" ? "card_finish_close_confirm"
+          : close.kind === "already_closed" ? "card_finish_close_already_closed" : "card_finish_close_rejected";
         const reason = close.reason || machtileTranslate("finish_close_unknown");
         return `<span class="card-today-status is-close-incomplete" data-today-status="close-incomplete"${title}><strong>${escapeHtml(machtileTranslate("card_finish_recorded"))}</strong><span>${escapeHtml(machtileTranslate(textKey, { reason }))}</span></span>`;
       }
