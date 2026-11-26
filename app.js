@@ -12005,7 +12005,8 @@ function machtileHmcPalletDoingLegendMarkup() {
 
 function machtileHmcPalletDoingActionsMarkup(workpiece, pallet, code, workpieceKey) {
   const core = machtileHmcPalletDoingCore;
-  const attrs = `data-hmc-doing-machine="${escapeHtml(code)}" data-hmc-doing-pallet="${pallet.palletNo}" data-hmc-doing-wp="${escapeHtml(String(workpiece.id))}" data-hmc-doing-part="${escapeHtml(core.partNoFor(workpiece))}" data-hmc-doing-key="${escapeHtml(workpieceKey)}"`;
+  const partChoices = core.partNoChoices(workpiece);
+  const attrs = `data-hmc-doing-machine="${escapeHtml(code)}" data-hmc-doing-pallet="${pallet.palletNo}" data-hmc-doing-wp="${escapeHtml(String(workpiece.id))}" data-hmc-doing-part="${escapeHtml(core.partNoFor(workpiece))}" data-hmc-doing-key="${escapeHtml(workpieceKey)}"${partChoices.length > 1 ? ` data-hmc-doing-choices="${escapeHtml(partChoices.join("|"))}"` : ""}`;
   const busy = machtileHmcPalletDoingBusy.has(workpieceKey) ? " disabled" : "";
   const active = core.isDoingActive(workpiece.doing);
   const picker = machtileHmcPalletDoingUi.picker?.key === workpieceKey ? machtileHmcPalletDoingUi.picker : null;
@@ -12020,11 +12021,45 @@ function machtileHmcPalletDoingActionsMarkup(workpiece, pallet, code, workpieceK
   return `<div class="doing-actions">${buttons}</div>`;
 }
 
-async function machtileHmcPalletDoingSend(dataset, status, reasonCode = "", reasonText = "") {
+// APP 自己的對話框（不用 window.confirm/alert）。回傳 Promise：選項值（字串）或 null（取消）。
+function machtileHmcPalletDoingDialog(title, choices) {
+  return new Promise((resolve) => {
+    if (document.querySelector("[data-hmc-doing-dialog]")) return resolve(null); // 已有一個開著：不再開第二個
+    const backdrop = document.createElement("div");
+    backdrop.className = "hmc-doing-dialog-backdrop";
+    backdrop.setAttribute("data-hmc-doing-dialog", "");
+    const buttons = choices.length
+      ? choices.map((part) => `<button type="button" class="primary" data-hmc-doing-dialog-choice="${escapeHtml(part)}">${escapeHtml(part)}</button>`).join("")
+      : `<button type="button" class="primary" data-hmc-doing-dialog-ok>${escapeHtml(machtileTranslate("hmc_doing_btn_confirm"))}</button>`;
+    backdrop.innerHTML = `<div class="hmc-doing-dialog" role="dialog" aria-modal="true"><p>${escapeHtml(title)}</p><div class="hmc-doing-dialog-actions">${buttons}<button type="button" data-hmc-doing-dialog-cancel>${escapeHtml(machtileTranslate("hmc_doing_btn_cancel"))}</button></div></div>`;
+    const finish = (value) => { backdrop.remove(); resolve(value); };
+    backdrop.addEventListener("click", (event) => {
+      if (event.target.closest("[data-hmc-doing-dialog-cancel]")) return finish(null);
+      const choice = event.target.closest("[data-hmc-doing-dialog-choice]");
+      if (choice) return finish(choice.dataset.hmcDoingDialogChoice);
+      if (event.target.closest("[data-hmc-doing-dialog-ok]")) finish("ok");
+    });
+    document.body.appendChild(backdrop);
+  });
+}
+
+async function machtileHmcPalletDoingStart(dataset) {
+  const choices = String(dataset.hmcDoingChoices || "").split("|").filter(Boolean);
+  let partNo = dataset.hmcDoingPart;
+  if (choices.length > 1) {
+    partNo = await machtileHmcPalletDoingDialog(machtileTranslate("hmc_doing_choose_part"), choices);
+    if (!partNo) return;
+  }
+  return machtileHmcPalletDoingSend(dataset, dataset.hmcDoingStart, "", "", { partNo });
+}
+
+async function machtileHmcPalletDoingSend(dataset, status, reasonCode = "", reasonText = "", options = {}) {
   const core = machtileHmcPalletDoingCore;
   if (!core) return;
+  const switchMold = options.switchMold === true;
   const content = { machineCode: dataset.hmcDoingMachine, palletNo: Number(dataset.hmcDoingPallet), workpieceKey: dataset.hmcDoingWp,
-    partNo: dataset.hmcDoingPart, status, reasonCode, reasonText, switchMold: false };
+    partNo: options.partNo || dataset.hmcDoingPart, status, reasonCode, reasonText, switchMold };
+  let askMold = false;
   const busyKey = dataset.hmcDoingKey;
   if (navigator.onLine === false) { showToast(machtileTranslate("hmc_doing_err_offline")); return; }
   if (machtileHmcPalletDoingBusy.has(busyKey)) return;
@@ -12046,10 +12081,19 @@ async function machtileHmcPalletDoingSend(dataset, status, reasonCode = "", reas
     const key = core.errorKey(error, navigator.onLine);
     // 伺服器明確拒絕＝這次操作作廢；網路／不明錯誤才保留同一個 command_uuid 供重送。
     if (key !== "hmc_doing_err_offline" && key !== "hmc_doing_err_generic") machtileHmcPalletDoingCommands.done(content);
-    showToast(machtileTranslate(key));
+    if (key === "hmc_doing_err_shared_mold" && !switchMold && status !== "idle_reason") askMold = true;
+    else showToast(machtileTranslate(key));
   } finally {
     machtileHmcPalletDoingBusy.delete(busyKey);
     renderWorkOrders();
+  }
+  if (askMold) {
+    // 同模具有別的料號在做：問過作業員，確定才用 switch_mold=true（新 command_uuid）重送；取消＝維持原狀、不報錯。
+    const other = core.conflictPartNo(machtileHmcPalletDoingRead(content.machineCode)?.rows, content.partNo);
+    const text = other
+      ? machtileTranslate("hmc_doing_switch_confirm", { other, part: content.partNo })
+      : machtileTranslate("hmc_doing_switch_confirm_generic");
+    if (await machtileHmcPalletDoingDialog(text, [])) await machtileHmcPalletDoingSend(dataset, status, reasonCode, reasonText, { partNo: content.partNo, switchMold: true });
   }
 }
 
@@ -30553,7 +30597,7 @@ function bindEvents() {
       return;
     }
     const doingStart = event.target.closest("[data-hmc-doing-start]");
-    if (doingStart) { void machtileHmcPalletDoingSend(doingStart.dataset, doingStart.dataset.hmcDoingStart); return; }
+    if (doingStart) { void machtileHmcPalletDoingStart(doingStart.dataset); return; }
     const doingPick = event.target.closest("[data-hmc-doing-pick]");
     if (doingPick) { machtileHmcPalletDoingUi.picker = { key: doingPick.dataset.hmcDoingKey, reasonCode: "", reasonText: "" }; renderWorkOrders(); return; }
     const doingConfirm = event.target.closest("[data-hmc-doing-confirm]");

@@ -126,3 +126,36 @@ test("error mapping: server codes, offline and generic", () => {
   assert.equal(doing.errorKey(new Error("whatever"), false), "hmc_doing_err_offline");
   assert.equal(doing.errorKey(new Error("500 boom"), true), "hmc_doing_err_generic");
 });
+
+test("partNoChoices: one part, two parts, case/space dedupe, no orders", () => {
+  const order = (part) => ({ order: { partNo: part } });
+  assert.deepEqual(doing.partNoChoices({ partNos: ["P16"], orders: [order("p16"), order(" P16 ")] }), ["P16"]);
+  assert.deepEqual(doing.partNoChoices({ partNos: ["P16", "P22"], orders: [order("P16"), order("p22"), order("P22 ")] }), ["P16", "P22"]);
+  assert.deepEqual(doing.partNoChoices({ partNos: ["P16", "P22"], orders: [order("P16")] }), ["P16"]);
+  assert.deepEqual(doing.partNoChoices({ partNos: [" p16", "P16", "p22"], orders: [] }), ["P16", "P22"]);
+  assert.deepEqual(doing.partNoChoices({ partNos: ["P16"], orders: [] }), ["P16"]);
+  assert.deepEqual(doing.partNoChoices({ partNos: [], orders: [] }), []);
+  assert.deepEqual(doing.partNoChoices(null), []);
+});
+
+test("partNoFor agrees with partNoChoices (review MEDIUM: first order outside the map)", () => {
+  const order = (part) => ({ order: { partNo: part } });
+  const wp = { partNos: ["A", "B"], orders: [order("X"), order("b")] };
+  assert.deepEqual(doing.partNoChoices(wp), ["B"]);
+  assert.equal(doing.partNoFor(wp), "B");
+  assert.equal(doing.partNoFor({ partNos: ["A", "B"], orders: [order("X")] }), "A");
+  assert.equal(doing.partNoFor({ partNos: [], orders: [order(" x ")] }), "X");
+  assert.equal(doing.partNoFor({ partNos: [], orders: [] }), "");
+});
+
+test("conflictPartNo: finds the other active part in the same mold group", () => {
+  const rows = doing.parseRead({ machine_code: "B02", pallets: [{ pallet_no: 1, workpieces: [
+    { workpiece_key: "a", part_no: "P16", status: "doing", mold_group_code: "M1" },
+    { workpiece_key: "b", part_no: "P22", status: "idle_reason", reason_code: "waiting_material", mold_group_code: "M1" },
+    { workpiece_key: "c", part_no: "X1", status: "doing", mold_group_code: "M2" },
+  ] }] }).rows;
+  assert.equal(doing.conflictPartNo(rows, "p22"), "P16");
+  assert.equal(doing.conflictPartNo(rows, "X1"), "");
+  assert.equal(doing.conflictPartNo(rows, "NONE"), "");
+  assert.equal(doing.conflictPartNo(null, "P22"), "");
+});

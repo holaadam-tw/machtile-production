@@ -60,7 +60,7 @@ const initialRead = () => ({
   ],
 });
 
-async function open({ base = false, doing = null, machines = '["B01","B02"]', readResponse = initialRead(), setResponse = null, holdLaterReads = false } = {}) {
+async function open({ base = false, doing = null, machines = '["B01","B02"]', readResponse = initialRead(), setResponse = null, holdLaterReads = false, map = b01Map, setResponses = null } = {}) {
   let releaseRead = null;
   const calls = { read: 0, set: [] };
   const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 380, height: 900 } });
@@ -70,13 +70,15 @@ async function open({ base = false, doing = null, machines = '["B01","B02"]', re
     const relative = url.pathname.replace(/^\//, "") || "index.html";
     if (relative === "config.js") {
       const flags = doing === null ? "" : `enableHmcPalletDoing:${doing},hmcPalletDoingMachines:${machines},`;
-      return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:true,enableHmcPalletStrip:true,hmcPalletCardMachines:["B01"],${flags}hmcPalletMap:${JSON.stringify({ B01: b01Map })},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
+      return route.fulfill({ contentType: mime[".js"], body: `window.MACHTILE_CONFIG={useSupabase:false,disableServiceWorker:true,enableHmcPalletCard:true,enableHmcPalletStrip:true,hmcPalletCardMachines:["B01"],${flags}hmcPalletMap:${JSON.stringify({ B01: map })},supabaseUrl:"http://127.0.0.1:${server.address().port}",supabaseAnonKey:"fake"};` });
     }
     if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_doing_read")) { calls.read += 1; if (holdLaterReads && calls.read > 1) await new Promise((resolve) => { releaseRead = resolve; }); return route.fulfill({ contentType: mime[".json"], body: JSON.stringify(readResponse) }); }
     if (url.pathname.endsWith("/rest/v1/rpc/hmc_pallet_doing_set")) {
       const body = JSON.parse(route.request().postData() || "{}");
       calls.set.push(body.p_payload);
-      if (setResponse?.status) return route.fulfill({ status: setResponse.status, contentType: mime[".json"], body: JSON.stringify(setResponse.body) });
+      const queued = setResponses && setResponses[calls.set.length - 1];
+      if (queued?.status) return route.fulfill({ status: queued.status, contentType: mime[".json"], body: JSON.stringify(queued.body) });
+      if (!queued && setResponse?.status) return route.fulfill({ status: setResponse.status, contentType: mime[".json"], body: JSON.stringify(setResponse.body) });
       return route.fulfill({ contentType: mime[".json"], body: JSON.stringify({ result: "set", command_uuid: body.p_payload.command_uuid, status: body.p_payload.status }) });
     }
     if (base && baseFiles.has(relative)) return route.fulfill({ contentType: mime[path.extname(relative)], body: relative === "app.js" ? Buffer.from(fixtureApp(baseFiles.get(relative).toString("utf8")), "utf8") : baseFiles.get(relative) });
@@ -201,9 +203,76 @@ try {
   await busyCard.locator('[data-hmc-doing-key="1:1-2"][data-hmc-doing-start]').click();
   await busy.page.waitForTimeout(250);
   eq(busy.calls.set.length, 1, "模具互斥：送出 1 次");
-  ok((await toastText(busy.page)).includes("共用模具"), `模具互斥：toast 顯示中文白話（${await toastText(busy.page)}）`);
-  eq(await busyCard.locator('[data-hmc-doing-key="1:1-2"][data-hmc-doing-start]').isDisabled(), false, "失敗後按鈕可再按");
+  eq(await busy.page.locator("[data-hmc-doing-dialog]").count(), 1, "模具互斥：跳出確認框（不是只有紅字）");
+  ok((await busy.page.locator("[data-hmc-doing-dialog]").textContent()).includes("同模具正在做的另一個料號會自動改成沒在做"), "模具互斥：拿不到對方料號用通用句");
   await busy.context.close();
+
+  // 7) 換模具一鍵＋確認框
+  const busyBody = { code: "P0001", message: "SHARED_MOLD_BUSY", details: null, hint: null };
+  {
+    const sw = await open({ doing: "true", setResponses: [{ status: 400, body: busyBody }] });
+    const swCard = sw.page.locator('[data-hmc-pallet-strip="B01"]');
+    await swCard.locator("[data-hmc-doing-legend]").waitFor();
+    await swCard.locator('[data-hmc-doing-key="1:1-2"][data-hmc-doing-start]').click();
+    await sw.page.locator("[data-hmc-doing-dialog]").waitFor();
+    eq(sw.calls.set.length, 1, "換模具：第一次先送 switch_mold=false");
+    eq(sw.calls.set[0].switch_mold, false, "換模具：第一次 switch_mold=false");
+    await sw.page.locator("[data-hmc-doing-dialog-ok]").click();
+    await sw.page.waitForTimeout(250);
+    eq(sw.calls.set.length, 2, "換模具：按確定後第二次送出");
+    eq(sw.calls.set[1].switch_mold, true, "換模具：第二次 switch_mold=true");
+    ok(sw.calls.set[1].command_uuid !== sw.calls.set[0].command_uuid, "換模具：第二次是新的 command_uuid");
+    ok(sw.calls.set[1].part_no === sw.calls.set[0].part_no && sw.calls.set[1].workpiece_key === sw.calls.set[0].workpiece_key && sw.calls.set[1].status === "doing", "換模具：其餘內容相同");
+    eq(await sw.page.locator("[data-hmc-doing-dialog]").count(), 0, "換模具：對話框關閉");
+    ok((await toastText(sw.page)).includes("已更新"), "換模具：成功後 toast 已更新");
+    await sw.context.close();
+    const cancel = await open({ doing: "true", setResponses: [{ status: 400, body: busyBody }] });
+    const cancelCard = cancel.page.locator('[data-hmc-pallet-strip="B01"]');
+    await cancelCard.locator("[data-hmc-doing-legend]").waitFor();
+    await cancelCard.locator('[data-hmc-doing-key="1:1-2"][data-hmc-doing-start]').click();
+    await cancel.page.locator("[data-hmc-doing-dialog]").waitFor();
+    await cancel.page.locator("[data-hmc-doing-dialog-cancel]").click();
+    await cancel.page.waitForTimeout(250);
+    eq(cancel.calls.set.length, 1, "換模具取消：只有 1 次 set");
+    eq(await cancel.page.locator("[data-hmc-doing-dialog]").count(), 0, "換模具取消：對話框關閉");
+    ok(!(await toastText(cancel.page)).includes("共用模具"), "換模具取消：不顯示錯誤");
+    eq(cancel.errors.length, 0, "換模具：沒有頁面錯誤");
+    await cancel.context.close();
+  }
+
+  // 8) 料號選擇：2 種 -> 小選單；1 種 -> 直接送
+  {
+    const twoMap = { ...b01Map, 1: [{ partNos: ["SF-03-01", " bg-03-01", "BG-03-01"], label: "兩種料號" }] };
+    const two = await open({ doing: "true", map: twoMap, readResponse: { ...initialRead(), pallets: [] } });
+    const twoCard = two.page.locator('[data-hmc-pallet-strip="B01"]');
+    await twoCard.locator("[data-hmc-doing-legend]").waitFor();
+    const startBtn = twoCard.locator("[data-hmc-doing-start]").first();
+    eq((await startBtn.getAttribute("data-hmc-doing-choices")).split("|").length >= 2, true, "兩種料號：按鈕帶多料號選項");
+    await startBtn.click();
+    await two.page.locator("[data-hmc-doing-dialog]").waitFor();
+    eq(two.calls.set.length, 0, "兩種料號：選之前不送");
+    const choiceTexts = await two.page.locator("[data-hmc-doing-dialog-choice]").allTextContents();
+    assert.deepEqual(choiceTexts, ["SF-03-01", "BG-03-01"]);
+    ok(true, "兩種料號：選單列出去重（大小寫空白）後的 2 個料號");
+    await two.page.locator('[data-hmc-doing-dialog-choice="BG-03-01"]').click();
+    await two.page.waitForTimeout(250);
+    eq(two.calls.set.length, 1, "兩種料號：選後送 1 次");
+    eq(two.calls.set[0].part_no, "BG-03-01", "兩種料號：payload.part_no 是選的第二個");
+    await twoCard.locator("[data-hmc-doing-start]").first().click();
+    await two.page.locator("[data-hmc-doing-dialog]").waitFor();
+    await two.page.locator("[data-hmc-doing-dialog-cancel]").click();
+    await two.page.waitForTimeout(150);
+    eq(two.calls.set.length, 1, "兩種料號取消：不送");
+    await two.context.close();
+    const one = await open({ doing: "true" });
+    const oneCard = one.page.locator('[data-hmc-pallet-strip="B01"]');
+    await oneCard.locator("[data-hmc-doing-legend]").waitFor();
+    await oneCard.locator('[data-hmc-doing-key="1:1-2"][data-hmc-doing-start]').click();
+    await one.page.waitForTimeout(250);
+    eq(await one.page.locator("[data-hmc-doing-dialog]").count(), 0, "一種料號：不出選單");
+    eq(one.calls.set.length, 1, "一種料號：直接送");
+    await one.context.close();
+  }
 
   // 6) read failure: strip unaffected, nothing new shown.
   const bad = await open({ doing: "true", readResponse: { not: "the contract" } });

@@ -98,13 +98,34 @@
   function startStatus(workpiece) { return Number(workpiece?.orderCount) > 0 ? "doing" : "doing_no_order"; }
 
   // Part number sent to the server: the part of the first order if there is one, else the first mapped part. upper+trim.
+  // Part number sent when there is no choice to make: the first of partNoChoices (same rule as the menu, so the
+  // pill / direct send / menu never disagree). Review MEDIUM 11/26: first order outside the map used to fall back
+  // to mapped[0] even when a later order matched the map.
   function partNoFor(workpiece) {
-    const order = (workpiece?.orders || [])[0];
-    const o = order?.order || order || {};
-    const fromOrder = normalize(o.partNo || o.part_no || o.drawing);
+    return partNoChoices(workpiece)[0] || "";
+  }
+
+  // Distinct part numbers (upper+trim) the operator may mean for this workpiece: parts of its open orders (limited to the
+  // mapped parts when there are any), else the mapped parts. 1 -> use directly, >=2 -> ask.
+  function partNoChoices(workpiece) {
     const mapped = Array.isArray(workpiece?.partNos) ? workpiece.partNos.map(normalize).filter(Boolean) : [];
-    if (fromOrder && mapped.includes(fromOrder)) return fromOrder;
-    return mapped[0] || fromOrder || "";
+    const uniq = (list) => list.filter((part, index) => list.indexOf(part) === index);
+    const fromOrders = (workpiece?.orders || []).map((entry) => {
+      const o = entry?.order || entry || {};
+      return normalize(o.partNo || o.part_no || o.drawing);
+    }).filter(Boolean);
+    const matched = uniq(mapped.length ? fromOrders.filter((part) => mapped.includes(part)) : fromOrders);
+    if (matched.length) return matched;
+    return uniq(mapped.length ? mapped : fromOrders);
+  }
+
+  // The other part number currently active in the same mold group as `partNo` ("" when unknown).
+  function conflictPartNo(rows, partNo) {
+    const part = normalize(partNo);
+    if (!Array.isArray(rows) || !part) return "";
+    const groups = rows.filter((row) => row.partNo === part && row.moldGroup).map((row) => row.moldGroup);
+    const other = rows.find((row) => groups.includes(row.moldGroup) && row.partNo && row.partNo !== part && isActiveStatus(row.status));
+    return other ? other.partNo : "";
   }
 
   // Returns { ok:true, payload } or { ok:false, error: "<CODE>" } (client-side pre-check; the server re-validates).
@@ -181,5 +202,5 @@
   }
 
   return Object.freeze({ STATUSES, REASON_CODES, parseRead, mergeDoing, chipClasses, chipTextKey, pillInfo, isDoingActive,
-    startStatus, partNoFor, buildSetPayload, createCommandStore, errorKey });
+    startStatus, partNoFor, partNoChoices, conflictPartNo, buildSetPayload, createCommandStore, errorKey });
 }));
