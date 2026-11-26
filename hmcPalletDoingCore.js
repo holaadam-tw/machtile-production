@@ -33,7 +33,9 @@
         });
       }
     }
-    return { machineCode: normalize(result.machine_code), requirePlannerConfirm: result.require_planner_confirm !== false, rows };
+    return { machineCode: normalize(result.machine_code), requirePlannerConfirm: result.require_planner_confirm !== false, rows,
+      pending_unmerged_count: Number(result.pending_unmerged_count || 0),
+      pending_no_order: Array.isArray(result.pending_no_order) ? result.pending_no_order : [] };
   }
 
   const isActiveStatus = (status) => status === "doing" || status === "doing_no_order";

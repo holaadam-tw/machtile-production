@@ -13602,3 +13602,14 @@ body.finish-sheet-mode #reportForm .submit-report::first-line { font-weight: 900
 .hmc-doing-dialog p { margin: 0 0 16px; font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; }
 .hmc-doing-dialog-actions { display: grid; gap: 10px; }
 .hmc-doing-dialog-actions button { min-height: 48px; font-size: 1rem; }
+.hmc-pallet-chip-wrap { display: inline-grid; gap: 4px; }
+.hmc-merge-entry { display: grid; gap: 3px; }
+.hmc-merge-badge { color: #9a3412; font-size: 11px; font-weight: 800; text-align: center; }
+.hmc-merge-entry button { min-height: 32px; border: 1px solid #fb923c; border-radius: 8px; background: #fff7ed; color: #9a3412; font-weight: 800; }
+.hmc-merge-dialog { max-height: calc(100vh - 32px); overflow: auto; }
+.hmc-merge-dialog h3 { margin-top: 0; }
+.hmc-merge-dialog dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+.hmc-merge-dialog dt { color: #667085; }
+.hmc-merge-dialog dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.hmc-merge-dialog fieldset { display: grid; gap: 8px; margin: 14px 0; border: 1px solid #d0d5dd; border-radius: 10px; }
+.hmc-merge-result { color: #b42318; font-weight: 700; }

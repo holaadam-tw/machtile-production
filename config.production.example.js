@@ -6,6 +6,9 @@
 // Never put service-role or other privileged keys here.
 window.MACHTILE_CONFIG = {
   enableReportUncertainRecover: false,
+  enableOverPreviousReasonPrompt: false,
+  enableHmcNoOrderMerge: false,
+  hmcNoOrderMergeMachines: ["B01", "B02"],
   cardQtyInstantEnabled: false,
   // 委外送回狀態條；雲端欄位、橋同步與瀏覽器驗證完成前保持 false。
   enableOutsourceStatusStrip: false,
