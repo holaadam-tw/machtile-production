@@ -159,7 +159,7 @@ window.MACHTILE_CONFIG = {
   enableHmcPalletDoing: true,
   hmcPalletDoingMachines: ["B01", "B02"],
   // 生管把「無單在做」總數歸入工單；雲端合約上線前保持 false。
-  enableHmcNoOrderMerge: false,
+  enableHmcNoOrderMerge: true,
   hmcNoOrderMergeMachines: ["B01", "B02"],
   hmcPalletMap: {
     B01: {
