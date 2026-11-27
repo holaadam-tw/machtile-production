@@ -266,7 +266,7 @@ window.MACHTILE_CONFIG = {
   hideLegacyReportForStationMachines: false,
   // 換道次（數量一起搬；第 3 階段 switch_step_preview＋switch_step 帶 expected_moved_*）：已經報過工的道次換成同一張單的另一道、已報數量一起搬過去。預設關；跟上面兩個換道次旗標分開。
   // 換道次（數量一起搬）開之前要先有：雲端 r3 migration 已套＋switch_step_move_enabled=true、工廠 SwitchStepMoveReportedEnabled＋SwitchStepMoveStations 機台名單。
-  enableSwitchStepMove: false,
+  enableSwitchStepMove: true,
   // 換道次（數量一起搬）開放的機台（預設 []＝一台都沒有）；enableSwitchStepMove 也要開，而且機台代號要在這裡才出按鈕。
-  switchStepMoveMachines: [],
+  switchStepMoveMachines: ["A05"],
 };
