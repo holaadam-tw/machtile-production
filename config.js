@@ -158,6 +158,9 @@ window.MACHTILE_CONFIG = {
   // B01/B02 盤號條「現在在做」（第 2 包）：預設關；關＝不產生新畫面、不呼叫新 RPC。開之前雲端 migration 20261126090000 要先套。
   enableHmcPalletDoing: false,
   hmcPalletDoingMachines: ["B01", "B02"],
+  // 生管把「無單在做」總數歸入工單；雲端合約上線前保持 false。
+  enableHmcNoOrderMerge: false,
+  hmcNoOrderMergeMachines: ["B01", "B02"],
   hmcPalletMap: {
     B01: {
       1: [

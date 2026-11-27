@@ -77,10 +77,13 @@ window.MACHTILE_CONFIG = {
   hmcPalletCardMachines: ["B01", "B02"],
   enableHmcPalletDoing: false,
   hmcPalletDoingMachines: ["B01", "B02"],
+  enableHmcNoOrderMerge: false,
+  hmcNoOrderMergeMachines: ["B01", "B02"],
   hmcPalletMap: {},
   pickStartFlowMachines: [],
   finishClaimStartComboMachines: [],
   enableShortCompletion: false,
+  enableOverPreviousReasonPrompt: false,
   shortCompletionMachines: [],
   // 組裝站平板報工（owner 2026-10-31 三週計畫）：false＝入口與畫面都不出現、不讀任何組裝資料。
   // 開之前要先有：派工橋同步這些站的工序（含 manufacture_ii_id）、雲端 machines 有這些站、Factory ReportPilotStations／
